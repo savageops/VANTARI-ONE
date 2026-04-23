@@ -1,0 +1,7 @@
+.zig-cache/
+zig-out/
+.playwright-cli/
+.var/sessions/
+.docs/todo/pending/
+.docs/todo/changelog/
+tmp-*.txt
