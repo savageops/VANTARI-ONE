@@ -38,15 +38,15 @@ pub fn loadFromEnvFile(allocator: std.mem.Allocator, env_path: []const u8) !type
         var value = std.mem.trim(u8, line[separator_index + 1 ..], " \t");
         value = trimQuotes(value);
 
-        if (std.mem.eql(u8, key, "OPENAI_BASE_URL")) {
+        if (std.mem.eql(u8, key, "BASE_URL")) {
             openai_base_url = try dupeReplacing(allocator, openai_base_url, value);
-        } else if (std.mem.eql(u8, key, "OPENAI_API_KEY")) {
+        } else if (std.mem.eql(u8, key, "API_KEY")) {
             openai_api_key = try dupeReplacing(allocator, openai_api_key, value);
-        } else if (std.mem.eql(u8, key, "OPENAI_MODEL")) {
+        } else if (std.mem.eql(u8, key, "MODEL")) {
             openai_model = try dupeReplacing(allocator, openai_model, value);
-        } else if (std.mem.eql(u8, key, "HARNESS_WORKSPACE")) {
+        } else if (std.mem.eql(u8, key, "WORKSPACE")) {
             workspace_root = try dupeReplacing(allocator, workspace_root, value);
-        } else if (std.mem.eql(u8, key, "HARNESS_MAX_STEPS")) {
+        } else if (std.mem.eql(u8, key, "MAX_STEPS")) {
             harness_max_steps = std.fmt.parseInt(usize, value, 10) catch return Error.InvalidValue;
         }
     }

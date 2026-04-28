@@ -35,13 +35,13 @@ mkdir -p "$SMOKE_DIR"
 BRIDGE_OUT="$SMOKE_DIR/bridge-out.txt"
 BRIDGE_ERR="$SMOKE_DIR/bridge-err.txt"
 
-if ! grep -q '^OPENAI_BASE_URL=http://127.0.0.1:1234$' .env; then
-  echo "GEMMA_LOCAL expected OPENAI_BASE_URL=http://127.0.0.1:1234 in .env" >&2
+if ! grep -q '^BASE_URL=http://127.0.0.1:1234$' .env; then
+  echo "GEMMA_LOCAL expected BASE_URL=http://127.0.0.1:1234 in .env" >&2
   exit 1
 fi
 
-if ! grep -q '^OPENAI_MODEL=gemma-4-26b-a4b-it-apex$' .env; then
-  echo "GEMMA_LOCAL expected OPENAI_MODEL=gemma-4-26b-a4b-it-apex in .env" >&2
+if ! grep -q '^MODEL=gemma-4-26b-a4b-it-apex$' .env; then
+  echo "GEMMA_LOCAL expected MODEL=gemma-4-26b-a4b-it-apex in .env" >&2
   exit 1
 fi
 
@@ -55,16 +55,16 @@ provider_models_url() {
   printf '%s/v1/models\n' "$base_url"
 }
 
-OPENAI_BASE_URL="$(grep '^OPENAI_BASE_URL=' .env | cut -d= -f2-)"
-OPENAI_API_KEY="$(grep '^OPENAI_API_KEY=' .env | cut -d= -f2-)"
-OPENAI_MODEL="$(grep '^OPENAI_MODEL=' .env | cut -d= -f2-)"
-PROVIDER_MODELS_URL="$(provider_models_url "$OPENAI_BASE_URL")"
-models_payload="$(curl -fsS -H "Authorization: Bearer $OPENAI_API_KEY" "$PROVIDER_MODELS_URL")" || {
+BASE_URL="$(grep '^BASE_URL=' .env | cut -d= -f2-)"
+API_KEY="$(grep '^API_KEY=' .env | cut -d= -f2-)"
+MODEL="$(grep '^MODEL=' .env | cut -d= -f2-)"
+PROVIDER_MODELS_URL="$(provider_models_url "$BASE_URL")"
+models_payload="$(curl -fsS -H "Authorization: Bearer $API_KEY" "$PROVIDER_MODELS_URL")" || {
   echo "GEMMA_LOCAL expected reachable provider at $PROVIDER_MODELS_URL" >&2
   exit 1
 }
 
-if ! python3 - <<'PY' "$models_payload" "$OPENAI_MODEL"
+if ! python3 - <<'PY' "$models_payload" "$MODEL"
 import json, sys
 payload = json.loads(sys.argv[1])
 target = sys.argv[2]

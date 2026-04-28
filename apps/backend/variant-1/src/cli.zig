@@ -66,7 +66,7 @@ const ParsedHealthResult = struct {
     ok: bool,
     model: []const u8,
     workspace_root: []const u8,
-    openai_base_url: []const u8,
+    base_url: []const u8,
     auth_provider: ?[]const u8 = null,
     subscription_plan_label: ?[]const u8 = null,
     subscription_status: ?[]const u8 = null,
@@ -135,7 +135,7 @@ pub const health_help_text =
     \\  VAR1 health [--json]
     \\
     \\Flags:
-    \\  --json                    Emit {"ok","model","workspace_root","openai_base_url","auth_provider"} instead of plain text.
+    \\  --json                    Emit {"ok","model","workspace_root","base_url","auth_provider"} instead of plain text.
     \\  -h, --help                Print help for the health command.
     \\
     \\Behavior:
@@ -407,11 +407,11 @@ fn executeHealthViaKernel(allocator: std.mem.Allocator, options: HealthCliOption
 
     const text_payload = try std.fmt.allocPrint(
         allocator,
-        "VAR1 health\nstatus: ready\nmodel: {s}\nworkspace_root: {s}\nopenai_base_url: {s}\nauth_provider: {s}\nsubscription_plan: {s}\nsubscription_status: {s}\n",
+        "VAR1 health\nstatus: ready\nmodel: {s}\nworkspace_root: {s}\nbase_url: {s}\nauth_provider: {s}\nsubscription_plan: {s}\nsubscription_status: {s}\n",
         .{
             parsed.value.model,
             parsed.value.workspace_root,
-            parsed.value.openai_base_url,
+            parsed.value.base_url,
             parsed.value.auth_provider orelse "unknown",
             parsed.value.subscription_plan_label orelse "unknown",
             parsed.value.subscription_status orelse "unknown",

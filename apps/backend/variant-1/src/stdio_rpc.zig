@@ -801,7 +801,7 @@ fn handleHealthGet(allocator: std.mem.Allocator, config: *const types.Config) ![
         .ok = true,
         .model = config.openai_model,
         .workspace_root = config.workspace_root,
-        .openai_base_url = config.openai_base_url,
+        .base_url = config.openai_base_url,
         .auth_provider = config.auth_provider,
         .subscription_plan_label = config.subscription_plan_label,
         .subscription_status = config.subscription_status,

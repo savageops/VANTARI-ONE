@@ -66,7 +66,7 @@ test "cli tools help documents schema fields" {
 test "cli health help documents config-only readiness output" {
     const help = VAR1.cli.helpText("health").?;
 
-    try std.testing.expect(std.mem.indexOf(u8, help, "\"openai_base_url\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "\"base_url\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "\"auth_provider\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "does not send a model completion request") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "VAR1 health --json") != null);
