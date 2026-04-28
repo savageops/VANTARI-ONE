@@ -678,7 +678,7 @@ fn executeInitHarness(
     const stats = try scaffoldHarness(allocator, workspace_root, parsed.value.force_overwrite);
     const content = try std.fmt.allocPrint(
         allocator,
-        "HARNESS_ROOT {s}\nDIRECTORIES_ENSURED {d}\nFILES_WRITTEN {d}\nFILES_SKIPPED {d}",
+        "ROOT {s}\nDIRECTORIES_ENSURED {d}\nFILES_WRITTEN {d}\nFILES_SKIPPED {d}",
         .{ ".var", stats.directories_created, stats.files_written, stats.files_skipped },
     );
     defer allocator.free(content);

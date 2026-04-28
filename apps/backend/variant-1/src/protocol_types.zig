@@ -95,7 +95,7 @@ pub const HealthGetResult = struct {
     ok: bool,
     model: []const u8,
     workspace_root: []const u8,
-    openai_base_url: []const u8,
+    base_url: []const u8,
     auth_provider: ?[]const u8 = null,
     subscription_plan_label: ?[]const u8 = null,
     subscription_status: ?[]const u8 = null,

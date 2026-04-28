@@ -51,11 +51,11 @@ test "config loader reads variant env values" {
     defer std.testing.allocator.free(env_path);
 
     try VAR1.fsutil.writeText(env_path,
-        \\OPENAI_BASE_URL=http://127.0.0.1:1234
-        \\OPENAI_API_KEY=test-key
-        \\OPENAI_MODEL=test-model
-        \\HARNESS_MAX_STEPS=4
-        \\HARNESS_WORKSPACE=.
+        \\BASE_URL=http://127.0.0.1:1234
+        \\API_KEY=test-key
+        \\MODEL=test-model
+        \\MAX_STEPS=4
+        \\WORKSPACE=.
         \\
     );
 
@@ -79,8 +79,8 @@ test "config loader rejects missing required keys" {
     defer std.testing.allocator.free(env_path);
 
     try VAR1.fsutil.writeText(env_path,
-        \\OPENAI_BASE_URL=http://127.0.0.1:1234
-        \\OPENAI_MODEL=test-model
+        \\BASE_URL=http://127.0.0.1:1234
+        \\MODEL=test-model
         \\
     );
 
@@ -99,14 +99,14 @@ test "config loader ignores commented backup provider entries" {
 
     try VAR1.fsutil.writeText(env_path,
         \\# Backup local provider
-        \\# OPENAI_BASE_URL=http://127.0.0.1:1234
-        \\# OPENAI_API_KEY=local-key
-        \\# OPENAI_MODEL=local-model
-        \\OPENAI_BASE_URL=https://api.z.ai/api/coding/paas/v4
-        \\OPENAI_API_KEY=active-key
-        \\OPENAI_MODEL=GLM-5.1
-        \\HARNESS_MAX_STEPS=10
-        \\HARNESS_WORKSPACE=.
+        \\# BASE_URL=http://127.0.0.1:1234
+        \\# API_KEY=local-key
+        \\# MODEL=local-model
+        \\BASE_URL=https://api.z.ai/api/coding/paas/v4
+        \\API_KEY=active-key
+        \\MODEL=GLM-5.1
+        \\MAX_STEPS=10
+        \\WORKSPACE=.
         \\
     );
 
@@ -130,11 +130,11 @@ test "loadDefault canonicalizes relative workspace root to an absolute current d
     defer std.testing.allocator.free(env_path);
 
     try VAR1.fsutil.writeText(env_path,
-        \\OPENAI_BASE_URL=http://127.0.0.1:1234
-        \\OPENAI_API_KEY=test-key
-        \\OPENAI_MODEL=test-model
-        \\HARNESS_MAX_STEPS=4
-        \\HARNESS_WORKSPACE=.
+        \\BASE_URL=http://127.0.0.1:1234
+        \\API_KEY=test-key
+        \\MODEL=test-model
+        \\MAX_STEPS=4
+        \\WORKSPACE=.
         \\
     );
 
@@ -164,11 +164,11 @@ test "loadDefault seeds canonical auth state from env and then prefers auth ledg
     defer std.testing.allocator.free(env_path);
 
     try VAR1.fsutil.writeText(env_path,
-        \\OPENAI_BASE_URL=https://api.z.ai/api/coding/paas/v4
-        \\OPENAI_API_KEY=env-key
-        \\OPENAI_MODEL=GLM-5.1
-        \\HARNESS_MAX_STEPS=4
-        \\HARNESS_WORKSPACE=.
+        \\BASE_URL=https://api.z.ai/api/coding/paas/v4
+        \\API_KEY=env-key
+        \\MODEL=GLM-5.1
+        \\MAX_STEPS=4
+        \\WORKSPACE=.
         \\
     );
 

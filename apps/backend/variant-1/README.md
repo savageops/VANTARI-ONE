@@ -142,17 +142,17 @@ The smoke lane now proves:
 - bridge-only root response
 - external browser client presence at `apps/frontend/var1-client`
 
-Before the first prompt run, the smoke scripts now also verify that the configured provider is reachable and that `OPENAI_MODEL` is actively served by the authenticated `/v1/models` surface.
+Before the first prompt run, the smoke scripts now also verify that the configured provider is reachable and that `MODEL` is actively served by the authenticated `/v1/models` surface.
 
 ## Configuration
 
 Required `.env` keys:
 
-- `OPENAI_BASE_URL`
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL`
-- `HARNESS_MAX_STEPS`
-- `HARNESS_WORKSPACE`
+- `BASE_URL`
+- `API_KEY`
+- `MODEL`
+- `MAX_STEPS`
+- `WORKSPACE`
 
 Use `.env.example` as the public template. Keep live `.env` values local.
 

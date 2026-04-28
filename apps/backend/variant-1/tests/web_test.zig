@@ -199,7 +199,7 @@ fn mockKernelCall(
                 .ok = true,
                 .model = "gemma-4-26b-a4b-it-apex",
                 .workspace_root = "E:/tmp/workspace",
-                .openai_base_url = "http://127.0.0.1:1234",
+                .base_url = "http://127.0.0.1:1234",
             }),
         };
     }

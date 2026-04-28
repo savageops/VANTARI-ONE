@@ -146,13 +146,13 @@ try {
   New-Item -ItemType Directory -Force -Path $smokeDir | Out-Null
 
   $envValues = Read-EnvMap -EnvPath (Join-Path $rootDir ".env")
-  if ($envValues["OPENAI_BASE_URL"] -ne "http://127.0.0.1:1234") {
-    throw "GEMMA_LOCAL expected OPENAI_BASE_URL=http://127.0.0.1:1234 in .env"
+  if ($envValues["BASE_URL"] -ne "http://127.0.0.1:1234") {
+    throw "GEMMA_LOCAL expected BASE_URL=http://127.0.0.1:1234 in .env"
   }
-  if ($envValues["OPENAI_MODEL"] -ne "gemma-4-26b-a4b-it-apex") {
-    throw "GEMMA_LOCAL expected OPENAI_MODEL=gemma-4-26b-a4b-it-apex in .env"
+  if ($envValues["MODEL"] -ne "gemma-4-26b-a4b-it-apex") {
+    throw "GEMMA_LOCAL expected MODEL=gemma-4-26b-a4b-it-apex in .env"
   }
-  Assert-ProviderReady -BaseUrl $envValues["OPENAI_BASE_URL"] -ApiKey $envValues["OPENAI_API_KEY"] -Model $envValues["OPENAI_MODEL"]
+  Assert-ProviderReady -BaseUrl $envValues["BASE_URL"] -ApiKey $envValues["API_KEY"] -Model $envValues["MODEL"]
 
   Write-Host "GEMMA_LOCAL suite"
   & $zigWrapper build test --summary all
