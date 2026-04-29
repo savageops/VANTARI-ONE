@@ -245,7 +245,7 @@ cd apps/backend/variant-1
 
 ## Validation
 
-Latest local Windows validation recorded on 2026-04-29:
+Latest local Windows validation recorded on 2026-04-30:
 
 ```text
 .\scripts\zigw.ps1 build test --summary all  -> 80/80 tests passed
