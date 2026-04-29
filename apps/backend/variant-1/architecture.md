@@ -289,7 +289,7 @@ The current validation lane should always prove these slices together:
 - auto and provider-overflow compaction write observable checkpoint/event records
 - external client exists at `apps/frontend/var1-client`
 
-Latest local Windows validation on 2026-04-29:
+Latest local Windows validation on 2026-04-30:
 
 - `.\scripts\zigw.ps1 build test --summary all` -> `80/80 tests passed`
 - `.\zig-out\bin\VAR1.exe tools --json` -> `search_files` includes `external_command` dependency availability for `iex`
