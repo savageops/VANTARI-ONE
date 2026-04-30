@@ -60,7 +60,7 @@ The browser client lives outside the kernel at `apps/frontend/var1-client`.
 
 The current tool surface is compiled into the `VAR1` binary. Tool definitions use the shared `ToolDefinition` shape: name, description, `parameters_json`, optional example, and optional usage hint. Built-in file and agent tools live under `src/core/tools/builtin/`; each module exports `definition`, `availability`, and `execute`. `src/core/tools/runtime.zig` composes those modules for catalog rendering and dispatch, `src/core/tools/registry.zig` resolves availability from module-owned tool names/specs, and `src/core/tools/module.zig` owns shared execution contracts. `src/core/executor/loop.zig` injects the context-filtered definitions into provider requests; `src/core/providers/openai_compatible.zig` writes them as OpenAI-compatible function schemas.
 
-`VAR1 tools --json` and the JSON-RPC `tools/list` method expose the same catalog. That catalog includes availability metadata, so installing clients can distinguish shipped schema from currently usable capability.
+`VAR1 tools --json` and the JSON-RPC `tools/list` method expose the same catalog. That catalog includes availability metadata, so installing clients can distinguish shipped schema from currently usable capability. Mutating file-tool responses preserve the stable `ok/tool/content` envelope and add a typed `effect` receipt when a workspace file changes.
 
 File tools are split by role:
 
@@ -69,6 +69,8 @@ File tools are split by role:
 - `read_file`, `write_file`, `append_file`, and `replace_in_file` operate on exact workspace-relative paths.
 
 An installed runtime must provide a real `iex` executable for `search_files`. PowerShell aliases are not enough for the Zig child-process runner. If `iex` is absent, search is unavailable at the command dependency boundary, `VAR1 tools --json` reports that state, and execution fails early with `ToolUnavailable` instead of surfacing a late child-process surprise.
+
+`write_file`, `append_file`, and `replace_in_file` return `effect.schema_version = "var1.tool_effect.v1"` with the requested path, resolved path, before/after byte counts, operation-specific counts, and SHA-256 hashes for existing file contents. This is the lightweight verification layer for small-model and bridge-facing workflows: the runtime proves the file effect at the tool boundary without introducing a separate evaluator loop.
 
 `src/core/tools/sockets.zig` and `src/core/plugins/manifest.zig` are validation boundaries for typed sockets and plugin manifests. They do not load plugins, auto-discover plugin roots, or mutate the model-visible tool list.
 

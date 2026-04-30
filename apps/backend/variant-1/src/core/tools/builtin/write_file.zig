@@ -42,7 +42,13 @@ pub fn execute(
     const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
     defer allocator.free(file_path);
 
+    const before = try module.captureFileSnapshot(allocator, file_path);
+    defer before.deinit(allocator);
+
     try fsutil.writeText(file_path, parsed.value.content);
+
+    const after = try module.fileSnapshotFromContents(allocator, true, parsed.value.content);
+    defer after.deinit(allocator);
 
     const summary = try std.fmt.allocPrint(
         allocator,
@@ -51,5 +57,15 @@ pub fn execute(
     );
     defer allocator.free(summary);
 
-    return module.okEnvelope(allocator, definition.name, summary);
+    return module.fileEffectEnvelope(
+        allocator,
+        definition.name,
+        summary,
+        .write_file,
+        parsed.value.path,
+        file_path,
+        before,
+        after,
+        .{ .name = .bytes_written, .value = parsed.value.content.len },
+    );
 }

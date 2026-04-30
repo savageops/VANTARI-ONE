@@ -275,8 +275,20 @@ test "file tools can create append replace and read within the workspace" {
     defer std.testing.allocator.free(read_output);
 
     try std.testing.expect(std.mem.indexOf(u8, write_output, "\"ok\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, write_output, "\"effect\":{\"schema_version\":\"var1.tool_effect.v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, write_output, "\"action\":\"write_file\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, write_output, "\"before_exists\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, write_output, "\"bytes_written\":6") != null);
+    try std.testing.expect(std.mem.indexOf(u8, write_output, "\"after_sha256\":") != null);
     try std.testing.expect(std.mem.indexOf(u8, append_output, "APPENDED_BYTES") != null);
+    try std.testing.expect(std.mem.indexOf(u8, append_output, "\"action\":\"append_file\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, append_output, "\"before_exists\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, append_output, "\"before_bytes\":6") != null);
+    try std.testing.expect(std.mem.indexOf(u8, append_output, "\"after_bytes\":11") != null);
+    try std.testing.expect(std.mem.indexOf(u8, append_output, "\"bytes_appended\":5") != null);
     try std.testing.expect(std.mem.indexOf(u8, replace_output, "REPLACEMENTS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replace_output, "\"action\":\"replace_in_file\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replace_output, "\"replacements\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, read_output, "1: alpha") != null);
     try std.testing.expect(std.mem.indexOf(u8, read_output, "2: gamma") != null);
 }

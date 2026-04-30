@@ -42,7 +42,28 @@ pub fn execute(
     const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
     defer allocator.free(file_path);
 
+    var before_exists = true;
+    const before_contents = fsutil.readTextAlloc(allocator, file_path) catch |err| switch (err) {
+        error.FileNotFound => missing: {
+            before_exists = false;
+            break :missing try allocator.dupe(u8, "");
+        },
+        else => return err,
+    };
+    defer allocator.free(before_contents);
+
+    const before = try module.fileSnapshotFromContents(allocator, before_exists, before_contents);
+    defer before.deinit(allocator);
+
     try fsutil.appendText(file_path, parsed.value.content);
+
+    const after = try module.fileSnapshotFromParts(
+        allocator,
+        true,
+        before_contents.len + parsed.value.content.len,
+        &.{ before_contents, parsed.value.content },
+    );
+    defer after.deinit(allocator);
 
     const summary = try std.fmt.allocPrint(
         allocator,
@@ -51,5 +72,15 @@ pub fn execute(
     );
     defer allocator.free(summary);
 
-    return module.okEnvelope(allocator, definition.name, summary);
+    return module.fileEffectEnvelope(
+        allocator,
+        definition.name,
+        summary,
+        .append_file,
+        parsed.value.path,
+        file_path,
+        before,
+        after,
+        .{ .name = .bytes_appended, .value = parsed.value.content.len },
+    );
 }
