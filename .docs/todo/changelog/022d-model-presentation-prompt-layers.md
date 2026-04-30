@@ -1,7 +1,7 @@
 ---
 id: 022d-model-presentation-prompt-layers
 parent: 022-model-presentation-prompt-layers
-status: pending
+status: completed
 owner: VAR1
 created: 2026-04-30
 ---
@@ -29,7 +29,11 @@ Validate the upgraded lane, compare against the main branch binary when feasible
 
 ## Evidence
 
-Pending.
+- Committed the implementation checkpoint as `834a632 feat(var1): add prompt layer envelope`.
+- Built upgraded `develop` and baseline `main` with separate Zig cache roots to avoid artifact contamination.
+- Health passed on both lanes using active provider `zai`, model `glm-5.1`.
+- Upgraded session `session-1777576359915-3cf77bc839898869` completed `write_file -> read_file -> append_file -> read_file -> replace_in_file -> read_file` and returned exactly `BENCH_OK beta=TWO gamma=three`.
+- Main session `session-1777576409385-a2b609f0db4508dc` completed only `write_file`, then failed `StepLimitExceeded`.
 
 ## Exit State
 

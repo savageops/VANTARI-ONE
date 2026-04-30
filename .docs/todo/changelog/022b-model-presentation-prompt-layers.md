@@ -1,7 +1,7 @@
 ---
 id: 022b-model-presentation-prompt-layers
 parent: 022-model-presentation-prompt-layers
-status: pending
+status: completed
 owner: VAR1
 created: 2026-04-30
 ---
@@ -29,7 +29,11 @@ Create a canonical prompt subsystem under `core/prompts/` and route provider bas
 
 ## Evidence
 
-Pending.
+- Added `apps/backend/variant-1/src/core/prompts/builder.zig` and exported it through `core/prompts/index.zig`.
+- Added `PromptPolicy` to shared config and `[prompts]` parsing in `core/config/settings.zig`.
+- Rewired `core/executor/loop.zig` to build provider base messages through `prompts.buildAgentSystemPrompt`.
+- Added prompt tests covering envelope sections and workspace-local prompt-file loading.
+- Validation: `.\scripts\zigw.ps1 build test --summary all` -> `88/88 tests passed`.
 
 ## Exit State
 

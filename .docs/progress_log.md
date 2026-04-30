@@ -18,6 +18,7 @@ The tracked git worktree was clean before this progress-log artifact was refresh
 - Active health base URL -> `https://api.z.ai/api/coding/paas/v4`
 - Active auth provider -> `zai`
 - `.\zig-out\bin\VAR1.exe tools --json` -> tool catalog emits availability metadata, including `search_files` with `external_command` dependency `iex` available
+- Live comparison against `main` (`3d33a01`) on Z.AI `glm-5.1`: upgraded `develop` completed the six-operation file-tool benchmark in session `session-1777576359915-3cf77bc839898869`; `main` failed in session `session-1777576409385-a2b609f0db4508dc` after one `write_file` with `StepLimitExceeded`.
 
 Live Z.AI credentials/configuration are not recorded here. The effective provider state resolves through ignored `.var/auth/auth.json`; secrets remain local and are not copied into this document.
 
@@ -98,9 +99,11 @@ Canonical session layout:
 31. Prompt assembly moved out of `core/tools/runtime.zig` into `core/prompts/builder.zig`.
 32. Optional `[prompts]` settings now support workspace-relative `system_prompt_file` and `developer_prompt_file`; missing or empty files fall back to built-in defaults while unknown keys and absolute paths fail closed.
 33. Tool descriptors and the rendered catalog now emphasize JSON-object call grammar, recovery from `ok:false`/tool-error hints, path-discovery order, and effect/result evidence for weaker models.
+34. Isolated-cache comparison builds proved the upgraded descriptor catalog differs from `main`; the upgraded live lane executed `write_file -> read_file -> append_file -> read_file -> replace_in_file -> read_file` and returned the exact required final answer, while `main` stopped after only the first write.
 
 ## Recent Commit Chain
 
+- `834a632 feat(var1): add prompt layer envelope` - added the canonical prompt envelope, configurable system/developer prompt paths, hidden guardrail layer, and stronger tool descriptors.
 - `56d3eb8 feat(var1): prioritize tool effect receipts` - made model-visible mutating-tool content effect-first.
 - `4e8924b feat(var1): add mutating tool effect receipts` - added structured file-effect metadata and SHA-256 receipts.
 - `3d33a01 Harden local model smoke harness` - made the Gemma smoke lane model-aware and tolerant for small-model probes.
@@ -176,7 +179,7 @@ Those files are workspace-relative and user-editable. Hidden guardrails, tool ru
 - The local small model `gemma-4-e2b-it` can use the harness and tools, but it still has weaker reasoning and artifact self-evaluation than larger models.
 - The strawberry sentinel for the small model previously returned `2` instead of `3`; this is treated as model capability degradation, not a transport/runtime failure.
 - Mutating-tool effect receipts improve model-visible evidence and the Z.AI `glm-5.1` benchmark shows better evidence-grounded adherence than the prior legacy receipt lane, but receipts are not a full deterministic artifact validator or a complete model-obedience fix.
-- Prompt layering improves instruction salience and configurability, but it is still a presentation contract; deterministic validators remain the next boundary for artifact correctness after mutating tools.
+- Prompt layering improves instruction salience and configurability; the first direct `main` comparison shows better tool batching/adherence under the same auth-only step budget, but deterministic validators remain the next boundary for artifact correctness after mutating tools.
 - The active provider is currently Z.AI `glm-5.1`; switch-provider smokes must preserve `.var/auth/auth.json` secret hygiene and avoid recording API keys in docs or logs.
 - Plugin manifests and sockets validate contracts only; runtime plugin discovery/execution is intentionally not active.
 - Exact tokenizer accounting is deferred until the current heuristic proves insufficient under real overflow evidence.

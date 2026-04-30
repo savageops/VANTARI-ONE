@@ -68,6 +68,33 @@ The descriptor pass tightened the high-frequency failure points for weaker model
 Build Summary: 5/5 steps succeeded; 88/88 tests passed
 ```
 
+Isolated-cache binary builds:
+
+```text
+develop 834a632 -> build succeeded
+main    3d33a01 -> build succeeded
+```
+
+Live Z.AI `glm-5.1` file-tool adherence probe:
+
+```text
+develop session-1777576359915-3cf77bc839898869
+events: write_file -> read_file -> append_file -> read_file -> replace_in_file -> read_file -> assistant_response
+output: BENCH_OK beta=TWO gamma=three
+artifact:
+alpha=one
+beta=TWO
+gamma=three
+
+main session-1777576409385-a2b609f0db4508dc
+events: write_file -> StepLimitExceeded
+artifact:
+alpha=one
+beta=two
+```
+
+The comparison used the same active provider/model and the same auth-only step-budget posture. The material behavioral delta was not just descriptor text: the upgraded prompt envelope induced the model to emit the whole required tool plan in one model turn, while `main` emitted only the first mutating tool call and exhausted the step gate.
+
 ## Residual Boundary
 
 Prompt layering and descriptor clarity improve the model-visible control surface, but they do not prove artifact correctness by themselves. The next durable step is a benchmark that compares main and upgraded binaries across the same provider/model using scripted tasks scored on tool-call validity, schema repair, evidence use, and final-answer groundedness.

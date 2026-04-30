@@ -1,7 +1,7 @@
 ---
 id: 022a-model-presentation-prompt-layers
 parent: 022-model-presentation-prompt-layers
-status: pending
+status: completed
 owner: VAR1
 created: 2026-04-30
 ---
@@ -26,7 +26,9 @@ Lock the existing prompt/tool presentation path and reference-derived boundary s
 
 ## Evidence
 
-Pending.
+- Baseline confirmed the pre-slice executor injected one system message built from `tools.buildAgentSystemPrompt`.
+- Baseline confirmed `core/tools/runtime.zig` owned both prompt prose and catalog rendering before the slice.
+- Reference lock used local Pi/Codex prompt/provider code plus Py Code Agent 0.1.0 package sources to extract the transferable invariant: centralized prompt assembly, provider-role compatibility, and descriptor hinting.
 
 ## Exit State
 

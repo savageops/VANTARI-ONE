@@ -1,6 +1,6 @@
 ---
 id: 022-model-presentation-prompt-layers
-status: pending
+status: completed
 owner: VAR1
 created: 2026-04-30
 ---
@@ -40,11 +40,13 @@ Replace the current single prompt assembled inside the tool runtime with a canon
 
 | File | Unit | Responsibility | Status |
 | --- | --- | --- | --- |
-| `.docs/todo/pending/022a-model-presentation-prompt-layers.md` | a | Baseline and reference lock | pending |
-| `.docs/todo/pending/022b-model-presentation-prompt-layers.md` | b | Prompt subsystem implementation | pending |
-| `.docs/todo/pending/022c-model-presentation-prompt-layers.md` | c | Tool descriptor hardening | pending |
-| `.docs/todo/pending/022d-model-presentation-prompt-layers.md` | d | Validation, comparison, docs, commit | pending |
+| `.docs/todo/changelog/022a-model-presentation-prompt-layers.md` | a | Baseline and reference lock | completed |
+| `.docs/todo/changelog/022b-model-presentation-prompt-layers.md` | b | Prompt subsystem implementation | completed |
+| `.docs/todo/changelog/022c-model-presentation-prompt-layers.md` | c | Tool descriptor hardening | completed |
+| `.docs/todo/changelog/022d-model-presentation-prompt-layers.md` | d | Validation, comparison, docs, commit | completed |
 
 ## Completion Gate
 
 Chain is complete when all units are archived into `.docs/todo/changelog/`, runtime tests pass, live prompt/tool adherence evidence exists for the upgraded lane, and a comparison against the main-branch binary is recorded if the baseline can be built.
+
+Completion evidence: `88/88` tests passed, `develop` `834a632` and `main` `3d33a01` both built with isolated Zig cache roots, upgraded session `session-1777576359915-3cf77bc839898869` completed the six-operation tool plan, and main session `session-1777576409385-a2b609f0db4508dc` failed after one tool call with `StepLimitExceeded`.

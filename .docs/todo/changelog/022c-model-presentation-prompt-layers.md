@@ -1,7 +1,7 @@
 ---
 id: 022c-model-presentation-prompt-layers
 parent: 022-model-presentation-prompt-layers
-status: pending
+status: completed
 owner: VAR1
 created: 2026-04-30
 ---
@@ -26,7 +26,10 @@ Improve model-facing tool descriptors and catalog guidance without introducing a
 
 ## Evidence
 
-Pending.
+- Hardened `list_files`, `search_files`, `read_file`, `write_file`, `append_file`, `replace_in_file`, and child-agent descriptors in their module-owned definitions.
+- Added catalog-level call grammar in `core/tools/runtime.zig`: one JSON object, declared fields only, inspect `ok:false` and `tool_error_hint` before retrying.
+- Added workspace-state tool examples and usage hints without introducing a second registry.
+- Verified upgraded `tools --json` emits the new descriptor text after isolated-cache rebuild.
 
 ## Exit State
 
