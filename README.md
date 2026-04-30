@@ -103,7 +103,7 @@ flowchart TB
 | Context compilation | Builds provider-ready message windows from `session.json`, `messages.jsonl`, and the latest `context.jsonl` checkpoint. |
 | Checkpointed compaction path | Generates deterministic Zig-native summary checkpoints in `context.jsonl` without replacing the complete transcript. |
 | Event persistence | Records runtime progress, tool lifecycle entries, bridge notifications, and terminal state in `events.jsonl`. |
-| Tool integration | Publishes built-in tool contracts and availability metadata from the kernel registry as JSON schemas for provider calls, `tools/list`, and `VAR1 tools --json`. |
+| Tool integration | Publishes built-in tool contracts and availability metadata from the kernel registry as JSON schemas for provider calls, `tools/list`, and `VAR1 tools --json`; write-capable file tools return typed effect receipts. |
 | Command-backed search | Exposes `search_files` as the content-search tool over the external `iex` executable; availability is false until a real executable is resolvable. |
 | Plugin boundary | Validates plugin manifests and socket declarations without runtime loading or direct store/provider access. |
 | Provider isolation | Resolves OpenAI-compatible provider configuration behind the runtime boundary. |
@@ -112,9 +112,11 @@ flowchart TB
 
 ## Tool Runtime
 
-Tool contracts are kernel-owned. Per-tool file and agent modules live under `apps/backend/variant-1/src/core/tools/builtin/`; each built-in tool exports its `definition`, `availability`, and `execute` contract. `src/core/tools/runtime.zig` composes those modules for dispatch and catalog output, `src/core/tools/registry.zig` resolves capability availability from module-owned tool names/specs, and `src/core/tools/module.zig` owns shared runner/context/envelope types. Provider schema serialization still flows through `src/core/providers/openai_compatible.zig`.
+Tool contracts are kernel-owned. Per-tool file and agent modules live under `apps/backend/variant-1/src/core/tools/builtin/`; each built-in tool exports its `definition`, `availability`, and `execute` contract. `src/core/tools/runtime.zig` composes those modules for dispatch and catalog output, `src/core/tools/registry.zig` resolves capability availability from module-owned tool names/specs, and `src/core/tools/module.zig` owns shared runner/context/envelope/effect-receipt types. Provider schema serialization still flows through `src/core/providers/openai_compatible.zig`.
 
 `tools/list` and `VAR1 tools --json` expose the same catalog, including availability metadata. `search_files` is the only content-search tool. It shells to `iex search --json` through the command-runner boundary and declares an `external_command("iex")` dependency. A checkout or packaged install must provide a real `iex` executable on `PATH` or beside the process before that tool is available; missing search dependencies are reported as unavailable capabilities instead of late process-spawn surprises. `list_files` is a native Zig directory/file discovery primitive and does not depend on `iex`.
+
+`write_file`, `append_file`, and `replace_in_file` preserve the stable `ok/tool/content` response shape and add an `effect` object with schema `var1.tool_effect.v1`. The receipt records the requested path, resolved path, before/after existence and byte counts, operation-specific counts, and SHA-256 hashes where content exists. This gives the harness deterministic file-effect evidence without adding a separate verifier worker.
 
 Plugin support is currently contract-level: `src/core/tools/sockets.zig` validates typed tool sockets and `src/core/plugins/manifest.zig` validates plugin socket declarations. There is no automatic plugin discovery or dynamic plugin execution in the shipped runtime.
 

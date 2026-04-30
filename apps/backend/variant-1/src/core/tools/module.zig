@@ -158,6 +158,155 @@ pub fn okEnvelope(allocator: std.mem.Allocator, tool_name: []const u8, content: 
     );
 }
 
+pub const FileSnapshot = struct {
+    exists: bool,
+    len: usize,
+    sha256_hex: ?[]u8 = null,
+
+    pub fn deinit(self: FileSnapshot, allocator: std.mem.Allocator) void {
+        if (self.sha256_hex) |hash| allocator.free(hash);
+    }
+};
+
+pub const FileEffectAction = enum {
+    write_file,
+    append_file,
+    replace_in_file,
+};
+
+pub const FileEffectMetricName = enum {
+    bytes_written,
+    bytes_appended,
+    replacements,
+};
+
+pub const FileEffectMetric = struct {
+    name: FileEffectMetricName,
+    value: usize,
+};
+
+pub fn captureFileSnapshot(allocator: std.mem.Allocator, path: []const u8) !FileSnapshot {
+    const contents = fsutil.readTextAlloc(allocator, path) catch |err| switch (err) {
+        error.FileNotFound => return .{ .exists = false, .len = 0 },
+        else => return err,
+    };
+    defer allocator.free(contents);
+
+    return fileSnapshotFromContents(allocator, true, contents);
+}
+
+pub fn fileSnapshotFromContents(
+    allocator: std.mem.Allocator,
+    exists: bool,
+    contents: []const u8,
+) !FileSnapshot {
+    if (!exists) return .{ .exists = false, .len = 0 };
+
+    return .{
+        .exists = exists,
+        .len = contents.len,
+        .sha256_hex = try sha256HexAlloc(allocator, contents),
+    };
+}
+
+pub fn fileSnapshotFromParts(
+    allocator: std.mem.Allocator,
+    exists: bool,
+    len: usize,
+    parts: []const []const u8,
+) !FileSnapshot {
+    if (!exists) return .{ .exists = false, .len = 0 };
+
+    return .{
+        .exists = exists,
+        .len = len,
+        .sha256_hex = try sha256HexPartsAlloc(allocator, parts),
+    };
+}
+
+pub fn fileEffectEnvelope(
+    allocator: std.mem.Allocator,
+    tool_name: []const u8,
+    content: []const u8,
+    action: FileEffectAction,
+    requested_path: []const u8,
+    resolved_path: []const u8,
+    before: FileSnapshot,
+    after: FileSnapshot,
+    metric: FileEffectMetric,
+) ![]u8 {
+    var output = std.array_list.Managed(u8).init(allocator);
+    errdefer output.deinit();
+
+    const writer = output.writer();
+    try writer.writeAll("{\"ok\":true,\"tool\":");
+    try writer.print("{f}", .{std.json.fmt(tool_name, .{})});
+    try writer.writeAll(",\"content\":");
+    try writer.print("{f}", .{std.json.fmt(content, .{})});
+    try writer.writeAll(",\"effect\":{\"schema_version\":\"var1.tool_effect.v1\",\"action\":");
+    try writer.print("{f}", .{std.json.fmt(fileEffectActionLabel(action), .{})});
+    try writer.writeAll(",\"path\":");
+    try writer.print("{f}", .{std.json.fmt(requested_path, .{})});
+    try writer.writeAll(",\"resolved_path\":");
+    try writer.print("{f}", .{std.json.fmt(resolved_path, .{})});
+    try writer.writeAll(",\"before_exists\":");
+    try writer.writeAll(if (before.exists) "true" else "false");
+    try writer.print(",\"before_bytes\":{d},\"after_bytes\":{d},", .{ before.len, after.len });
+    try writer.print("\"{s}\":{d},", .{ fileEffectMetricLabel(metric.name), metric.value });
+    try writer.writeAll("\"before_sha256\":");
+    try writeOptionalHash(writer, before.sha256_hex);
+    try writer.writeAll(",\"after_sha256\":");
+    try writeOptionalHash(writer, after.sha256_hex);
+    try writer.writeAll("}}");
+
+    return output.toOwnedSlice();
+}
+
+fn sha256HexAlloc(allocator: std.mem.Allocator, contents: []const u8) ![]u8 {
+    return sha256HexPartsAlloc(allocator, &.{contents});
+}
+
+fn sha256HexPartsAlloc(allocator: std.mem.Allocator, parts: []const []const u8) ![]u8 {
+    var digest: [32]u8 = undefined;
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    for (parts) |part| {
+        hasher.update(part);
+    }
+    hasher.final(&digest);
+
+    const hex_chars = "0123456789abcdef";
+    const hex = try allocator.alloc(u8, digest.len * 2);
+    for (digest, 0..) |byte, index| {
+        hex[index * 2] = hex_chars[@as(usize, byte >> 4)];
+        hex[index * 2 + 1] = hex_chars[@as(usize, byte & 0x0f)];
+    }
+    return hex;
+}
+
+fn fileEffectActionLabel(action: FileEffectAction) []const u8 {
+    return switch (action) {
+        .write_file => "write_file",
+        .append_file => "append_file",
+        .replace_in_file => "replace_in_file",
+    };
+}
+
+fn fileEffectMetricLabel(metric: FileEffectMetricName) []const u8 {
+    return switch (metric) {
+        .bytes_written => "bytes_written",
+        .bytes_appended => "bytes_appended",
+        .replacements => "replacements",
+    };
+}
+
+fn writeOptionalHash(writer: anytype, value: ?[]const u8) !void {
+    if (value) |hash| {
+        try writer.print("{f}", .{std.json.fmt(hash, .{})});
+    } else {
+        try writer.writeAll("null");
+    }
+}
+
 pub fn renderLineRange(
     allocator: std.mem.Allocator,
     content: []const u8,

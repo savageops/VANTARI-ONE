@@ -49,6 +49,9 @@ pub fn execute(
     const original = try fsutil.readTextAlloc(allocator, file_path);
     defer allocator.free(original);
 
+    const before = try module.fileSnapshotFromContents(allocator, true, original);
+    defer before.deinit(allocator);
+
     const replace_result = try module.replaceText(
         allocator,
         original,
@@ -62,6 +65,9 @@ pub fn execute(
 
     try fsutil.writeText(file_path, replace_result.contents);
 
+    const after = try module.fileSnapshotFromContents(allocator, true, replace_result.contents);
+    defer after.deinit(allocator);
+
     const summary = try std.fmt.allocPrint(
         allocator,
         "PATH {s}\nREPLACEMENTS {d}",
@@ -69,5 +75,15 @@ pub fn execute(
     );
     defer allocator.free(summary);
 
-    return module.okEnvelope(allocator, definition.name, summary);
+    return module.fileEffectEnvelope(
+        allocator,
+        definition.name,
+        summary,
+        .replace_in_file,
+        parsed.value.path,
+        file_path,
+        before,
+        after,
+        .{ .name = .replacements, .value = replace_result.replacements },
+    );
 }
