@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-  [int]$Port = 4311
+  [int]$Port = 4311,
+  [string]$ExpectedModel = "",
+  [switch]$AllowSanityMismatch
 )
 
 Set-StrictMode -Version Latest
@@ -128,6 +130,25 @@ function Test-ReportsThree {
   return $Text -match '\b3\b'
 }
 
+function Assert-SanityAnswer {
+  param(
+    [string]$Surface,
+    [string]$Text
+  )
+
+  if (Test-ReportsThree -Text $Text) {
+    return
+  }
+
+  $message = "GEMMA_LOCAL $Surface did not clearly report 3: $Text"
+  if ($AllowSanityMismatch) {
+    Write-Warning "$message; continuing because -AllowSanityMismatch is set"
+    return
+  }
+
+  throw $message
+}
+
 function Wait-ForBridgeHealth {
   param([int]$TargetPort)
 
@@ -142,6 +163,57 @@ function Wait-ForBridgeHealth {
   throw "bridge health check did not respond on port $TargetPort"
 }
 
+function Invoke-BridgeRpc {
+  param(
+    [int]$TargetPort,
+    [string]$BridgeToken,
+    [int]$Id,
+    [string]$Method,
+    [hashtable]$Params
+  )
+
+  $body = @{
+    jsonrpc = "2.0"
+    id = $Id
+    method = $Method
+    params = $Params
+  } | ConvertTo-Json -Depth 30 -Compress
+
+  if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
+    throw "GEMMA_LOCAL bridge RPC smoke requires curl.exe for exact header emission"
+  }
+
+  $bodyPath = Join-Path $smokeDir "bridge-rpc-$Id-$([guid]::NewGuid().ToString('N')).json"
+  try {
+    [System.IO.File]::WriteAllText($bodyPath, $body, [System.Text.UTF8Encoding]::new($false))
+    $curlArgs = @(
+      "-sS",
+      "-X", "POST",
+      "-H", "Content-Type: application/json",
+      "-H", "X-Var1-Bridge-Token: $($BridgeToken.Trim())",
+      "--data-binary", "@$bodyPath",
+      "http://127.0.0.1:$TargetPort/rpc"
+    )
+    $rawResponse = & curl.exe @curlArgs 2>&1
+    if ($LASTEXITCODE -ne 0) {
+      throw "GEMMA_LOCAL bridge RPC $Method curl failed: $($rawResponse | Out-String)"
+    }
+    $response = $rawResponse | Out-String | ConvertFrom-Json
+  } finally {
+    Remove-Item -LiteralPath $bodyPath -Force -ErrorAction SilentlyContinue
+  }
+
+  if (($response.PSObject.Properties.Name -contains "error") -and $null -ne $response.error) {
+    throw "GEMMA_LOCAL bridge RPC $Method failed: $($response.error | ConvertTo-Json -Compress)"
+  }
+
+  if (-not ($response.PSObject.Properties.Name -contains "result")) {
+    throw "GEMMA_LOCAL bridge RPC $Method returned no result: $($response | ConvertTo-Json -Depth 30 -Compress)"
+  }
+
+  return $response.result
+}
+
 try {
   New-Item -ItemType Directory -Force -Path $smokeDir | Out-Null
 
@@ -149,16 +221,30 @@ try {
   if ($envValues["BASE_URL"] -ne "http://127.0.0.1:1234") {
     throw "GEMMA_LOCAL expected BASE_URL=http://127.0.0.1:1234 in .env"
   }
-  if ($envValues["MODEL"] -ne "gemma-4-26b-a4b-it-apex") {
-    throw "GEMMA_LOCAL expected MODEL=gemma-4-26b-a4b-it-apex in .env"
+
+  $configuredModel = if ($envValues.ContainsKey("MODEL")) { $envValues["MODEL"] } else { "" }
+  if ([string]::IsNullOrWhiteSpace($configuredModel)) {
+    throw "GEMMA_LOCAL expected MODEL to be configured in .env"
   }
-  Assert-ProviderReady -BaseUrl $envValues["BASE_URL"] -ApiKey $envValues["API_KEY"] -Model $envValues["MODEL"]
+
+  $expectedRuntimeModel = if ([string]::IsNullOrWhiteSpace($ExpectedModel)) { $configuredModel } else { $ExpectedModel }
+  if ($configuredModel -ne $expectedRuntimeModel) {
+    throw "GEMMA_LOCAL expected MODEL=$expectedRuntimeModel in .env"
+  }
+  Assert-ProviderReady -BaseUrl $envValues["BASE_URL"] -ApiKey $envValues["API_KEY"] -Model $expectedRuntimeModel
 
   Write-Host "GEMMA_LOCAL suite"
   & $zigWrapper build test --summary all
   if ($LASTEXITCODE -ne 0) {
     throw "zig test suite failed"
   }
+
+  Write-Host "GEMMA_LOCAL effective config"
+  $effectiveHealthOutput = Invoke-Variant1 -CommandArgs @("health")
+  if ($effectiveHealthOutput -notmatch [regex]::Escape("model: $expectedRuntimeModel")) {
+    throw "GEMMA_LOCAL runtime health did not report expected model $expectedRuntimeModel. Health output: $effectiveHealthOutput"
+  }
+  Write-Host $effectiveHealthOutput
 
   Write-Host "GEMMA_LOCAL windows build"
   & $zigWrapper build -Dtarget=x86_64-windows-gnu --summary all
@@ -168,9 +254,7 @@ try {
 
   Write-Host "GEMMA_LOCAL direct run"
   $directRunOutput = Invoke-Variant1 -CommandArgs @("run", "--prompt", $sanityPrompt)
-  if (-not (Test-ReportsThree -Text $directRunOutput)) {
-    throw "GEMMA_LOCAL direct run did not clearly report 3: $directRunOutput"
-  }
+  Assert-SanityAnswer -Surface "direct run" -Text $directRunOutput
   Write-Host $directRunOutput
 
   $promptFile = Join-Path $smokeDir "VAR1-gemma-delegated-prompt-$([guid]::NewGuid().ToString('N')).txt"
@@ -184,9 +268,7 @@ Return only the child's final answer and nothing else.
 
   Write-Host "GEMMA_LOCAL delegated"
   $delegatedOutput = Invoke-Variant1 -CommandArgs @("run", "--prompt-file", $promptFile)
-  if (-not (Test-ReportsThree -Text $delegatedOutput)) {
-    throw "GEMMA_LOCAL delegated run did not clearly report 3: $delegatedOutput"
-  }
+  Assert-SanityAnswer -Surface "delegated run" -Text $delegatedOutput
   Write-Host $delegatedOutput
 
   Clear-BridgePort -TargetPort $Port
@@ -197,7 +279,7 @@ Return only the child's final answer and nothing else.
   $bridgeProcess = Start-Process -FilePath $exePath -ArgumentList @("serve", "--host", "127.0.0.1", "--port", $Port.ToString()) -RedirectStandardOutput $bridgeOut -RedirectStandardError $bridgeErr -PassThru -WindowStyle Hidden
 
   $health = Wait-ForBridgeHealth -TargetPort $Port
-  if ($health.model -ne "gemma-4-26b-a4b-it-apex") {
+  if ($health.model -ne $expectedRuntimeModel) {
     throw "GEMMA_LOCAL bridge health reported unexpected model: $($health.model)"
   }
 
@@ -213,44 +295,45 @@ Return only the child's final answer and nothing else.
     throw "GEMMA_LOCAL bridge root did not point operators to apps/frontend/var1-client"
   }
 
-  $created = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/tasks" -Method Post -ContentType "application/json" -Body (@{ prompt = $sanityPrompt } | ConvertTo-Json -Compress)
-  $taskId = $created.task.id
-  if ([string]::IsNullOrWhiteSpace($taskId)) {
-    throw "GEMMA_LOCAL bridge compatibility create route did not return a task id"
+  $bridgeToken = ([string]$health.bridge_token).Trim()
+  if ([string]::IsNullOrWhiteSpace($bridgeToken)) {
+    throw "GEMMA_LOCAL bridge health did not expose a bridge token"
   }
 
-  $taskList = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/tasks" -Method Get
-  if (-not ($taskList.tasks | Where-Object { $_.id -eq $taskId })) {
-    throw "GEMMA_LOCAL bridge compatibility list route did not expose the created task"
+  $created = Invoke-BridgeRpc -TargetPort $Port -BridgeToken $bridgeToken -Id 1 -Method "session/create" -Params @{
+    prompt = $sanityPrompt
+    enable_agent_tools = $true
+  }
+  $sessionId = $created.session.session_id
+  if ([string]::IsNullOrWhiteSpace($sessionId)) {
+    throw "GEMMA_LOCAL bridge session/create did not return a session id"
   }
 
-  $detail = $null
-  for ($attempt = 0; $attempt -lt 40; $attempt += 1) {
-    $detail = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/tasks/$taskId" -Method Get
-    $detailAnswer = if ($null -ne $detail.task.answer) { [string]$detail.task.answer } else { "" }
-    if ($detail.task.status -eq "completed" -and (Test-ReportsThree -Text $detailAnswer)) {
-      break
-    }
-    Start-Sleep -Seconds 1
+  $sent = Invoke-BridgeRpc -TargetPort $Port -BridgeToken $bridgeToken -Id 2 -Method "session/send" -Params @{
+    session_id = $sessionId
+    enable_agent_tools = $true
   }
-
-  $detailAnswer = if ($null -ne $detail.task.answer) { [string]$detail.task.answer } else { "" }
-  if ($detail.task.status -ne "completed" -or -not (Test-ReportsThree -Text $detailAnswer)) {
-    throw "GEMMA_LOCAL bridge compatibility task did not complete with the expected answer"
+  $detailAnswer = if ($null -ne $sent.session.output) { [string]$sent.session.output } else { "" }
+  if ($sent.session.status -ne "completed") {
+    throw "GEMMA_LOCAL bridge session/send did not complete. Status: $($sent.session.status)"
   }
+  Assert-SanityAnswer -Surface "bridge session/send" -Text $detailAnswer
 
-  $journal = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/tasks/$taskId/journal" -Method Get
-  $journalEventTypes = @($journal.events | ForEach-Object { $_.event_type })
+  $detail = Invoke-BridgeRpc -TargetPort $Port -BridgeToken $bridgeToken -Id 3 -Method "session/get" -Params @{
+    session_id = $sessionId
+  }
+  $journalEventTypes = @($detail.events | ForEach-Object { $_.event_type })
   if ($journalEventTypes -notcontains "assistant_response") {
-    throw "GEMMA_LOCAL bridge compatibility journal did not expose assistant_response"
+    throw "GEMMA_LOCAL bridge session/get did not expose assistant_response"
   }
 
   $summary = [ordered]@{
     model = $health.model
     workspace_root = $health.workspace_root
-    task_id = $taskId
-    status = $detail.task.status
-    answer = $detail.task.answer
+    session_id = $sessionId
+    status = $sent.session.status
+    answer = $sent.session.output
+    sanity_answer_verified = (Test-ReportsThree -Text $detailAnswer)
     journal_events = ($journalEventTypes -join ",")
   } | ConvertTo-Json -Compress
 

@@ -162,6 +162,7 @@ Windows-native operator scripts remain the primary lane:
 .\scripts\zigw.ps1 build test --summary all
 .\scripts\health.ps1
 .\scripts\local_gemma_smoke.ps1
+.\scripts\local_gemma_smoke.ps1 -ExpectedModel gemma-4-e2b-it -AllowSanityMismatch
 ```
 
 Shell wrappers remain available:
@@ -180,7 +181,7 @@ The smoke lane now proves:
 - bridge-only root response
 - external browser client presence at `apps/frontend/var1-client`
 
-Before the first prompt run, the smoke scripts now also verify that the configured provider is reachable and that `MODEL` is actively served by the authenticated `/v1/models` surface.
+Before the first prompt run, the smoke scripts verify that the configured provider is reachable, that the expected model is actively served by the authenticated `/v1/models` surface, and that effective `VAR1 health` agrees with the expected runtime model. `-ExpectedModel` is optional for the default configured model and explicit for small-model probes. `-AllowSanityMismatch` keeps transport, tool, and bridge checks running when a deliberately weaker model misses the strawberry sanity answer, while still reporting that answer as an unverified model-capability result.
 
 ## Configuration
 
@@ -192,7 +193,7 @@ Required `.env` keys:
 - `MAX_STEPS`
 - `WORKSPACE`
 
-Use `.env.example` as the public template. Keep live `.env` values local. Non-secret context policy lives in `.var/config/settings.toml` when an override is needed:
+Use `.env.example` as the public template. Keep live `.env` values local. `.env` seeds auth on first run; after `.var/auth/auth.json` exists, the active provider record is the effective model/auth source reported by `VAR1 health`. Non-secret context policy lives in `.var/config/settings.toml` when an override is needed:
 
 ```toml
 [context]
