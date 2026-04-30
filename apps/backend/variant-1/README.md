@@ -51,7 +51,7 @@ Runtime code is physically partitioned by ownership under `src/`:
 | --- | --- | --- | --- |
 | `shared` | `VAR1.shared` | `shared/types.zig`, `shared/fsutil.zig`, `shared/protocol/` | contracts, filesystem helpers, wire payloads |
 | `core` | `VAR1.core` | `core/config/`, `core/sessions/`, `core/executor/`, `core/providers/`, `core/tools/`, `core/agents/`, `core/auth/` | execution, state, provider transport, tools, delegation, auth resolution |
-| `host` | `VAR1.host` | `host/stdio_rpc.zig`, `host/http_bridge.zig`, `host/bridge_access.zig` | stdio RPC host, HTTP bridge, and local browser access policy |
+| `host` | `VAR1.host` | `host/stdio_rpc.zig`, `host/http_bridge.zig`, `host/bridge_access.zig` | stdio RPC host, HTTP bridge, local browser access policy, and durable bridge audit sink |
 | `clients` | `VAR1.clients` | `clients/cli.zig` | protocol-backed client shell |
 
 The browser client lives outside the kernel at `apps/frontend/var1-client`.
@@ -152,7 +152,7 @@ The browser client uses only `POST /rpc`, `GET /events`, and `GET /api/health`. 
 - `/api/health` is the local readiness and bridge-token handshake route
 - `/` is bridge-only text that points operators at `apps/frontend/var1-client`
 
-The bridge binds to `127.0.0.1` by default. `host/bridge_access.zig` owns the local-origin allowlist, token guard, bridge-visible redaction, and audit-action classification; `host/http_bridge.zig` owns the route and connection transport. No kernel-owned HTML is served from `src/`.
+The bridge binds to `127.0.0.1` by default. `host/bridge_access.zig` owns the local-origin allowlist, token guard, bridge-visible key-and-value redaction, audit-action classification, and append-only audit emission to `.var/audit/bridge.jsonl`; `host/http_bridge.zig` owns the route and connection transport. Health, error, RPC, and event payloads share the same secret-shaped value redactor before reaching the browser. Session, auth, and write-capable RPC actions use the `var1.bridge_audit.v1` event schema and fail closed if the audit sink cannot persist the event. No kernel-owned HTML is served from `src/`.
 
 ## Scripts
 
@@ -240,14 +240,15 @@ This lane is now session-native end to end:
 - tool module registry and availability catalog
 - protocol types
 - stdio host
-- local bridge origin/token/redaction/audit guards
+- local bridge origin/token/key-and-value redaction plus durable audit guards
 - CLI
-- smoke scripts
+- smoke scripts with stale local process diagnostics
 - tests
 
 No compatibility facade or old-layout storage reader remains in this lane.
 
 Latest local Windows validation on 2026-04-30:
 
-- `.\scripts\zigw.ps1 build test --summary all` -> `80/80 tests passed`
+- `.\scripts\zigw.ps1 build test --summary all` -> `86/86 tests passed`
 - `.\zig-out\bin\VAR1.exe tools --json` -> `search_files` includes `external_command` dependency availability for `iex`
+- `.\scripts\health.ps1` -> `status: ready`

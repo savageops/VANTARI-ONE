@@ -188,14 +188,14 @@ sequenceDiagram
   Browser->>Bridge: POST /rpc with X-VAR1-Bridge-Token
   Bridge->>Access: local-origin and token guard
   Bridge->>Kernel: JSON-RPC method
-  Bridge->>Access: classify and log session/auth/write-capable action
+  Bridge->>Access: append redacted audit event for session/auth/write-capable action
   Kernel-->>Bridge: result
   Bridge-->>Browser: JSON response
   Browser->>Bridge: GET /events with X-VAR1-Bridge-Token
   Bridge-->>Browser: event snapshot stream
 ```
 
-The bridge binds to `127.0.0.1` by default. CORS allows only explicit local HTTP origins; direct-file `Origin: null` callers are rejected so bridge access remains bound to a local browser origin. `/rpc` and `/events` require the health-issued bridge token; `/api/health` is the handshake route. `host/bridge_access.zig` owns access policy, sensitive-field redaction, and audit classification; `host/http_bridge.zig` owns the route transport.
+The bridge binds to `127.0.0.1` by default. CORS allows only explicit local HTTP origins; direct-file `Origin: null` callers are rejected so bridge access remains bound to a local browser origin. `/rpc` and `/events` require the health-issued bridge token; `/api/health` is the handshake route. `host/bridge_access.zig` owns access policy, sensitive-field and secret-shaped value redaction for health/error/RPC/event payloads, audit classification, and append-only `var1.bridge_audit.v1` emission to `.var/audit/bridge.jsonl`; `host/http_bridge.zig` owns the route transport. Audit persistence happens before audited session/auth/write-capable RPC dispatch, so an audit write failure blocks the action instead of creating unaudited state.
 
 ## Session state machine
 
@@ -256,7 +256,7 @@ Every session directory contains:
 - `src/host/stdio_rpc.zig`
   Content-Length framed stdio host and local child-process client
 - `src/host/bridge_access.zig`
-  local HTTP bridge access policy for origin checks, token validation, redaction, and audit classification
+  local HTTP bridge access policy for origin checks, token validation, key-and-value redaction, audit classification, and durable audit event emission
 - `src/host/http_bridge.zig`
   local HTTP bridge route transport for `/rpc`, `/events`, and `/api/health`
 - `src/clients/cli.zig`
@@ -285,11 +285,15 @@ The current validation lane should always prove these slices together:
 - bridge root response is text, not embedded HTML
 - bridge rejects removed facade routes
 - bridge rejects unapproved origins and tokenless RPC/event access
+- bridge-visible RPC and event payloads share the bridge redaction primitive
+- audited bridge RPCs append redacted audit records to `.var/audit/bridge.jsonl`
 - tool catalog reports availability metadata
 - auto and provider-overflow compaction write observable checkpoint/event records
+- health preflights stale local `VAR1.exe` process diagnostics before build/test gates
 - external client exists at `apps/frontend/var1-client`
 
 Latest local Windows validation on 2026-04-30:
 
-- `.\scripts\zigw.ps1 build test --summary all` -> `80/80 tests passed`
+- `.\scripts\zigw.ps1 build test --summary all` -> `86/86 tests passed`
+- `.\scripts\health.ps1` -> `status: ready`
 - `.\zig-out\bin\VAR1.exe tools --json` -> `search_files` includes `external_command` dependency availability for `iex`

@@ -68,6 +68,8 @@ pub fn parseContextPolicy(content: []const u8, defaults: types.ContextPolicy) !t
             policy.aggressiveness_milli = try parseRatioMilli(value);
         } else if (std.mem.eql(u8, key, "retry_on_provider_overflow")) {
             policy.retry_on_provider_overflow = try parseBool(value);
+        } else {
+            return Error.InvalidValue;
         }
     }
 
@@ -141,4 +143,15 @@ test "settings parse context policy TOML" {
     try std.testing.expectEqual(@as(usize, 2), policy.max_entries_per_checkpoint);
     try std.testing.expectEqual(@as(u16, 500), policy.aggressiveness_milli);
     try std.testing.expect(!policy.retry_on_provider_overflow);
+}
+
+test "settings reject unknown context policy keys" {
+    try std.testing.expectError(
+        Error.InvalidValue,
+        parseContextPolicy(
+            \\[context]
+            \\auto_compact = false
+            \\
+        , .{}),
+    );
 }

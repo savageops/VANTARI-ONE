@@ -1,7 +1,18 @@
 const std = @import("std");
+const fsutil = @import("../shared/fsutil.zig");
 const protocol_types = @import("../shared/protocol/types.zig");
 
 pub const default_cors_origin = "http://127.0.0.1:4310";
+pub const audit_schema_version = "var1.bridge_audit.v1";
+
+const AuditEvent = struct {
+    schema_version: []const u8 = audit_schema_version,
+    event_type: []const u8 = "bridge_rpc",
+    action: []const u8,
+    method: []const u8,
+    session_id: ?[]const u8 = null,
+    timestamp_ms: i64,
+};
 
 pub fn allowedCorsOrigin(origin: ?[]const u8) ?[]const u8 {
     const value = origin orelse return default_cors_origin;
@@ -31,7 +42,7 @@ pub fn redactAndAttachHandshake(
     payload_json: []const u8,
     bridge_token: []const u8,
 ) ![]u8 {
-    const redacted = try redactSensitiveJsonPayload(allocator, payload_json);
+    const redacted = try redactJsonPayload(allocator, payload_json);
     defer allocator.free(redacted);
 
     const trimmed = std.mem.trim(u8, redacted, " \r\n\t");
@@ -49,6 +60,10 @@ pub fn redactAndAttachHandshake(
     );
 }
 
+pub fn redactJsonPayload(allocator: std.mem.Allocator, payload_json: []const u8) ![]u8 {
+    return redactSensitiveJsonPayload(allocator, payload_json);
+}
+
 pub fn extractSessionId(allocator: std.mem.Allocator, params_json: []const u8) !?[]u8 {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, params_json, .{}) catch return null;
     defer parsed.deinit();
@@ -59,21 +74,29 @@ pub fn extractSessionId(allocator: std.mem.Allocator, params_json: []const u8) !
     return try allocator.dupe(u8, value.string);
 }
 
-pub fn logAudit(method: []const u8, session_id: ?[]const u8) void {
+pub fn appendAuditEvent(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    method: []const u8,
+    session_id: ?[]const u8,
+) !void {
     const action = auditAction(method) orelse return;
-    if (session_id) |value| {
-        std.debug.print("VAR1 bridge audit action={s} method={s} session_id={s}\n", .{
-            action,
-            method,
-            value,
-        });
-        return;
-    }
 
-    std.debug.print("VAR1 bridge audit action={s} method={s}\n", .{
-        action,
-        method,
+    const audit_path = try auditLogPath(allocator, workspace_root);
+    defer allocator.free(audit_path);
+
+    const event = AuditEvent{
+        .action = action,
+        .method = auditSafeField(method),
+        .session_id = if (session_id) |value| auditSafeField(value) else null,
+        .timestamp_ms = std.time.milliTimestamp(),
+    };
+    const jsonl = try std.fmt.allocPrint(allocator, "{f}\n", .{
+        std.json.fmt(event, .{}),
     });
+    defer allocator.free(jsonl);
+
+    try fsutil.appendText(audit_path, jsonl);
 }
 
 pub fn logError(scope: []const u8, session_id: ?[]const u8, err: anyerror) void {
@@ -104,6 +127,15 @@ pub fn auditAction(method: []const u8) ?[]const u8 {
     return null;
 }
 
+pub fn auditLogPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
+    return fsutil.join(allocator, &.{ workspace_root, ".var", "audit", "bridge.jsonl" });
+}
+
+fn auditSafeField(value: []const u8) []const u8 {
+    if (isSecretShapedString(value)) return "[redacted]";
+    return value;
+}
+
 fn redactSensitiveJsonPayload(allocator: std.mem.Allocator, payload_json: []const u8) ![]u8 {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, payload_json, .{}) catch {
         return allocator.dupe(u8, "{\"ok\":false,\"error\":\"InvalidBridgePayload\"}");
@@ -129,6 +161,9 @@ fn redactSensitiveJsonValue(value: *std.json.Value) void {
         .array => |array| {
             for (array.items) |*item| redactSensitiveJsonValue(item);
         },
+        .string => |string| {
+            if (isSecretShapedString(string)) value.* = .{ .string = "[redacted]" };
+        },
         else => {},
     }
 }
@@ -142,6 +177,48 @@ fn isSensitiveField(field: []const u8) bool {
         std.ascii.eqlIgnoreCase(field, "set_cookie") or
         std.ascii.eqlIgnoreCase(field, "password") or
         std.ascii.eqlIgnoreCase(field, "secret");
+}
+
+fn isSecretShapedString(value: []const u8) bool {
+    if (std.mem.indexOf(u8, value, "sk-") != null) return true;
+    if (std.ascii.indexOfIgnoreCase(value, "Bearer ") != null) return true;
+    return containsJwtLikeToken(value);
+}
+
+fn containsJwtLikeToken(value: []const u8) bool {
+    var cursor: usize = 0;
+    while (cursor < value.len) {
+        while (cursor < value.len and !isJwtTokenByte(value[cursor])) : (cursor += 1) {}
+        const token_start = cursor;
+        while (cursor < value.len and isJwtTokenByte(value[cursor])) : (cursor += 1) {}
+        if (looksLikeJwtToken(value[token_start..cursor])) return true;
+    }
+    return false;
+}
+
+fn looksLikeJwtToken(token: []const u8) bool {
+    var dot_count: usize = 0;
+    var segment_start: usize = 0;
+
+    for (token, 0..) |byte, index| {
+        if (byte == '.') {
+            if (index - segment_start < 10) return false;
+            dot_count += 1;
+            segment_start = index + 1;
+            continue;
+        }
+        if (!isJwtBase64UrlByte(byte)) return false;
+    }
+
+    return dot_count == 2 and token.len - segment_start >= 10;
+}
+
+fn isJwtTokenByte(byte: u8) bool {
+    return isJwtBase64UrlByte(byte) or byte == '.';
+}
+
+fn isJwtBase64UrlByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '-' or byte == '_';
 }
 
 fn isLocalHttpOrigin(origin: []const u8) bool {
@@ -195,6 +272,21 @@ test "bridge access redacts health payload before attaching handshake token" {
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"api_key\":\"[redacted]\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"authorization\":\"[redacted]\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"bridge_token\":\"token-1\"") != null);
+}
+
+test "bridge access redacts secret-shaped string values" {
+    const payload = try redactAndAttachHandshake(
+        std.testing.allocator,
+        "{\"ok\":false,\"message\":\"provider returned sk-live-secret\",\"errors\":[\"Bearer abc.def.ghi\",\"jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c\"],\"safe\":\"ordinary value\"}",
+        "token-1",
+    );
+    defer std.testing.allocator.free(payload);
+
+    try std.testing.expect(std.mem.indexOf(u8, payload, "sk-live-secret") == null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "Bearer abc.def.ghi") == null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c") == null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"message\":\"[redacted]\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"safe\":\"ordinary value\"") != null);
 }
 
 test "bridge access classifies audited rpc methods" {

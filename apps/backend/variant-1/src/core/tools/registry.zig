@@ -34,17 +34,14 @@ const availability_entries = [_]AvailabilityEntry{
     .{ .name = write_file.definition.name, .spec = write_file.availability },
     .{ .name = append_file.definition.name, .spec = append_file.availability },
     .{ .name = replace_in_file.definition.name, .spec = replace_in_file.availability },
-    .{ .name = agents.definitions[0].name, .spec = agents.availability },
-    .{ .name = agents.definitions[1].name, .spec = agents.availability },
-    .{ .name = agents.definitions[2].name, .spec = agents.availability },
-    .{ .name = agents.definitions[3].name, .spec = agents.availability },
 };
 
-pub fn availabilitySpec(tool_name: []const u8) module.AvailabilitySpec {
+pub fn availabilitySpec(tool_name: []const u8) ?module.AvailabilitySpec {
     for (availability_entries) |entry| {
         if (std.mem.eql(u8, tool_name, entry.name)) return entry.spec;
     }
-    return .{};
+    if (agents.availabilitySpec(tool_name)) |spec| return spec;
+    return null;
 }
 
 pub fn resolveAvailability(
@@ -52,7 +49,7 @@ pub fn resolveAvailability(
     probe: ?module.CommandProbe,
     tool_name: []const u8,
 ) !ResolvedAvailability {
-    const spec = availabilitySpec(tool_name);
+    const spec = availabilitySpec(tool_name) orelse module.AvailabilitySpec{};
     const dependency = spec.dependency orelse return .{ .status = .available };
 
     const dependency_available = switch (dependency.kind) {
@@ -150,11 +147,15 @@ pub fn dependencyKindLabel(kind: module.DependencyKind) []const u8 {
 }
 
 test "availability registry is derived from builtin module definitions" {
-    const search_spec = availabilitySpec(search_files.definition.name);
+    const search_spec = availabilitySpec(search_files.definition.name).?;
     try std.testing.expect(search_spec.dependency != null);
     try std.testing.expectEqual(module.DependencyKind.external_command, search_spec.dependency.?.kind);
     try std.testing.expectEqualStrings("iex", search_spec.dependency.?.name);
 
-    const agent_spec = availabilitySpec(agents.definitions[0].name);
-    try std.testing.expect(agent_spec.dependency == null);
+    for (agents.definitions) |definition| {
+        const agent_spec = availabilitySpec(definition.name);
+        try std.testing.expect(agent_spec != null);
+        try std.testing.expect(agent_spec.?.dependency == null);
+    }
+    try std.testing.expect(availabilitySpec("missing_tool") == null);
 }

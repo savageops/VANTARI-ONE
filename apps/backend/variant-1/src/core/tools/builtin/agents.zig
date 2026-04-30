@@ -70,6 +70,11 @@ pub const definitions = [_]types.ToolDefinition{
 
 pub const availability = module.AvailabilitySpec{};
 
+pub fn availabilitySpec(tool_name: []const u8) ?module.AvailabilitySpec {
+    if (!handles(tool_name)) return null;
+    return availability;
+}
+
 pub fn handles(tool_name: []const u8) bool {
     for (definitions) |definition| {
         if (std.mem.eql(u8, definition.name, tool_name)) return true;
