@@ -5,7 +5,7 @@ const module = @import("../module.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "write_file",
-    .description = "Create or overwrite a file inside the workspace. JSON arguments require path and content. Parent directories are created automatically for workspace-relative targets.",
+    .description = "Create a new workspace file or intentionally overwrite an entire file. Arguments require path and full content. Parent directories are created for workspace-relative targets.",
     .parameters_json =
     \\{
     \\  "type": "object",
@@ -18,7 +18,7 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"path\":\"notes/todo.md\",\"content\":\"alpha\\n\"}",
-    .usage_hint = "Use write_file when you intend to replace the entire file contents. Paths must stay inside the workspace root.",
+    .usage_hint = "Use only for full-file writes. For narrow edits prefer replace_in_file; for ledger/additive writes prefer append_file. Path must stay inside the workspace root.",
 };
 
 pub const availability = module.AvailabilitySpec{};

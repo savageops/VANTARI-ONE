@@ -5,7 +5,7 @@ const module = @import("../module.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "list_files",
-    .description = "List files under an existing workspace path. JSON arguments accept only optional path and max_results fields. Omit path or use \".\" for the workspace root. Use this before read_file or search_files when you do not know the exact path yet.",
+    .description = "Discover workspace paths. Call when the target file or directory is unknown. Arguments are an object with optional path and max_results only; omit path or use \".\" for the workspace root.",
     .parameters_json =
     \\{
     \\  "type": "object",
@@ -17,7 +17,7 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"path\":\"src\",\"max_results\":100}",
-    .usage_hint = "Use an existing workspace-relative path only. Start with path:\".\" or omit path when you need workspace discovery.",
+    .usage_hint = "Use before read_file/search_files when path certainty is low. Path must be workspace-relative and existing; never pass absolute paths or .. segments.",
 };
 
 pub const availability = module.AvailabilitySpec{};

@@ -6,7 +6,7 @@ const registry = @import("../registry.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "search_files",
-    .description = "Search file contents with iex under an existing workspace path. JSON arguments accept pattern plus optional path, glob, and max_results fields. Use list_files first when you do not know the path, and use read_file when you already know the file to inspect.",
+    .description = "Find text or symbols with iex under an existing workspace path. Use for content discovery, not file reading. Arguments require pattern and optionally accept path, glob, and max_results.",
     .parameters_json =
     \\{
     \\  "type": "object",
@@ -21,7 +21,7 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"pattern\":\"read_file\",\"path\":\"src\",\"glob\":\"*.zig\",\"max_results\":20}",
-    .usage_hint = "pattern is required. path must already exist inside the workspace. Use list_files first when unsure, and switch to read_file when you already know the target file.",
+    .usage_hint = "Use list_files first when unsure about the search root. Use read_file after search_files identifies a target. pattern is an iex expression or literal; do not invent regex flags or shell syntax.",
 };
 
 pub const availability = module.AvailabilitySpec{

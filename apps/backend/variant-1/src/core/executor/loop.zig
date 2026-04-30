@@ -1,6 +1,7 @@
 const std = @import("std");
 const docs_sync = @import("../docs/sync.zig");
 const context_builder = @import("../context/index.zig");
+const prompts = @import("../prompts/index.zig");
 const provider = @import("../providers/openai_compatible.zig");
 const store = @import("../sessions/store.zig");
 const tools = @import("../tools/runtime.zig");
@@ -140,7 +141,7 @@ pub fn runPromptWithOptions(
 
     var base_message_count = rebuildProviderBaseMessages(
         allocator,
-        config.workspace_root,
+        config,
         execution_context,
         session,
         &messages,
@@ -319,7 +320,7 @@ pub fn runPromptWithOptions(
 
 fn rebuildProviderBaseMessages(
     allocator: std.mem.Allocator,
-    workspace_root: []const u8,
+    config: types.Config,
     execution_context: tools.ExecutionContext,
     session: types.SessionRecord,
     messages: *std.array_list.Managed(types.ChatMessage),
@@ -339,11 +340,11 @@ fn rebuildProviderBaseMessages(
     for (messages.items) |message| message.deinit(allocator);
     messages.clearRetainingCapacity();
 
-    const system_prompt = try tools.buildAgentSystemPrompt(allocator, execution_context);
+    const system_prompt = try prompts.buildAgentSystemPrompt(allocator, execution_context, config.prompt_policy);
     defer allocator.free(system_prompt);
 
     try messages.append(try types.initTextMessage(allocator, .system, system_prompt));
-    try context_builder.appendProviderMessages(allocator, workspace_root, messages, session);
+    try context_builder.appendProviderMessages(allocator, config.workspace_root, messages, session);
 
     const base_message_count = messages.items.len;
     try messages.appendSlice(preserved.items);
@@ -389,7 +390,7 @@ fn ensureContextWithinBudget(
 
     return rebuildProviderBaseMessages(
         allocator,
-        config.workspace_root,
+        config,
         execution_context,
         session,
         messages,
@@ -426,7 +427,7 @@ fn completeWithContextRecovery(
 
         base_message_count.* = try rebuildProviderBaseMessages(
             allocator,
-            config.workspace_root,
+            config,
             execution_context,
             session,
             messages,

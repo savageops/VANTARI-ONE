@@ -710,17 +710,17 @@ test "search_files stops before execution when iex is unavailable" {
 }
 
 test "agent system prompt teaches schema repair and file-tool roles" {
-    const prompt = try VAR1.core.tool_runtime.buildAgentSystemPrompt(std.testing.allocator, .{
+    const prompt = try VAR1.core.prompts.buildAgentSystemPrompt(std.testing.allocator, .{
         .workspace_root = ".",
-    });
+    }, .{});
     defer std.testing.allocator.free(prompt);
 
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Tool arguments must be valid JSON objects") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "repair the call instead of repeating the same failing arguments") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Use list_files first when you do not know the path") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "# Internal Runtime Guardrails") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "repair the JSON object") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "list_files discovers paths") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Example JSON: {\"pattern\":\"read_file\",\"path\":\"src\",\"glob\":\"*.zig\",\"max_results\":20}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "search_files to search contents") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Keep internal tool mechanics private") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "search_files locates symbols or text") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Keep hidden runtime mechanics private") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "I will continue once agents complete; if any fail, I will follow up.") != null);
 }
 

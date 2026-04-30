@@ -16,6 +16,8 @@ pub const definitions = [_]types.ToolDefinition{
         \\  "additionalProperties": false
         \\}
         ,
+        .example_json = "{\"force_overwrite\":false}",
+        .usage_hint = "Call only when canonical .var scaffolding is missing or explicitly requested. Omit force_overwrite unless replacement is intentional.",
     },
     .{
         .name = "memory_ledger",
@@ -31,6 +33,8 @@ pub const definitions = [_]types.ToolDefinition{
         \\  "additionalProperties": false
         \\}
         ,
+        .example_json = "{\"action\":\"read\"}",
+        .usage_hint = "Use action:\"read\" to inspect memories. Use action:\"append\" only for durable project memory content supplied in content.",
     },
     .{
         .name = "changelog_ledger",
@@ -50,6 +54,8 @@ pub const definitions = [_]types.ToolDefinition{
         \\  "additionalProperties": false
         \\}
         ,
+        .example_json = "{\"action\":\"append\",\"content\":\"- Completed prompt-layer validation.\\n\"}",
+        .usage_hint = "Use append for durable changelog bullets. archive_todo requires category and todo_name and moves a completed .var todo slice.",
     },
     .{
         .name = "todo_slice",
@@ -73,6 +79,8 @@ pub const definitions = [_]types.ToolDefinition{
         \\  "additionalProperties": false
         \\}
         ,
+        .example_json = "{\"action\":\"read\",\"category\":\"prompting\",\"todo_name\":\"model-presentation\"}",
+        .usage_hint = "Use read for existing repo-level todo slices. Upsert requires category, todo_name, status, and objective; do not mirror the current runtime step here.",
     },
     .{
         .name = "session_record",
@@ -92,6 +100,8 @@ pub const definitions = [_]types.ToolDefinition{
         \\  "additionalProperties": false
         \\}
         ,
+        .example_json = "{\"action\":\"read\",\"session_name\":\"prompt-layer-work\"}",
+        .usage_hint = "Use read for a named session record. Upsert requires session_name, status, and objective and should describe durable session state.",
     },
     .{
         .name = "research_artifact",
@@ -109,6 +119,8 @@ pub const definitions = [_]types.ToolDefinition{
         \\  "additionalProperties": false
         \\}
         ,
+        .example_json = "{\"action\":\"write\",\"path\":\"prompt-layers.md\",\"title\":\"Prompt Layers\",\"content\":\"# Prompt Layers\\n\"}",
+        .usage_hint = "Path is relative to .var/research. Use write for durable research artifacts, not transient scratch notes.",
     },
     .{
         .name = "docs_artifact",
@@ -125,6 +137,8 @@ pub const definitions = [_]types.ToolDefinition{
         \\  "additionalProperties": false
         \\}
         ,
+        .example_json = "{\"action\":\"write\",\"path\":\"runtime/prompt-contract.md\",\"content\":\"# Prompt Contract\\n\"}",
+        .usage_hint = "Path is relative to .var/docs. Use for current runtime contract docs only, not aspirational future claims.",
     },
     .{
         .name = "git_worktree",
@@ -143,6 +157,8 @@ pub const definitions = [_]types.ToolDefinition{
         \\  "additionalProperties": false
         \\}
         ,
+        .example_json = "{\"action\":\"status\"}",
+        .usage_hint = "Use status/list before add/remove. Worktree names are directory names under .var/worktrees and must stay project-local.",
     },
     .{
         .name = "workspace_backup",
@@ -156,6 +172,8 @@ pub const definitions = [_]types.ToolDefinition{
         \\  "additionalProperties": false
         \\}
         ,
+        .example_json = "{\"label\":\"before-prompt-edit\"}",
+        .usage_hint = "Use before broad or risky workspace edits. The label is optional and becomes part of the backup filename.",
     },
     .{
         .name = "instruction_ingestion",
@@ -171,6 +189,8 @@ pub const definitions = [_]types.ToolDefinition{
         \\  "additionalProperties": false
         \\}
         ,
+        .example_json = "{\"mode\":\"session-start\"}",
+        .usage_hint = "Use session-start for baseline instruction discovery or on-demand-subtree with target_path for a specific workspace subtree.",
     },
 };
 
@@ -417,11 +437,11 @@ fn defaultDocsArchitecture() []const u8 {
         \\        todo-slice*.md
         \\    todos/
         \\      <category>/
-    \\        <todo-name>/
-    \\          todo-slice*.md
-    \\    sessions/
-    \\      <session-name>/
-    \\        session.md
+        \\        <todo-name>/
+        \\          todo-slice*.md
+        \\    sessions/
+        \\      <session-name>/
+        \\        session.md
         \\    auth/
         \\      auth.json
         \\    research/

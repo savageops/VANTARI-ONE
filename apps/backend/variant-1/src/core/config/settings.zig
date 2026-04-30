@@ -24,6 +24,23 @@ pub fn loadContextPolicy(
     return parseContextPolicy(content, defaults);
 }
 
+pub fn loadPromptPolicy(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    defaults: types.PromptPolicy,
+) !types.PromptPolicy {
+    const settings_path = try std.fs.path.join(allocator, &.{ workspace_root, settings_path_parts[0], settings_path_parts[1], settings_path_parts[2] });
+    defer allocator.free(settings_path);
+
+    const content = std.fs.cwd().readFileAlloc(allocator, settings_path, 1024 * 1024) catch |err| switch (err) {
+        error.FileNotFound => return clonePromptPolicy(allocator, defaults),
+        else => return err,
+    };
+    defer allocator.free(content);
+
+    return parsePromptPolicy(allocator, content, defaults);
+}
+
 pub fn parseContextPolicy(content: []const u8, defaults: types.ContextPolicy) !types.ContextPolicy {
     var policy = defaults;
     var in_context_section = false;
@@ -77,6 +94,48 @@ pub fn parseContextPolicy(content: []const u8, defaults: types.ContextPolicy) !t
     return policy;
 }
 
+pub fn parsePromptPolicy(
+    allocator: std.mem.Allocator,
+    content: []const u8,
+    defaults: types.PromptPolicy,
+) !types.PromptPolicy {
+    var policy = try clonePromptPolicy(allocator, defaults);
+    errdefer policy.deinit(allocator);
+    var in_prompts_section = false;
+
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |raw_line| {
+        const line_without_comment = stripComment(raw_line);
+        const line = std.mem.trim(u8, line_without_comment, " \t\r");
+        if (line.len == 0) continue;
+
+        if (line[0] == '[') {
+            if (line.len < 2 or line[line.len - 1] != ']') return Error.InvalidValue;
+            const section = std.mem.trim(u8, line[1 .. line.len - 1], " \t");
+            in_prompts_section = std.mem.eql(u8, section, "prompts");
+            continue;
+        }
+
+        if (!in_prompts_section) continue;
+
+        const separator_index = std.mem.indexOfScalar(u8, line, '=') orelse return Error.InvalidValue;
+        const key = std.mem.trim(u8, line[0..separator_index], " \t");
+        const value = trimQuotes(std.mem.trim(u8, line[separator_index + 1 ..], " \t"));
+        if (key.len == 0 or value.len == 0) return Error.InvalidValue;
+        if (std.fs.path.isAbsolute(value)) return Error.InvalidValue;
+
+        if (std.mem.eql(u8, key, "system_prompt_file")) {
+            policy.system_prompt_file = try dupeReplacing(allocator, policy.system_prompt_file, value);
+        } else if (std.mem.eql(u8, key, "developer_prompt_file")) {
+            policy.developer_prompt_file = try dupeReplacing(allocator, policy.developer_prompt_file, value);
+        } else {
+            return Error.InvalidValue;
+        }
+    }
+
+    return policy;
+}
+
 fn stripComment(line: []const u8) []const u8 {
     const comment_index = std.mem.indexOfScalar(u8, line, '#') orelse return line;
     return line[0..comment_index];
@@ -119,6 +178,18 @@ fn validate(policy: types.ContextPolicy) !void {
     if (policy.aggressiveness_milli > 1000) return Error.InvalidValue;
 }
 
+fn clonePromptPolicy(allocator: std.mem.Allocator, defaults: types.PromptPolicy) !types.PromptPolicy {
+    return .{
+        .system_prompt_file = if (defaults.system_prompt_file) |value| try allocator.dupe(u8, value) else null,
+        .developer_prompt_file = if (defaults.developer_prompt_file) |value| try allocator.dupe(u8, value) else null,
+    };
+}
+
+fn dupeReplacing(allocator: std.mem.Allocator, existing: ?[]u8, value: []const u8) ![]u8 {
+    if (existing) |previous| allocator.free(previous);
+    return allocator.dupe(u8, value);
+}
+
 test "settings parse context policy TOML" {
     const policy = try parseContextPolicy(
         \\[context]
@@ -151,6 +222,30 @@ test "settings reject unknown context policy keys" {
         parseContextPolicy(
             \\[context]
             \\auto_compact = false
+            \\
+        , .{}),
+    );
+}
+
+test "settings parse prompt policy TOML" {
+    var policy = try parsePromptPolicy(std.testing.allocator,
+        \\[prompts]
+        \\system_prompt_file = ".var/prompts/system.md"
+        \\developer_prompt_file = ".var/prompts/developer.md"
+        \\
+    , .{});
+    defer policy.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings(".var/prompts/system.md", policy.system_prompt_file.?);
+    try std.testing.expectEqualStrings(".var/prompts/developer.md", policy.developer_prompt_file.?);
+}
+
+test "settings reject invalid prompt policy keys" {
+    try std.testing.expectError(
+        Error.InvalidValue,
+        parsePromptPolicy(std.testing.allocator,
+            \\[prompts]
+            \\hidden_guardrail_file = ".var/prompts/guardrail.md"
             \\
         , .{}),
     );

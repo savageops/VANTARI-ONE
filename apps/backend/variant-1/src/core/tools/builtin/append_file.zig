@@ -5,7 +5,7 @@ const module = @import("../module.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "append_file",
-    .description = "Append text to an existing workspace file or create it if it does not exist. JSON arguments require path and content.",
+    .description = "Append text to a workspace file, creating it only when absent. Arguments require path and content. Use for additive logs, ledgers, and notes.",
     .parameters_json =
     \\{
     \\  "type": "object",
@@ -18,7 +18,7 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"path\":\"notes/todo.md\",\"content\":\"beta\\n\"}",
-    .usage_hint = "Use append_file for additive writes only. Use write_file instead when you need to replace the full file.",
+    .usage_hint = "Use for additive writes only. Include your own newline when needed. Use write_file for full replacement and replace_in_file for exact local edits.",
 };
 
 pub const availability = module.AvailabilitySpec{};

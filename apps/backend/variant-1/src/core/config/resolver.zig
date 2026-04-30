@@ -79,6 +79,7 @@ pub fn loadDefault(allocator: std.mem.Allocator, workspace_root: []const u8) !ty
         error.FileNotFound, Error.MissingKey => try loadDefaultFromAuthOnly(allocator, workspace_root),
         else => return err,
     };
+    errdefer config.deinit(allocator);
 
     const canonical_workspace_root = try canonicalizeWorkspaceRoot(
         allocator,
@@ -102,6 +103,7 @@ pub fn loadDefault(allocator: std.mem.Allocator, workspace_root: []const u8) !ty
 
     try applyResolvedAuth(allocator, &config, resolved_auth);
     config.context_policy = try settings.loadContextPolicy(allocator, config.workspace_root, config.context_policy);
+    config.prompt_policy = try settings.loadPromptPolicy(allocator, config.workspace_root, config.prompt_policy);
     return config;
 }
 
@@ -127,6 +129,7 @@ fn loadDefaultFromAuthOnly(allocator: std.mem.Allocator, workspace_root: []const
     errdefer config.deinit(allocator);
 
     config.context_policy = try settings.loadContextPolicy(allocator, config.workspace_root, config.context_policy);
+    config.prompt_policy = try settings.loadPromptPolicy(allocator, config.workspace_root, config.prompt_policy);
     return config;
 }
 
