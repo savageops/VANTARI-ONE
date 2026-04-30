@@ -70,7 +70,7 @@ File tools are split by role:
 
 An installed runtime must provide a real `iex` executable for `search_files`. PowerShell aliases are not enough for the Zig child-process runner. If `iex` is absent, search is unavailable at the command dependency boundary, `VAR1 tools --json` reports that state, and execution fails early with `ToolUnavailable` instead of surfacing a late child-process surprise.
 
-`write_file`, `append_file`, and `replace_in_file` return `effect.schema_version = "var1.tool_effect.v1"` with the requested path, resolved path, before/after byte counts, operation-specific counts, and SHA-256 hashes for existing file contents. This is the lightweight verification layer for small-model and bridge-facing workflows: the runtime proves the file effect at the tool boundary without introducing a separate evaluator loop.
+`write_file`, `append_file`, and `replace_in_file` return `effect.schema_version = "var1.tool_effect.v1"` with the requested path, resolved path, before/after byte counts, operation-specific counts, and SHA-256 hashes for existing file contents. Their model-visible `content` begins with `EFFECT_SCHEMA var1.tool_effect.v1` and `EFFECT_KEY effect`, then carries the legacy `PATH`/`BYTES` output for compatibility. This is the lightweight verification layer for small-model and bridge-facing workflows: the runtime proves the file effect at the tool boundary without introducing a separate evaluator loop.
 
 `src/core/tools/sockets.zig` and `src/core/plugins/manifest.zig` are validation boundaries for typed sockets and plugin manifests. They do not load plugins, auto-discover plugin roots, or mutate the model-visible tool list.
 

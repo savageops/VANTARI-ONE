@@ -185,6 +185,8 @@ pub const FileEffectMetric = struct {
     value: usize,
 };
 
+const file_effect_schema_version = "var1.tool_effect.v1";
+
 pub fn captureFileSnapshot(allocator: std.mem.Allocator, path: []const u8) !FileSnapshot {
     const contents = fsutil.readTextAlloc(allocator, path) catch |err| switch (err) {
         error.FileNotFound => return .{ .exists = false, .len = 0 },
@@ -235,6 +237,18 @@ pub fn fileEffectEnvelope(
     after: FileSnapshot,
     metric: FileEffectMetric,
 ) ![]u8 {
+    const effect_content = try fileEffectContentAlloc(
+        allocator,
+        content,
+        action,
+        requested_path,
+        resolved_path,
+        before,
+        after,
+        metric,
+    );
+    defer allocator.free(effect_content);
+
     var output = std.array_list.Managed(u8).init(allocator);
     errdefer output.deinit();
 
@@ -242,8 +256,10 @@ pub fn fileEffectEnvelope(
     try writer.writeAll("{\"ok\":true,\"tool\":");
     try writer.print("{f}", .{std.json.fmt(tool_name, .{})});
     try writer.writeAll(",\"content\":");
-    try writer.print("{f}", .{std.json.fmt(content, .{})});
-    try writer.writeAll(",\"effect\":{\"schema_version\":\"var1.tool_effect.v1\",\"action\":");
+    try writer.print("{f}", .{std.json.fmt(effect_content, .{})});
+    try writer.writeAll(",\"effect\":{\"schema_version\":");
+    try writer.print("{f}", .{std.json.fmt(file_effect_schema_version, .{})});
+    try writer.writeAll(",\"action\":");
     try writer.print("{f}", .{std.json.fmt(fileEffectActionLabel(action), .{})});
     try writer.writeAll(",\"path\":");
     try writer.print("{f}", .{std.json.fmt(requested_path, .{})});
@@ -258,6 +274,42 @@ pub fn fileEffectEnvelope(
     try writer.writeAll(",\"after_sha256\":");
     try writeOptionalHash(writer, after.sha256_hex);
     try writer.writeAll("}}");
+
+    return output.toOwnedSlice();
+}
+
+fn fileEffectContentAlloc(
+    allocator: std.mem.Allocator,
+    legacy_content: []const u8,
+    action: FileEffectAction,
+    requested_path: []const u8,
+    resolved_path: []const u8,
+    before: FileSnapshot,
+    after: FileSnapshot,
+    metric: FileEffectMetric,
+) ![]u8 {
+    var output = std.array_list.Managed(u8).init(allocator);
+    errdefer output.deinit();
+
+    const writer = output.writer();
+    try writer.print(
+        "EFFECT_SCHEMA {s}\nEFFECT_KEY effect\nEFFECT_ACTION {s}\nEFFECT_PATH {s}\nEFFECT_RESOLVED_PATH {s}\nEFFECT_BEFORE_EXISTS {s}\nEFFECT_BEFORE_BYTES {d}\nEFFECT_AFTER_BYTES {d}\n{s} {d}\n",
+        .{
+            file_effect_schema_version,
+            fileEffectActionLabel(action),
+            requested_path,
+            resolved_path,
+            if (before.exists) "true" else "false",
+            before.len,
+            after.len,
+            fileEffectMetricContentLabel(metric.name),
+            metric.value,
+        },
+    );
+    try writeEffectContentHash(writer, "EFFECT_BEFORE_SHA256", before.sha256_hex);
+    try writeEffectContentHash(writer, "EFFECT_AFTER_SHA256", after.sha256_hex);
+    try writer.writeAll("LEGACY_OUTPUT\n");
+    try writer.writeAll(legacy_content);
 
     return output.toOwnedSlice();
 }
@@ -299,11 +351,28 @@ fn fileEffectMetricLabel(metric: FileEffectMetricName) []const u8 {
     };
 }
 
+fn fileEffectMetricContentLabel(metric: FileEffectMetricName) []const u8 {
+    return switch (metric) {
+        .bytes_written => "EFFECT_BYTES_WRITTEN",
+        .bytes_appended => "EFFECT_BYTES_APPENDED",
+        .replacements => "EFFECT_REPLACEMENTS",
+    };
+}
+
 fn writeOptionalHash(writer: anytype, value: ?[]const u8) !void {
     if (value) |hash| {
         try writer.print("{f}", .{std.json.fmt(hash, .{})});
     } else {
         try writer.writeAll("null");
+    }
+}
+
+fn writeEffectContentHash(writer: anytype, label: []const u8, value: ?[]const u8) !void {
+    try writer.print("{s} ", .{label});
+    if (value) |hash| {
+        try writer.print("{s}\n", .{hash});
+    } else {
+        try writer.writeAll("null\n");
     }
 }
 
@@ -416,4 +485,42 @@ fn normalizeToolPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     }
 
     return normalized;
+}
+
+test "file effect envelope exposes effect-first content and structured metadata" {
+    const allocator = std.testing.allocator;
+
+    const envelope = try fileEffectEnvelope(
+        allocator,
+        "write_file",
+        "PATH resolved.txt\nBYTES 5",
+        .write_file,
+        "requested.txt",
+        "resolved.txt",
+        .{ .exists = false, .len = 0 },
+        .{ .exists = true, .len = 5 },
+        .{ .name = .bytes_written, .value = 5 },
+    );
+    defer allocator.free(envelope);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, envelope, .{});
+    defer parsed.deinit();
+
+    const root = parsed.value.object;
+    const content_value = root.get("content") orelse return error.MissingContent;
+    try std.testing.expect(content_value == .string);
+    const content = content_value.string;
+
+    try std.testing.expect(std.mem.startsWith(u8, content, "EFFECT_SCHEMA var1.tool_effect.v1\n"));
+    try std.testing.expect(std.mem.indexOf(u8, content, "EFFECT_KEY effect\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "EFFECT_ACTION write_file\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "EFFECT_BYTES_WRITTEN 5\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "LEGACY_OUTPUT\nPATH resolved.txt\nBYTES 5") != null);
+
+    const effect_value = root.get("effect") orelse return error.MissingEffect;
+    try std.testing.expect(effect_value == .object);
+    const effect = effect_value.object;
+    try std.testing.expectEqualStrings(file_effect_schema_version, effect.get("schema_version").?.string);
+    try std.testing.expectEqualStrings("write_file", effect.get("action").?.string);
+    try std.testing.expectEqual(@as(i64, 5), effect.get("bytes_written").?.integer);
 }
