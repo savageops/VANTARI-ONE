@@ -356,6 +356,27 @@ test "search_files uses the command runner contract" {
     try std.testing.expect(std.mem.indexOf(u8, search_output, "src/main.zig:12:read_file") != null);
 }
 
+test "tool availability registry derives agent capabilities from the agent module" {
+    const search_spec = VAR1.core.tools.registry.availabilitySpec("search_files").?;
+    try std.testing.expect(search_spec.dependency != null);
+    try std.testing.expectEqual(VAR1.core.tools.module.DependencyKind.external_command, search_spec.dependency.?.kind);
+    try std.testing.expectEqualStrings("iex", search_spec.dependency.?.name);
+
+    const agent_names = [_][]const u8{
+        "launch_agent",
+        "agent_status",
+        "wait_agent",
+        "list_agents",
+    };
+    for (agent_names) |name| {
+        const agent_spec = VAR1.core.tools.registry.availabilitySpec(name);
+        try std.testing.expect(agent_spec != null);
+        try std.testing.expect(agent_spec.?.dependency == null);
+    }
+
+    try std.testing.expect(VAR1.core.tools.registry.availabilitySpec("missing_tool") == null);
+}
+
 test "agent tools use the agent service contract and surface agent tool catalog" {
     var context = MockAgentContext{ .allocator = std.testing.allocator };
     defer context.deinit();
@@ -637,12 +658,12 @@ test "catalog json reports unavailable command-backed tools explicitly" {
 }
 
 test "availability registry uses builtin module-owned names" {
-    const search_spec = VAR1.core.tools.registry.availabilitySpec("search_files");
+    const search_spec = VAR1.core.tools.registry.availabilitySpec("search_files").?;
     try std.testing.expect(search_spec.dependency != null);
     try std.testing.expectEqual(VAR1.core.tools.module.DependencyKind.external_command, search_spec.dependency.?.kind);
     try std.testing.expectEqualStrings("iex", search_spec.dependency.?.name);
 
-    const agent_spec = VAR1.core.tools.registry.availabilitySpec("launch_agent");
+    const agent_spec = VAR1.core.tools.registry.availabilitySpec("launch_agent").?;
     try std.testing.expect(agent_spec.dependency == null);
 }
 

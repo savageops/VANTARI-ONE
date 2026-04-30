@@ -59,10 +59,11 @@ pub const KernelBridge = struct {
 pub const Bridge = struct {
     allocator: std.mem.Allocator,
     kernel: KernelBridge,
+    workspace_root: []const u8,
     token_storage: [64]u8 = undefined,
     token_len: usize = 0,
 
-    pub fn initLocal(allocator: std.mem.Allocator) !Bridge {
+    pub fn initLocal(allocator: std.mem.Allocator, workspace_root: []const u8) !Bridge {
         const client = try allocator.create(stdio_rpc.LocalClient);
         errdefer allocator.destroy(client);
         client.* = try stdio_rpc.LocalClient.init(allocator);
@@ -76,6 +77,7 @@ pub const Bridge = struct {
                 .waitNotificationAfterFn = localKernelWaitNotificationAfter,
                 .deinitFn = localKernelDeinit,
             },
+            .workspace_root = workspace_root,
         };
         bridge.initRandomToken();
 
@@ -87,10 +89,11 @@ pub const Bridge = struct {
         return bridge;
     }
 
-    pub fn initWithKernel(allocator: std.mem.Allocator, kernel: KernelBridge) Bridge {
+    pub fn initWithKernel(allocator: std.mem.Allocator, kernel: KernelBridge, workspace_root: []const u8) Bridge {
         var bridge = Bridge{
             .allocator = allocator,
             .kernel = kernel,
+            .workspace_root = workspace_root,
         };
         bridge.setToken(test_bridge_token);
         return bridge;
@@ -133,12 +136,12 @@ const Response = struct {
     }
 };
 
-pub fn serve(allocator: std.mem.Allocator, _: types.Config, options: ServeOptions) !void {
+pub fn serve(allocator: std.mem.Allocator, config: types.Config, options: ServeOptions) !void {
     const address = try std.net.Address.parseIp(options.host, options.port);
     var listener = try address.listen(.{ .reuse_address = true });
     defer listener.deinit();
 
-    var bridge = try Bridge.initLocal(allocator);
+    var bridge = try Bridge.initLocal(allocator, config.workspace_root);
     defer bridge.deinit();
 
     var stdout_buffer: [256]u8 = undefined;
@@ -305,7 +308,7 @@ fn forwardRpcRequest(allocator: std.mem.Allocator, bridge: *Bridge, body: []cons
 
     const audit_session_id = try bridge_access.extractSessionId(allocator, params_json);
     defer if (audit_session_id) |value| allocator.free(value);
-    bridge_access.logAudit(method_value.string, audit_session_id);
+    try bridge_access.appendAuditEvent(allocator, bridge.workspace_root, method_value.string, audit_session_id);
 
     const call = try bridge.kernel.call(allocator, method_value.string, params_json);
     defer call.deinit(allocator);
@@ -322,11 +325,14 @@ fn forwardRpcRequest(allocator: std.mem.Allocator, bridge: *Bridge, body: []cons
             "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"result\":{s}}}",
             .{ id_json, call.result_json orelse "null" },
         );
+    defer allocator.free(body_json);
+
+    const redacted_body_json = try bridge_access.redactJsonPayload(allocator, body_json);
 
     return .{
         .status = .ok,
         .content_type = "application/json; charset=utf-8",
-        .body = body_json,
+        .body = redacted_body_json,
     };
 }
 
@@ -400,10 +406,13 @@ fn parseSinceQuery(target: []const u8) u64 {
 }
 
 fn renderSseEvent(allocator: std.mem.Allocator, notification: stdio_rpc.Notification) ![]u8 {
+    const redacted_params_json = try bridge_access.redactJsonPayload(allocator, notification.params_json);
+    defer allocator.free(redacted_params_json);
+
     return std.fmt.allocPrint(
         allocator,
         "id: {d}\nevent: {s}\ndata: {s}\n\n",
-        .{ notification.sequence, notification.method, notification.params_json },
+        .{ notification.sequence, notification.method, redacted_params_json },
     );
 }
 

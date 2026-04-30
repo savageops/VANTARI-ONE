@@ -107,7 +107,7 @@ flowchart TB
 | Command-backed search | Exposes `search_files` as the content-search tool over the external `iex` executable; availability is false until a real executable is resolvable. |
 | Plugin boundary | Validates plugin manifests and socket declarations without runtime loading or direct store/provider access. |
 | Provider isolation | Resolves OpenAI-compatible provider configuration behind the runtime boundary. |
-| Browser ingress | Exposes `/rpc`, `/events`, and `/api/health` through a local-origin bridge with token-gated RPC/event access. |
+| Browser ingress | Exposes `/rpc`, `/events`, and `/api/health` through a local-origin bridge with token-gated RPC/event access and durable redacted audit records. |
 | CLI ingress | Uses the same session/protocol vocabulary rather than maintaining a separate execution path. |
 
 ## Tool Runtime
@@ -120,7 +120,7 @@ Plugin support is currently contract-level: `src/core/tools/sockets.zig` validat
 
 ## Bridge Security
 
-`VAR1 serve` binds to `127.0.0.1` by default. Browser startup reads `/api/health`, receives a per-process `bridge_token`, and sends it as `X-VAR1-Bridge-Token` for `/rpc` and `/events`. CORS is restricted to explicit local HTTP origins (`127.0.0.1`, `localhost`, and IPv6 loopback); `file://` / `Origin: null` callers are rejected so browser access stays provenance-bound. `src/host/bridge_access.zig` owns local-origin, token, redaction, and audit classification policy so route handling stays transport-focused. Bridge-visible health and error payloads redact sensitive fields before they leave the backend.
+`VAR1 serve` binds to `127.0.0.1` by default. Browser startup reads `/api/health`, receives a per-process `bridge_token`, and sends it as `X-VAR1-Bridge-Token` for `/rpc` and `/events`. CORS is restricted to explicit local HTTP origins (`127.0.0.1`, `localhost`, and IPv6 loopback); `file://` / `Origin: null` callers are rejected so browser access stays provenance-bound. `src/host/bridge_access.zig` owns local-origin, token, key-and-value redaction, audit classification, and durable audit event emission so route handling stays transport-focused. Bridge-visible health, error, RPC, and event payloads redact sensitive fields and secret-shaped string values before they leave the backend. Audited session/auth/write-capable bridge RPCs append `var1.bridge_audit.v1` JSONL records to `.var/audit/bridge.jsonl`; audit write failure aborts the bridge action rather than creating unaudited state.
 
 ## Session State
 
@@ -140,6 +140,8 @@ Plugin support is currently contract-level: `src/core/tools/sockets.zig` validat
 | `context.jsonl` | compacted/model-ready checkpoint history |
 | `events.jsonl` | progress, tool, bridge, and runtime events |
 | `output.txt` | latest terminal assistant output |
+
+Global bridge audit records live outside a single session at `.var/audit/bridge.jsonl`. Each line is a redacted `var1.bridge_audit.v1` event with action, method, optional session id, and timestamp.
 
 ```mermaid
 flowchart LR
@@ -234,6 +236,8 @@ aggressiveness_milli = 350
 retry_on_provider_overflow = true
 ```
 
+Unknown keys in `[context]` are rejected rather than ignored, so typoed compaction or budget controls cannot silently fall back to defaults.
+
 Essential local commands:
 
 ```powershell
@@ -248,8 +252,9 @@ cd apps/backend/variant-1
 Latest local Windows validation recorded on 2026-04-30:
 
 ```text
-.\scripts\zigw.ps1 build test --summary all  -> 80/80 tests passed
+.\scripts\zigw.ps1 build test --summary all  -> 86/86 tests passed
 .\zig-out\bin\VAR1.exe tools --json          -> search_files reports external_command iex availability
+.\scripts\health.ps1                         -> status: ready
 ```
 
 Provider-backed smoke validation depends on the configured provider exposing `MODEL` through its authenticated model list.

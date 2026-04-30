@@ -205,6 +205,12 @@ fn mockKernelCall(
         };
     }
 
+    if (std.mem.eql(u8, method, "auth/status")) {
+        return .{
+            .error_json = try allocator.dupe(u8, "{\"code\":-32000,\"message\":\"provider returned sk-live-secret\",\"data\":{\"authorization\":\"Bearer abc.def.ghi\"}}"),
+        };
+    }
+
     if (std.mem.eql(u8, method, VAR1.shared.protocol.types.methods.session_list)) {
         var summaries = try allocator.alloc(VAR1.shared.protocol.types.SessionSummary, ctx.sessions.items.len);
         defer allocator.free(summaries);
@@ -341,7 +347,23 @@ fn makeBridge(allocator: std.mem.Allocator, ctx: *MockKernelContext) VAR1.host.h
         .context = ctx,
         .callFn = mockKernelCall,
         .waitNotificationAfterFn = mockWaitNotificationAfter,
-    });
+    }, ".");
+}
+
+fn makeBridgeWithWorkspace(
+    allocator: std.mem.Allocator,
+    ctx: *MockKernelContext,
+    workspace_root: []const u8,
+) VAR1.host.http_bridge.Bridge {
+    return VAR1.host.http_bridge.Bridge.initWithKernel(allocator, .{
+        .context = ctx,
+        .callFn = mockKernelCall,
+        .waitNotificationAfterFn = mockWaitNotificationAfter,
+    }, workspace_root);
+}
+
+fn tmpWorkspacePath(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
+    return std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
 }
 
 fn renderJsonAlloc(allocator: std.mem.Allocator, value: anytype) ![]u8 {
@@ -393,13 +415,42 @@ test "web route forwards json-rpc payloads and preserves caller ids" {
     try std.testing.expect(std.mem.indexOf(u8, ctx.last_params.?, "\"probe\":true") != null);
 }
 
+test "web route redacts secret-shaped values from rpc output" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var ctx = MockKernelContext.init(std.testing.allocator);
+    defer ctx.deinit();
+    var bridge = makeBridgeWithWorkspace(std.testing.allocator, &ctx, workspace_root);
+
+    const response = try VAR1.host.http_bridge.routeWithAccess(
+        std.testing.allocator,
+        &bridge,
+        .POST,
+        "/rpc",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"req-redact\",\"method\":\"auth/status\",\"params\":{}}",
+        "http://127.0.0.1:4310",
+        VAR1.host.http_bridge.test_bridge_token,
+    );
+    defer response.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(std.http.Status.ok, response.status);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "sk-live-secret") == null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "Bearer abc.def.ghi") == null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "\"message\":\"[redacted]\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "\"authorization\":\"[redacted]\"") != null);
+}
+
 test "web route renders session notifications as sse snapshots" {
     var ctx = MockKernelContext.init(std.testing.allocator);
     defer ctx.deinit();
     try ctx.setNotification(
         4,
         VAR1.shared.protocol.types.notification_methods.session_event,
-        "{\"session_id\":\"session-1\",\"event_type\":\"assistant_response\",\"message\":\"3\"}",
+        "{\"session_id\":\"session-1\",\"event_type\":\"assistant_response\",\"message\":\"provider returned sk-live-secret\"}",
     );
     var bridge = makeBridge(std.testing.allocator, &ctx);
 
@@ -419,6 +470,8 @@ test "web route renders session notifications as sse snapshots" {
     try std.testing.expect(std.mem.indexOf(u8, response.body, "id: 4") != null);
     try std.testing.expect(std.mem.indexOf(u8, response.body, "event: session/event") != null);
     try std.testing.expect(std.mem.indexOf(u8, response.body, "\"session_id\":\"session-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "sk-live-secret") == null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "\"message\":\"[redacted]\"") != null);
 }
 
 test "web route rejects unapproved browser origins" {
@@ -569,4 +622,85 @@ test "bridge access module owns origin redaction and audit classification" {
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"api_key\":\"[redacted]\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"authorization\":\"[redacted]\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"bridge_token\":\"token-1\"") != null);
+}
+
+test "bridge access redacts secret-shaped values in generic payload fields" {
+    const payload = try VAR1.host.bridge_access.redactAndAttachHandshake(
+        std.testing.allocator,
+        "{\"ok\":false,\"message\":\"provider returned sk-live-secret\",\"errors\":[\"Bearer abc.def.ghi\",\"jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c\"],\"safe\":\"ordinary value\"}",
+        "token-1",
+    );
+    defer std.testing.allocator.free(payload);
+
+    try std.testing.expect(std.mem.indexOf(u8, payload, "sk-live-secret") == null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "Bearer abc.def.ghi") == null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c") == null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"message\":\"[redacted]\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"safe\":\"ordinary value\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"bridge_token\":\"token-1\"") != null);
+}
+
+test "bridge route persists redacted audit events for mutating rpc actions" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var ctx = MockKernelContext.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.seedInitializedSession("session-audit-1", "hello");
+
+    var bridge = makeBridgeWithWorkspace(std.testing.allocator, &ctx, workspace_root);
+
+    const response = try VAR1.host.http_bridge.routeWithAccess(
+        std.testing.allocator,
+        &bridge,
+        .POST,
+        "/rpc",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"req-1\",\"method\":\"session/send\",\"params\":{\"session_id\":\"session-audit-1\",\"prompt\":\"next\"}}",
+        "http://127.0.0.1:4310",
+        VAR1.host.http_bridge.test_bridge_token,
+    );
+    defer response.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(std.http.Status.ok, response.status);
+
+    const audit_path = try VAR1.host.bridge_access.auditLogPath(std.testing.allocator, workspace_root);
+    defer std.testing.allocator.free(audit_path);
+    const audit_log = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, audit_path);
+    defer std.testing.allocator.free(audit_log);
+
+    try std.testing.expect(std.mem.indexOf(u8, audit_log, "\"schema_version\":\"var1.bridge_audit.v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, audit_log, "\"event_type\":\"bridge_rpc\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, audit_log, "\"action\":\"session_write\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, audit_log, "\"method\":\"session/send\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, audit_log, "\"session_id\":\"session-audit-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, audit_log, "\"timestamp_ms\":") != null);
+}
+
+test "bridge audit sink redacts secret-shaped fields" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    try VAR1.host.bridge_access.appendAuditEvent(
+        std.testing.allocator,
+        workspace_root,
+        "auth/sk-live-secret",
+        "Bearer abc.def.ghi",
+    );
+
+    const audit_path = try VAR1.host.bridge_access.auditLogPath(std.testing.allocator, workspace_root);
+    defer std.testing.allocator.free(audit_path);
+    const audit_log = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, audit_path);
+    defer std.testing.allocator.free(audit_log);
+
+    try std.testing.expect(std.mem.indexOf(u8, audit_log, "sk-live-secret") == null);
+    try std.testing.expect(std.mem.indexOf(u8, audit_log, "Bearer abc.def.ghi") == null);
+    try std.testing.expect(std.mem.indexOf(u8, audit_log, "\"action\":\"auth\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, audit_log, "\"method\":\"[redacted]\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, audit_log, "\"session_id\":\"[redacted]\"") != null);
 }

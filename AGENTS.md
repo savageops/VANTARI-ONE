@@ -73,3 +73,13 @@ Canonical session layout:
 - Plan first for storage/context architecture changes. Implement only after the target contract, storage behavior, and tests are explicit.
 - No parallel systems, hidden fallbacks, or prompt-scaffolding leakage into user-facing output.
 - Public docs must describe current runtime truth, not intended future state.
+
+## Quality Review Ledger
+
+- High-pass reviews must produce ranked, evidence-backed findings before edits. Prefer one durable architecture correction over many cosmetic rewrites.
+- Bridge, session, auth, and write-capable ingress must leave durable redacted audit evidence, not only process stderr. Audit events belong in `.var` append-only records or session events with a stable schema.
+- Bridge-visible redaction must protect sensitive keys and secret-shaped string values before health, auth, error, or RPC payloads leave the backend.
+- Tool capability truth is contractual: catalog availability must derive from module-owned definitions without hand-indexed tool lists or string branch drift.
+- Operator scripts must diagnose Windows-owned executable locks and stale local kernel/bridge processes before validation claims fail obscurely.
+- Runtime configuration must fail closed on unknown high-impact policy keys or expose explicit diagnostics through operator surfaces.
+- Context budget heuristics remain acceptable only while tests prove compaction checkpoints/events and provider-overflow recovery; exact tokenizer work requires evidence that the heuristic is insufficient.

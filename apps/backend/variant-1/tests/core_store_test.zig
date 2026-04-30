@@ -124,6 +124,28 @@ test "local settings TOML overlays non-secret context policy" {
     try std.testing.expect(!policy.retry_on_provider_overflow);
 }
 
+test "local settings TOML rejects unknown context policy keys" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const settings_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "config", "settings.toml" });
+    defer std.testing.allocator.free(settings_path);
+
+    try VAR1.shared.fsutil.writeText(settings_path,
+        \\[context]
+        \\auto_compact = false
+        \\
+    );
+
+    try std.testing.expectError(
+        VAR1.core.config.local_settings.Error.InvalidValue,
+        VAR1.core.config.local_settings.loadContextPolicy(std.testing.allocator, workspace_root, .{}),
+    );
+}
+
 test "config loader ignores commented backup provider entries" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
