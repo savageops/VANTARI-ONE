@@ -10,6 +10,7 @@ pub const Config = struct {
     max_steps: usize,
     workspace_root: []u8,
     context_policy: ContextPolicy = .{},
+    prompt_policy: PromptPolicy = .{},
 
     pub fn deinit(self: Config, allocator: std.mem.Allocator) void {
         allocator.free(self.openai_base_url);
@@ -19,6 +20,7 @@ pub const Config = struct {
         if (self.subscription_plan_label) |value| allocator.free(value);
         if (self.subscription_status) |value| allocator.free(value);
         allocator.free(self.workspace_root);
+        self.prompt_policy.deinit(allocator);
     }
 };
 
@@ -32,6 +34,16 @@ pub const ContextPolicy = struct {
     max_entries_per_checkpoint: usize = 0,
     aggressiveness_milli: u16 = 350,
     retry_on_provider_overflow: bool = true,
+};
+
+pub const PromptPolicy = struct {
+    system_prompt_file: ?[]u8 = null,
+    developer_prompt_file: ?[]u8 = null,
+
+    pub fn deinit(self: PromptPolicy, allocator: std.mem.Allocator) void {
+        if (self.system_prompt_file) |value| allocator.free(value);
+        if (self.developer_prompt_file) |value| allocator.free(value);
+    }
 };
 
 pub const AuthType = enum {

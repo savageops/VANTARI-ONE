@@ -5,7 +5,7 @@ const module = @import("../module.zig");
 pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "launch_agent",
-        .description = "Launch another VAR1 agent as a named child run. JSON arguments require prompt and optionally accept name. Use this only for bounded child work you want VAR1 to execute separately.",
+        .description = "Launch a bounded child VAR1 agent. Arguments require prompt and optionally accept name. Use only when the child can make independent progress from a self-contained task statement.",
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -18,11 +18,11 @@ pub const definitions = [_]types.ToolDefinition{
         \\}
         ,
         .example_json = "{\"prompt\":\"Inspect src/core/tools/runtime.zig and summarize search_files.\",\"name\":\"search-audit\"}",
-        .usage_hint = "Keep the child prompt bounded and self-contained. Use the returned name for agent_status or wait_agent.",
+        .usage_hint = "Keep the child prompt concrete, finite, and self-contained. You own supervision after launch; use the returned name for agent_status or wait_agent.",
     },
     .{
         .name = "agent_status",
-        .description = "Inspect the latest status and journal-backed progress metadata for a named child agent without blocking. JSON arguments require name.",
+        .description = "Inspect a named child agent without blocking. Arguments require name returned by launch_agent and return journal-backed status/progress metadata.",
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -38,7 +38,7 @@ pub const definitions = [_]types.ToolDefinition{
     },
     .{
         .name = "wait_agent",
-        .description = "Wait up to timeout_ms for a named child agent. JSON arguments require name and optionally accept timeout_ms. If the child does not finish in time, the tool returns its current snapshot instead of failing.",
+        .description = "Wait bounded time for a named child agent. Arguments require name and optionally accept timeout_ms. Timeout returns the current snapshot instead of failing.",
         .parameters_json =
         \\{
         \\  "type": "object",

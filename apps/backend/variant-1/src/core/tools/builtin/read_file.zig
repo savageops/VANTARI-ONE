@@ -5,7 +5,7 @@ const module = @import("../module.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "read_file",
-    .description = "Read an existing file from the workspace. JSON arguments require path and optionally accept start_line and end_line. Line numbers are 1-based and inclusive.",
+    .description = "Inspect an existing workspace file. Arguments require path and optionally accept start_line/end_line. Use only after the file path is known.",
     .parameters_json =
     \\{
     \\  "type": "object",
@@ -19,7 +19,7 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"path\":\"src/core/tools/runtime.zig\",\"start_line\":1,\"end_line\":80}",
-    .usage_hint = "Pass a file path, not a directory. Use list_files to discover paths and search_files to locate matching files first.",
+    .usage_hint = "Pass a file path, not a directory. Line numbers are 1-based inclusive. Read before replace_in_file when exact old_text must be known.",
 };
 
 pub const availability = module.AvailabilitySpec{};

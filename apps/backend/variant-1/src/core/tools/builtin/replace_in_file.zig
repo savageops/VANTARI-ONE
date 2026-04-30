@@ -5,7 +5,7 @@ const module = @import("../module.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "replace_in_file",
-    .description = "Replace exact text in an existing workspace file. JSON arguments require path, old_text, and new_text, with optional replace_all for every match.",
+    .description = "Perform exact text replacement in an existing workspace file. Arguments require path, old_text, and new_text, plus optional replace_all.",
     .parameters_json =
     \\{
     \\  "type": "object",
@@ -20,7 +20,7 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"path\":\"src/core/tools/runtime.zig\",\"old_text\":\"alpha\",\"new_text\":\"beta\",\"replace_all\":false}",
-    .usage_hint = "replace_in_file performs exact string replacement, not regex replacement. Read the file first when you need to confirm the current text.",
+    .usage_hint = "This is exact string replacement, not regex. Read the target first, copy old_text precisely, and keep replace_all false unless every occurrence must change.",
 };
 
 pub const availability = module.AvailabilitySpec{};

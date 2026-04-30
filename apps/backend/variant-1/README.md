@@ -195,7 +195,7 @@ Required `.env` keys:
 - `MAX_STEPS`
 - `WORKSPACE`
 
-Use `.env.example` as the public template. Keep live `.env` values local. `.env` seeds auth on first run; after `.var/auth/auth.json` exists, the active provider record is the effective model/auth source reported by `VAR1 health`. Non-secret context policy lives in `.var/config/settings.toml` when an override is needed:
+Use `.env.example` as the public template. Keep live `.env` values local. `.env` seeds auth on first run; after `.var/auth/auth.json` exists, the active provider record is the effective model/auth source reported by `VAR1 health`. Non-secret context and prompt policy lives in `.var/config/settings.toml` when an override is needed:
 
 ```toml
 [context]
@@ -208,9 +208,15 @@ keep_recent_messages = 8
 max_entries_per_checkpoint = 0
 aggressiveness_milli = 350
 retry_on_provider_overflow = true
+
+[prompts]
+system_prompt_file = ".var/prompts/system.md"
+developer_prompt_file = ".var/prompts/developer.md"
 ```
 
 The context policy controls only model-window behavior. `messages.jsonl` stays append-only, `context.jsonl` stays the checkpoint ledger, manual `session/compact` remains available when `manual_compaction = true`, and executor auto-compaction calls the same compactor when estimates or provider overflow require a smaller model-visible window.
+
+Prompt policy controls only user-editable model instructions. `src/core/prompts/` always wraps those optional files with a hidden kernel guardrail layer and the current tool-use contract. Missing or empty prompt files fall back to built-in defaults; unknown `[prompts]` keys or absolute prompt paths fail closed.
 
 ## Files worth reading first
 
@@ -224,6 +230,7 @@ The context policy controls only model-window behavior. `messages.jsonl` stays a
 - `src/core/context/compactor.zig`
 - `src/core/context/budget.zig`
 - `src/core/context/overflow.zig`
+- `src/core/prompts/index.zig`
 - `src/core/sessions/store.zig`
 - `src/core/tools/module.zig`
 - `src/core/tools/registry.zig`

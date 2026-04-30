@@ -225,7 +225,9 @@ Every session directory contains:
 
 `messages.jsonl` is the complete append-only transcript. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested.
 
-`.var/config/settings.toml` is the optional non-secret policy file. The `[context]` table owns `auto_compaction`, `manual_compaction`, `context_window_tokens`, `compact_at_ratio`, `reserve_output_tokens`, `keep_recent_messages`, `max_entries_per_checkpoint`, `aggressiveness_milli`, and `retry_on_provider_overflow`. Provider URL, model, API keys, and auth-plan state do not move into this file.
+`.var/config/settings.toml` is the optional non-secret policy file. The `[context]` table owns `auto_compaction`, `manual_compaction`, `context_window_tokens`, `compact_at_ratio`, `reserve_output_tokens`, `keep_recent_messages`, `max_entries_per_checkpoint`, `aggressiveness_milli`, and `retry_on_provider_overflow`. The `[prompts]` table owns only `system_prompt_file` and `developer_prompt_file`, both workspace-relative. Provider URL, model, API keys, hidden guardrails, and auth-plan state do not move into this file.
+
+`src/core/prompts/` owns the model-presented prompt envelope. It loads optional project-local system/developer prompt files from `.var/prompts/`, falls back to built-in defaults when those files are missing or empty, injects the hidden runtime guardrail layer from compiled code, and appends the live tool catalog plus tool-use contract. Provider transport remains OpenAI-compatible by sending the resulting envelope as a system-role message while preserving internal/system/developer/tool boundaries inside the prompt text.
 
 `store.ensureStoreReady(...)` validates and rewrites existing `.var/sessions/<id>/session.json` records into the current canonical shape. It does not read old roots, old-layout files, or old-layout fields.
 
@@ -247,6 +249,8 @@ Every session directory contains:
   provider-error classifier for explicit context-window overflow, excluding rate-limit and availability failures
 - `src/core/config/settings.zig`
   optional `.var/config/settings.toml` policy loader for non-secret runtime controls
+- `src/core/prompts/builder.zig`
+  sole owner for assembling internal guardrails, user-editable system/developer prompt layers, and the live tool-use contract
 - `src/core/tools/`
   typed tool socket namespace, built-in module registry/runtime, availability resolver, command-backed search dispatch, and workspace-state helpers
 - `src/core/plugins/`

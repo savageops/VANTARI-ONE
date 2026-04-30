@@ -10,6 +10,7 @@ pub const docs_sync = @import("docs/sync.zig");
 pub const executor = @import("executor/loop.zig");
 pub const workspace_runtime = tools.workspace_runtime;
 pub const plugins = @import("plugins/index.zig");
+pub const prompts = @import("prompts/index.zig");
 pub const protocol_types = @import("../shared/protocol/types.zig");
 pub const provider_runtime = @import("providers/openai_compatible.zig");
 pub const session_store = @import("sessions/store.zig");
@@ -24,4 +25,5 @@ test "core namespace exposes executor and store" {
     try std.testing.expect(@hasDecl(@This(), "context"));
     try std.testing.expect(@hasDecl(@This(), "tools"));
     try std.testing.expect(@hasDecl(@This(), "plugins"));
+    try std.testing.expect(@hasDecl(@This(), "prompts"));
 }

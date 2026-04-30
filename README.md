@@ -211,7 +211,7 @@ The executor uses the same compactor for automatic pressure relief. It estimates
 
 ## Configuration
 
-Runtime configuration is resolved from the backend lane at `apps/backend/variant-1`. Provider credentials stay in `.env` or the auth ledger; non-secret context policy can be overridden in `.var/config/settings.toml`.
+Runtime configuration is resolved from the backend lane at `apps/backend/variant-1`. Provider credentials stay in `.env` or the auth ledger; non-secret context and prompt policy can be overridden in `.var/config/settings.toml`.
 
 | Parameter | Required | Meaning |
 |---|---|---|
@@ -222,6 +222,16 @@ Runtime configuration is resolved from the backend lane at `apps/backend/variant
 | `MAX_STEPS` | no | execution step ceiling; defaults to `1` when resolved from auth-only config |
 
 Reference shape: [`apps/backend/variant-1/.env.example`](./apps/backend/variant-1/.env.example).
+
+Optional prompt policy:
+
+```toml
+[prompts]
+system_prompt_file = ".var/prompts/system.md"
+developer_prompt_file = ".var/prompts/developer.md"
+```
+
+Those files are user-editable instruction layers. The hidden kernel guardrail layer and current tool-use contract are assembled by `apps/backend/variant-1/src/core/prompts/` and are not configured through settings.
 
 Context policy TOML shape:
 

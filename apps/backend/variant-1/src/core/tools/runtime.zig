@@ -86,6 +86,7 @@ pub fn renderCatalog(allocator: std.mem.Allocator, execution_context: ExecutionC
     try output.writer().print(
         \\VAR1 built-in tools
         \\Workspace root: {s}
+        \\Call contract: pass one JSON object; use only declared fields; inspect ok:false and tool_error_hint before retrying.
         \\
     , .{execution_context.workspace_root});
 
@@ -154,37 +155,6 @@ pub fn renderCatalogJson(allocator: std.mem.Allocator, execution_context: Execut
 
     try output.writer().writeAll("]}");
     return output.toOwnedSlice();
-}
-
-pub fn buildAgentSystemPrompt(allocator: std.mem.Allocator, execution_context: ExecutionContext) ![]u8 {
-    const catalog = try renderCatalog(allocator, execution_context);
-    defer allocator.free(catalog);
-    const workspace_state_note = if (execution_context.workspace_state_enabled)
-        "Workspace-state tools are enabled because this request is explicitly .var-state-related. Use init_workspace only when the canonical structure is missing or incomplete. Do not call todo_slice just to track the current run. If you call session_record with action:\"upsert\", provide session_name, status, and objective. If you call todo_slice with action:\"upsert\", provide category, todo_name, status, and objective."
-    else
-        "Workspace-state tools are not in the current catalog because this request is not explicitly .var-state-related. For normal coding work, use file tools and agent tools only, and do not invent extra workspace-state bookkeeping.";
-
-    return std.fmt.allocPrint(
-        allocator,
-        \\You are VAR1, a coding kernel agent operating inside the workspace root `{s}`.
-        \\Use the built-in tools whenever they help you inspect, search, create, or edit files.
-        \\Tool arguments must be valid JSON objects that match the declared schema exactly and use only the documented keys.
-        \\If a tool returns ok:false or includes a tool error hint, repair the call instead of repeating the same failing arguments.
-        \\Use list_files to discover paths, search_files to search contents, read_file to inspect a known file, write_file to replace a file, append_file to add text, and replace_in_file for exact string swaps.
-        \\If the request explicitly touches workspace process state, use the canonical .var tools instead of inventing a second ledger or runtime surface.
-        \\{s}
-        \\If agent tools are available, you may launch a bounded child VAR1 agent instead of doing all work yourself.
-        \\Use agent_status for non-blocking child supervision. Use wait_agent only when you are ready to spend bounded time collecting a child result or current snapshot.
-        \\Keep internal tool mechanics private in operator-facing responses. Do not expose raw tool names, tool-call ids, or ask the operator to run supervision commands unless they explicitly asked for tool documentation.
-        \\When you delegate child runs, you own supervision. Continue supervising child lifecycle state until each required child reaches terminal state, and if children are still in flight provide this exact update: "I will continue once agents complete; if any fail, I will follow up."
-        \\Never invent tool results. Never write outside the workspace root.
-        \\Prefer precise, minimal edits over rewriting unrelated content.
-        \\When you are done, return a direct final answer for the operator.
-        \\
-        \\{s}
-    ,
-        .{ execution_context.workspace_root, workspace_state_note, catalog },
-    );
 }
 
 pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 {
