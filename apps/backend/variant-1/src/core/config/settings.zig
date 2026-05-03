@@ -120,7 +120,8 @@ pub fn parsePromptPolicy(
 
         const separator_index = std.mem.indexOfScalar(u8, line, '=') orelse return Error.InvalidValue;
         const key = std.mem.trim(u8, line[0..separator_index], " \t");
-        const value = trimQuotes(std.mem.trim(u8, line[separator_index + 1 ..], " \t"));
+        const value = try parseTomlStringScalar(allocator, std.mem.trim(u8, line[separator_index + 1 ..], " \t"));
+        defer allocator.free(value);
         if (key.len == 0 or value.len == 0) return Error.InvalidValue;
         if (std.fs.path.isAbsolute(value)) return Error.InvalidValue;
 
@@ -137,8 +138,29 @@ pub fn parsePromptPolicy(
 }
 
 fn stripComment(line: []const u8) []const u8 {
-    const comment_index = std.mem.indexOfScalar(u8, line, '#') orelse return line;
-    return line[0..comment_index];
+    var in_string = false;
+    var escaped = false;
+
+    for (line, 0..) |byte, index| {
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (byte == '\\') {
+                escaped = true;
+            } else if (byte == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if (byte == '"') {
+            in_string = true;
+        } else if (byte == '#') {
+            return line[0..index];
+        }
+    }
+
+    return line;
 }
 
 fn parseBool(value: []const u8) !bool {
@@ -168,6 +190,36 @@ fn trimQuotes(value: []const u8) []const u8 {
         return value[1 .. value.len - 1];
     }
     return value;
+}
+
+fn parseTomlStringScalar(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    if (value.len < 2 or value[0] != '"' or value[value.len - 1] != '"') return Error.InvalidValue;
+
+    var output = std.array_list.Managed(u8).init(allocator);
+    errdefer output.deinit();
+
+    var index: usize = 1;
+    while (index < value.len - 1) : (index += 1) {
+        const byte = value[index];
+        if (byte == '"') return Error.InvalidValue;
+        if (byte != '\\') {
+            try output.append(byte);
+            continue;
+        }
+
+        index += 1;
+        if (index >= value.len - 1) return Error.InvalidValue;
+        switch (value[index]) {
+            '"' => try output.append('"'),
+            '\\' => try output.append('\\'),
+            'n' => try output.append('\n'),
+            'r' => try output.append('\r'),
+            't' => try output.append('\t'),
+            else => return Error.InvalidValue,
+        }
+    }
+
+    return output.toOwnedSlice();
 }
 
 fn validate(policy: types.ContextPolicy) !void {
@@ -230,14 +282,25 @@ test "settings reject unknown context policy keys" {
 test "settings parse prompt policy TOML" {
     var policy = try parsePromptPolicy(std.testing.allocator,
         \\[prompts]
-        \\system_prompt_file = ".var/prompts/system.md"
+        \\system_prompt_file = ".var/prompts/system#main.md" # outside comment
         \\developer_prompt_file = ".var/prompts/developer.md"
         \\
     , .{});
     defer policy.deinit(std.testing.allocator);
 
-    try std.testing.expectEqualStrings(".var/prompts/system.md", policy.system_prompt_file.?);
+    try std.testing.expectEqualStrings(".var/prompts/system#main.md", policy.system_prompt_file.?);
     try std.testing.expectEqualStrings(".var/prompts/developer.md", policy.developer_prompt_file.?);
+}
+
+test "settings reject unquoted prompt policy strings" {
+    try std.testing.expectError(
+        Error.InvalidValue,
+        parsePromptPolicy(std.testing.allocator,
+            \\[prompts]
+            \\system_prompt_file = .var/prompts/system.md
+            \\
+        , .{}),
+    );
 }
 
 test "settings reject invalid prompt policy keys" {

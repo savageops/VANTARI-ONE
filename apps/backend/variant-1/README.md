@@ -39,7 +39,7 @@ Each durable run lives under `.var/sessions/<id>/`:
 - `events.jsonl`
 - `output.txt`
 
-`messages.jsonl` is the append-only session transcript. `context.jsonl` is the compact checkpoint history produced by `core/context/compactor.zig` and consumed by the context builder; it is not a second full transcript.
+`messages.jsonl` is the append-only session transcript, including assistant tool-call turns and tool-result rows. `context.jsonl` is the compact checkpoint history produced by `core/context/compactor.zig` and consumed by the context builder; it is not a second full transcript.
 
 Session ids remain opaque. The store mints `session-...` ids for new runs.
 
@@ -60,7 +60,7 @@ The browser client lives outside the kernel at `apps/frontend/var1-client`.
 
 The current tool surface is compiled into the `VAR1` binary. Tool definitions use the shared `ToolDefinition` shape: name, description, `parameters_json`, optional example, and optional usage hint. Built-in file and agent tools live under `src/core/tools/builtin/`; each module exports `definition`, `availability`, and `execute`. `src/core/tools/runtime.zig` composes those modules for catalog rendering and dispatch, `src/core/tools/registry.zig` resolves availability from module-owned tool names/specs, and `src/core/tools/module.zig` owns shared execution contracts. `src/core/executor/loop.zig` injects the context-filtered definitions into provider requests; `src/core/providers/openai_compatible.zig` writes them as OpenAI-compatible function schemas.
 
-`VAR1 tools --json` and the JSON-RPC `tools/list` method expose the same catalog. That catalog includes availability metadata, so installing clients can distinguish shipped schema from currently usable capability. Mutating file-tool responses preserve the stable `ok/tool/content` envelope and add a typed `effect` receipt when a workspace file changes.
+`VAR1 tools --json` and the JSON-RPC `tools/list` method expose the same catalog. That catalog includes availability metadata, so installing clients can distinguish shipped schema from currently usable capability. Runtime argument parsing rejects undeclared tool parameters, matching the advertised `additionalProperties:false` schema contract. Mutating file-tool responses preserve the stable `ok/tool/content` envelope and add a typed `effect` receipt when a workspace file changes.
 
 File tools are split by role:
 
@@ -154,7 +154,7 @@ The browser client uses only `POST /rpc`, `GET /events`, and `GET /api/health`. 
 - `/api/health` is the local readiness and bridge-token handshake route
 - `/` is bridge-only text that points operators at `apps/frontend/var1-client`
 
-The bridge binds to `127.0.0.1` by default. `host/bridge_access.zig` owns the local-origin allowlist, token guard, bridge-visible key-and-value redaction, audit-action classification, and append-only audit emission to `.var/audit/bridge.jsonl`; `host/http_bridge.zig` owns the route and connection transport. Health, error, RPC, and event payloads share the same secret-shaped value redactor before reaching the browser. Session, auth, and write-capable RPC actions use the `var1.bridge_audit.v1` event schema and fail closed if the audit sink cannot persist the event. No kernel-owned HTML is served from `src/`.
+The bridge binds to `127.0.0.1` by default. `host/bridge_access.zig` owns the local-origin allowlist, token guard, bridge-visible key-and-value redaction, audit-action classification, and append-only audit emission to `.var/audit/bridge.jsonl`; `host/http_bridge.zig` owns route and connection transport, accepting each socket into a detached worker so long RPC/event requests do not serialize the listener. Health, error, RPC, and event payloads share the same secret-shaped value redactor before reaching the browser. Session, auth, and write-capable RPC actions use the `var1.bridge_audit.v1` event schema and fail closed if the audit sink cannot persist the event. No kernel-owned HTML is served from `src/`.
 
 ## Scripts
 
@@ -193,6 +193,8 @@ Required `.env` keys:
 - `API_KEY`
 - `MODEL`
 - `MAX_STEPS`
+- `MAX_TOOL_CALLS_PER_TURN`
+- `MAX_TOOL_CALLS_PER_SESSION`
 - `WORKSPACE`
 
 Use `.env.example` as the public template. Keep live `.env` values local. `.env` seeds auth on first run; after `.var/auth/auth.json` exists, the active provider record is the effective model/auth source reported by `VAR1 health`. Non-secret context and prompt policy lives in `.var/config/settings.toml` when an override is needed:
@@ -214,9 +216,9 @@ system_prompt_file = ".var/prompts/system.md"
 developer_prompt_file = ".var/prompts/developer.md"
 ```
 
-The context policy controls only model-window behavior. `messages.jsonl` stays append-only, `context.jsonl` stays the checkpoint ledger, manual `session/compact` remains available when `manual_compaction = true`, and executor auto-compaction calls the same compactor when estimates or provider overflow require a smaller model-visible window.
+The step policy and tool-call policy are separate controls. `MAX_STEPS` limits provider turns; `MAX_TOOL_CALLS_PER_TURN` and `MAX_TOOL_CALLS_PER_SESSION` limit the number of tool effects the model may request before dispatch. The context policy controls only model-window behavior. `messages.jsonl` stays append-only, `context.jsonl` stays the checkpoint ledger, manual `session/compact` remains available when `manual_compaction = true`, and executor auto-compaction calls the same compactor when estimates or provider overflow require a smaller model-visible window.
 
-Prompt policy controls only user-editable model instructions. `src/core/prompts/` always wraps those optional files with a hidden kernel guardrail layer and the current tool-use contract. Missing or empty prompt files fall back to built-in defaults; unknown `[prompts]` keys or absolute prompt paths fail closed.
+Prompt policy controls only user-editable model instructions. `src/core/prompts/` always wraps those optional files with a hidden kernel guardrail layer and the current tool-use contract. Prompt paths must be quoted TOML strings; missing or empty prompt files fall back to built-in defaults, while unknown `[prompts]` keys, unquoted values, or absolute prompt paths fail closed.
 
 ## Files worth reading first
 
@@ -257,8 +259,8 @@ This lane is now session-native end to end:
 
 No compatibility facade or old-layout storage reader remains in this lane.
 
-Latest local Windows validation on 2026-04-30:
+Latest local Windows validation on 2026-05-04:
 
-- `.\scripts\zigw.ps1 build test --summary all` -> `86/86 tests passed`
+- `.\scripts\zigw.ps1 build test --summary all` -> `90/90 tests passed`
 - `.\zig-out\bin\VAR1.exe tools --json` -> `search_files` includes `external_command` dependency availability for `iex`
 - `.\scripts\health.ps1` -> `status: ready`

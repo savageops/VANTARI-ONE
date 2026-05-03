@@ -11,6 +11,12 @@ const connection_write_buffer_size = 16 * 1024;
 const sse_poll_timeout_ms: usize = 1000;
 pub const test_bridge_token = "test-bridge-token";
 
+const ConnectionJob = struct {
+    allocator: std.mem.Allocator,
+    bridge: *Bridge,
+    connection: std.net.Server.Connection,
+};
+
 pub const ServeOptions = struct {
     host: []const u8 = "127.0.0.1",
     port: u16 = 4310,
@@ -154,10 +160,32 @@ pub fn serve(allocator: std.mem.Allocator, config: types.Config, options: ServeO
 
     while (true) {
         var connection = try listener.accept();
-        handleConnection(allocator, &bridge, &connection) catch |err| {
-            bridge_access.logError("http_connection", null, err);
+        const job = allocator.create(ConnectionJob) catch |err| {
+            connection.stream.close();
+            bridge_access.logError("http_connection_alloc", null, err);
+            continue;
         };
+        job.* = .{
+            .allocator = allocator,
+            .bridge = &bridge,
+            .connection = connection,
+        };
+
+        const thread = std.Thread.spawn(.{}, handleConnectionJob, .{job}) catch |err| {
+            job.connection.stream.close();
+            allocator.destroy(job);
+            bridge_access.logError("http_connection_spawn", null, err);
+            continue;
+        };
+        thread.detach();
     }
+}
+
+fn handleConnectionJob(job: *ConnectionJob) void {
+    defer job.allocator.destroy(job);
+    handleConnection(job.allocator, job.bridge, &job.connection) catch |err| {
+        bridge_access.logError("http_connection", null, err);
+    };
 }
 
 pub fn route(

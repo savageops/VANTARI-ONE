@@ -12,6 +12,7 @@ pub const Error = error{
     ContextWindowExceeded,
     MissingAssistantContent,
     StepLimitExceeded,
+    ToolBudgetExceeded,
 };
 
 pub const Hooks = struct {
@@ -152,6 +153,7 @@ pub fn runPromptWithOptions(
     };
 
     var requires_child_supervision = false;
+    var executed_tool_calls: usize = 0;
     var step: usize = 0;
     while (step < config.max_steps) : (step += 1) {
         if (options.hooks.shouldCancel(session.id)) {
@@ -188,6 +190,38 @@ pub fn runPromptWithOptions(
         defer completion.deinit(allocator);
 
         if (completion.hasToolCalls()) {
+            const session_budget_exceeded = completion.tool_calls.len > config.max_tool_calls_per_session or
+                executed_tool_calls > config.max_tool_calls_per_session - completion.tool_calls.len;
+            if (completion.tool_calls.len > config.max_tool_calls_per_turn or
+                session_budget_exceeded)
+            {
+                const budget_message = try std.fmt.allocPrint(
+                    allocator,
+                    "tool budget exceeded: requested={d} turn_limit={d} session_used={d} session_limit={d}",
+                    .{
+                        completion.tool_calls.len,
+                        config.max_tool_calls_per_turn,
+                        executed_tool_calls,
+                        config.max_tool_calls_per_session,
+                    },
+                );
+                defer allocator.free(budget_message);
+                try recordSessionEvent(
+                    allocator,
+                    config.workspace_root,
+                    options.hooks,
+                    session.id,
+                    "tool_budget_exceeded",
+                    budget_message,
+                    session.status,
+                );
+                try docs_sync.appendLog(allocator, config.workspace_root, budget_message);
+                try failSession(allocator, config.workspace_root, options.hooks, &session, @errorName(Error.ToolBudgetExceeded));
+                return Error.ToolBudgetExceeded;
+            }
+
+            executed_tool_calls += completion.tool_calls.len;
+
             const summary = try tools.renderToolCallSummary(allocator, completion.tool_calls);
             defer allocator.free(summary);
 
@@ -204,7 +238,16 @@ pub fn runPromptWithOptions(
             );
             try docs_sync.appendLog(allocator, config.workspace_root, request_log);
 
+            const tool_request_timestamp = std.time.milliTimestamp();
             try messages.append(try types.initAssistantToolCallMessage(allocator, completion.content, completion.tool_calls));
+            try store.appendAssistantToolCallSessionMessage(
+                allocator,
+                config.workspace_root,
+                session.id,
+                completion.content,
+                completion.tool_calls,
+                tool_request_timestamp,
+            );
 
             for (completion.tool_calls) |tool_call| {
                 if (options.hooks.shouldCancel(session.id)) {
@@ -228,6 +271,14 @@ pub fn runPromptWithOptions(
                 );
                 try docs_sync.appendLog(allocator, config.workspace_root, tool_result.log_line);
                 try messages.append(try types.initToolMessage(allocator, tool_call.id, tool_result.output));
+                try store.appendToolSessionMessage(
+                    allocator,
+                    config.workspace_root,
+                    session.id,
+                    tool_call.id,
+                    tool_result.output,
+                    std.time.milliTimestamp(),
+                );
             }
 
             continue;

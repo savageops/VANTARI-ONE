@@ -179,6 +179,22 @@ fn mockSendToolLoop(
     );
 }
 
+fn mockSendOverBudgetToolBatch(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const u8,
+    payload: []const u8,
+) anyerror![]u8 {
+    var ctx: *ToolLoopContext = @ptrCast(@alignCast(ctx_ptr.?));
+    ctx.payloads[ctx.call_count] = try ctx.allocator.dupe(u8, payload);
+    defer ctx.call_count += 1;
+
+    return allocator.dupe(u8,
+        \\{"model":"gemma-4-e2b-it","choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"context.txt\"}"}},{"id":"call_2","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"context.txt\"}"}},{"id":"call_3","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"context.txt\"}"}}]}}]}
+    );
+}
+
 fn mockSendResumePrompt(
     ctx_ptr: ?*anyopaque,
     allocator: std.mem.Allocator,
@@ -698,6 +714,19 @@ test "loop executes tool calls and exposes descriptors in the provider payload" 
 
     try std.testing.expect(std.mem.indexOf(u8, events, "tool_requested") != null);
     try std.testing.expect(std.mem.indexOf(u8, events, "tool_completed") != null);
+
+    const transcript = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, result.session_id);
+    defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, transcript);
+    try std.testing.expectEqual(@as(usize, 4), transcript.len);
+    try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.user, transcript[0].role);
+    try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.assistant, transcript[1].role);
+    try std.testing.expectEqual(@as(usize, 1), transcript[1].tool_calls.len);
+    try std.testing.expectEqualStrings("call_1", transcript[1].tool_calls[0].id);
+    try std.testing.expectEqualStrings("read_file", transcript[1].tool_calls[0].name);
+    try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.tool, transcript[2].role);
+    try std.testing.expectEqualStrings("call_1", transcript[2].tool_call_id.?);
+    try std.testing.expect(std.mem.indexOf(u8, transcript[2].content, "hello from file") != null);
+    try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.assistant, transcript[3].role);
 }
 
 test "loop enforces the step budget when tool use does not conclude in time" {
@@ -721,4 +750,42 @@ test "loop enforces the step budget when tool use does not conclude in time" {
         .context = &context,
         .sendFn = mockSendToolLoop,
     }));
+}
+
+test "loop enforces the per-turn tool budget before dispatch" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const file_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, "context.txt" });
+    defer std.testing.allocator.free(file_path);
+    try VAR1.shared.fsutil.writeText(file_path, "hello from file\n");
+
+    var config = try makeConfig(std.testing.allocator, workspace_root, 4);
+    defer config.deinit(std.testing.allocator);
+    config.max_tool_calls_per_turn = 2;
+    config.max_tool_calls_per_session = 8;
+
+    var context = ToolLoopContext{ .allocator = std.testing.allocator };
+    defer context.deinit();
+
+    try std.testing.expectError(VAR1.core.executor.Error.ToolBudgetExceeded, VAR1.core.executor.runPromptWithTransport(std.testing.allocator, config, "Read context.txt several times.", .{
+        .context = &context,
+        .sendFn = mockSendOverBudgetToolBatch,
+    }));
+
+    const sessions = try VAR1.core.session_store.listSessionRecords(std.testing.allocator, workspace_root);
+    defer VAR1.shared.types.deinitSessionRecords(std.testing.allocator, sessions);
+    try std.testing.expectEqual(@as(usize, 1), sessions.len);
+    try std.testing.expectEqual(VAR1.shared.types.SessionStatus.failed, sessions[0].status);
+    try std.testing.expectEqualStrings("ToolBudgetExceeded", sessions[0].failure_reason.?);
+
+    const events_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", sessions[0].id, "events.jsonl" });
+    defer std.testing.allocator.free(events_path);
+    const events = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, events_path);
+    defer std.testing.allocator.free(events);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_budget_exceeded") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_completed") == null);
 }

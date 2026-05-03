@@ -49,7 +49,21 @@ fn appendRawMessages(
         if (first_kept_seq > 0 and turn.seq < first_kept_seq) continue;
         switch (turn.role) {
             .user => try messages.append(try types.initTextMessage(allocator, .user, turn.content)),
-            .assistant => try messages.append(try types.initTextMessage(allocator, .assistant, turn.content)),
+            .assistant => {
+                if (turn.tool_calls.len > 0) {
+                    try messages.append(try types.initAssistantToolCallMessage(
+                        allocator,
+                        if (turn.content.len > 0) turn.content else null,
+                        turn.tool_calls,
+                    ));
+                } else {
+                    try messages.append(try types.initTextMessage(allocator, .assistant, turn.content));
+                }
+            },
+            .tool => {
+                const tool_call_id = turn.tool_call_id orelse continue;
+                try messages.append(try types.initToolMessage(allocator, tool_call_id, turn.content));
+            },
         }
     }
 }

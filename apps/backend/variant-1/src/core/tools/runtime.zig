@@ -160,6 +160,8 @@ pub fn renderCatalogJson(allocator: std.mem.Allocator, execution_context: Execut
 pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 {
     const is_schema_error = std.mem.eql(u8, error_name, "InvalidArguments") or
         std.mem.eql(u8, error_name, "MissingField") or
+        std.mem.eql(u8, error_name, "UnknownField") or
+        std.mem.eql(u8, error_name, "DuplicateField") or
         std.mem.eql(u8, error_name, "UnexpectedToken");
 
     if (is_schema_error) {

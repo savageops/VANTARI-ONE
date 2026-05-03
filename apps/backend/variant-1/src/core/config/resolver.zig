@@ -22,6 +22,8 @@ pub fn loadFromEnvFile(allocator: std.mem.Allocator, env_path: []const u8) !type
     var openai_model: ?[]u8 = null;
     var workspace_root: ?[]u8 = null;
     var max_steps: usize = 1;
+    var max_tool_calls_per_turn: usize = 8;
+    var max_tool_calls_per_session: usize = 32;
 
     errdefer if (openai_base_url) |value| allocator.free(value);
     errdefer if (openai_api_key) |value| allocator.free(value);
@@ -51,6 +53,10 @@ pub fn loadFromEnvFile(allocator: std.mem.Allocator, env_path: []const u8) !type
             workspace_root = try dupeReplacing(allocator, workspace_root, value);
         } else if (std.mem.eql(u8, key, "MAX_STEPS")) {
             max_steps = std.fmt.parseInt(usize, value, 10) catch return Error.InvalidValue;
+        } else if (std.mem.eql(u8, key, "MAX_TOOL_CALLS_PER_TURN")) {
+            max_tool_calls_per_turn = std.fmt.parseInt(usize, value, 10) catch return Error.InvalidValue;
+        } else if (std.mem.eql(u8, key, "MAX_TOOL_CALLS_PER_SESSION")) {
+            max_tool_calls_per_session = std.fmt.parseInt(usize, value, 10) catch return Error.InvalidValue;
         }
     }
 
@@ -67,6 +73,8 @@ pub fn loadFromEnvFile(allocator: std.mem.Allocator, env_path: []const u8) !type
         .subscription_plan_label = if (isZaiProvider(provider_id)) try allocator.dupe(u8, resolved_model) else null,
         .subscription_status = if (isZaiProvider(provider_id)) try allocator.dupe(u8, "active") else null,
         .max_steps = max_steps,
+        .max_tool_calls_per_turn = max_tool_calls_per_turn,
+        .max_tool_calls_per_session = max_tool_calls_per_session,
         .workspace_root = workspace_root orelse try allocator.dupe(u8, "."),
     };
 }
