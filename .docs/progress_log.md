@@ -1,8 +1,8 @@
 # VANTARI-ONE Technical Progress Log
 
-Updated: 2026-04-30
+Updated: 2026-05-04
 Branch: `develop`
-Base HEAD before this slice: `56d3eb8 feat(var1): prioritize tool effect receipts`
+Base HEAD before this slice: `260dd15 docs(var1): record prompt adherence comparison`
 Runtime lane: `apps/backend/variant-1`
 Kernel executable: `VAR1`
 
@@ -12,15 +12,15 @@ VANTARI-ONE is currently a local agent harness centered on one Zig kernel, `VAR1
 
 The tracked git worktree was clean before this progress-log artifact was refreshed. Latest fresh validation in this turn:
 
-- `.\scripts\zigw.ps1 build test --summary all` -> `88/88 tests passed`
+- `.\scripts\zigw.ps1 build test --summary all` -> `90/90 tests passed`
 - `.\zig-out\bin\VAR1.exe health --json` -> `ok: true`
-- Active health model -> `glm-5.1`
-- Active health base URL -> `https://api.z.ai/api/coding/paas/v4`
-- Active auth provider -> `zai`
+- Active health model -> `vantari-probe`
+- Active health base URL -> `https://app.cli.cloud/llm/v1`
+- Active auth provider -> `cli-cloud-llm-v1`
 - `.\zig-out\bin\VAR1.exe tools --json` -> tool catalog emits availability metadata, including `search_files` with `external_command` dependency `iex` available
 - Live comparison against `main` (`3d33a01`) on Z.AI `glm-5.1`: upgraded `develop` completed the six-operation file-tool benchmark in session `session-1777576359915-3cf77bc839898869`; `main` failed in session `session-1777576409385-a2b609f0db4508dc` after one `write_file` with `StepLimitExceeded`.
 
-Live Z.AI credentials/configuration are not recorded here. The effective provider state resolves through ignored `.var/auth/auth.json`; secrets remain local and are not copied into this document.
+Live provider credentials/configuration are not recorded here. The effective provider state resolves through ignored `.var/auth/auth.json`; secrets remain local and are not copied into this document.
 
 ## Architecture Lock
 
@@ -100,9 +100,15 @@ Canonical session layout:
 32. Optional `[prompts]` settings now support workspace-relative `system_prompt_file` and `developer_prompt_file`; missing or empty files fall back to built-in defaults while unknown keys and absolute paths fail closed.
 33. Tool descriptors and the rendered catalog now emphasize JSON-object call grammar, recovery from `ok:false`/tool-error hints, path-discovery order, and effect/result evidence for weaker models.
 34. Isolated-cache comparison builds proved the upgraded descriptor catalog differs from `main`; the upgraded live lane executed `write_file -> read_file -> append_file -> read_file -> replace_in_file -> read_file` and returned the exact required final answer, while `main` stopped after only the first write.
+35. Tool-call assistant messages and tool-result messages now persist as first-class `messages.jsonl` transcript entries, and the context builder reconstructs provider-ready assistant tool calls plus tool replies from the durable ledger.
+36. Tool dispatch now has independent `MAX_TOOL_CALLS_PER_TURN` and `MAX_TOOL_CALLS_PER_SESSION` budgets, with `tool_budget_exceeded` events and fail-closed session state before side effects execute.
+37. Built-in tool argument parsing now rejects undeclared parameters instead of accepting keys outside the advertised `additionalProperties:false` schemas.
+38. The HTTP bridge accepts each connection into a detached worker so long `/rpc` or `/events` requests do not serialize listener progress.
+39. Prompt settings parse quoted TOML string scalars instead of blind line splitting; `#` inside quoted paths remains data, comments outside strings remain comments, and unquoted prompt paths fail closed.
 
 ## Recent Commit Chain
 
+- `260dd15 docs(var1): record prompt adherence comparison` - recorded the isolated prompt-layer comparison evidence and follow-up planning artifacts.
 - `834a632 feat(var1): add prompt layer envelope` - added the canonical prompt envelope, configurable system/developer prompt paths, hidden guardrail layer, and stronger tool descriptors.
 - `56d3eb8 feat(var1): prioritize tool effect receipts` - made model-visible mutating-tool content effect-first.
 - `4e8924b feat(var1): add mutating tool effect receipts` - added structured file-effect metadata and SHA-256 receipts.
@@ -163,6 +169,16 @@ developer_prompt_file = ".var/prompts/developer.md"
 
 Those files are workspace-relative and user-editable. Hidden guardrails, tool rules, tool availability, and the catalog are assembled from compiled kernel code and module-owned tool definitions, not from a user-editable prompt file.
 
+Tool-call budgets are configured beside the provider execution budget:
+
+```text
+MAX_STEPS=28
+MAX_TOOL_CALLS_PER_TURN=8
+MAX_TOOL_CALLS_PER_SESSION=32
+```
+
+`MAX_STEPS` limits provider turns. Tool-call budgets limit side-effect cardinality before tool dispatch, so one model turn cannot compress unbounded file or child-agent effects into a single step.
+
 ## Security And Audit Posture
 
 - Default bridge bind remains `127.0.0.1`.
@@ -180,7 +196,7 @@ Those files are workspace-relative and user-editable. Hidden guardrails, tool ru
 - The strawberry sentinel for the small model previously returned `2` instead of `3`; this is treated as model capability degradation, not a transport/runtime failure.
 - Mutating-tool effect receipts improve model-visible evidence and the Z.AI `glm-5.1` benchmark shows better evidence-grounded adherence than the prior legacy receipt lane, but receipts are not a full deterministic artifact validator or a complete model-obedience fix.
 - Prompt layering improves instruction salience and configurability; the first direct `main` comparison shows better tool batching/adherence under the same auth-only step budget, but deterministic validators remain the next boundary for artifact correctness after mutating tools.
-- The active provider is currently Z.AI `glm-5.1`; switch-provider smokes must preserve `.var/auth/auth.json` secret hygiene and avoid recording API keys in docs or logs.
+- The latest local health smoke uses `cli-cloud-llm-v1` with model `vantari-probe`; switch-provider smokes must preserve `.var/auth/auth.json` secret hygiene and avoid recording API keys in docs or logs.
 - Plugin manifests and sockets validate contracts only; runtime plugin discovery/execution is intentionally not active.
 - Exact tokenizer accounting is deferred until the current heuristic proves insufficient under real overflow evidence.
 

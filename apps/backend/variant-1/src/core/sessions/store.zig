@@ -33,7 +33,9 @@ const ParsedSessionMessage = struct {
     id: []const u8,
     seq: u64,
     role: []const u8,
-    content: []const u8,
+    content: []const u8 = "",
+    tool_call_id: ?[]const u8 = null,
+    tool_calls: []types.ToolCall = &.{},
     timestamp_ms: i64,
 };
 
@@ -388,6 +390,74 @@ pub fn upsertAssistantSessionMessage(
     return appendSessionMessage(allocator, workspace_root, session_id, .assistant, content, timestamp_ms);
 }
 
+pub fn appendAssistantToolCallSessionMessage(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    content: ?[]const u8,
+    tool_calls: []const types.ToolCall,
+    timestamp_ms: i64,
+) !void {
+    const messages_path = try messagesFilePath(allocator, workspace_root, session_id);
+    defer allocator.free(messages_path);
+
+    if (!fsutil.fileExists(messages_path)) {
+        try writeSessionMessages(allocator, messages_path, &.{});
+    }
+
+    const next_seq = try nextSessionMessageSeq(allocator, messages_path);
+    const message_id = try sessionMessageId(allocator, next_seq);
+    defer allocator.free(message_id);
+
+    const jsonl = try std.fmt.allocPrint(allocator, "{f}\n", .{
+        std.json.fmt(.{
+            .id = message_id,
+            .seq = next_seq,
+            .role = types.sessionMessageRoleLabel(.assistant),
+            .content = content orelse "",
+            .tool_calls = tool_calls,
+            .timestamp_ms = timestamp_ms,
+        }, .{}),
+    });
+    defer allocator.free(jsonl);
+
+    try fsutil.appendText(messages_path, jsonl);
+}
+
+pub fn appendToolSessionMessage(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    tool_call_id: []const u8,
+    content: []const u8,
+    timestamp_ms: i64,
+) !void {
+    const messages_path = try messagesFilePath(allocator, workspace_root, session_id);
+    defer allocator.free(messages_path);
+
+    if (!fsutil.fileExists(messages_path)) {
+        try writeSessionMessages(allocator, messages_path, &.{});
+    }
+
+    const next_seq = try nextSessionMessageSeq(allocator, messages_path);
+    const message_id = try sessionMessageId(allocator, next_seq);
+    defer allocator.free(message_id);
+
+    const jsonl = try std.fmt.allocPrint(allocator, "{f}\n", .{
+        std.json.fmt(.{
+            .id = message_id,
+            .seq = next_seq,
+            .role = types.sessionMessageRoleLabel(.tool),
+            .content = content,
+            .tool_call_id = tool_call_id,
+            .timestamp_ms = timestamp_ms,
+        }, .{}),
+    });
+    defer allocator.free(jsonl);
+
+    try fsutil.appendText(messages_path, jsonl);
+}
+
 pub fn appendContextCheckpoint(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
@@ -574,16 +644,38 @@ fn readSessionMessagesFromPath(
         }) catch continue;
         defer parsed.deinit();
 
-        try messages.append(.{
-            .id = try allocator.dupe(u8, parsed.value.id),
-            .seq = parsed.value.seq,
-            .role = try types.parseSessionMessageRole(parsed.value.role),
-            .content = try allocator.dupe(u8, parsed.value.content),
-            .timestamp_ms = parsed.value.timestamp_ms,
-        });
+        try messages.append(try cloneParsedSessionMessage(allocator, parsed.value));
     }
 
     return messages.toOwnedSlice();
+}
+
+fn cloneParsedSessionMessage(
+    allocator: std.mem.Allocator,
+    parsed: ParsedSessionMessage,
+) !types.SessionMessage {
+    const role = try types.parseSessionMessageRole(parsed.role);
+    const id = try allocator.dupe(u8, parsed.id);
+    errdefer allocator.free(id);
+    const content_copy = try allocator.dupe(u8, parsed.content);
+    errdefer allocator.free(content_copy);
+    const tool_call_id = if (parsed.tool_call_id) |value| try allocator.dupe(u8, value) else null;
+    errdefer if (tool_call_id) |value| allocator.free(value);
+    const tool_calls = try types.cloneToolCalls(allocator, parsed.tool_calls);
+    errdefer {
+        for (tool_calls) |tool_call| tool_call.deinit(allocator);
+        if (tool_calls.len > 0) allocator.free(tool_calls);
+    }
+
+    return .{
+        .id = id,
+        .seq = parsed.seq,
+        .role = role,
+        .content = content_copy,
+        .tool_call_id = tool_call_id,
+        .tool_calls = tool_calls,
+        .timestamp_ms = parsed.timestamp_ms,
+    };
 }
 
 fn writeSessionMessages(
@@ -602,6 +694,8 @@ fn writeSessionMessages(
                 .seq = message.seq,
                 .role = types.sessionMessageRoleLabel(message.role),
                 .content = message.content,
+                .tool_call_id = message.tool_call_id,
+                .tool_calls = message.tool_calls,
                 .timestamp_ms = message.timestamp_ms,
             }, .{}),
         });

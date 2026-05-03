@@ -99,7 +99,7 @@ flowchart TB
 | Capability | Contract |
 |---|---|
 | Session-native execution | Creates, resumes, sends, compacts, cancels, reads, and lists sessions through the protocol surface. |
-| Session history | Persists user/assistant messages in `messages.jsonl` with stable message identifiers and monotonic sequence numbers. |
+| Session history | Persists user, assistant, assistant-tool-call, and tool-result messages in `messages.jsonl` with stable message identifiers and monotonic sequence numbers. |
 | Context compilation | Builds provider-ready message windows from `session.json`, `messages.jsonl`, and the latest `context.jsonl` checkpoint. |
 | Checkpointed compaction path | Generates deterministic Zig-native summary checkpoints in `context.jsonl` without replacing the complete transcript. |
 | Event persistence | Records runtime progress, tool lifecycle entries, bridge notifications, and terminal state in `events.jsonl`. |
@@ -107,7 +107,7 @@ flowchart TB
 | Command-backed search | Exposes `search_files` as the content-search tool over the external `iex` executable; availability is false until a real executable is resolvable. |
 | Plugin boundary | Validates plugin manifests and socket declarations without runtime loading or direct store/provider access. |
 | Provider isolation | Resolves OpenAI-compatible provider configuration behind the runtime boundary. |
-| Browser ingress | Exposes `/rpc`, `/events`, and `/api/health` through a local-origin bridge with token-gated RPC/event access and durable redacted audit records. |
+| Browser ingress | Exposes `/rpc`, `/events`, and `/api/health` through a local-origin bridge with detached per-connection workers, token-gated RPC/event access, and durable redacted audit records. |
 | CLI ingress | Uses the same session/protocol vocabulary rather than maintaining a separate execution path. |
 
 ## Tool Runtime
@@ -122,7 +122,7 @@ Plugin support is currently contract-level: `src/core/tools/sockets.zig` validat
 
 ## Bridge Security
 
-`VAR1 serve` binds to `127.0.0.1` by default. Browser startup reads `/api/health`, receives a per-process `bridge_token`, and sends it as `X-VAR1-Bridge-Token` for `/rpc` and `/events`. CORS is restricted to explicit local HTTP origins (`127.0.0.1`, `localhost`, and IPv6 loopback); `file://` / `Origin: null` callers are rejected so browser access stays provenance-bound. `src/host/bridge_access.zig` owns local-origin, token, key-and-value redaction, audit classification, and durable audit event emission so route handling stays transport-focused. Bridge-visible health, error, RPC, and event payloads redact sensitive fields and secret-shaped string values before they leave the backend. Audited session/auth/write-capable bridge RPCs append `var1.bridge_audit.v1` JSONL records to `.var/audit/bridge.jsonl`; audit write failure aborts the bridge action rather than creating unaudited state.
+`VAR1 serve` binds to `127.0.0.1` by default. Browser startup reads `/api/health`, receives a per-process `bridge_token`, and sends it as `X-VAR1-Bridge-Token` for `/rpc` and `/events`. CORS is restricted to explicit local HTTP origins (`127.0.0.1`, `localhost`, and IPv6 loopback); `file://` / `Origin: null` callers are rejected so browser access stays provenance-bound. `src/host/http_bridge.zig` accepts sockets into detached per-connection workers, and `src/host/bridge_access.zig` owns local-origin, token, key-and-value redaction, audit classification, and durable audit event emission so route handling stays transport-focused. Bridge-visible health, error, RPC, and event payloads redact sensitive fields and secret-shaped string values before they leave the backend. Audited session/auth/write-capable bridge RPCs append `var1.bridge_audit.v1` JSONL records to `.var/audit/bridge.jsonl`; audit write failure aborts the bridge action rather than creating unaudited state.
 
 ## Session State
 
@@ -220,6 +220,8 @@ Runtime configuration is resolved from the backend lane at `apps/backend/variant
 | `MODEL` | yes | model identifier sent to the provider |
 | `WORKSPACE` | no | workspace root for `.var/` resolution; defaults to `.` |
 | `MAX_STEPS` | no | execution step ceiling; defaults to `1` when resolved from auth-only config |
+| `MAX_TOOL_CALLS_PER_TURN` | no | per-assistant-turn tool-call ceiling; defaults to `8` |
+| `MAX_TOOL_CALLS_PER_SESSION` | no | per-session tool-call ceiling; defaults to `32` |
 
 Reference shape: [`apps/backend/variant-1/.env.example`](./apps/backend/variant-1/.env.example).
 
@@ -248,7 +250,7 @@ aggressiveness_milli = 350
 retry_on_provider_overflow = true
 ```
 
-Unknown keys in `[context]` are rejected rather than ignored, so typoed compaction or budget controls cannot silently fall back to defaults.
+Unknown keys in `[context]` are rejected rather than ignored, so typoed compaction controls cannot silently fall back to defaults. Prompt file paths must be quoted TOML strings, so `#` inside a path is data while comments outside the string remain comments.
 
 Essential local commands:
 
@@ -261,10 +263,10 @@ cd apps/backend/variant-1
 
 ## Validation
 
-Latest local Windows validation recorded on 2026-04-30:
+Latest local Windows validation recorded on 2026-05-04:
 
 ```text
-.\scripts\zigw.ps1 build test --summary all  -> 86/86 tests passed
+.\scripts\zigw.ps1 build test --summary all  -> 90/90 tests passed
 .\zig-out\bin\VAR1.exe tools --json          -> search_files reports external_command iex availability
 .\scripts\health.ps1                         -> status: ready
 ```

@@ -8,6 +8,8 @@ pub const Config = struct {
     subscription_plan_label: ?[]u8 = null,
     subscription_status: ?[]u8 = null,
     max_steps: usize,
+    max_tool_calls_per_turn: usize = 8,
+    max_tool_calls_per_session: usize = 32,
     workspace_root: []u8,
     context_policy: ContextPolicy = .{},
     prompt_policy: PromptPolicy = .{},
@@ -127,6 +129,7 @@ pub const MessageRole = enum {
 pub const SessionMessageRole = enum {
     user,
     assistant,
+    tool,
 };
 
 pub const SessionMessage = struct {
@@ -134,11 +137,16 @@ pub const SessionMessage = struct {
     seq: u64,
     role: SessionMessageRole,
     content: []u8,
+    tool_call_id: ?[]u8 = null,
+    tool_calls: []ToolCall = &.{},
     timestamp_ms: i64,
 
     pub fn deinit(self: SessionMessage, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
         allocator.free(self.content);
+        if (self.tool_call_id) |value| allocator.free(value);
+        for (self.tool_calls) |tool_call| tool_call.deinit(allocator);
+        if (self.tool_calls.len > 0) allocator.free(self.tool_calls);
     }
 };
 
@@ -273,12 +281,14 @@ pub fn sessionMessageRoleLabel(role: SessionMessageRole) []const u8 {
     return switch (role) {
         .user => "user",
         .assistant => "assistant",
+        .tool => "tool",
     };
 }
 
 pub fn parseSessionMessageRole(label: []const u8) !SessionMessageRole {
     if (std.mem.eql(u8, label, "user")) return .user;
     if (std.mem.eql(u8, label, "assistant")) return .assistant;
+    if (std.mem.eql(u8, label, "tool")) return .tool;
     return error.InvalidSessionMessageRole;
 }
 

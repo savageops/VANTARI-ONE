@@ -34,7 +34,7 @@ pub fn execute(
     };
 
     var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
-        .ignore_unknown_fields = true,
+        .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
 

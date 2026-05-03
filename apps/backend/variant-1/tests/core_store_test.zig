@@ -55,6 +55,8 @@ test "config loader reads variant env values" {
         \\API_KEY=test-key
         \\MODEL=test-model
         \\MAX_STEPS=4
+        \\MAX_TOOL_CALLS_PER_TURN=5
+        \\MAX_TOOL_CALLS_PER_SESSION=12
         \\WORKSPACE=.
         \\
     );
@@ -66,6 +68,8 @@ test "config loader reads variant env values" {
     try std.testing.expectEqualStrings("test-key", config.openai_api_key);
     try std.testing.expectEqualStrings("test-model", config.openai_model);
     try std.testing.expectEqual(@as(usize, 4), config.max_steps);
+    try std.testing.expectEqual(@as(usize, 5), config.max_tool_calls_per_turn);
+    try std.testing.expectEqual(@as(usize, 12), config.max_tool_calls_per_session);
 }
 
 test "config loader rejects missing required keys" {

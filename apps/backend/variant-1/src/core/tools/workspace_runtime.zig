@@ -691,7 +691,7 @@ fn executeInitWorkspace(
     };
 
     var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
-        .ignore_unknown_fields = true,
+        .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
 
@@ -717,7 +717,7 @@ fn executeMemoryLedger(
     };
 
     var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
-        .ignore_unknown_fields = true,
+        .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
 
@@ -760,7 +760,7 @@ fn executeChangelogLedger(
     };
 
     var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
-        .ignore_unknown_fields = true,
+        .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
 
@@ -834,7 +834,7 @@ fn executeTodoSlice(
     };
 
     var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
-        .ignore_unknown_fields = true,
+        .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
 
@@ -890,7 +890,7 @@ fn executeSessionRecord(
     };
 
     var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
-        .ignore_unknown_fields = true,
+        .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
 
@@ -958,7 +958,7 @@ fn executeBodyFileTool(
     };
 
     var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
-        .ignore_unknown_fields = true,
+        .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
 
@@ -1005,7 +1005,7 @@ fn executeGitWorktree(
     };
 
     var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
-        .ignore_unknown_fields = true,
+        .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
 
@@ -1113,7 +1113,7 @@ fn executeWorkspaceBackup(
     };
 
     var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
-        .ignore_unknown_fields = true,
+        .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
 
@@ -1167,7 +1167,7 @@ fn executeInstructionIngestion(
     };
 
     var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
-        .ignore_unknown_fields = true,
+        .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
 

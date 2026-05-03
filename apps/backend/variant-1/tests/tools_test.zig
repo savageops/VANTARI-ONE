@@ -325,6 +325,23 @@ test "file tools reject paths outside the workspace" {
     try std.testing.expectError(VAR1.shared.fsutil.PathError.PathOutsideWorkspace, VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), write_call));
 }
 
+test "file tools reject undeclared arguments before side effects" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var write_call = try makeToolCall(std.testing.allocator, "write_file", "{\"path\":\"notes/example.txt\",\"content\":\"alpha\",\"extra\":true}");
+    defer write_call.deinit(std.testing.allocator);
+
+    try std.testing.expectError(error.UnknownField, VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), write_call));
+
+    const file_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, "notes", "example.txt" });
+    defer std.testing.allocator.free(file_path);
+    try std.testing.expect(!VAR1.shared.fsutil.fileExists(file_path));
+}
+
 test "list_files defaults to the workspace root and returns relative paths" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
