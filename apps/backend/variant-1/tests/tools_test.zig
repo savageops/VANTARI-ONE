@@ -157,6 +157,7 @@ fn mockNonGitRunner(
 const MockAgentContext = struct {
     allocator: std.mem.Allocator,
     last_prompt: ?[]u8 = null,
+    last_scope: VAR1.core.tool_runtime.DelegationScope = .{},
 
     fn deinit(self: *MockAgentContext) void {
         if (self.last_prompt) |value| self.allocator.free(value);
@@ -169,11 +170,23 @@ fn mockLaunchAgent(
     _: []const u8,
     prompt: []const u8,
     _: ?[]const u8,
+    scope: VAR1.core.tool_runtime.DelegationScope,
 ) anyerror![]u8 {
     var ctx: *MockAgentContext = @ptrCast(@alignCast(ctx_ptr.?));
     if (ctx.last_prompt) |value| ctx.allocator.free(value);
     ctx.last_prompt = try ctx.allocator.dupe(u8, prompt);
-    return allocator.dupe(u8, "AGENT_NAME berry-child\nSTATUS running\nPROMPT how many r in strawberry");
+    ctx.last_scope = scope;
+    return std.fmt.allocPrint(
+        allocator,
+        "AGENT_NAME berry-child\nSTATUS running\nCAPABILITY_PROFILE subagent\nSCOPE_DEPTH {}\nCONTACT_BUDGET {}\nVALIDATION_STATUS {s}\nESCALATION_REASON {s}\nPROMPT {s}",
+        .{
+            scope.scope_depth,
+            scope.contact_budget,
+            VAR1.core.agent_scope.validationStatusLabel(scope.validation_status),
+            VAR1.core.agent_scope.escalationReasonLabel(scope),
+            prompt,
+        },
+    );
 }
 
 fn mockAgentStatus(
@@ -406,6 +419,64 @@ test "tool availability registry derives agent capabilities from the agent modul
     try std.testing.expect(VAR1.core.tools.registry.availabilitySpec("missing_tool") == null);
 }
 
+test "tool review classifies capability risk before dispatch" {
+    var read_call = try makeToolCall(std.testing.allocator, "read_file", "{\"path\":\"src/main.zig\"}");
+    defer read_call.deinit(std.testing.allocator);
+    const read_decision = VAR1.core.tool_runtime.review.reviewToolCall(read_call);
+    try std.testing.expect(read_decision.approved);
+    try std.testing.expectEqual(VAR1.core.tool_runtime.review.ToolReviewRisk.read_only, read_decision.risk);
+    try std.testing.expectEqualStrings("tool_reviewed", read_decision.event_type);
+
+    var write_call = try makeToolCall(std.testing.allocator, "write_file", "{\"path\":\"out.txt\",\"content\":\"ok\"}");
+    defer write_call.deinit(std.testing.allocator);
+    const write_decision = VAR1.core.tool_runtime.review.reviewToolCall(write_call);
+    try std.testing.expect(write_decision.approved);
+    try std.testing.expectEqual(VAR1.core.tool_runtime.review.ToolReviewRisk.write_capable, write_decision.risk);
+
+    var launch_call = try makeToolCall(std.testing.allocator, "launch_agent", "{\"prompt\":\"inspect one file\"}");
+    defer launch_call.deinit(std.testing.allocator);
+    const launch_decision = VAR1.core.tool_runtime.review.reviewToolCall(launch_call);
+    try std.testing.expect(launch_decision.approved);
+    try std.testing.expectEqual(VAR1.core.tool_runtime.review.ToolReviewRisk.delegating, launch_decision.risk);
+
+    var unknown_call = try makeToolCall(std.testing.allocator, "unknown_tool", "{}");
+    defer unknown_call.deinit(std.testing.allocator);
+    const unknown_decision = VAR1.core.tool_runtime.review.reviewToolCall(unknown_call);
+    try std.testing.expect(!unknown_decision.approved);
+    try std.testing.expectEqual(VAR1.core.tool_runtime.review.ToolReviewRisk.unknown_high_impact, unknown_decision.risk);
+    try std.testing.expectEqualStrings("tool_blocked", unknown_decision.event_type);
+    try std.testing.expect(unknown_decision.tool_error_hint != null);
+
+    const event = try VAR1.core.tool_runtime.review.renderReviewEvent(std.testing.allocator, unknown_call, unknown_decision);
+    defer std.testing.allocator.free(event);
+    try std.testing.expect(std.mem.indexOf(u8, event, "\"schema\":\"var1.tool_review.v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, event, "\"approved\":false") != null);
+
+    const blocked = try VAR1.core.tool_runtime.review.renderBlockedToolResult(std.testing.allocator, unknown_call, unknown_decision);
+    defer std.testing.allocator.free(blocked);
+    try std.testing.expect(std.mem.indexOf(u8, blocked, "\"error\":\"ToolReviewBlocked\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, blocked, "Unknown tool names are blocked before execution") != null);
+}
+
+test "agent capability profiles and delegation scopes bound child launch" {
+    const subagent = try VAR1.core.agent_profile.resolveProfile("subagent");
+    try std.testing.expect(VAR1.core.agent_profile.allowsToolClass(subagent, .delegation));
+    try std.testing.expect(!VAR1.core.agent_profile.allowsToolClass(subagent, .workspace_state));
+
+    try VAR1.core.agent_scope.validateDelegationScope(.{}, subagent);
+    try VAR1.core.agent_scope.validateDelegationScope(.{
+        .scope_depth = 2,
+        .contact_budget = 3,
+        .validation_status = .self_checked,
+        .escalation_reason = "parallel file-level contract audit",
+        .parent_capability_profile = "root",
+    }, subagent);
+    try std.testing.expectError(VAR1.core.agent_scope.Error.UnsupportedDelegationScope, VAR1.core.agent_scope.validateDelegationScope(.{
+        .scope_depth = 2,
+    }, subagent));
+    try std.testing.expectError(VAR1.core.agent_profile.Error.UnsupportedCapabilityProfile, VAR1.core.agent_profile.resolveProfile("recursive_mas"));
+}
+
 test "agent tools use the agent service contract and surface agent tool catalog" {
     var context = MockAgentContext{ .allocator = std.testing.allocator };
     defer context.deinit();
@@ -433,6 +504,23 @@ test "agent tools use the agent service contract and surface agent tool catalog"
     defer std.testing.allocator.free(launch_output);
     try std.testing.expect(std.mem.indexOf(u8, launch_output, "berry-child") != null);
     try std.testing.expect(std.mem.indexOf(u8, context.last_prompt.?, "strawberry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, launch_output, "CAPABILITY_PROFILE subagent") != null);
+    try std.testing.expectEqual(@as(usize, 1), context.last_scope.scope_depth);
+    try std.testing.expectEqual(@as(usize, 1), context.last_scope.contact_budget);
+
+    var scoped_launch_call = try makeToolCall(std.testing.allocator, "launch_agent", "{\"prompt\":\"audit scoped files\",\"name\":\"scoped-child\",\"scope_depth\":2,\"contact_budget\":3,\"validation_status\":\"self_checked\",\"escalation_reason\":\"parallel file-level contract audit\",\"parent_capability_profile\":\"root\"}");
+    defer scoped_launch_call.deinit(std.testing.allocator);
+    const scoped_launch_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execution_context, scoped_launch_call);
+    defer std.testing.allocator.free(scoped_launch_output);
+    try std.testing.expect(std.mem.indexOf(u8, scoped_launch_output, "SCOPE_DEPTH 2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, scoped_launch_output, "CONTACT_BUDGET 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, scoped_launch_output, "VALIDATION_STATUS self_checked") != null);
+    try std.testing.expectEqual(@as(usize, 2), context.last_scope.scope_depth);
+    try std.testing.expectEqual(@as(usize, 3), context.last_scope.contact_budget);
+
+    var blocked_launch_call = try makeToolCall(std.testing.allocator, "launch_agent", "{\"prompt\":\"expand without reason\",\"scope_depth\":2}");
+    defer blocked_launch_call.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedDelegationScope, VAR1.core.tool_runtime.execute(std.testing.allocator, execution_context, blocked_launch_call));
 
     var status_call = try makeToolCall(std.testing.allocator, "agent_status", "{\"name\":\"berry-child\"}");
     defer status_call.deinit(std.testing.allocator);

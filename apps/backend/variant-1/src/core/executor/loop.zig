@@ -255,6 +255,52 @@ pub fn runPromptWithOptions(
                     return Error.Cancelled;
                 }
 
+                const review_decision = tools.review.reviewToolCall(tool_call);
+                const review_event = try tools.review.renderReviewEvent(allocator, tool_call, review_decision);
+                defer allocator.free(review_event);
+                const review_log = try tools.review.renderReviewLog(allocator, tool_call, review_decision);
+                defer allocator.free(review_log);
+                try recordSessionEvent(
+                    allocator,
+                    config.workspace_root,
+                    options.hooks,
+                    session.id,
+                    "tool_reviewed",
+                    review_event,
+                    session.status,
+                );
+                try docs_sync.appendLog(allocator, config.workspace_root, review_log);
+
+                if (!review_decision.approved) {
+                    const blocked_output = try tools.review.renderBlockedToolResult(allocator, tool_call, review_decision);
+                    defer allocator.free(blocked_output);
+                    const blocked_log = try std.fmt.allocPrint(allocator, "tool blocked: {s} risk={s}", .{
+                        tool_call.name,
+                        tools.review.riskLabel(review_decision.risk),
+                    });
+                    defer allocator.free(blocked_log);
+                    try recordSessionEvent(
+                        allocator,
+                        config.workspace_root,
+                        options.hooks,
+                        session.id,
+                        "tool_blocked",
+                        review_event,
+                        session.status,
+                    );
+                    try docs_sync.appendLog(allocator, config.workspace_root, blocked_log);
+                    try messages.append(try types.initToolMessage(allocator, tool_call.id, blocked_output));
+                    try store.appendToolSessionMessage(
+                        allocator,
+                        config.workspace_root,
+                        session.id,
+                        tool_call.id,
+                        blocked_output,
+                        std.time.milliTimestamp(),
+                    );
+                    continue;
+                }
+
                 const tool_result = try executeToolCall(allocator, execution_context, tool_call);
                 defer allocator.free(tool_result.output);
                 defer allocator.free(tool_result.log_line);

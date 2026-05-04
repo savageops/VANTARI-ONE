@@ -16,6 +16,8 @@ This app is the only live backend lane in the repository. Operators use the CLI,
 | State root | `.var/sessions/<id>/` |
 | Provider boundary | `src/core/providers/openai_compatible.zig` |
 | Tool runtime | `src/core/tools/runtime.zig`, `src/core/tools/registry.zig`, `src/core/tools/builtin/*.zig` |
+| Capability governance | `src/core/tools/review.zig`, `src/core/agents/profile.zig`, `src/core/agents/scope.zig` |
+| Memory/evaluation boundary | `src/core/memory/derivative.zig`, `src/core/evaluation/events.zig` |
 
 ## What ships
 
@@ -73,6 +75,16 @@ An installed runtime must provide a real `iex` executable for `search_files`. Po
 `write_file`, `append_file`, and `replace_in_file` return `effect.schema_version = "var1.tool_effect.v1"` with the requested path, resolved path, before/after byte counts, operation-specific counts, and SHA-256 hashes for existing file contents. Their model-visible `content` begins with `EFFECT_SCHEMA var1.tool_effect.v1` and `EFFECT_KEY effect`, then carries the legacy `PATH`/`BYTES` output for compatibility. This is the lightweight verification layer for small-model and bridge-facing workflows: the runtime proves the file effect at the tool boundary without introducing a separate evaluator loop.
 
 `src/core/tools/sockets.zig` and `src/core/plugins/manifest.zig` are validation boundaries for typed sockets and plugin manifests. They do not load plugins, auto-discover plugin roots, or mutate the model-visible tool list.
+
+## Capability governance
+
+The executor now has a review-before-effect state transition for tool calls. `src/core/executor/loop.zig` appends `tool_requested`, calls `src/core/tools/review.zig`, appends `tool_reviewed`, and then either dispatches through `src/core/tools/runtime.zig` or appends `tool_blocked` with a protocol-visible denial result. The blocked path preserves the provider tool-message contract while preventing unknown high-impact tools from reaching an implementation branch.
+
+Delegation is scoped, not implicit. The `launch_agent` tool accepts `scope_depth`, `contact_budget`, `validation_status`, `escalation_reason`, and `parent_capability_profile`; `src/core/agents/scope.zig` rejects zero-value scope and rejects expansion beyond the default profile without an escalation reason. `src/core/agents/profile.zig` owns `root` and `subagent` capability profiles as typed execution boundaries over tool classes, delegation policy, budget policy, and provider inheritance. They are not UI roles, company roles, or provider prompt taxonomy.
+
+Memory and evaluation stay evidence-bound. `src/core/memory/derivative.zig` defines derivative memory entries that cite `session_id`, `source_seq_start`, and `source_seq_end`, and rejects transcript replay-shaped summaries. `src/core/evaluation/events.zig` appends redacted `runtime_heartbeat`, `evaluator_result`, and `runtime_unsupported_behavior` events; evaluator results carry `executor_mutation:"forbidden"` and never mutate loop state through a side channel.
+
+Unsupported MAS-derived behavior is explicit: RecursiveMAS-style latent transfer, GRASP gradients, dynamic markets, autonomous background evolution, exact tokenizer integration, and plugin auto-discovery are not shipped runtime behavior.
 
 ## Quick start
 
@@ -235,8 +247,13 @@ Prompt policy controls only user-editable model instructions. `src/core/prompts/
 - `src/core/prompts/index.zig`
 - `src/core/sessions/store.zig`
 - `src/core/tools/module.zig`
+- `src/core/tools/review.zig`
 - `src/core/tools/registry.zig`
 - `src/core/tools/builtin/`
+- `src/core/agents/profile.zig`
+- `src/core/agents/scope.zig`
+- `src/core/memory/derivative.zig`
+- `src/core/evaluation/events.zig`
 - `tests/`
 - `../frontend/var1-client/`
 
@@ -250,6 +267,9 @@ This lane is now session-native end to end:
 - context budget and overflow policy
 - executor
 - tool module registry and availability catalog
+- tool review gate with `tool_reviewed` / `tool_blocked` events
+- scoped delegation and typed capability profile contracts
+- derivative memory and non-mutating evaluator event boundaries
 - protocol types
 - stdio host
 - local bridge origin/token/key-and-value redaction plus durable audit guards
@@ -261,6 +281,6 @@ No compatibility facade or old-layout storage reader remains in this lane.
 
 Latest local Windows validation on 2026-05-04:
 
-- `.\scripts\zigw.ps1 build test --summary all` -> `90/90 tests passed`
+- `.\scripts\zigw.ps1 build test --summary all` -> `95/95 tests passed`
 - `.\zig-out\bin\VAR1.exe tools --json` -> `search_files` includes `external_command` dependency availability for `iex`
 - `.\scripts\health.ps1` -> `status: ready`

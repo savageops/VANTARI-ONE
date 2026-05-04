@@ -179,6 +179,29 @@ fn mockSendToolLoop(
     );
 }
 
+fn mockSendBlockedToolLoop(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const u8,
+    payload: []const u8,
+) anyerror![]u8 {
+    var ctx: *ToolLoopContext = @ptrCast(@alignCast(ctx_ptr.?));
+    ctx.payloads[ctx.call_count] = try ctx.allocator.dupe(u8, payload);
+
+    defer ctx.call_count += 1;
+
+    if (ctx.call_count == 0) {
+        return allocator.dupe(u8,
+            \\{"model":"gemma-4-e2b-it","choices":[{"message":{"tool_calls":[{"id":"call_blocked","type":"function","function":{"name":"unknown_runtime_mutation","arguments":"{\"path\":\"context.txt\"}"}}]}}]}
+        );
+    }
+
+    return allocator.dupe(u8,
+        \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"The runtime blocked the undeclared capability."}}]}
+    );
+}
+
 fn mockSendOverBudgetToolBatch(
     ctx_ptr: ?*anyopaque,
     allocator: std.mem.Allocator,
@@ -713,7 +736,10 @@ test "loop executes tool calls and exposes descriptors in the provider payload" 
     defer std.testing.allocator.free(events);
 
     try std.testing.expect(std.mem.indexOf(u8, events, "tool_requested") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_reviewed") != null);
     try std.testing.expect(std.mem.indexOf(u8, events, "tool_completed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_requested").? < std.mem.indexOf(u8, events, "tool_reviewed").?);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_reviewed").? < std.mem.indexOf(u8, events, "tool_completed").?);
 
     const transcript = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, result.session_id);
     defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, transcript);
@@ -727,6 +753,50 @@ test "loop executes tool calls and exposes descriptors in the provider payload" 
     try std.testing.expectEqualStrings("call_1", transcript[2].tool_call_id.?);
     try std.testing.expect(std.mem.indexOf(u8, transcript[2].content, "hello from file") != null);
     try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.assistant, transcript[3].role);
+}
+
+test "loop blocks undeclared tool calls before execution and returns protocol-visible denial" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const config = try makeConfig(std.testing.allocator, workspace_root, 4);
+    defer config.deinit(std.testing.allocator);
+
+    var context = ToolLoopContext{ .allocator = std.testing.allocator };
+    defer context.deinit();
+
+    const result = try VAR1.core.executor.runPromptWithTransport(std.testing.allocator, config, "Try the undeclared mutation.", .{
+        .context = &context,
+        .sendFn = mockSendBlockedToolLoop,
+    });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(std.mem.indexOf(u8, result.output, "blocked the undeclared capability") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context.payloads[1].?, "\"role\":\"tool\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context.payloads[1].?, "ToolReviewBlocked") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context.payloads[1].?, "UnknownTool") == null);
+
+    const events_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", result.session_id, "events.jsonl" });
+    defer std.testing.allocator.free(events_path);
+    const events = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, events_path);
+    defer std.testing.allocator.free(events);
+
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_requested") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_reviewed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_blocked") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_completed") == null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_requested").? < std.mem.indexOf(u8, events, "tool_reviewed").?);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_reviewed").? < std.mem.indexOf(u8, events, "tool_blocked").?);
+
+    const transcript = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, result.session_id);
+    defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, transcript);
+    try std.testing.expectEqual(@as(usize, 4), transcript.len);
+    try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.tool, transcript[2].role);
+    try std.testing.expectEqualStrings("call_blocked", transcript[2].tool_call_id.?);
+    try std.testing.expect(std.mem.indexOf(u8, transcript[2].content, "ToolReviewBlocked") != null);
 }
 
 test "loop enforces the step budget when tool use does not conclude in time" {

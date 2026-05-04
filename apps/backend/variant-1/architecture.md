@@ -34,17 +34,23 @@ flowchart TB
   executor --> store["src/core/sessions/store.zig"]
   executor --> provider["src/core/providers/openai_compatible.zig"]
   executor --> tools["src/core/tools/runtime.zig"]
+  executor --> review["src/core/tools/review.zig"]
+  executor --> evaluation["src/core/evaluation/events.zig"]
   tools --> toolRegistry["src/core/tools/registry.zig"]
   tools --> toolModules["src/core/tools/builtin/*.zig"]
   tools --> agents["src/core/agents/service.zig"]
+  agents --> profile["src/core/agents/profile.zig + scope.zig"]
   tools --> workspaceState["src/core/tools/workspace_runtime.zig"]
+  tools --> review
   toolModules --> iex["iex executable"]
   executor --> docs["src/core/docs/sync.zig"]
   executor --> config["src/core/config/settings.zig"]
+  kernel --> memory["src/core/memory/derivative.zig"]
 
   context --> store
   budget --> config
   overflow --> provider
+  evaluation --> store
   compactor --> store
   store --> sessionRoot[".var/sessions/<id>/session.json + messages.jsonl + context.jsonl + events.jsonl + output.txt"]
   docs --> processRoot[".var/todos + .var/changelog + .var/memories"]
@@ -142,7 +148,9 @@ sequenceDiagram
   participant L as core/executor/loop.zig
   participant T as core/tools/runtime.zig
   participant R as core/tools/registry.zig
+  participant V as core/tools/review.zig
   participant M as core/tools/builtin/*.zig
+  participant S as core/sessions/store.zig
   participant P as core/providers/openai_compatible.zig
   participant I as iex executable
 
@@ -157,18 +165,57 @@ sequenceDiagram
   T-->>L: context-filtered tool definitions
   L->>P: provider request with function schemas
   P-->>L: assistant tool call
-  L->>T: execute(tool_call)
-  T->>M: dispatch to per-tool execute
-  M->>R: ensureAvailable(search_files)
-  M->>I: search_files invokes iex search --json
-  I-->>M: JSON hits
-  M-->>T: tool result envelope
-  T-->>L: tool result envelope
+  L->>S: append tool_requested
+  L->>V: review before side effects
+  V-->>L: ToolReviewDecision
+  L->>S: append tool_reviewed
+  alt approved
+    L->>T: execute(tool_call)
+    T->>M: dispatch to per-tool execute
+    M->>R: ensureAvailable(search_files)
+    M->>I: search_files invokes iex search --json
+    I-->>M: JSON hits
+    M-->>T: tool result envelope
+    T-->>L: tool result envelope
+  else blocked
+    L->>S: append tool_blocked and denial tool result
+  end
 ```
 
 Tool definitions are schema-first. The shared shape lives in `shared/types.zig` as `ToolDefinition { name, description, parameters_json, example_json, usage_hint }`. Per-tool modules under `core/tools/builtin/` own their definition, availability contract, and execute path. The registry resolves availability from module-owned names/specs instead of duplicating string branches. Provider request construction, CLI catalog export, RPC catalog export, and failure repair hints derive from those module-owned metadata surfaces.
 
 `search_files` is the content-search tool. It declares an `external_command("iex")` dependency, resolves the workspace path in Zig, then invokes `iex search --json --max-hits ...` through the command-runner boundary. `list_files` is the native Zig path-discovery tool and does not shell to `iex`. Installing `VAR1` therefore requires a real `iex` executable for content search; when it is absent, catalog availability reports `search_files` as unavailable and execution fails early with `ToolUnavailable`.
+
+## Capability governance flow
+
+```mermaid
+sequenceDiagram
+  participant P as Provider
+  participant L as loop.zig
+  participant R as tools/review.zig
+  participant T as tools/runtime.zig
+  participant S as store.zig
+
+  P-->>L: assistant tool call
+  L->>S: append tool_requested
+  L->>R: reviewToolCall
+  R-->>L: ToolReviewDecision
+  L->>S: append tool_reviewed
+  alt approved
+    L->>T: execute
+    T-->>L: tool result
+    L->>S: append tool_completed plus transcript tool row
+  else blocked
+    L->>S: append tool_blocked
+    L->>S: append protocol-visible denial tool row
+  end
+```
+
+The review gate is a kernel state transition, not a copied reviewer-agent architecture. Read-only tools receive review evidence and continue through the existing dispatch. Write-capable, workspace-state, and delegation tools are classified before execution. Unknown high-impact names are denied before dispatch and returned to the provider as `ToolReviewBlocked`, preserving the OpenAI-compatible tool-call protocol.
+
+Scoped delegation is validated at the agent-tool boundary. `launch_agent` carries `scope_depth`, `contact_budget`, `validation_status`, `escalation_reason`, and `parent_capability_profile`; `src/core/agents/scope.zig` rejects zero-value scope and rejects profile expansion without a reason. `src/core/agents/profile.zig` owns capability profiles as runtime capability boundaries over tool classes, delegation policy, budget policy, and provider inheritance.
+
+Derivative memory and evaluator evidence are deliberately non-authoritative. `src/core/memory/derivative.zig` requires `session_id`, `source_seq_start`, and `source_seq_end`, and rejects transcript replay-shaped payloads. `src/core/evaluation/events.zig` appends redacted heartbeat/evaluator events with evaluator mutation forbidden. RecursiveMAS latent transfer, GRASP gradients, dynamic markets, autonomous background evolution, exact tokenizer integration, and plugin auto-discovery remain unsupported behavior until there is a tested contract for cancellation, idempotency, cold-start recovery, and lifecycle ownership.
 
 ## Bridge access flow
 
@@ -252,7 +299,13 @@ Every session directory contains:
 - `src/core/prompts/builder.zig`
   sole owner for assembling internal guardrails, user-editable system/developer prompt layers, and the live tool-use contract
 - `src/core/tools/`
-  typed tool socket namespace, built-in module registry/runtime, availability resolver, command-backed search dispatch, and workspace-state helpers
+  typed tool socket namespace, built-in module registry/runtime, pre-dispatch review, availability resolver, command-backed search dispatch, and workspace-state helpers
+- `src/core/agents/`
+  child-session launch service, scoped delegation validation, and typed capability profiles
+- `src/core/memory/`
+  derivative memory contracts that cite source transcript sequence ranges without duplicating `messages.jsonl`
+- `src/core/evaluation/`
+  redacted heartbeat, evaluator, and unsupported-behavior event append helpers
 - `src/core/plugins/`
   plugin manifest/socket contracts only; plugin implementations do not live in core
 - `src/shared/protocol/types.zig`
@@ -292,12 +345,16 @@ The current validation lane should always prove these slices together:
 - bridge-visible RPC and event payloads share the bridge redaction primitive
 - audited bridge RPCs append redacted audit records to `.var/audit/bridge.jsonl`
 - tool catalog reports availability metadata
+- tool calls record `tool_reviewed` before `tool_completed` or `tool_blocked`
+- delegated agent launches validate scoped delegation and capability profile fields
+- derivative memory rejects transcript replay while citing source sequence ranges
+- heartbeat/evaluator evidence appends redacted non-mutating events
 - auto and provider-overflow compaction write observable checkpoint/event records
 - health preflights stale local `VAR1.exe` process diagnostics before build/test gates
 - external client exists at `apps/frontend/var1-client`
 
-Latest local Windows validation on 2026-04-30:
+Latest local Windows validation on 2026-05-04:
 
-- `.\scripts\zigw.ps1 build test --summary all` -> `86/86 tests passed`
+- `.\scripts\zigw.ps1 build test --summary all` -> `95/95 tests passed`
 - `.\scripts\health.ps1` -> `status: ready`
 - `.\zig-out\bin\VAR1.exe tools --json` -> `search_files` includes `external_command` dependency availability for `iex`

@@ -1,7 +1,9 @@
 const std = @import("std");
 const docs_sync = @import("../docs/sync.zig");
 const fsutil = @import("../../shared/fsutil.zig");
+const profile_contract = @import("profile.zig");
 const store = @import("../sessions/store.zig");
+const scope_contract = @import("scope.zig");
 const tools = @import("../tools/runtime.zig");
 const types = @import("../../shared/types.zig");
 
@@ -60,9 +62,10 @@ fn launchFromHandle(
     parent_session_id: []const u8,
     prompt: []const u8,
     requested_name: ?[]const u8,
+    delegation_scope: scope_contract.DelegationScope,
 ) anyerror![]u8 {
     const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
-    return launch(service, allocator, parent_session_id, prompt, requested_name);
+    return launch(service, allocator, parent_session_id, prompt, requested_name, delegation_scope);
 }
 
 fn statusFromHandle(
@@ -101,8 +104,11 @@ fn launch(
     parent_session_id: []const u8,
     prompt: []const u8,
     requested_name: ?[]const u8,
+    delegation_scope: scope_contract.DelegationScope,
 ) ![]u8 {
     try docs_sync.ensureRunStart(allocator, service.config.workspace_root);
+    const child_profile = profile_contract.defaultSubagentProfile();
+    try scope_contract.validateDelegationScope(delegation_scope, child_profile);
 
     const agent_name = if (requested_name) |value|
         try allocator.dupe(u8, value)
@@ -118,13 +124,16 @@ fn launch(
         .status = .initialized,
         .parent_session_id = parent_session_id,
         .display_name = agent_name,
-        .agent_profile = "subagent",
+        .agent_profile = child_profile.id,
     });
     defer child_session.deinit(allocator);
 
+    const delegation_event = try scope_contract.renderDelegationEvent(allocator, delegation_scope, child_profile);
+    defer allocator.free(delegation_event);
+
     try store.appendEvent(allocator, service.config.workspace_root, child_session.id, .{
         .event_type = "session_delegated",
-        .message = "Child session delegated by parent session.",
+        .message = delegation_event,
         .timestamp_ms = std.time.milliTimestamp(),
     });
     try docs_sync.writePending(allocator, service.config.workspace_root, .{
@@ -174,12 +183,18 @@ fn launch(
 
     return std.fmt.allocPrint(
         allocator,
-        "AGENT_NAME {s}\nSTATUS {s}\nSESSION_ID {s}\nPARENT_SESSION_ID {s}\nPROMPT {s}",
+        "AGENT_NAME {s}\nSTATUS {s}\nSESSION_ID {s}\nPARENT_SESSION_ID {s}\nCAPABILITY_PROFILE {s}\nSCOPE_DEPTH {}\nCONTACT_BUDGET {}\nVALIDATION_STATUS {s}\nESCALATION_REASON {s}\nPARENT_CAPABILITY_PROFILE {s}\nPROMPT {s}",
         .{
             agent_name,
             types.statusLabel(child_session.status),
             child_session.id,
             parent_session_id,
+            child_profile.id,
+            delegation_scope.scope_depth,
+            delegation_scope.contact_budget,
+            scope_contract.validationStatusLabel(delegation_scope.validation_status),
+            scope_contract.escalationReasonLabel(delegation_scope),
+            scope_contract.parentCapabilityProfileLabel(delegation_scope),
             prompt,
         },
     );
