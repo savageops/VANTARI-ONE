@@ -1164,6 +1164,7 @@ fn noopLaunch(
     _: []const u8,
     _: []const u8,
     _: ?[]const u8,
+    _: tools.DelegationScope,
 ) anyerror![]u8 {
     return error.UnexpectedCall;
 }

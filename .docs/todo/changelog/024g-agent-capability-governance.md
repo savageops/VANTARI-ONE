@@ -5,7 +5,7 @@ type: verification-closeout
 protocol_version: "2.1"
 category: feature
 phase: g
-status: pending
+status: done
 patch_scope: "No artifact change. This unit validates, verifies invariants, and terminates the chain."
 blast_radius: low
 blast_radius_justification: "Read-only execution. Validation commands do not modify system state."
@@ -16,7 +16,7 @@ exit_criterion: "Full regression commands exit 0, all invariant assertions pass,
 validation: "Set-Location E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE\\apps\\backend\\variant-1; .\\scripts\\zigw.ps1 build test --summary all; Set-Location E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE; ix search \"lit:tool_reviewed || lit:scope_depth || lit:capability_profile || lit:source_seq_start || lit:heartbeat\" apps/backend/variant-1/src apps/backend/variant-1/tests .docs --json; git diff --check"
 expected_exit_code: 0
 expected_output_pattern: "tests passed"
-evidence: "PLACEHOLDER - replace with captured final validation output. Chain cannot terminate until this is populated."
+evidence: "2026-05-04 closeout validation passed. `Set-Location apps/backend/variant-1; .\\scripts\\zigw.ps1 build test --summary all` exited 0 with `Build Summary: 5/5 steps succeeded; 95/95 tests passed`. `ix search \"lit:tool_reviewed || lit:scope_depth || lit:capability_profile || lit:source_seq_start || lit:heartbeat\" apps/backend/variant-1/src apps/backend/variant-1/tests .docs --json` exited 0 with 177 matches across review, scope, profile, memory, heartbeat, tests, docs, and changelog. `ix search \"lit:Talent Market || lit:Bellman || lit:RecursiveLink || lit:company hierarchy\" apps/backend/variant-1/src --json` exited 0 with `matches_found:0`. `git diff --check` exited 0 with CRLF warnings only. Dupe audit via `dupe-audit.sh --provider gguf --target review/profile/scope/derivative/events --output summary --no-write` exited 0 with `target_file_count=5`, `segment_count=11`, `candidate_pair_count=1`, `exact_duplicate_candidate_count=0`."
 conflict_surface: ""
 invariants:
   - "I1: messages.jsonl remains the complete durable transcript."
@@ -63,11 +63,11 @@ Run the full regression suite, assert all chain invariants, verify all acceptanc
 
 ## Pre-flight Checklist
 
-- [ ] Every execution unit from `024a` through `024f` is in `/todo/changelog/`.
-- [ ] No unit in `/todo/changelog/` for this chain has `evidence: PLACEHOLDER`.
-- [ ] No unit in `/todo/pending/` for this chain remains with `status: in-progress` or `status: blocked`.
-- [ ] All exit state claims from all prior units are verifiable on the current filesystem.
-- [ ] Every parent source-message anchor appears in at least one archived unit's `Original User Message Proof` section.
+- [x] Every execution unit from `024a` through `024f` is in `/todo/changelog/`.
+- [x] No unit in `/todo/changelog/` for this chain has `evidence: PLACEHOLDER`.
+- [x] No unit in `/todo/pending/` for this chain remains with `status: in-progress` or `status: blocked`.
+- [x] All exit state claims from all prior units are verifiable on the current filesystem.
+- [x] Every parent source-message anchor appears in at least one archived unit's `Original User Message Proof` section.
 
 ## Invariant Assertion Surface
 
@@ -88,26 +88,26 @@ Run the full regression suite, assert all chain invariants, verify all acceptanc
 
 | Unit | Acceptance Criterion | Status |
 |------|---------------------|--------|
-| 024a | Interpretation locks reject copied MAS architecture and preserve every source anchor. | [ ] PASS / [ ] FAIL |
-| 024b | Review primitive classifies mutating/delegating/read-only tools deterministically. | [ ] PASS / [ ] FAIL |
-| 024c | Executor records reviewed/blocked events before side effects and preserves approved execution. | [ ] PASS / [ ] FAIL |
-| 024d | Scoped delegation and capability profiles fail unsupported capability requests before execution. | [ ] PASS / [ ] FAIL |
-| 024e | Derivative memory, heartbeat, and evaluator contracts preserve transcript ownership. | [ ] PASS / [ ] FAIL |
-| 024f | Docs describe shipped runtime truth and rejected MAS boundaries. | [ ] PASS / [ ] FAIL |
+| 024a | Interpretation locks reject copied MAS architecture and preserve every source anchor. | [x] PASS / [ ] FAIL |
+| 024b | Review primitive classifies mutating/delegating/read-only tools deterministically. | [x] PASS / [ ] FAIL |
+| 024c | Executor records reviewed/blocked events before side effects and preserves approved execution. | [x] PASS / [ ] FAIL |
+| 024d | Scoped delegation and capability profiles fail unsupported capability requests before execution. | [x] PASS / [ ] FAIL |
+| 024e | Derivative memory, heartbeat, and evaluator contracts preserve transcript ownership. | [x] PASS / [ ] FAIL |
+| 024f | Docs describe shipped runtime truth and rejected MAS boundaries. | [x] PASS / [ ] FAIL |
 
 ## Source Message Coverage Audit
 
 | Source Anchor | Original Snippet Present In Parent | Covered By Unit | Evidence Present | Status |
 |---------------|------------------------------------|-----------------|------------------|--------|
-| U1 | [ ] YES / [ ] NO | 024a-024g | [ ] YES / [ ] NO | [ ] PASS / [ ] FAIL |
-| U2 | [ ] YES / [ ] NO | 024a, 024g | [ ] YES / [ ] NO | [ ] PASS / [ ] FAIL |
-| U3 | [ ] YES / [ ] NO | 024a, 024f, 024g | [ ] YES / [ ] NO | [ ] PASS / [ ] FAIL |
-| U4 | [ ] YES / [ ] NO | 024a, 024f, 024g | [ ] YES / [ ] NO | [ ] PASS / [ ] FAIL |
-| U5 | [ ] YES / [ ] NO | 024g | [ ] YES / [ ] NO | [ ] PASS / [ ] FAIL |
-| U6 | [ ] YES / [ ] NO | 024b-024g | [ ] YES / [ ] NO | [ ] PASS / [ ] FAIL |
-| U7 | [ ] YES / [ ] NO | all units | [ ] YES / [ ] NO | [ ] PASS / [ ] FAIL |
-| U8 | [ ] YES / [ ] NO | 024a, 024d, 024e, 024f, 024g | [ ] YES / [ ] NO | [ ] PASS / [ ] FAIL |
-| U9 | [ ] YES / [ ] NO | 024b-024g | [ ] YES / [ ] NO | [ ] PASS / [ ] FAIL |
+| U1 | [x] YES / [ ] NO | 024a-024g | [x] YES / [ ] NO | [x] PASS / [ ] FAIL |
+| U2 | [x] YES / [ ] NO | 024a, 024g | [x] YES / [ ] NO | [x] PASS / [ ] FAIL |
+| U3 | [x] YES / [ ] NO | 024a, 024f, 024g | [x] YES / [ ] NO | [x] PASS / [ ] FAIL |
+| U4 | [x] YES / [ ] NO | 024a, 024f, 024g | [x] YES / [ ] NO | [x] PASS / [ ] FAIL |
+| U5 | [x] YES / [ ] NO | 024g | [x] YES / [ ] NO | [x] PASS / [ ] FAIL |
+| U6 | [x] YES / [ ] NO | 024b-024g | [x] YES / [ ] NO | [x] PASS / [ ] FAIL |
+| U7 | [x] YES / [ ] NO | all units | [x] YES / [ ] NO | [x] PASS / [ ] FAIL |
+| U8 | [x] YES / [ ] NO | 024a, 024d, 024e, 024f, 024g | [x] YES / [ ] NO | [x] PASS / [ ] FAIL |
+| U9 | [x] YES / [ ] NO | 024b-024g | [x] YES / [ ] NO | [x] PASS / [ ] FAIL |
 
 ## Regression Surface
 
@@ -151,12 +151,12 @@ Run the full regression suite, assert all chain invariants, verify all acceptanc
 
 ## Chain Audit
 
-- [ ] Chain manifest in parent is complete: every planned letter has a file in `/todo/changelog/`.
-- [ ] Parent's Phase Plan table: all letters marked `archived`.
-- [ ] No files for this chain remain in `/todo/pending/` except the parent and this unit.
-- [ ] Source Message Coverage Audit shows PASS for every original user-message anchor.
-- [ ] All invariants in Invariant Assertion Surface table show PASS.
-- [ ] All acceptance criteria in Acceptance Criteria Matrix show PASS.
+- [x] Chain manifest in parent is complete: every planned letter has a file in `/todo/changelog/`.
+- [x] Parent's Phase Plan table: all letters marked `archived`.
+- [x] No files for this chain remain in `/todo/pending/` except the parent and this unit.
+- [x] Source Message Coverage Audit shows PASS for every original user-message anchor.
+- [x] All invariants in Invariant Assertion Surface table show PASS.
+- [x] All acceptance criteria in Acceptance Criteria Matrix show PASS.
 
 ## Next todo
 
@@ -164,13 +164,13 @@ Run the full regression suite, assert all chain invariants, verify all acceptanc
 
 ## Completion
 
-- [ ] All pre-flight checks passed.
-- [ ] Full regression suite executed. All commands exit 0. All output patterns matched.
-- [ ] All invariants asserted: PASS.
-- [ ] All acceptance criteria resolved: PASS.
-- [ ] Chain audit complete: all rows verified.
-- [ ] Evidence captured. `evidence` field populated with full regression stdout. PLACEHOLDER is gone.
-- [ ] Status set to `done`.
-- [ ] `mv /todo/pending/024g-agent-capability-governance.md /todo/changelog/024g-agent-capability-governance.md` - verified.
-- [ ] Parent Archival Protocol: update parent status to `done`, update chain manifest, `mv /todo/pending/024-agent-capability-governance.md /todo/changelog/024-agent-capability-governance.md` - verified.
-- [ ] Chain is complete. `/todo/pending/` contains zero files for this chain.
+- [x] All pre-flight checks passed.
+- [x] Full regression suite executed. All commands exit 0. All output patterns matched.
+- [x] All invariants asserted: PASS.
+- [x] All acceptance criteria resolved: PASS.
+- [x] Chain audit complete: all rows verified.
+- [x] Evidence captured. `evidence` field populated with full regression stdout. PLACEHOLDER is gone.
+- [x] Status set to `done`.
+- [x] `mv /todo/pending/024g-agent-capability-governance.md /todo/changelog/024g-agent-capability-governance.md` - verified.
+- [x] Parent Archival Protocol: update parent status to `done`, update chain manifest, `mv /todo/pending/024-agent-capability-governance.md /todo/changelog/024-agent-capability-governance.md` - verified.
+- [x] Chain is complete. `/todo/pending/` contains zero files for this chain.

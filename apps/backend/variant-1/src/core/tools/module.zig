@@ -1,5 +1,8 @@
 const std = @import("std");
+const agent_scope = @import("../agents/scope.zig");
 const fsutil = @import("../../shared/fsutil.zig");
+
+pub const DelegationScope = agent_scope.DelegationScope;
 
 pub const DependencyKind = enum {
     none,
@@ -81,6 +84,7 @@ pub const AgentService = struct {
         parent_session_id: []const u8,
         prompt: []const u8,
         name: ?[]const u8,
+        scope: DelegationScope,
     ) anyerror![]u8,
     statusFn: *const fn (
         ctx: ?*anyopaque,
@@ -107,8 +111,9 @@ pub const AgentService = struct {
         parent_session_id: []const u8,
         prompt: []const u8,
         name: ?[]const u8,
+        scope: DelegationScope,
     ) anyerror![]u8 {
-        return self.launchFn(self.context, allocator, parent_session_id, prompt, name);
+        return self.launchFn(self.context, allocator, parent_session_id, prompt, name, scope);
     }
 
     pub fn status(

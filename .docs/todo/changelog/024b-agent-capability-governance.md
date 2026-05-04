@@ -5,7 +5,7 @@ type: execution-unit
 protocol_version: "2.1"
 category: feature
 phase: b
-status: pending
+status: done
 patch_scope: "Pre-tool review contract primitives for deterministic review-before-effect decisions."
 blast_radius: high
 blast_radius_justification: "This unit introduces shared tool review types and policy used by the executor loop before side effects. Failure can block or wrongly approve foundational tool execution."
@@ -16,8 +16,8 @@ exit_criterion: "Zig tests covering tool review policy pass and `ix search \"lit
 validation: "Set-Location E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE\\apps\\backend\\variant-1; .\\scripts\\zigw.ps1 build test --summary all"
 expected_exit_code: 0
 expected_output_pattern: "tests passed"
-evidence: "PLACEHOLDER - replace with exact captured stdout at completion. Archival is gated on this field being populated."
-conflict_surface: "021-codex-subscription-auth"
+evidence: "2026-05-04 024b validation passed. Command: Set-Location apps/backend/variant-1; .\\scripts\\zigw.ps1 build test --summary all -> exit 0, stdout: Build Summary: 5/5 steps succeeded; 91/91 tests passed; test success. Command: ix search \"lit:ToolReviewDecision || lit:tool_reviewed || lit:ToolReviewBlocked\" apps/backend/variant-1/src apps/backend/variant-1/tests --json -> exit 0, found apps/backend/variant-1/src/core/tools/review.zig ToolReviewDecision at line 11, tool_reviewed event decisions at lines 28/37/46, ToolReviewBlocked render path at line 106, and tests/tools_test.zig assertions at lines 415 and 444."
+conflict_surface: ""
 invariants:
   - "I3: high-risk/write-capable/delegating tool calls must have a deterministic reviewed transition before side effects."
   - "I4: read-only tool behavior remains backward compatible unless explicit review policy requires metadata-only review evidence."
@@ -26,9 +26,9 @@ invariants:
 source_message_anchor: "U1, U6, U7, U9"
 source_message_excerpt: "\"Could you show me how that translates to Ventori and how that improves the current code base and makes it better?\"; \"materially improve the architecture and the Kcapability of the code base.\"; \"We don't want to change anything for the worse.\"; \"do something far better, which is more simple, but more capable.\""
 source_message_proof_obligation: "Implement the smallest review-before-effect primitive that materially improves architecture without regressing existing tool availability or behavior."
-entry_state: "`024a-agent-capability-governance` is archived with non-PLACEHOLDER evidence. If `apps/backend/variant-1/src/shared/types.zig` is still touched by pending `021b`, `021f-codex-subscription-auth` is archived first."
-rollback_surface: "Revert `apps/backend/variant-1/src/core/tools/review.zig`, review exports in `src/core/tools/runtime.zig` and `src/core/tools/module.zig`, shared review structs in `src/shared/types.zig`, and focused review tests; then rerun Zig tests."
-dependencies: "024a-agent-capability-governance, 021f-codex-subscription-auth"
+entry_state: "`024a-agent-capability-governance` is archived with non-PLACEHOLDER evidence. `apps/backend/variant-1/src/shared/types.zig` is not in this unit's patch surface; review contracts remain tool-runtime owned, so the pending `021` auth chain no longer overlaps this unit."
+rollback_surface: "Revert `apps/backend/variant-1/src/core/tools/review.zig`, review exports in `src/core/tools/runtime.zig` and `src/core/tools/module.zig`, and focused review tests; then rerun Zig tests."
+dependencies: "024a-agent-capability-governance"
 next_todo: /todo/pending/024c-agent-capability-governance.md
 continuation: "On completion: record evidence (replace PLACEHOLDER), set status done, move this file to /todo/changelog/024b-agent-capability-governance.md, continue immediately to next_todo. Do not pause. Do not batch."
 blocked_reason: ""
@@ -66,7 +66,7 @@ The executor cannot safely gain a review phase until review semantics exist inde
 ## Entry State
 
 - `024a-agent-capability-governance` is archived with evidence and locks the interpretation.
-- `021f-codex-subscription-auth` is archived if the unit needs `apps/backend/variant-1/src/shared/types.zig`; otherwise document why no shared-types conflict remains before execution.
+- No `apps/backend/variant-1/src/shared/types.zig` change is required: review policy is a kernel-local `core/tools` contract until a bridge or client protocol needs a public schema.
 - `apps/backend/variant-1/src/core/tools/registry.zig` resolves availability from module-owned definitions.
 - `apps/backend/variant-1/src/core/tools/module.zig` owns shared tool execution types and error contracts.
 
@@ -75,7 +75,6 @@ The executor cannot safely gain a review phase until review semantics exist inde
 **Modifies:**
 - `apps/backend/variant-1/src/core/tools/runtime.zig` - export or route the review primitive without changing current catalog shape.
 - `apps/backend/variant-1/src/core/tools/module.zig` - add minimal shared review enums/structs only if they are tool-runtime owned.
-- `apps/backend/variant-1/src/shared/types.zig` - add protocol-visible review structs only if loop/session/event consumers need them.
 - `apps/backend/variant-1/tests/**` - add focused review-policy tests.
 
 **Adds:**
@@ -126,7 +125,7 @@ The executor cannot safely gain a review phase until review semantics exist inde
 ## Rollback Procedure
 
 1. Revert `apps/backend/variant-1/src/core/tools/review.zig`.
-2. Revert review-related changes in `apps/backend/variant-1/src/core/tools/runtime.zig`, `apps/backend/variant-1/src/core/tools/module.zig`, and `apps/backend/variant-1/src/shared/types.zig`.
+2. Revert review-related changes in `apps/backend/variant-1/src/core/tools/runtime.zig` and `apps/backend/variant-1/src/core/tools/module.zig`.
 3. Revert focused review tests under `apps/backend/variant-1/tests/**`.
 4. Run `Set-Location E:\Workspaces\01_Projects\01_Github\VANTARI-ONE\apps\backend\variant-1; .\scripts\zigw.ps1 build test --summary all`.
 
@@ -136,10 +135,10 @@ The executor cannot safely gain a review phase until review semantics exist inde
 
 ## Completion
 
-- [ ] Pre-flight passed (all checklist items verified before execution began).
-- [ ] All validation commands executed. Exit codes match `expected_exit_code`. Output matches `expected_output_pattern`.
-- [ ] Post-flight: all Exit State claims are verifiable on the filesystem.
-- [ ] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
-- [ ] Status set to `done`.
-- [ ] `mv /todo/pending/024b-agent-capability-governance.md /todo/changelog/024b-agent-capability-governance.md` - verified.
+- [x] Pre-flight passed (all checklist items verified before execution began).
+- [x] All validation commands executed. Exit codes match `expected_exit_code`. Output matches `expected_output_pattern`.
+- [x] Post-flight: all Exit State claims are verifiable on the filesystem.
+- [x] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
+- [x] Status set to `done`.
+- [x] `mv /todo/pending/024b-agent-capability-governance.md /todo/changelog/024b-agent-capability-governance.md` - verified.
 - [ ] Continue immediately to `next_todo`. No pause. No batch.

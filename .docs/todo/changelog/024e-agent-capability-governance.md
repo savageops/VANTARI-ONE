@@ -5,7 +5,7 @@ type: execution-unit
 protocol_version: "2.1"
 category: feature
 phase: e
-status: pending
+status: done
 patch_scope: "Transcript-safe derivative memory boundary plus heartbeat/evaluator event contracts."
 blast_radius: high
 blast_radius_justification: "Memory and evaluator contracts can corrupt context ownership or session truth if implemented as hidden stores or side channels."
@@ -16,8 +16,8 @@ exit_criterion: "Zig tests prove memory entries reject transcript duplication, h
 validation: "Set-Location E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE\\apps\\backend\\variant-1; .\\scripts\\zigw.ps1 build test --summary all"
 expected_exit_code: 0
 expected_output_pattern: "tests passed"
-evidence: "PLACEHOLDER - replace with exact captured stdout at completion. Archival is gated on this field being populated."
-conflict_surface: "021-codex-subscription-auth"
+evidence: "2026-05-04: `Set-Location apps/backend/variant-1; .\\scripts\\zigw.ps1 build test --summary all` exited 0 with `Build Summary: 5/5 steps succeeded; 95/95 tests passed`. `ix search \"lit:source_seq_start || lit:heartbeat || lit:evaluator\" apps/backend/variant-1/src apps/backend/variant-1/tests --json` exited 0 and found sequence-bound derivative memory, runtime heartbeat events, evaluator result events, unsupported-behavior events, and focused tests."
+conflict_surface: ""
 invariants:
   - "I1: messages.jsonl remains the complete durable transcript."
   - "I2: context.jsonl remains model-visible checkpoint history only."
@@ -27,8 +27,8 @@ source_message_anchor: "U1, U6, U7, U8, U9"
 source_message_excerpt: "\"Could you show me how that translates to Ventori and how that improves the current code base and makes it better?\"; \"materially improve the architecture and the Kcapability of the code base.\"; \"We don't want to change anything for the worse.\"; \"we don't want to copy.\"; \"do something far better, which is more simple, but more capable.\""
 source_message_proof_obligation: "Translate LLMA-Mem and CORAL into transcript-safe memory and health/evaluator boundaries without introducing background evolution or a second transcript."
 entry_state: "`024d-agent-capability-governance` is archived with evidence. Scoped delegation and capability profiles exist, so memory/evaluator boundaries can attach to explicit session/capability contexts."
-rollback_surface: "Revert new `src/core/memory/` files or checkpoint metadata changes, evaluator/heartbeat event additions, shared type changes, and focused tests introduced by this unit."
-dependencies: "024d-agent-capability-governance, 021f-codex-subscription-auth"
+rollback_surface: "Revert new `src/core/memory/` files or checkpoint metadata changes, evaluator/heartbeat event additions, and focused tests introduced by this unit."
+dependencies: "024d-agent-capability-governance"
 next_todo: /todo/pending/024f-agent-capability-governance.md
 continuation: "On completion: record evidence (replace PLACEHOLDER), set status done, move this file to /todo/changelog/024e-agent-capability-governance.md, continue immediately to next_todo. Do not pause. Do not batch."
 blocked_reason: ""
@@ -74,7 +74,6 @@ Memory and evaluator behavior are the easiest place to accidentally add a parall
 ## Patch Surface
 
 **Modifies:**
-- `apps/backend/variant-1/src/shared/types.zig` - add derivative memory/evaluator event structs only if protocol-visible.
 - `apps/backend/variant-1/src/core/sessions/store.zig` - add typed append/read helpers only if generic event helpers are insufficient.
 - `apps/backend/variant-1/tests/**` - add focused memory-boundary and heartbeat/evaluator tests.
 
@@ -127,7 +126,7 @@ Memory and evaluator behavior are the easiest place to accidentally add a parall
 ## Rollback Procedure
 
 1. Revert added `apps/backend/variant-1/src/core/memory/` and `src/core/evaluation/` files if present.
-2. Revert shared type and session-store changes introduced by this unit.
+2. Revert session-store changes introduced by this unit, if any.
 3. Revert focused tests introduced by this unit.
 4. Run full Zig regression.
 
@@ -137,10 +136,10 @@ Memory and evaluator behavior are the easiest place to accidentally add a parall
 
 ## Completion
 
-- [ ] Pre-flight passed (all checklist items verified before execution began).
-- [ ] All validation commands executed. Exit codes match `expected_exit_code`. Output matches `expected_output_pattern`.
-- [ ] Post-flight: all Exit State claims are verifiable on the filesystem.
-- [ ] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
-- [ ] Status set to `done`.
+- [x] Pre-flight passed (all checklist items verified before execution began).
+- [x] All validation commands executed. Exit codes match `expected_exit_code`. Output matches `expected_output_pattern`.
+- [x] Post-flight: all Exit State claims are verifiable on the filesystem.
+- [x] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
+- [x] Status set to `done`.
 - [ ] `mv /todo/pending/024e-agent-capability-governance.md /todo/changelog/024e-agent-capability-governance.md` - verified.
 - [ ] Continue immediately to `next_todo`. No pause. No batch.

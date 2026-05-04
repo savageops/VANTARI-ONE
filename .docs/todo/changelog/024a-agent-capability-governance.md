@@ -5,7 +5,7 @@ type: execution-unit
 protocol_version: "2.1"
 category: feature
 phase: a
-status: pending
+status: done
 patch_scope: "Interpretation freeze and invariant declaration. No artifact change."
 blast_radius: low
 blast_radius_justification: "No runtime files are modified. Failure is contained to chain interpretation quality before implementation begins."
@@ -16,7 +16,7 @@ exit_criterion: "ix inspect .docs/todo/pending/024-agent-capability-governance.m
 validation: "Set-Location E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE; ix inspect .docs/todo/pending/024-agent-capability-governance.md --range 1:180"
 expected_exit_code: 0
 expected_output_pattern: "024 Agent Capability Governance"
-evidence: "PLACEHOLDER - replace with exact captured stdout at completion. Archival is gated on this field being populated."
+evidence: "2026-05-04 024a validation passed. Command: ix inspect .docs/todo/pending/024-agent-capability-governance.md --range 1:180 -> exit 0, stdout included '# 024 Agent Capability Governance', source anchors U1-U9, invariants I1-I10, and phase plan 024a-024g. Command: ix inspect apps/backend/variant-1/src/core/executor/loop.zig --range 230:285 -> exit 0, stdout lines 252-258 show for (completion.tool_calls) and const tool_result = try executeToolCall(allocator, execution_context, tool_call). Entry-state verification: ix inspect AGENTS.md --range 1:170 -> exit 0, stdout lines 5-8 declare apps/backend/variant-1 live lane and .var/sessions canonical; Test-Path .docs/research/2026-05-04-multi-agent-systems-9-methods.md -> True; Test-Path apps/backend/variant-1/src/core/agents/service.zig -> True."
 conflict_surface: ""
 invariants:
   - "I1: messages.jsonl remains the complete durable transcript."
@@ -133,10 +133,10 @@ This unit prevents the implementation from drifting into a copied MAS framework 
 
 ## Completion
 
-- [ ] Pre-flight passed (all checklist items verified before execution began).
-- [ ] All validation commands executed. Exit codes match `expected_exit_code`. Output matches `expected_output_pattern`.
-- [ ] Post-flight: all Exit State claims are verifiable on the filesystem.
-- [ ] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
-- [ ] Status set to `done`.
-- [ ] `mv /todo/pending/024a-agent-capability-governance.md /todo/changelog/024a-agent-capability-governance.md` - verified.
-- [ ] Continue immediately to `next_todo`. No pause. No batch.
+- [x] Pre-flight passed (all checklist items verified before execution began).
+- [x] All validation commands executed. Exit codes match `expected_exit_code`. Output matches `expected_output_pattern`.
+- [x] Post-flight: all Exit State claims are verifiable on the filesystem.
+- [x] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
+- [x] Status set to `done`.
+- [x] `mv /todo/pending/024a-agent-capability-governance.md /todo/changelog/024a-agent-capability-governance.md` - verified.
+- [x] Continue immediately to `next_todo`. No pause. No batch.

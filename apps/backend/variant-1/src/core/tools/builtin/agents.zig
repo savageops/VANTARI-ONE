@@ -1,24 +1,31 @@
 const std = @import("std");
 const types = @import("../../../shared/types.zig");
+const profile_contract = @import("../../agents/profile.zig");
+const scope_contract = @import("../../agents/scope.zig");
 const module = @import("../module.zig");
 
 pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "launch_agent",
-        .description = "Launch a bounded child VAR1 agent. Arguments require prompt and optionally accept name. Use only when the child can make independent progress from a self-contained task statement.",
+        .description = "Launch a bounded child VAR1 agent. Arguments require prompt and optionally accept name plus an explicit delegation scope. Use only when the child can make independent progress from a self-contained task statement.",
         .parameters_json =
         \\{
         \\  "type": "object",
         \\  "properties": {
         \\    "prompt": { "type": "string", "description": "Required exact prompt for the child VAR1 agent to execute." },
-        \\    "name": { "type": "string", "description": "Optional short display name for the child agent. Defaults to an auto-generated name." }
+        \\    "name": { "type": "string", "description": "Optional short display name for the child agent. Defaults to an auto-generated name." },
+        \\    "scope_depth": { "type": "integer", "minimum": 1, "description": "Delegation depth requested for this child. Defaults to 1." },
+        \\    "contact_budget": { "type": "integer", "minimum": 1, "description": "Maximum child contact/supervision budget. Defaults to 1." },
+        \\    "validation_status": { "type": "string", "enum": ["unverified","self_checked","validated"], "description": "How much validation the parent has already performed. Defaults to unverified." },
+        \\    "escalation_reason": { "type": "string", "description": "Required when scope_depth or contact_budget expands beyond the default bounded child scope." },
+        \\    "parent_capability_profile": { "type": "string", "enum": ["root","subagent"], "description": "Optional known profile id for the delegating parent." }
         \\  },
         \\  "required": ["prompt"],
         \\  "additionalProperties": false
         \\}
         ,
-        .example_json = "{\"prompt\":\"Inspect src/core/tools/runtime.zig and summarize search_files.\",\"name\":\"search-audit\"}",
-        .usage_hint = "Keep the child prompt concrete, finite, and self-contained. You own supervision after launch; use the returned name for agent_status or wait_agent.",
+        .example_json = "{\"prompt\":\"Inspect src/core/tools/runtime.zig and summarize search_files.\",\"name\":\"search-audit\",\"scope_depth\":1,\"contact_budget\":1,\"validation_status\":\"unverified\"}",
+        .usage_hint = "Keep the child prompt concrete, finite, and self-contained. Expanding scope_depth or contact_budget requires escalation_reason and remains bounded by the kernel capability profile.",
     },
     .{
         .name = "agent_status",
@@ -115,6 +122,11 @@ fn executeLaunchAgent(
     const Args = struct {
         prompt: []const u8,
         name: ?[]const u8 = null,
+        scope_depth: usize = 1,
+        contact_budget: usize = 1,
+        validation_status: []const u8 = "unverified",
+        escalation_reason: ?[]const u8 = null,
+        parent_capability_profile: ?[]const u8 = null,
     };
 
     var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
@@ -122,11 +134,21 @@ fn executeLaunchAgent(
     });
     defer parsed.deinit();
 
+    const delegation_scope: module.DelegationScope = .{
+        .scope_depth = parsed.value.scope_depth,
+        .contact_budget = parsed.value.contact_budget,
+        .validation_status = try scope_contract.parseValidationStatus(parsed.value.validation_status),
+        .escalation_reason = parsed.value.escalation_reason,
+        .parent_capability_profile = parsed.value.parent_capability_profile,
+    };
+    try scope_contract.validateDelegationScope(delegation_scope, profile_contract.defaultSubagentProfile());
+
     const content = try service.launch(
         allocator,
         parent_session_id,
         parsed.value.prompt,
         parsed.value.name,
+        delegation_scope,
     );
     defer allocator.free(content);
 

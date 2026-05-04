@@ -23,6 +23,10 @@ Current kernel ownership already contains the primitives these papers keep redis
 | Model-visible context | `src/core/context/builder.zig` | Only the builder assembles provider messages from session state and checkpoints. |
 | Context compression | `src/core/context/compactor.zig` | Checkpoints cover explicit message sequence ranges without mutating transcript history. |
 | Tool capability truth | `src/core/tools/registry.zig` | Tool availability derives from module-owned definitions, not hand-indexed strings. |
+| Tool review state | `src/core/tools/review.zig` + `src/core/executor/loop.zig` | Tool calls move through `tool_requested -> tool_reviewed -> tool_completed/tool_blocked` before side effects. |
+| Scoped delegation | `src/core/agents/profile.zig` + `src/core/agents/scope.zig` | Child launches carry capability profile, scope depth, contact budget, validation state, and escalation reason. |
+| Derivative memory | `src/core/memory/derivative.zig` | Memory summaries cite source session sequence ranges and cannot replay a full transcript. |
+| Evaluation evidence | `src/core/evaluation/events.zig` | Heartbeat and evaluator events are append-only, redacted, and non-mutating. |
 | Runtime execution | `src/core/executor/loop.zig` | Tool calls, events, output, compaction, and provider-overflow recovery converge in one loop. |
 | Shared protocol | `src/shared/types.zig` | Sessions, context checkpoints, tools, events, and policy fields are typed surfaces. |
 
@@ -112,33 +116,33 @@ Adopt from OMC and OrgAgent only at the manifest/profile layer. Avoid importing 
 
 1. Pre-tool review gate.
    - Source method: Reinforced Agent.
-   - Local touchpoints: `loop.zig`, `tools/runtime.zig`, `tools/registry.zig`, `shared/types.zig`.
-   - Contract: every high-risk or write-capable tool call receives a durable `tool_reviewed` event before execution.
-   - Test: approved call executes; blocked call appends event and session-visible denial without invoking the tool.
+   - Local touchpoints: `src/core/tools/review.zig`, `src/core/executor/loop.zig`, `src/core/tools/runtime.zig`, `tests/runtime_loop_test.zig`.
+   - Shipped contract: every tool call receives a durable `tool_reviewed` event before execution; unknown high-impact calls receive `tool_blocked` plus a protocol-visible denial without invoking the tool.
+   - Test: approved call executes after review; blocked call appends `tool_requested`, `tool_reviewed`, and `tool_blocked` without `tool_completed`.
 
 2. Scoped escalation contract.
    - Source method: CASCADE.
-   - Local touchpoints: agent/supervision tool definitions, event schema, session messages.
-   - Contract: delegated or peer communication carries `scope_depth`, `contact_budget`, `validation_status`, and `escalation_reason`.
-   - Test: local validation success avoids escalation; failure expands scope only within budget.
+   - Local touchpoints: `src/core/agents/scope.zig`, `src/core/agents/profile.zig`, `src/core/tools/builtin/agents.zig`, `tests/tools_test.zig`.
+   - Shipped contract: delegated communication carries `scope_depth`, `contact_budget`, `validation_status`, `escalation_reason`, and `parent_capability_profile`.
+   - Test: default subagent scope launches; expanded scope without an escalation reason fails with `UnsupportedDelegationScope`.
 
 3. Memory topology without transcript duplication.
    - Source method: LLMA-Mem.
-   - Local touchpoints: future `src/core/memory/` or checkpoint metadata.
-   - Contract: derivative memory entries cite source session id and sequence range; invalidation is explicit; no full-message replay store exists outside `messages.jsonl`.
-   - Test: model context can consume memory summaries while full transcript remains the only durable transcript.
+   - Local touchpoints: `src/core/memory/derivative.zig`, `tests/core_store_test.zig`.
+   - Shipped contract: derivative memory entries cite source session id and sequence range; invalidation is explicit; replay-shaped summaries are rejected; no full-message replay store exists outside `messages.jsonl`.
+   - Test: valid sequence-bound summaries pass; transcript replay and `messages.jsonl`-shaped payloads fail.
 
 4. Capability profile and talent manifest.
    - Source methods: OMC and OrgAgent.
-   - Local touchpoints: existing `agent_profile`, plugin manifests, tool registry.
-   - Contract: a capability profile is a typed bundle of tools, policy, resource envelope, provider constraints, and availability.
-   - Test: unavailable capability fails at registry/profile resolution, not during late execution.
+   - Local touchpoints: `src/core/agents/profile.zig`, `src/core/agents/service.zig`, `src/core/tools/module.zig`.
+   - Shipped contract: a capability profile is a typed runtime boundary over tool classes, delegation policy, budget policy, and provider inheritance.
+   - Test: unsupported tool classes fail through profile resolution before execution.
 
 5. Runtime health and evaluator separation.
    - Source method: CORAL.
-   - Local touchpoints: bridge audit, events, session lifecycle, future evaluator socket.
-   - Contract: long-running work emits heartbeat/health records and evaluator outputs are separated from executor state mutation.
-   - Test: stale/failed runtime reports a diagnosable event with redacted payloads.
+   - Local touchpoints: `src/core/evaluation/events.zig`, `tests/core_store_test.zig`.
+   - Shipped contract: long-running work can emit heartbeat records and evaluator outputs as redacted session events; evaluator mutation is forbidden.
+   - Test: heartbeat/evaluator records append to `events.jsonl` and redact secret-shaped payloads.
 
 6. Provider and local-host policy guard.
    - Source method: Agentic Federated Learning.
@@ -150,6 +154,20 @@ Adopt from OMC and OrgAgent only at the manifest/profile layer. Avoid importing 
    - RecursiveMAS requires model-internal latent transfer. Use its token-efficiency principle only.
    - GRASP requires training/RL gradient infrastructure. Use its consensus principle only.
 
+## Shipped VAR1 Mapping (2026-05-04)
+
+| Method | VAR1 status | Shipped evidence |
+| --- | --- | --- |
+| RecursiveMAS | Rejected as runtime behavior; adapted only as source-bounded context-efficiency pressure. | `src/core/context/compactor.zig` remains the checkpoint primitive; `src/core/memory/derivative.zig` rejects latent-transfer substitutes that replay transcript data. |
+| OneManCompany (OMC) | Adapted as capability profiles, not a Talent Market. | `src/core/agents/profile.zig` owns `root` and `subagent` profiles; dynamic markets remain unsupported. |
+| OrgAgent | Adapted as typed execution boundaries, not company taxonomy. | `src/core/agents/profile.zig` and `scope.zig` bind delegation by capability and scope rather than organizational role names. |
+| CORAL | Adapted as heartbeat/evaluator evidence without autonomous background evolution. | `src/core/evaluation/events.zig` emits redacted `runtime_heartbeat`, `evaluator_result`, and `runtime_unsupported_behavior` records. |
+| LLMA-Mem | Adapted as derivative memory that cites source sequence ranges. | `src/core/memory/derivative.zig` requires `source_seq_start` / `source_seq_end` and rejects transcript replay. |
+| Agentic Federated Learning | Held as future policy framing only. | Provider/privacy/hardware policy remains outside this chain; unknown high-impact policy must fail closed when implemented. |
+| CASCADE | Adapted as scoped delegation. | `launch_agent` validates `scope_depth`, `contact_budget`, `validation_status`, `escalation_reason`, and `parent_capability_profile`. |
+| GRASP | Rejected as training/runtime gradient behavior; consensus principle remains research-only. | `runtime_unsupported_behavior` diagnostics explicitly cover gradient/RL machinery. |
+| Reinforced Agent | Adapted as deterministic pre-tool review. | `tool_requested -> tool_reviewed -> tool_completed/tool_blocked` is tested in `tests/runtime_loop_test.zig`. |
+
 ## Rejection Ledger
 
 - Do not create a second transcript store under the label "memory".
@@ -158,6 +176,10 @@ Adopt from OMC and OrgAgent only at the manifest/profile layer. Avoid importing 
 - Do not import company-role taxonomy into product UI or provider prompts.
 - Do not route around the context builder; all provider-visible history remains builder-owned.
 - Do not make scoped escalation a hidden side channel; every expansion needs an event and budget.
+- Do not add RecursiveMAS-style model-internal latent transfer to the harness runtime.
+- Do not add GRASP gradients, RL policy updates, or Bellman-equilibrium machinery.
+- Do not ship exact tokenizer integration until heuristic insufficiency is proven by tests.
+- Do not enable plugin auto-discovery until manifest validation, deterministic load order, explicit enablement, and lifecycle tests exist.
 
 ## Source Index
 

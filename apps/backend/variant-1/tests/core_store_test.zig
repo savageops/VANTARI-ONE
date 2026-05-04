@@ -906,6 +906,70 @@ test "agent service resolves child session status from the canonical session sto
     try std.testing.expect(std.mem.indexOf(u8, list_output, "NEXT_PARENT_ACTION") != null);
 }
 
+test "derivative memory is sequence-bound and rejects transcript replay" {
+    const memory = VAR1.core.memory.derivative;
+
+    const entry = memory.DerivativeMemoryEntry{
+        .session_id = "session-1",
+        .source_seq_start = 2,
+        .source_seq_end = 5,
+        .entry_type = .decision,
+        .summary = "Operator approved bounded capability profiles and rejected background evolution.",
+        .created_at_ms = 123,
+    };
+    try memory.validateEntry(entry);
+
+    const rendered = try memory.renderEntryJson(std.testing.allocator, entry);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"source_seq_start\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"source_seq_end\":5") != null);
+
+    try std.testing.expectError(memory.Error.TranscriptReplayRejected, memory.validateEntry(.{
+        .session_id = "session-1",
+        .source_seq_start = 2,
+        .source_seq_end = 5,
+        .entry_type = .summary,
+        .summary = "{\"seq\":2,\"role\":\"user\",\"content\":\"raw transcript row\"}",
+        .created_at_ms = 123,
+    }));
+
+    const diagnostic = memory.unsupportedBehaviorDiagnostic(.autonomous_background_evolution);
+    try std.testing.expect(std.mem.indexOf(u8, diagnostic, "unsupported") != null);
+    try std.testing.expect(std.mem.indexOf(u8, diagnostic, "cold-start recovery") != null);
+}
+
+test "heartbeat and evaluator boundaries append redacted session events" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "evaluate current run");
+    defer session.deinit(std.testing.allocator);
+
+    try VAR1.core.evaluation.events.appendHeartbeatEvent(std.testing.allocator, workspace_root, session.id, .running, "api_key=sk-test");
+    try VAR1.core.evaluation.events.appendEvaluatorEvent(std.testing.allocator, workspace_root, session.id, "contract-check", true, "No executor mutation.");
+    try VAR1.core.evaluation.events.appendUnsupportedBehaviorEvent(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "autonomous_background_evolution",
+        VAR1.core.memory.derivative.unsupportedBehaviorDiagnostic(.autonomous_background_evolution),
+    );
+
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
+
+    try std.testing.expectEqual(@as(usize, 3), events.len);
+    try std.testing.expectEqualStrings("runtime_heartbeat", events[0].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[0].message, "[redacted]") != null);
+    try std.testing.expectEqualStrings("evaluator_result", events[1].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[1].message, "\"executor_mutation\":\"forbidden\"") != null);
+    try std.testing.expectEqualStrings("runtime_unsupported_behavior", events[2].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[2].message, "cold-start recovery") != null);
+}
+
 test "docs sync writes pending sessions and archives completed sessions" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

@@ -39,6 +39,7 @@ Ventari is built for people who want to operate agents, not babysit scattered sc
 | Protocol | JSON-RPC 2.0 over stdio, plus an HTTP bridge for browser clients |
 | Context | Builder-owned model windows from immutable messages plus compact checkpoints |
 | Tools | Per-tool module registry with availability metadata and explicit external command boundaries |
+| Capability governance | Review-before-effect tool events, scoped delegation, typed capability profiles, derivative memory boundaries, and non-mutating evaluator evidence |
 | Clients | CLI and framework-free browser shell; neither owns runtime state |
 
 ## Quick Start
@@ -80,6 +81,7 @@ flowchart TB
     kernel --> sessions["session lifecycle"]
     kernel --> context["context compiler"]
     kernel --> tools["tool module registry"]
+    kernel --> governance["capability governance"]
     kernel --> plugins["plugin manifest contracts"]
     kernel --> provider["provider transport"]
     kernel --> events["event emission"]
@@ -87,6 +89,9 @@ flowchart TB
 
   sessions --> sessionState[".var/sessions"]
   context --> provider
+  tools --> governance
+  governance --> events
+  governance --> sessionState
   tools --> events
   provider --> events
   events --> sessionState
@@ -104,6 +109,10 @@ flowchart TB
 | Checkpointed compaction path | Generates deterministic Zig-native summary checkpoints in `context.jsonl` without replacing the complete transcript. |
 | Event persistence | Records runtime progress, tool lifecycle entries, bridge notifications, and terminal state in `events.jsonl`. |
 | Tool integration | Publishes built-in tool contracts and availability metadata from the kernel registry as JSON schemas for provider calls, `tools/list`, and `VAR1 tools --json`; write-capable file tools return typed effect receipts. |
+| Tool review gate | Records `tool_requested -> tool_reviewed -> tool_completed` for approved calls and `tool_requested -> tool_reviewed -> tool_blocked` for denied calls before an unknown or high-impact tool reaches implementation dispatch. |
+| Scoped delegation | Validates `launch_agent` scope fields before child-session creation: `scope_depth`, `contact_budget`, `validation_status`, `escalation_reason`, and `parent_capability_profile`. |
+| Capability profiles | Keeps `root` and `subagent` capability profiles as typed runtime boundaries for tool classes, budgets, delegation policy, and provider inheritance; they are not product roles or copied org charts. |
+| Derivative memory and evaluator evidence | Defines sequence-bound derivative memory entries and append-only heartbeat/evaluator events without creating another transcript or mutating executor state from an evaluator side channel. |
 | Command-backed search | Exposes `search_files` as the content-search tool over the external `iex` executable; availability is false until a real executable is resolvable. |
 | Plugin boundary | Validates plugin manifests and socket declarations without runtime loading or direct store/provider access. |
 | Provider isolation | Resolves OpenAI-compatible provider configuration behind the runtime boundary. |
@@ -117,6 +126,8 @@ Tool contracts are kernel-owned. Per-tool file and agent modules live under `app
 `tools/list` and `VAR1 tools --json` expose the same catalog, including availability metadata. `search_files` is the only content-search tool. It shells to `iex search --json` through the command-runner boundary and declares an `external_command("iex")` dependency. A checkout or packaged install must provide a real `iex` executable on `PATH` or beside the process before that tool is available; missing search dependencies are reported as unavailable capabilities instead of late process-spawn surprises. `list_files` is a native Zig directory/file discovery primitive and does not depend on `iex`.
 
 `write_file`, `append_file`, and `replace_in_file` preserve the stable `ok/tool/content` response shape and add an `effect` object with schema `var1.tool_effect.v1`. The receipt records the requested path, resolved path, before/after existence and byte counts, operation-specific counts, and SHA-256 hashes where content exists. The model-visible `content` now starts with `EFFECT_SCHEMA var1.tool_effect.v1` and `EFFECT_KEY effect` before the legacy `PATH`/`BYTES` output, so smaller local models see the file-effect semantics before low-signal byte accounting. This gives the harness deterministic file-effect evidence without adding a separate verifier worker.
+
+Tool calls pass through `src/core/tools/review.zig` inside `src/core/executor/loop.zig` before side effects execute. The durable event order is `tool_requested`, then `tool_reviewed`, then either `tool_completed` for approved calls or `tool_blocked` plus a protocol-visible denial tool result for blocked calls. This preserves provider protocol shape while making unknown high-impact tools fail before dispatch instead of falling into a late runtime surprise.
 
 Plugin support is currently contract-level: `src/core/tools/sockets.zig` validates typed tool sockets and `src/core/plugins/manifest.zig` validates plugin socket declarations. There is no automatic plugin discovery or dynamic plugin execution in the shipped runtime.
 
@@ -159,6 +170,8 @@ flowchart LR
 ```
 
 `messages.jsonl` and `context.jsonl` are separate control planes. The transcript remains the complete session history; context checkpoints constrain the provider-visible working set.
+
+Derivative memory is also separate from the transcript. `src/core/memory/derivative.zig` accepts only entries that cite a source session and `source_seq_start` / `source_seq_end` range, rejects transcript replay-shaped payloads, and leaves `messages.jsonl` as the only full durable transcript. `src/core/evaluation/events.zig` can append redacted heartbeat and evaluator-result records, but evaluator output is evidence only: it does not mutate executor state or secretly schedule runtime work.
 
 ## Protocol Contract
 

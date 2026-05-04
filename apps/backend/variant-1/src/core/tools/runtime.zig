@@ -1,6 +1,7 @@
 const std = @import("std");
 const module = @import("module.zig");
 const registry = @import("registry.zig");
+pub const review = @import("review.zig");
 const workspace_state_tools = @import("workspace_runtime.zig");
 const types = @import("../../shared/types.zig");
 const list_files = @import("builtin/list_files.zig");
@@ -19,6 +20,7 @@ pub const CommandRunner = module.CommandRunner;
 pub const CommandProbe = module.CommandProbe;
 pub const AgentService = module.AgentService;
 pub const ExecutionContext = module.ExecutionContext;
+pub const DelegationScope = module.DelegationScope;
 
 const file_tool_definitions = [_]types.ToolDefinition{
     list_files.definition,
@@ -203,6 +205,14 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
 
     if (std.mem.eql(u8, error_name, "ToolUnavailable") and std.mem.eql(u8, tool_name, "search_files")) {
         return "search_files is unavailable because its required iex executable dependency is not resolvable. Use list_files and read_file until capability availability reports search_files as available.";
+    }
+
+    if (std.mem.eql(u8, tool_name, "launch_agent") and std.mem.eql(u8, error_name, "UnsupportedDelegationScope")) {
+        return "launch_agent rejected the delegation scope. Use positive scope_depth/contact_budget values; include escalation_reason when either value expands beyond the default bounded child scope.";
+    }
+
+    if (std.mem.eql(u8, tool_name, "launch_agent") and std.mem.eql(u8, error_name, "UnsupportedCapabilityProfile")) {
+        return "launch_agent rejected an unknown capability profile. Use the current canonical profiles only: root or subagent.";
     }
 
     return null;

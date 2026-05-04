@@ -4,7 +4,7 @@ type: parent
 protocol_version: "2.1"
 spec_status: approved
 category: feature
-status: pending
+status: done
 epic_boundary: "Add a VAR1-native agent capability governance layer that upgrades tool review, scoped delegation, capability profiles, transcript-safe memory boundaries, and runtime health evidence without copying external MAS architectures or creating parallel runtime state."
 subtodo_start: /todo/pending/024a-agent-capability-governance.md
 subtodo_final: /todo/pending/024g-agent-capability-governance.md
@@ -108,14 +108,14 @@ The research harvest shows that the durable improvements are not larger agent hi
 
 | File | Phase | Role | Status |
 |------|-------|------|--------|
-| `/todo/pending/024-agent-capability-governance.md` | parent | Chain root | pending |
-| `/todo/pending/024a-agent-capability-governance.md` | a | Baseline / contract lock | pending |
-| `/todo/pending/024b-agent-capability-governance.md` | b | Pre-tool review contract primitives | pending |
-| `/todo/pending/024c-agent-capability-governance.md` | c | Executor loop review integration | pending |
-| `/todo/pending/024d-agent-capability-governance.md` | d | Scoped delegation and capability profiles | pending |
-| `/todo/pending/024e-agent-capability-governance.md` | e | Transcript-safe memory and evaluator health boundaries | pending |
-| `/todo/pending/024f-agent-capability-governance.md` | f | Docs, research mapping, and operator handoff | pending |
-| `/todo/pending/024g-agent-capability-governance.md` | g | Verification / closeout | pending |
+| `/todo/changelog/024-agent-capability-governance.md` | parent | Chain root | archived |
+| `/todo/changelog/024a-agent-capability-governance.md` | a | Baseline / contract lock | archived |
+| `/todo/changelog/024b-agent-capability-governance.md` | b | Pre-tool review contract primitives | archived |
+| `/todo/changelog/024c-agent-capability-governance.md` | c | Executor loop review integration | archived |
+| `/todo/changelog/024d-agent-capability-governance.md` | d | Scoped delegation and capability profiles | archived |
+| `/todo/changelog/024e-agent-capability-governance.md` | e | Transcript-safe memory and evaluator health boundaries | archived |
+| `/todo/changelog/024f-agent-capability-governance.md` | f | Docs, research mapping, and operator handoff | archived |
+| `/todo/changelog/024g-agent-capability-governance.md` | g | Verification / closeout | archived |
 
 Chain is complete when all rows read `archived` and all files are in `/todo/changelog/`.
 
@@ -124,7 +124,7 @@ Chain is complete when all rows read `archived` and all files are in `/todo/chan
 | Letter | Role | Patch Surface | Depends On | Parallelizable |
 |--------|------|---------------|------------|----------------|
 | `a` | Baseline / contract lock | Interpretation freeze, boundary declaration, invariant declaration - no artifact change | - | No |
-| `b` | Implementation unit 1 | `src/core/tools/review.zig`, `src/core/tools/module.zig`, `src/core/tools/runtime.zig`, `src/shared/types.zig`, focused review tests | `a`, `021f` if shared-types conflict remains | No |
+| `b` | Implementation unit 1 | `src/core/tools/review.zig`, `src/core/tools/module.zig`, `src/core/tools/runtime.zig`, focused review tests | `a`; shared-types conflict removed by keeping review contracts tool-runtime owned | No |
 | `c` | Implementation unit 2 | `src/core/executor/loop.zig`, session event append path, executor loop tests | `b` | No |
 | `d` | Implementation unit 3 | `src/core/agents/profile.zig`, `src/core/agents/service.zig`, agent builtin tool schemas, plugin manifest validation, agent tests | `c` | No |
 | `e` | Implementation unit 4 | `src/core/memory/` boundary module or checkpoint metadata, evaluator/heartbeat event contracts, shared types, tests | `d` | No |
@@ -144,4 +144,4 @@ Chain is complete when all rows read `archived` and all files are in `/todo/chan
 
 ## Next todo
 
-`/todo/pending/024a-agent-capability-governance.md`
+`NONE`

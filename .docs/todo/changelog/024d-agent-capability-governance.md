@@ -5,7 +5,7 @@ type: execution-unit
 protocol_version: "2.1"
 category: feature
 phase: d
-status: pending
+status: done
 patch_scope: "Scoped delegation and typed capability profile contracts for agent sessions."
 blast_radius: high
 blast_radius_justification: "Agent delegation can spawn child sessions and affect tool availability, session lineage, and future provider policy. Failure can create uncontrolled delegation or incorrect capability exposure."
@@ -16,8 +16,8 @@ exit_criterion: "Zig tests prove scoped delegation fields persist and unsupporte
 validation: "Set-Location E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE\\apps\\backend\\variant-1; .\\scripts\\zigw.ps1 build test --summary all"
 expected_exit_code: 0
 expected_output_pattern: "tests passed"
-evidence: "PLACEHOLDER - replace with exact captured stdout at completion. Archival is gated on this field being populated."
-conflict_surface: "021-codex-subscription-auth"
+evidence: "2026-05-04: `Set-Location apps/backend/variant-1; .\\scripts\\zigw.ps1 build test --summary all` exited 0 with `Build Summary: 5/5 steps succeeded; 93/93 tests passed`. `ix search \"lit:scope_depth || lit:contact_budget || lit:capability_profile\" apps/backend/variant-1/src apps/backend/variant-1/tests --json` exited 0 and found profile/scope contracts in `src/core/agents/profile.zig`, `src/core/agents/scope.zig`, launch schema/runtime diagnostics, and focused tests."
+conflict_surface: ""
 invariants:
   - "I5: tool capability truth remains module-owned through registry/tool definitions."
   - "I6: scoped delegation carries explicit scope, contact budget, validation state, and escalation reason."
@@ -26,9 +26,9 @@ invariants:
 source_message_anchor: "U1, U6, U7, U8, U9"
 source_message_excerpt: "\"Could you show me how that translates to Ventori and how that improves the current code base and makes it better?\"; \"materially improve the architecture and the Kcapability of the code base.\"; \"We don't want to change anything for the worse.\"; \"we don't want to copy.\"; \"do something far better, which is more simple, but more capable.\""
 source_message_proof_obligation: "Translate CASCADE, OMC, and OrgAgent into bounded VAR1 delegation/profile contracts without copying company hierarchy or marketplace machinery."
-entry_state: "`024c-agent-capability-governance` is archived with evidence. Reviewed delegating tool calls are now explicit in the executor loop. If this unit touches `src/shared/types.zig`, `021f-codex-subscription-auth` remains archived."
-rollback_surface: "Revert `src/core/agents/profile.zig`, scoped delegation changes in `src/core/agents/service.zig`, agent builtin schema changes, plugin manifest validation changes, shared type changes, and focused tests."
-dependencies: "024c-agent-capability-governance, 021f-codex-subscription-auth"
+entry_state: "`024c-agent-capability-governance` is archived with evidence. Reviewed delegating tool calls are now explicit in the executor loop. Profile and scope contracts remain kernel-local under `core/agents`; no `src/shared/types.zig` change is required."
+rollback_surface: "Revert `src/core/agents/profile.zig`, scoped delegation changes in `src/core/agents/service.zig`, agent builtin schema changes, plugin manifest validation changes, and focused tests."
+dependencies: "024c-agent-capability-governance"
 next_todo: /todo/pending/024e-agent-capability-governance.md
 continuation: "On completion: record evidence (replace PLACEHOLDER), set status done, move this file to /todo/changelog/024d-agent-capability-governance.md, continue immediately to next_todo. Do not pause. Do not batch."
 blocked_reason: ""
@@ -76,7 +76,6 @@ Review-before-effect governs whether a delegated call may execute; it does not d
 - `apps/backend/variant-1/src/core/agents/service.zig` - persist scoped delegation metadata and validate child launch scope.
 - `apps/backend/variant-1/src/core/tools/builtin/agents.zig` - extend tool schema/hints for scope, budget, validation state, and escalation reason if this is the current launch tool owner.
 - `apps/backend/variant-1/src/core/plugins/manifest.zig` - validate profile-related socket/capability declarations only if plugin manifests expose them.
-- `apps/backend/variant-1/src/shared/types.zig` - add shared profile/scope structs only if session/protocol consumers require them.
 - `apps/backend/variant-1/tests/**` - add focused scoped-delegation and capability-profile tests.
 
 **Adds:**
@@ -131,7 +130,7 @@ Review-before-effect governs whether a delegated call may execute; it does not d
 1. Revert `apps/backend/variant-1/src/core/agents/profile.zig` and `scope.zig` if added.
 2. Revert scoped delegation changes in `apps/backend/variant-1/src/core/agents/service.zig`.
 3. Revert agent tool schema changes and plugin manifest changes introduced by this unit.
-4. Revert shared type changes and focused tests added by this unit.
+4. Revert focused tests added by this unit.
 5. Run full Zig regression.
 
 ## Next todo
@@ -140,10 +139,10 @@ Review-before-effect governs whether a delegated call may execute; it does not d
 
 ## Completion
 
-- [ ] Pre-flight passed (all checklist items verified before execution began).
-- [ ] All validation commands executed. Exit codes match `expected_exit_code`. Output matches `expected_output_pattern`.
-- [ ] Post-flight: all Exit State claims are verifiable on the filesystem.
-- [ ] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
-- [ ] Status set to `done`.
+- [x] Pre-flight passed (all checklist items verified before execution began).
+- [x] All validation commands executed. Exit codes match `expected_exit_code`. Output matches `expected_output_pattern`.
+- [x] Post-flight: all Exit State claims are verifiable on the filesystem.
+- [x] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
+- [x] Status set to `done`.
 - [ ] `mv /todo/pending/024d-agent-capability-governance.md /todo/changelog/024d-agent-capability-governance.md` - verified.
 - [ ] Continue immediately to `next_todo`. No pause. No batch.

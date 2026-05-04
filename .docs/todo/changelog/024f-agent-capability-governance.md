@@ -5,7 +5,7 @@ type: execution-unit
 protocol_version: "2.1"
 category: feature
 phase: f
-status: pending
+status: done
 patch_scope: "Architecture documentation, research mapping, and operator handoff for shipped capability governance."
 blast_radius: medium
 blast_radius_justification: "Docs and changelog are operator-facing and can misrepresent runtime truth if incorrect, but this unit does not change executable code."
@@ -16,8 +16,8 @@ exit_criterion: "ix search finds review, scoped delegation, capability profile, 
 validation: "Set-Location E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE; ix search \"lit:tool_reviewed || lit:scoped delegation || lit:capability profile || lit:derivative memory || lit:unsupported\" README.md apps/backend/variant-1/README.md apps/backend/variant-1/architecture.md .docs/research .docs/todo/changelog/_log.md --json"
 expected_exit_code: 0
 expected_output_pattern: "tool_reviewed"
-evidence: "PLACEHOLDER - replace with exact captured stdout at completion. Archival is gated on this field being populated."
-conflict_surface: "021-codex-subscription-auth"
+evidence: "2026-05-04 docs validation: `ix search \"lit:tool_reviewed || lit:scoped delegation || lit:capability profile || lit:derivative memory || lit:unsupported\" README.md apps/backend/variant-1/README.md apps/backend/variant-1/architecture.md .docs/research .docs/todo/changelog/_log.md --json` exited 0 with 42 matches including README.md:112 `tool_requested -> tool_reviewed -> tool_completed`, apps/backend/variant-1/README.md:81 review-before-effect, architecture.md:216 scoped delegation, research artifact lines 162-169 all nine method mappings, and _log.md:100 implementation entry. `git diff --check -- README.md apps/backend/variant-1/README.md apps/backend/variant-1/architecture.md .docs/research/2026-05-04-multi-agent-systems-9-methods.md .docs/todo/changelog/_log.md` exited 0 with CRLF warnings only."
+conflict_surface: ""
 invariants:
   - "I7: capability profiles are typed execution boundaries, not product UI role taxonomy."
   - "I8: unsupported runtime behavior fails by contract or reports explicit diagnostics."
@@ -27,7 +27,7 @@ source_message_excerpt: "\"Could you show me how that translates to Ventori and 
 source_message_proof_obligation: "Document the shipped architecture truth and research translation so future operators cannot mistake the implementation for copied MAS architecture."
 entry_state: "`024e-agent-capability-governance` is archived with evidence. Runtime review, scope, capability, memory, heartbeat, and evaluator contracts exist and are covered by tests."
 rollback_surface: "Revert documentation, research crosswalk, and changelog edits introduced by this unit; do not revert runtime files from prior units unless terminal verification identifies a code regression."
-dependencies: "024e-agent-capability-governance, 021f-codex-subscription-auth"
+dependencies: "024e-agent-capability-governance"
 next_todo: /todo/pending/024g-agent-capability-governance.md
 continuation: "On completion: record evidence (replace PLACEHOLDER), set status done, move this file to /todo/changelog/024f-agent-capability-governance.md, continue immediately to next_todo. Do not pause. Do not batch."
 blocked_reason: ""
@@ -58,12 +58,12 @@ Runtime capability governance changes affect how operators reason about tool eff
 
 ## Pre-flight Checklist
 
-- [ ] All `dependencies` are archived in `/todo/changelog/` with non-PLACEHOLDER evidence.
-- [ ] All `entry_state` claims are verifiable on the current filesystem.
-- [ ] `source_message_anchor`, `source_message_excerpt`, and `source_message_proof_obligation` are populated and match the parent source-message capture.
-- [ ] `conflict_surface` is empty or cross-chain dependency is resolved.
-- [ ] Rollback procedure is populated for blast_radius medium or high.
-- [ ] If re-executing after partial failure: idempotency_contract is read and the correct recovery path is determined.
+- [x] All `dependencies` are archived in `/todo/changelog/` with non-PLACEHOLDER evidence.
+- [x] All `entry_state` claims are verifiable on the current filesystem.
+- [x] `source_message_anchor`, `source_message_excerpt`, and `source_message_proof_obligation` are populated and match the parent source-message capture.
+- [x] `conflict_surface` is empty or cross-chain dependency is resolved.
+- [x] Rollback procedure is populated for blast_radius medium or high.
+- [x] If re-executing after partial failure: idempotency_contract is read and the correct recovery path is determined.
 
 ## Entry State
 
@@ -137,10 +137,10 @@ Runtime capability governance changes affect how operators reason about tool eff
 
 ## Completion
 
-- [ ] Pre-flight passed (all checklist items verified before execution began).
-- [ ] All validation commands executed. Exit codes match `expected_exit_code`. Output matches `expected_output_pattern`.
-- [ ] Post-flight: all Exit State claims are verifiable on the filesystem.
-- [ ] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
-- [ ] Status set to `done`.
-- [ ] `mv /todo/pending/024f-agent-capability-governance.md /todo/changelog/024f-agent-capability-governance.md` - verified.
-- [ ] Continue immediately to `next_todo`. No pause. No batch.
+- [x] Pre-flight passed (all checklist items verified before execution began).
+- [x] All validation commands executed. Exit codes match `expected_exit_code`. Output matches `expected_output_pattern`.
+- [x] Post-flight: all Exit State claims are verifiable on the filesystem.
+- [x] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
+- [x] Status set to `done`.
+- [x] `mv /todo/pending/024f-agent-capability-governance.md /todo/changelog/024f-agent-capability-governance.md` - verified.
+- [x] Continue immediately to `next_todo`. No pause. No batch.

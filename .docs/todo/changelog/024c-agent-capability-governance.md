@@ -5,7 +5,7 @@ type: execution-unit
 protocol_version: "2.1"
 category: feature
 phase: c
-status: pending
+status: done
 patch_scope: "Executor loop integration for pre-tool review and durable review/block events."
 blast_radius: high
 blast_radius_justification: "The executor loop controls model/tool turns, session status, tool budgets, session messages, and durable events. Failure can regress every tool-mediated session."
@@ -16,7 +16,7 @@ exit_criterion: "Zig tests prove approved mutating tool execution, blocked mutat
 validation: "Set-Location E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE\\apps\\backend\\variant-1; .\\scripts\\zigw.ps1 build test --summary all"
 expected_exit_code: 0
 expected_output_pattern: "tests passed"
-evidence: "PLACEHOLDER - replace with exact captured stdout at completion. Archival is gated on this field being populated."
+evidence: "2026-05-04 024c validation passed. Command: Set-Location apps/backend/variant-1; .\\scripts\\zigw.ps1 build test --summary all -> exit 0, stdout: Build Summary: 5/5 steps succeeded; 92/92 tests passed; test success. Command: ix search \"lit:tool_reviewed || lit:tool_blocked\" apps/backend/variant-1/src apps/backend/variant-1/tests --json -> exit 0, found executor event recording at loop.zig lines 268 and 287, review policy labels at review.zig lines 28/37/46/54, and runtime-loop event-order assertions at tests/runtime_loop_test.zig lines 739-742 and 788-792."
 conflict_surface: ""
 invariants:
   - "I1: messages.jsonl remains the complete durable transcript."
@@ -133,10 +133,10 @@ This unit touches the central runtime loop and must be separate from review poli
 
 ## Completion
 
-- [ ] Pre-flight passed (all checklist items verified before execution began).
-- [ ] All validation commands executed. Exit codes match `expected_exit_code`. Output matches `expected_output_pattern`.
-- [ ] Post-flight: all Exit State claims are verifiable on the filesystem.
-- [ ] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
-- [ ] Status set to `done`.
-- [ ] `mv /todo/pending/024c-agent-capability-governance.md /todo/changelog/024c-agent-capability-governance.md` - verified.
+- [x] Pre-flight passed (all checklist items verified before execution began).
+- [x] All validation commands executed. Exit codes match `expected_exit_code`. Output matches `expected_output_pattern`.
+- [x] Post-flight: all Exit State claims are verifiable on the filesystem.
+- [x] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
+- [x] Status set to `done`.
+- [x] `mv /todo/pending/024c-agent-capability-governance.md /todo/changelog/024c-agent-capability-governance.md` - verified.
 - [ ] Continue immediately to `next_todo`. No pause. No batch.
