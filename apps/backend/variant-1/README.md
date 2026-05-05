@@ -78,7 +78,7 @@ An installed runtime must provide a real `iex` executable for `search_files`. Po
 
 ## Capability governance
 
-The executor now has a review-before-effect state transition for tool calls. `src/core/executor/loop.zig` appends `tool_requested`, calls `src/core/tools/review.zig`, appends `tool_reviewed`, and then either dispatches through `src/core/tools/runtime.zig` or appends `tool_blocked` with a protocol-visible denial result. The blocked path preserves the provider tool-message contract while preventing unknown high-impact tools from reaching an implementation branch.
+The executor now has a review-before-effect state transition for tool calls. `src/core/executor/loop.zig` appends `tool_requested`, passes the active `ToolDefinition` catalog into `src/core/tools/review.zig`, appends `tool_reviewed`, and then either dispatches through `src/core/tools/runtime.zig` or appends `tool_blocked` with a protocol-visible denial result. Risk classification comes from each module-owned `ToolDefinition.review_risk`; the blocked path preserves the provider tool-message contract while preventing unknown or context-unavailable tools from reaching an implementation branch.
 
 Delegation is scoped, not implicit. The `launch_agent` tool accepts `scope_depth`, `contact_budget`, `validation_status`, `escalation_reason`, and `parent_capability_profile`; `src/core/agents/scope.zig` rejects zero-value scope and rejects expansion beyond the default profile without an escalation reason. `src/core/agents/profile.zig` owns `root` and `subagent` capability profiles as typed execution boundaries over tool classes, delegation policy, budget policy, and provider inheritance. They are not UI roles, company roles, or provider prompt taxonomy.
 

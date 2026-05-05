@@ -6,6 +6,7 @@ const module = @import("../module.zig");
 pub const definition = types.ToolDefinition{
     .name = "read_file",
     .description = "Inspect an existing workspace file. Arguments require path and optionally accept start_line/end_line. Use only after the file path is known.",
+    .review_risk = .read_only,
     .parameters_json =
     \\{
     \\  "type": "object",

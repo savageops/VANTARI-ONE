@@ -220,6 +220,7 @@ test "tool socket validates tool definitions through core namespace" {
     try VAR1.core.tools.validateDefinition(std.testing.allocator, .{
         .name = "lookup_ticket",
         .description = "Look up a ticket.",
+        .review_risk = .read_only,
         .parameters_json = "{\"type\":\"object\",\"additionalProperties\":false}",
     });
 
@@ -227,6 +228,7 @@ test "tool socket validates tool definitions through core namespace" {
     try std.testing.expectError(VAR1.core.tools.sockets.Error.InvalidParametersSchema, VAR1.core.tools.validateDefinition(std.testing.allocator, .{
         .name = "bad_schema",
         .description = "Bad schema.",
+        .review_risk = .unknown_high_impact,
         .parameters_json = "[]",
     }));
 }
@@ -420,32 +422,49 @@ test "tool availability registry derives agent capabilities from the agent modul
 }
 
 test "tool review classifies capability risk before dispatch" {
+    const file_definitions = VAR1.core.tool_runtime.builtinDefinitions(false);
+    const agent_definitions = VAR1.core.tool_runtime.builtinDefinitions(true);
+    const workspace_definitions = VAR1.core.tool_runtime.builtinDefinitionsForContext(.{
+        .workspace_root = ".",
+        .workspace_state_enabled = true,
+    });
+
     var read_call = try makeToolCall(std.testing.allocator, "read_file", "{\"path\":\"src/main.zig\"}");
     defer read_call.deinit(std.testing.allocator);
-    const read_decision = VAR1.core.tool_runtime.review.reviewToolCall(read_call);
+    const read_decision = VAR1.core.tool_runtime.review.reviewToolCall(read_call, file_definitions);
     try std.testing.expect(read_decision.approved);
     try std.testing.expectEqual(VAR1.core.tool_runtime.review.ToolReviewRisk.read_only, read_decision.risk);
     try std.testing.expectEqualStrings("tool_reviewed", read_decision.event_type);
 
     var write_call = try makeToolCall(std.testing.allocator, "write_file", "{\"path\":\"out.txt\",\"content\":\"ok\"}");
     defer write_call.deinit(std.testing.allocator);
-    const write_decision = VAR1.core.tool_runtime.review.reviewToolCall(write_call);
+    const write_decision = VAR1.core.tool_runtime.review.reviewToolCall(write_call, file_definitions);
     try std.testing.expect(write_decision.approved);
     try std.testing.expectEqual(VAR1.core.tool_runtime.review.ToolReviewRisk.write_capable, write_decision.risk);
 
     var launch_call = try makeToolCall(std.testing.allocator, "launch_agent", "{\"prompt\":\"inspect one file\"}");
     defer launch_call.deinit(std.testing.allocator);
-    const launch_decision = VAR1.core.tool_runtime.review.reviewToolCall(launch_call);
+    const launch_decision = VAR1.core.tool_runtime.review.reviewToolCall(launch_call, agent_definitions);
     try std.testing.expect(launch_decision.approved);
     try std.testing.expectEqual(VAR1.core.tool_runtime.review.ToolReviewRisk.delegating, launch_decision.risk);
 
     var unknown_call = try makeToolCall(std.testing.allocator, "unknown_tool", "{}");
     defer unknown_call.deinit(std.testing.allocator);
-    const unknown_decision = VAR1.core.tool_runtime.review.reviewToolCall(unknown_call);
+    const unknown_decision = VAR1.core.tool_runtime.review.reviewToolCall(unknown_call, agent_definitions);
     try std.testing.expect(!unknown_decision.approved);
     try std.testing.expectEqual(VAR1.core.tool_runtime.review.ToolReviewRisk.unknown_high_impact, unknown_decision.risk);
     try std.testing.expectEqualStrings("tool_blocked", unknown_decision.event_type);
     try std.testing.expect(unknown_decision.tool_error_hint != null);
+
+    var context_unavailable_call = try makeToolCall(std.testing.allocator, "init_workspace", "{}");
+    defer context_unavailable_call.deinit(std.testing.allocator);
+    const context_unavailable_decision = VAR1.core.tool_runtime.review.reviewToolCall(context_unavailable_call, file_definitions);
+    try std.testing.expect(!context_unavailable_decision.approved);
+    try std.testing.expectEqual(VAR1.core.tool_runtime.review.ToolReviewRisk.unknown_high_impact, context_unavailable_decision.risk);
+
+    const workspace_decision = VAR1.core.tool_runtime.review.reviewToolCall(context_unavailable_call, workspace_definitions);
+    try std.testing.expect(workspace_decision.approved);
+    try std.testing.expectEqual(VAR1.core.tool_runtime.review.ToolReviewRisk.write_capable, workspace_decision.risk);
 
     const event = try VAR1.core.tool_runtime.review.renderReviewEvent(std.testing.allocator, unknown_call, unknown_decision);
     defer std.testing.allocator.free(event);

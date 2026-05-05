@@ -48,6 +48,7 @@ test "tool socket validates compact lowercase tool contracts" {
     const definition = types.ToolDefinition{
         .name = "read_file",
         .description = "Read a file.",
+        .review_risk = .read_only,
         .parameters_json = "{\"type\":\"object\",\"additionalProperties\":false}",
     };
 
@@ -56,6 +57,7 @@ test "tool socket validates compact lowercase tool contracts" {
     try std.testing.expectError(Error.InvalidParametersSchema, validateDefinition(std.testing.allocator, .{
         .name = "bad_schema",
         .description = "Bad schema.",
+        .review_risk = .unknown_high_impact,
         .parameters_json = "[]",
     }));
 }

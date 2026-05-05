@@ -1,12 +1,7 @@
 const std = @import("std");
 const types = @import("../../shared/types.zig");
 
-pub const ToolReviewRisk = enum {
-    read_only,
-    write_capable,
-    delegating,
-    unknown_high_impact,
-};
+pub const ToolReviewRisk = types.ToolRiskClass;
 
 pub const ToolReviewDecision = struct {
     approved: bool,
@@ -16,37 +11,12 @@ pub const ToolReviewDecision = struct {
     tool_error_hint: ?[]const u8 = null,
 };
 
-pub fn reviewToolCall(tool_call: types.ToolCall) ToolReviewDecision {
-    return reviewToolName(tool_call.name);
+pub fn reviewToolCall(tool_call: types.ToolCall, active_definitions: []const types.ToolDefinition) ToolReviewDecision {
+    return reviewToolName(tool_call.name, active_definitions);
 }
 
-pub fn reviewToolName(tool_name: []const u8) ToolReviewDecision {
-    if (isReadOnly(tool_name)) {
-        return .{
-            .approved = true,
-            .risk = .read_only,
-            .event_type = "tool_reviewed",
-            .reason = "declared read-only capability",
-        };
-    }
-
-    if (isWriteCapable(tool_name)) {
-        return .{
-            .approved = true,
-            .risk = .write_capable,
-            .event_type = "tool_reviewed",
-            .reason = "declared write-capable capability",
-        };
-    }
-
-    if (std.mem.eql(u8, tool_name, "launch_agent")) {
-        return .{
-            .approved = true,
-            .risk = .delegating,
-            .event_type = "tool_reviewed",
-            .reason = "declared bounded delegation capability",
-        };
-    }
+pub fn reviewToolName(tool_name: []const u8, active_definitions: []const types.ToolDefinition) ToolReviewDecision {
+    if (definitionByName(active_definitions, tool_name)) |definition| return approveDefinition(definition);
 
     return .{
         .approved = false,
@@ -54,6 +24,36 @@ pub fn reviewToolName(tool_name: []const u8) ToolReviewDecision {
         .event_type = "tool_blocked",
         .reason = "undeclared capability cannot be dispatched",
         .tool_error_hint = "Use only tools from the current catalog. Unknown tool names are blocked before execution.",
+    };
+}
+
+fn approveDefinition(definition: types.ToolDefinition) ToolReviewDecision {
+    return switch (definition.review_risk) {
+        .read_only => .{
+            .approved = true,
+            .risk = .read_only,
+            .event_type = "tool_reviewed",
+            .reason = "declared read-only capability",
+        },
+        .write_capable => .{
+            .approved = true,
+            .risk = .write_capable,
+            .event_type = "tool_reviewed",
+            .reason = "declared write-capable capability",
+        },
+        .delegating => .{
+            .approved = true,
+            .risk = .delegating,
+            .event_type = "tool_reviewed",
+            .reason = "declared bounded delegation capability",
+        },
+        .unknown_high_impact => .{
+            .approved = false,
+            .risk = .unknown_high_impact,
+            .event_type = "tool_blocked",
+            .reason = "declared capability has unknown high-impact risk",
+            .tool_error_hint = "This tool is declared but not approved for execution until its review_risk is narrowed by the owning module.",
+        },
     };
 }
 
@@ -128,42 +128,9 @@ pub fn renderReviewLog(
     });
 }
 
-fn isReadOnly(tool_name: []const u8) bool {
-    const names = [_][]const u8{
-        "list_files",
-        "search_files",
-        "read_file",
-        "agent_status",
-        "wait_agent",
-        "list_agents",
-        "instruction_ingestion",
-    };
-
-    return containsName(names[0..], tool_name);
-}
-
-fn isWriteCapable(tool_name: []const u8) bool {
-    const names = [_][]const u8{
-        "write_file",
-        "append_file",
-        "replace_in_file",
-        "init_workspace",
-        "memory_ledger",
-        "changelog_ledger",
-        "todo_slice",
-        "session_record",
-        "research_artifact",
-        "docs_artifact",
-        "git_worktree",
-        "workspace_backup",
-    };
-
-    return containsName(names[0..], tool_name);
-}
-
-fn containsName(names: []const []const u8, tool_name: []const u8) bool {
-    for (names) |name| {
-        if (std.mem.eql(u8, name, tool_name)) return true;
+fn definitionByName(definitions: []const types.ToolDefinition, tool_name: []const u8) ?types.ToolDefinition {
+    for (definitions) |definition| {
+        if (std.mem.eql(u8, definition.name, tool_name)) return definition;
     }
-    return false;
+    return null;
 }

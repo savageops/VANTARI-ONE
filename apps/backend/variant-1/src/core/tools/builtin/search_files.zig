@@ -7,6 +7,7 @@ const registry = @import("../registry.zig");
 pub const definition = types.ToolDefinition{
     .name = "search_files",
     .description = "Find text or symbols with iex under an existing workspace path. Use for content discovery, not file reading. Arguments require pattern and optionally accept path, glob, and max_results.",
+    .review_risk = .read_only,
     .parameters_json =
     \\{
     \\  "type": "object",

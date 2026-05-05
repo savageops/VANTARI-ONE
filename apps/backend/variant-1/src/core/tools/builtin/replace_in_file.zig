@@ -6,6 +6,7 @@ const module = @import("../module.zig");
 pub const definition = types.ToolDefinition{
     .name = "replace_in_file",
     .description = "Perform exact text replacement in an existing workspace file. Arguments require path, old_text, and new_text, plus optional replace_all.",
+    .review_risk = .write_capable,
     .parameters_json =
     \\{
     \\  "type": "object",
