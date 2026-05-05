@@ -6,6 +6,7 @@ const module = @import("../module.zig");
 pub const definition = types.ToolDefinition{
     .name = "list_files",
     .description = "Discover workspace paths. Call when the target file or directory is unknown. Arguments are an object with optional path and max_results only; omit path or use \".\" for the workspace root.",
+    .review_risk = .read_only,
     .parameters_json =
     \\{
     \\  "type": "object",

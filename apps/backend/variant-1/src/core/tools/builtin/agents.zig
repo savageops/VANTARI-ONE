@@ -8,6 +8,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "launch_agent",
         .description = "Launch a bounded child VAR1 agent. Arguments require prompt and optionally accept name plus an explicit delegation scope. Use only when the child can make independent progress from a self-contained task statement.",
+        .review_risk = .delegating,
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -30,6 +31,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "agent_status",
         .description = "Inspect a named child agent without blocking. Arguments require name returned by launch_agent and return journal-backed status/progress metadata.",
+        .review_risk = .read_only,
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -46,6 +48,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "wait_agent",
         .description = "Wait bounded time for a named child agent. Arguments require name and optionally accept timeout_ms. Timeout returns the current snapshot instead of failing.",
+        .review_risk = .read_only,
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -63,6 +66,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "list_agents",
         .description = "List the child agents launched by the current parent session, including their names and statuses. JSON arguments must be an empty object.",
+        .review_risk = .read_only,
         .parameters_json =
         \\{
         \\  "type": "object",

@@ -166,7 +166,7 @@ sequenceDiagram
   L->>P: provider request with function schemas
   P-->>L: assistant tool call
   L->>S: append tool_requested
-  L->>V: review before side effects
+  L->>V: reviewToolCall(tool_call, active definitions)
   V-->>L: ToolReviewDecision
   L->>S: append tool_reviewed
   alt approved
@@ -182,7 +182,7 @@ sequenceDiagram
   end
 ```
 
-Tool definitions are schema-first. The shared shape lives in `shared/types.zig` as `ToolDefinition { name, description, parameters_json, example_json, usage_hint }`. Per-tool modules under `core/tools/builtin/` own their definition, availability contract, and execute path. The registry resolves availability from module-owned names/specs instead of duplicating string branches. Provider request construction, CLI catalog export, RPC catalog export, and failure repair hints derive from those module-owned metadata surfaces.
+Tool definitions are schema-first. The shared shape lives in `shared/types.zig` as `ToolDefinition { name, description, parameters_json, review_risk, example_json, usage_hint }`. Per-tool modules under `core/tools/builtin/` own their definition, review risk, availability contract, and execute path. The registry resolves availability from module-owned names/specs instead of duplicating string branches. Provider request construction, CLI catalog export, RPC catalog export, review classification, and failure repair hints derive from those module-owned metadata surfaces.
 
 `search_files` is the content-search tool. It declares an `external_command("iex")` dependency, resolves the workspace path in Zig, then invokes `iex search --json --max-hits ...` through the command-runner boundary. `list_files` is the native Zig path-discovery tool and does not shell to `iex`. Installing `VAR1` therefore requires a real `iex` executable for content search; when it is absent, catalog availability reports `search_files` as unavailable and execution fails early with `ToolUnavailable`.
 
@@ -198,7 +198,9 @@ sequenceDiagram
 
   P-->>L: assistant tool call
   L->>S: append tool_requested
-  L->>R: reviewToolCall
+  L->>T: builtinDefinitionsForContext(execution_context)
+  T-->>L: active definitions
+  L->>R: reviewToolCall(tool_call, active definitions)
   R-->>L: ToolReviewDecision
   L->>S: append tool_reviewed
   alt approved
@@ -211,7 +213,7 @@ sequenceDiagram
   end
 ```
 
-The review gate is a kernel state transition, not a copied reviewer-agent architecture. Read-only tools receive review evidence and continue through the existing dispatch. Write-capable, workspace-state, and delegation tools are classified before execution. Unknown high-impact names are denied before dispatch and returned to the provider as `ToolReviewBlocked`, preserving the OpenAI-compatible tool-call protocol.
+The review gate is a kernel state transition, not a copied reviewer-agent architecture. Read-only tools receive review evidence and continue through the existing dispatch. Write-capable, workspace-state, and delegation tools are classified from active `ToolDefinition.review_risk` metadata before execution. Tool names absent from the active catalog, including context-unavailable tools, are denied before dispatch and returned to the provider as `ToolReviewBlocked`, preserving the OpenAI-compatible tool-call protocol.
 
 Scoped delegation is validated at the agent-tool boundary. `launch_agent` carries `scope_depth`, `contact_budget`, `validation_status`, `escalation_reason`, and `parent_capability_profile`; `src/core/agents/scope.zig` rejects zero-value scope and rejects profile expansion without a reason. `src/core/agents/profile.zig` owns capability profiles as runtime capability boundaries over tool classes, delegation policy, budget policy, and provider inheritance.
 

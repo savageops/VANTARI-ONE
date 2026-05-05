@@ -182,10 +182,18 @@ pub fn deinitContextCheckpoints(allocator: std.mem.Allocator, checkpoints: []Con
     allocator.free(checkpoints);
 }
 
+pub const ToolRiskClass = enum {
+    read_only,
+    write_capable,
+    delegating,
+    unknown_high_impact,
+};
+
 pub const ToolDefinition = struct {
     name: []const u8,
     description: []const u8,
     parameters_json: []const u8,
+    review_risk: ToolRiskClass,
     example_json: ?[]const u8 = null,
     usage_hint: ?[]const u8 = null,
 };

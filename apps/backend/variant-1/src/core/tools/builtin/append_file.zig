@@ -6,6 +6,7 @@ const module = @import("../module.zig");
 pub const definition = types.ToolDefinition{
     .name = "append_file",
     .description = "Append text to a workspace file, creating it only when absent. Arguments require path and content. Use for additive logs, ledgers, and notes.",
+    .review_risk = .write_capable,
     .parameters_json =
     \\{
     \\  "type": "object",

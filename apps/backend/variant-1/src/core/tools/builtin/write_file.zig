@@ -6,6 +6,7 @@ const module = @import("../module.zig");
 pub const definition = types.ToolDefinition{
     .name = "write_file",
     .description = "Create a new workspace file or intentionally overwrite an entire file. Arguments require path and full content. Parent directories are created for workspace-relative targets.",
+    .review_risk = .write_capable,
     .parameters_json =
     \\{
     \\  "type": "object",

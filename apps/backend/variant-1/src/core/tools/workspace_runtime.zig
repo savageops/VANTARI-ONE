@@ -7,6 +7,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "init_workspace",
         .description = "Scaffold the canonical .var structure for the current workspace without overwriting existing populated files unless explicitly forced.",
+        .review_risk = .write_capable,
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -22,6 +23,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "memory_ledger",
         .description = "Read or append the canonical .var memories ledger.",
+        .review_risk = .write_capable,
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -39,6 +41,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "changelog_ledger",
         .description = "Read or append the canonical .var changelog log, or archive a completed todo slice into .var/changelog/<todo-name>/.",
+        .review_risk = .write_capable,
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -60,6 +63,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "todo_slice",
         .description = "Read or upsert a canonical .var todo slice under .var/todos/<category>/<todo-name>/. The runtime already manages the current run's own todo slice, so use this only for explicit repo-level execution slices.",
+        .review_risk = .write_capable,
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -85,6 +89,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "session_record",
         .description = "Read or upsert a canonical .var session record under .var/sessions/<session-name>/session.md.",
+        .review_risk = .write_capable,
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -106,6 +111,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "research_artifact",
         .description = "Read or write research artifacts under .var/research/.",
+        .review_risk = .write_capable,
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -125,6 +131,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "docs_artifact",
         .description = "Read or write canonical runtime contract docs under .var/docs/.",
+        .review_risk = .write_capable,
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -143,6 +150,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "git_worktree",
         .description = "Inspect or manage Git worktrees rooted under .var/worktrees/ when the workspace is a real Git checkout.",
+        .review_risk = .write_capable,
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -163,6 +171,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "workspace_backup",
         .description = "Create a timestamped workspace backup archive under .var/backup/.",
+        .review_risk = .write_capable,
         .parameters_json =
         \\{
         \\  "type": "object",
@@ -178,6 +187,7 @@ pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "instruction_ingestion",
         .description = "Discover applicable AGENTS.md instructions within the workspace according to the canonical ingestion modes.",
+        .review_risk = .read_only,
         .parameters_json =
         \\{
         \\  "type": "object",

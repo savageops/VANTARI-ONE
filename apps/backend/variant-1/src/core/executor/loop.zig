@@ -255,7 +255,8 @@ pub fn runPromptWithOptions(
                     return Error.Cancelled;
                 }
 
-                const review_decision = tools.review.reviewToolCall(tool_call);
+                const active_tool_definitions = tools.builtinDefinitionsForContext(execution_context);
+                const review_decision = tools.review.reviewToolCall(tool_call, active_tool_definitions);
                 const review_event = try tools.review.renderReviewEvent(allocator, tool_call, review_decision);
                 defer allocator.free(review_event);
                 const review_log = try tools.review.renderReviewLog(allocator, tool_call, review_decision);
