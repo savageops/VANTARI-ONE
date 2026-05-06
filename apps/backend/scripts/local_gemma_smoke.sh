@@ -78,7 +78,7 @@ then
   exit 1
 fi
 
-run_windows_variant1() {
+run_windows_var1() {
   local label="$1"
   shift
 
@@ -142,19 +142,45 @@ windows_http_get() {
   local path="$1"
   local output_file="$2"
   rm -f "$output_file"
-  curl.exe -s "http://127.0.0.1:$BRIDGE_PORT$path" | sed 's/\r$//' > "$output_file"
+  curl.exe -fsS "http://127.0.0.1:$BRIDGE_PORT$path" | sed 's/\r$//' > "$output_file"
   cat "$output_file"
 }
 
-windows_http_post_json() {
-  local path="$1"
-  local request_file="$2"
-  local output_file="$3"
+json_string_param() {
+  local key="$1"
+  local value="$2"
+  python3 - <<'PY' "$key" "$value"
+import json, sys
+print(json.dumps({sys.argv[1]: sys.argv[2]}))
+PY
+}
+
+windows_rpc_call() {
+  local method="$1"
+  local params_json="$2"
+  local request_file="$3"
+  local output_file="$4"
   local windows_request_file
+
+  python3 - <<'PY' "$method" "$params_json" > "$request_file"
+import json, sys
+method = sys.argv[1]
+params = json.loads(sys.argv[2])
+print(json.dumps({
+    "jsonrpc": "2.0",
+    "id": "gemma-smoke",
+    "method": method,
+    "params": params,
+}))
+PY
 
   windows_request_file="$(to_windows_path "$request_file")"
   rm -f "$output_file"
-  curl.exe -s -X POST -H "Content-Type: application/json" --data-binary "@$windows_request_file" "http://127.0.0.1:$BRIDGE_PORT$path" | sed 's/\r$//' > "$output_file"
+  curl.exe -fsS -X POST \
+    -H "Content-Type: application/json" \
+    -H "X-VAR1-Bridge-Token: $BRIDGE_TOKEN" \
+    --data-binary "@$windows_request_file" \
+    "http://127.0.0.1:$BRIDGE_PORT/rpc" | sed 's/\r$//' > "$output_file"
   cat "$output_file"
 }
 
@@ -176,7 +202,7 @@ EOF
 WINDOWS_PROMPT_FILE="$(to_windows_path "$prompt_file")"
 
 echo "GEMMA_LOCAL direct run"
-run_windows_variant1 "direct-run" run --prompt "$SANITY_PROMPT"
+run_windows_var1 "direct-run" run --prompt "$SANITY_PROMPT"
 direct_run_output="$REPLY"
 if [[ "$direct_run_output" != *"3"* ]]; then
   echo "GEMMA_LOCAL direct run did not clearly report 3" >&2
@@ -184,7 +210,7 @@ if [[ "$direct_run_output" != *"3"* ]]; then
 fi
 
 echo "GEMMA_LOCAL delegated"
-run_windows_variant1 "delegated" run --prompt-file "$WINDOWS_PROMPT_FILE"
+run_windows_var1 "delegated" run --prompt-file "$WINDOWS_PROMPT_FILE"
 delegated_output="$REPLY"
 if [[ "$delegated_output" != *"3"* ]]; then
   echo "GEMMA_LOCAL delegated run did not clearly report 3" >&2
@@ -229,53 +255,52 @@ if [[ "$bridge_home" != *"apps/frontend/var1-client"* ]]; then
 fi
 
 bridge_request="$(mktemp "$SMOKE_DIR/gemma-bridge-request.XXXXXX.json")"
-printf '{"prompt":"%s"}' "$SANITY_PROMPT" > "$bridge_request"
-
-create_output="$(windows_http_post_json "/api/tasks" "$bridge_request" "$create_output_file")"
-
-task_id="$(python3 - <<'PY' "$create_output"
+BRIDGE_TOKEN="$(python3 - <<'PY' "$health_output"
 import json, sys
 payload = json.loads(sys.argv[1])
-print(payload["task"]["id"])
+print(payload["bridge_token"])
 PY
 )"
 
-if [[ -z "$task_id" ]]; then
-  echo "GEMMA_LOCAL bridge compatibility route did not return a task id" >&2
+if [[ -z "$BRIDGE_TOKEN" ]]; then
+  echo "GEMMA_LOCAL bridge health did not return a bridge token" >&2
   exit 1
 fi
 
-detail_output=""
-for _ in $(seq 1 40); do
-  detail_output="$(windows_http_get "/api/tasks/$task_id" "$detail_output_file")"
-  if python3 - <<'PY' "$detail_output"
-import json, sys
-payload = json.loads(sys.argv[1])
-status = payload["task"]["status"]
-answer = payload["task"].get("answer") or ""
-raise SystemExit(0 if status == "completed" and "3" in answer else 1)
-PY
-  then
-    break
-  fi
-  sleep 1
-done
+create_params="$(json_string_param "prompt" "$SANITY_PROMPT")"
+create_output="$(windows_rpc_call "session/create" "$create_params" "$bridge_request" "$create_output_file")"
 
-if ! python3 - <<'PY' "$detail_output"
+session_id="$(python3 - <<'PY' "$create_output"
 import json, sys
 payload = json.loads(sys.argv[1])
-status = payload["task"]["status"]
-answer = payload["task"].get("answer") or ""
+print(payload["result"]["session"]["session_id"])
+PY
+)"
+
+if [[ -z "$session_id" ]]; then
+  echo "GEMMA_LOCAL bridge RPC create did not return a session id" >&2
+  exit 1
+fi
+
+send_params="$(json_string_param "session_id" "$session_id")"
+send_output="$(windows_rpc_call "session/send" "$send_params" "$bridge_request" "$detail_output_file")"
+if ! python3 - <<'PY' "$send_output"
+import json, sys
+payload = json.loads(sys.argv[1])
+session = payload["result"]["session"]
+status = session["status"]
+answer = session.get("output") or ""
 raise SystemExit(0 if status == "completed" and "3" in answer else 1)
 PY
 then
-  echo "GEMMA_LOCAL bridge compatibility task did not complete with the expected answer" >&2
+  echo "GEMMA_LOCAL bridge RPC session did not complete with the expected answer" >&2
   exit 1
 fi
 
-journal_output="$(windows_http_get "/api/tasks/$task_id/journal" "$journal_output_file")"
-if [[ "$journal_output" != *"assistant_response"* ]]; then
-  echo "GEMMA_LOCAL bridge compatibility journal did not expose assistant_response" >&2
+get_params="$(json_string_param "session_id" "$session_id")"
+detail_output="$(windows_rpc_call "session/get" "$get_params" "$bridge_request" "$journal_output_file")"
+if [[ "$detail_output" != *"assistant_response"* ]]; then
+  echo "GEMMA_LOCAL bridge RPC detail did not expose assistant_response" >&2
   exit 1
 fi
 

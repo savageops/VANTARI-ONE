@@ -1,6 +1,6 @@
 # VAR1 Architecture
 
-This is the canonical architecture map for the current `VAR1` agent harness runtime.
+This is the canonical architecture map for the current `VAR1` agent-session runtime.
 
 ## Architecture lock
 
@@ -276,7 +276,7 @@ Every session directory contains:
 
 `.var/config/settings.toml` is the optional non-secret policy file. The `[context]` table owns `auto_compaction`, `manual_compaction`, `context_window_tokens`, `compact_at_ratio`, `reserve_output_tokens`, `keep_recent_messages`, `max_entries_per_checkpoint`, `aggressiveness_milli`, and `retry_on_provider_overflow`. The `[prompts]` table owns only `system_prompt_file` and `developer_prompt_file`, both workspace-relative. Provider URL, model, API keys, hidden guardrails, and auth-plan state do not move into this file.
 
-`src/core/prompts/` owns the model-presented prompt envelope. It loads optional project-local system/developer prompt files from `.var/prompts/`, falls back to built-in defaults when those files are missing or empty, injects the hidden runtime guardrail layer from compiled code, and appends the live tool catalog plus tool-use contract. Provider transport remains OpenAI-compatible by sending the resulting envelope as a system-role message while preserving internal/system/developer/tool boundaries inside the prompt text.
+`src/core/prompts/` owns the model-presented prompt envelope. When no project prompt override is configured, it uses compiled system/developer layers. When an override path is configured, the file must exist and contain non-whitespace content; missing or empty configured prompt layers fail closed. The builder then injects the hidden runtime guardrail layer from compiled code and appends the live tool catalog plus tool-use contract. Provider transport remains OpenAI-compatible by sending the resulting envelope as a system-role message while preserving internal/system/developer/tool boundaries inside the prompt text.
 
 `store.ensureStoreReady(...)` validates and rewrites existing `.var/sessions/<id>/session.json` records into the current canonical shape. It does not read old roots, old-layout files, or old-layout fields.
 

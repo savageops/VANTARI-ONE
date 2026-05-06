@@ -97,7 +97,7 @@ flowchart TB
   events --> sessionState
 ```
 
-`VAR1` runs the agent work. CLI and browser surfaces send protocol requests into the same harness runtime. Session state, transcript assembly, provider interaction, tool dispatch, and event emission stay inside the Zig kernel.
+`VAR1` runs the agent work. CLI and browser surfaces send protocol requests into the same agent-session runtime. Session state, transcript assembly, provider interaction, tool dispatch, and event emission stay inside the Zig kernel.
 
 ## Capabilities
 

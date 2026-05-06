@@ -8,7 +8,7 @@
 **/.refs/
 **/.var/
 **/.untrack/
-**/.harness/
+/data/
 
 # Zig toolchains and build outputs
 **/.toolchain/
