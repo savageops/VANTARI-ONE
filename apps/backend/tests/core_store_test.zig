@@ -294,6 +294,70 @@ test "loadDefault seeds canonical auth state from env and then prefers auth ledg
     try std.testing.expectEqualStrings("active", ledger_config.subscription_status.?);
 }
 
+test "loadDefault accepts UTF-8 BOM auth ledger" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const env_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".env" });
+    defer std.testing.allocator.free(env_path);
+
+    try VAR1.shared.fsutil.writeText(env_path,
+        \\BASE_URL=https://api.z.ai/api/coding/paas/v4
+        \\API_KEY=env-key
+        \\MODEL=GLM-5.1
+        \\MAX_STEPS=4
+        \\WORKSPACE=.
+        \\
+    );
+
+    const original_cwd = try std.process.getCwdAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(original_cwd);
+    defer std.process.changeCurDir(original_cwd) catch unreachable;
+
+    try std.process.changeCurDir(workspace_root);
+
+    const seeded_config = try VAR1.core.config.loadDefault(std.testing.allocator, ".");
+    defer seeded_config.deinit(std.testing.allocator);
+
+    const auth_path = try VAR1.core.auth_store.authFilePath(std.testing.allocator, seeded_config.workspace_root);
+    defer std.testing.allocator.free(auth_path);
+
+    try VAR1.shared.fsutil.writeText(auth_path,
+        "\xEF\xBB\xBF" ++
+            \\{
+            \\  "version": 1,
+            \\  "active_provider": "zai",
+            \\  "providers": {
+            \\    "zai": {
+            \\      "auth_type": "api_key",
+            \\      "api_key": "bom-ledger-key",
+            \\      "base_url": "https://api.z.ai/api/coding/paas/v4",
+            \\      "model": "GLM-5.1",
+            \\      "subscription": {
+            \\        "plan_id": "zai-coding-plan",
+            \\        "plan_label": "GLM-5.1",
+            \\        "status": "active",
+            \\        "source": "manual",
+            \\        "last_verified_at_ms": 100
+            \\      },
+            \\      "updated_at_ms": 100
+            \\    }
+            \\  }
+            \\}
+            \\
+    );
+
+    const ledger_config = try VAR1.core.config.loadDefault(std.testing.allocator, ".");
+    defer ledger_config.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("bom-ledger-key", ledger_config.openai_api_key);
+    try std.testing.expectEqualStrings("zai", ledger_config.auth_provider.?);
+    try std.testing.expectEqualStrings("GLM-5.1", ledger_config.openai_model);
+}
+
 test "resolveInWorkspace anchors dot workspace roots against cwd" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

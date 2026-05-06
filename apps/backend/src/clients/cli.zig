@@ -578,13 +578,52 @@ pub fn resolvePromptInput(
 
 fn expectKernelResult(allocator: std.mem.Allocator, call: stdio_rpc.RpcCallResult) ![]u8 {
     if (call.error_json) |error_json| {
-        const message = try std.fmt.allocPrint(allocator, "kernel rpc error: {s}\n", .{error_json});
-        defer allocator.free(message);
-        try writeStderr(message);
-        return error.RpcRemoteError;
+        try writeKernelErrorEnvelope(allocator, error_json);
+        std.process.exit(1);
     }
 
-    return allocator.dupe(u8, call.result_json orelse return error.InvalidRpcResponse);
+    if (call.result_json) |result_json| return allocator.dupe(u8, result_json);
+
+    try writeStderr("VAR1_ERROR category=kernel_rpc code=MissingResult message=\"kernel response did not include result\"\n");
+    std.process.exit(1);
+}
+
+fn writeKernelErrorEnvelope(allocator: std.mem.Allocator, error_json: []const u8) !void {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, error_json, .{}) catch {
+        try writeStderr("VAR1_ERROR category=kernel_rpc code=RemoteError message=\"kernel returned an unparsable error envelope\"\n");
+        return;
+    };
+    defer parsed.deinit();
+
+    if (parsed.value != .object) {
+        try writeStderr("VAR1_ERROR category=kernel_rpc code=RemoteError message=\"kernel returned a non-object error envelope\"\n");
+        return;
+    }
+
+    const object = parsed.value.object;
+    const message = if (object.get("message")) |value|
+        if (value == .string) value.string else "kernel returned a remote error"
+    else
+        "kernel returned a remote error";
+
+    if (object.get("code")) |value| {
+        switch (value) {
+            .integer => |code| try writeStderrFmt(
+                "VAR1_ERROR category=kernel_rpc code={d} message={f}\n",
+                .{ code, std.json.fmt(message, .{}) },
+            ),
+            else => try writeStderrFmt(
+                "VAR1_ERROR category=kernel_rpc code=RemoteError message={f}\n",
+                .{std.json.fmt(message, .{})},
+            ),
+        }
+        return;
+    }
+
+    try writeStderrFmt(
+        "VAR1_ERROR category=kernel_rpc code=RemoteError message={f}\n",
+        .{std.json.fmt(message, .{})},
+    );
 }
 
 fn renderRunResultJson(
@@ -617,6 +656,13 @@ fn writeStderr(text: []const u8) !void {
     var stderr_buffer: [4096]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     try stderr_writer.interface.writeAll(text);
+    try stderr_writer.interface.flush();
+}
+
+fn writeStderrFmt(comptime fmt: []const u8, args: anytype) !void {
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    try stderr_writer.interface.print(fmt, args);
     try stderr_writer.interface.flush();
 }
 
