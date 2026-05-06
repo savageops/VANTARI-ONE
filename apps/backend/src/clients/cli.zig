@@ -589,15 +589,25 @@ fn expectKernelResult(allocator: std.mem.Allocator, call: stdio_rpc.RpcCallResul
 }
 
 fn writeKernelErrorEnvelope(allocator: std.mem.Allocator, error_json: []const u8) !void {
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, error_json, .{}) catch {
-        try writeStderr("VAR1_ERROR category=kernel_rpc code=RemoteError message=\"kernel returned an unparsable error envelope\"\n");
-        return;
-    };
+    const envelope = try renderKernelErrorEnvelope(allocator, error_json);
+    defer allocator.free(envelope);
+    try writeStderr(envelope);
+}
+
+pub fn renderKernelErrorEnvelope(allocator: std.mem.Allocator, error_json: []const u8) ![]u8 {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, error_json, .{}) catch return std.fmt.allocPrint(
+        allocator,
+        "VAR1_ERROR category=kernel_rpc code=RemoteError message=\"kernel returned an unparsable error envelope\"\n",
+        .{},
+    );
     defer parsed.deinit();
 
     if (parsed.value != .object) {
-        try writeStderr("VAR1_ERROR category=kernel_rpc code=RemoteError message=\"kernel returned a non-object error envelope\"\n");
-        return;
+        return std.fmt.allocPrint(
+            allocator,
+            "VAR1_ERROR category=kernel_rpc code=RemoteError message=\"kernel returned a non-object error envelope\"\n",
+            .{},
+        );
     }
 
     const object = parsed.value.object;
@@ -608,19 +618,21 @@ fn writeKernelErrorEnvelope(allocator: std.mem.Allocator, error_json: []const u8
 
     if (object.get("code")) |value| {
         switch (value) {
-            .integer => |code| try writeStderrFmt(
+            .integer => |code| return std.fmt.allocPrint(
+                allocator,
                 "VAR1_ERROR category=kernel_rpc code={d} message={f}\n",
                 .{ code, std.json.fmt(message, .{}) },
             ),
-            else => try writeStderrFmt(
+            else => return std.fmt.allocPrint(
+                allocator,
                 "VAR1_ERROR category=kernel_rpc code=RemoteError message={f}\n",
                 .{std.json.fmt(message, .{})},
             ),
         }
-        return;
     }
 
-    try writeStderrFmt(
+    return std.fmt.allocPrint(
+        allocator,
         "VAR1_ERROR category=kernel_rpc code=RemoteError message={f}\n",
         .{std.json.fmt(message, .{})},
     );

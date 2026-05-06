@@ -5,8 +5,11 @@ const types = @import("../../shared/types.zig");
 pub const Error = error{
     BadStatus,
     ContextWindowExceeded,
+    MalformedChunkedResponse,
+    MalformedHttpResponse,
     MissingChoice,
     MissingContent,
+    ShortHttpResponseBody,
 };
 
 const max_head_bytes = 64 * 1024;
@@ -310,17 +313,17 @@ fn readResponse(allocator: std.mem.Allocator, source_reader: *std.Io.Reader) ![]
 }
 
 fn parseRawHttpResponse(allocator: std.mem.Allocator, raw_response: []const u8) ![]u8 {
-    const header_end = std.mem.indexOf(u8, raw_response, "\r\n\r\n") orelse return error.InvalidHttpResponse;
+    const header_end = std.mem.indexOf(u8, raw_response, "\r\n\r\n") orelse return Error.MalformedHttpResponse;
     const headers = raw_response[0..header_end];
     const body = raw_response[header_end + 4 ..];
 
-    const status_line_end = std.mem.indexOf(u8, headers, "\r\n") orelse return error.InvalidHttpResponse;
+    const status_line_end = std.mem.indexOf(u8, headers, "\r\n") orelse return Error.MalformedHttpResponse;
     const status_line = headers[0..status_line_end];
 
     var status_iter = std.mem.tokenizeScalar(u8, status_line, ' ');
-    _ = status_iter.next() orelse return error.InvalidHttpResponse;
-    const status_code_text = status_iter.next() orelse return error.InvalidHttpResponse;
-    const status_code = try std.fmt.parseUnsigned(u16, status_code_text, 10);
+    _ = status_iter.next() orelse return Error.MalformedHttpResponse;
+    const status_code_text = status_iter.next() orelse return Error.MalformedHttpResponse;
+    const status_code = std.fmt.parseUnsigned(u16, status_code_text, 10) catch return Error.MalformedHttpResponse;
     if (status_code != 200) {
         if (status_code == 413 or context_overflow.isContextOverflowText(headers) or context_overflow.isContextOverflowText(body)) {
             return Error.ContextWindowExceeded;
@@ -345,7 +348,7 @@ fn parseRawHttpResponse(allocator: std.mem.Allocator, raw_response: []const u8) 
         }
 
         if (std.ascii.eqlIgnoreCase(name, "content-length")) {
-            content_length = try std.fmt.parseUnsigned(usize, value, 10);
+            content_length = std.fmt.parseUnsigned(usize, value, 10) catch return Error.MalformedHttpResponse;
         }
     }
 
@@ -354,7 +357,7 @@ fn parseRawHttpResponse(allocator: std.mem.Allocator, raw_response: []const u8) 
     }
 
     if (content_length) |expected_len| {
-        if (body.len < expected_len) return error.InvalidHttpResponse;
+        if (body.len < expected_len) return Error.ShortHttpResponseBody;
         return allocator.dupe(u8, body[0..expected_len]);
     }
 
@@ -367,22 +370,22 @@ fn decodeChunkedBody(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
 
     var cursor: usize = 0;
     while (true) {
-        const size_line_end = std.mem.indexOfPos(u8, body, cursor, "\r\n") orelse return error.InvalidHttpResponse;
+        const size_line_end = std.mem.indexOfPos(u8, body, cursor, "\r\n") orelse return Error.MalformedChunkedResponse;
         const raw_size = body[cursor..size_line_end];
         const extension_index = std.mem.indexOfScalar(u8, raw_size, ';') orelse raw_size.len;
         const size_text = std.mem.trim(u8, raw_size[0..extension_index], " ");
-        const chunk_size = try std.fmt.parseUnsigned(usize, size_text, 16);
+        const chunk_size = std.fmt.parseUnsigned(usize, size_text, 16) catch return Error.MalformedChunkedResponse;
 
         cursor = size_line_end + 2;
         if (chunk_size == 0) {
             return decoded.toOwnedSlice();
         }
 
-        if (cursor + chunk_size + 2 > body.len) return error.InvalidHttpResponse;
+        if (cursor + chunk_size + 2 > body.len) return Error.ShortHttpResponseBody;
         try decoded.appendSlice(body[cursor .. cursor + chunk_size]);
         cursor += chunk_size;
 
-        if (!std.mem.eql(u8, body[cursor .. cursor + 2], "\r\n")) return error.InvalidHttpResponse;
+        if (!std.mem.eql(u8, body[cursor .. cursor + 2], "\r\n")) return Error.MalformedChunkedResponse;
         cursor += 2;
     }
 }
