@@ -93,6 +93,7 @@ const CancelContext = struct {
 const LocalHttpServer = struct {
     server: std.net.Server,
     response: []const u8,
+    raw_response: ?[]const u8 = null,
     status: std.http.Status = .ok,
     method: ?std.http.Method = null,
     target_buffer: [256]u8 = undefined,
@@ -150,6 +151,12 @@ const LocalHttpServer = struct {
             const body_reader = try request.readerExpectContinue(&body_reader_buffer);
             try body_reader.readSliceAll(body_storage[0..body_len]);
             ctx.body_ok = std.mem.eql(u8, body_storage[0..body_len], "{\"hello\":true}");
+        }
+
+        if (ctx.raw_response) |raw_response| {
+            try writer.interface.writeAll(raw_response);
+            try writer.interface.flush();
+            return;
         }
 
         try request.respond(ctx.response, .{ .status = ctx.status });
@@ -354,6 +361,99 @@ test "provider native http transport classifies context overflow status" {
     defer std.testing.allocator.free(url);
 
     try std.testing.expectError(error.ContextWindowExceeded, VAR1.core.provider_runtime.httpSend(
+        null,
+        std.testing.allocator,
+        url,
+        "test-key",
+        "{\"hello\":true}",
+    ));
+
+    if (local_server.err) |err| return err;
+}
+
+test "provider native http transport classifies malformed response headers" {
+    var address = try std.net.Address.parseIp4("127.0.0.1", 0);
+    const server = try address.listen(.{ .reuse_address = true });
+
+    var local_server = LocalHttpServer{
+        .server = server,
+        .response = "",
+        .raw_response = "HTTP/1.1 200 OK\r\ncontent-length: 2\r\n",
+    };
+
+    const thread = try std.Thread.spawn(.{}, LocalHttpServer.serve, .{&local_server});
+    defer thread.join();
+
+    const url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "http://127.0.0.1:{d}/v1/chat/completions",
+        .{local_server.server.listen_address.getPort()},
+    );
+    defer std.testing.allocator.free(url);
+
+    try std.testing.expectError(error.MalformedHttpResponse, VAR1.core.provider_runtime.httpSend(
+        null,
+        std.testing.allocator,
+        url,
+        "test-key",
+        "{\"hello\":true}",
+    ));
+
+    if (local_server.err) |err| return err;
+}
+
+test "provider native http transport classifies short declared bodies" {
+    var address = try std.net.Address.parseIp4("127.0.0.1", 0);
+    const server = try address.listen(.{ .reuse_address = true });
+
+    var local_server = LocalHttpServer{
+        .server = server,
+        .response = "",
+        .raw_response = "HTTP/1.1 200 OK\r\ncontent-length: 8\r\n\r\n{}",
+    };
+
+    const thread = try std.Thread.spawn(.{}, LocalHttpServer.serve, .{&local_server});
+    defer thread.join();
+
+    const url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "http://127.0.0.1:{d}/v1/chat/completions",
+        .{local_server.server.listen_address.getPort()},
+    );
+    defer std.testing.allocator.free(url);
+
+    try std.testing.expectError(error.ShortHttpResponseBody, VAR1.core.provider_runtime.httpSend(
+        null,
+        std.testing.allocator,
+        url,
+        "test-key",
+        "{\"hello\":true}",
+    ));
+
+    if (local_server.err) |err| return err;
+}
+
+test "provider native http transport classifies malformed chunk boundaries" {
+    var address = try std.net.Address.parseIp4("127.0.0.1", 0);
+    const server = try address.listen(.{ .reuse_address = true });
+
+    var local_server = LocalHttpServer{
+        .server = server,
+        .response = "",
+        .raw_response = "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n2\r\nabXX",
+    };
+
+    const thread = try std.Thread.spawn(.{}, LocalHttpServer.serve, .{&local_server});
+    defer thread.join();
+
+    const url = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "http://127.0.0.1:{d}/v1/chat/completions",
+        .{local_server.server.listen_address.getPort()},
+    );
+    defer std.testing.allocator.free(url);
+
+    try std.testing.expectError(error.MalformedChunkedResponse, VAR1.core.provider_runtime.httpSend(
         null,
         std.testing.allocator,
         url,

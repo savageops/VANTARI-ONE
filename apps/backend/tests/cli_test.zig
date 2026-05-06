@@ -80,3 +80,36 @@ test "cli serve help documents canonical bridge routes only" {
     try std.testing.expect(std.mem.indexOf(u8, help, "GET  /api/health") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "/api/tasks") == null);
 }
+
+test "cli kernel error envelope preserves code and JSON-escapes message" {
+    const envelope = try VAR1.clients.cli.renderKernelErrorEnvelope(
+        std.testing.allocator,
+        "{\"code\":-32001,\"message\":\"Session \\\"not\\\" found\"}",
+    );
+    defer std.testing.allocator.free(envelope);
+
+    try std.testing.expectEqualStrings(
+        "VAR1_ERROR category=kernel_rpc code=-32001 message=\"Session \\\"not\\\" found\"\n",
+        envelope,
+    );
+}
+
+test "cli kernel error envelope handles malformed remote error JSON" {
+    const envelope = try VAR1.clients.cli.renderKernelErrorEnvelope(std.testing.allocator, "{");
+    defer std.testing.allocator.free(envelope);
+
+    try std.testing.expectEqualStrings(
+        "VAR1_ERROR category=kernel_rpc code=RemoteError message=\"kernel returned an unparsable error envelope\"\n",
+        envelope,
+    );
+}
+
+test "cli kernel error envelope handles non-object remote error JSON" {
+    const envelope = try VAR1.clients.cli.renderKernelErrorEnvelope(std.testing.allocator, "[]");
+    defer std.testing.allocator.free(envelope);
+
+    try std.testing.expectEqualStrings(
+        "VAR1_ERROR category=kernel_rpc code=RemoteError message=\"kernel returned a non-object error envelope\"\n",
+        envelope,
+    );
+}
