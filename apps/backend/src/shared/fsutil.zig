@@ -1,6 +1,8 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
+pub const max_text_file_bytes: usize = 64 * 1024 * 1024;
+
 pub const PathError = error{
     PathOutsideWorkspace,
 };
@@ -23,17 +25,14 @@ pub fn ensureParent(path: []const u8) !void {
 pub fn writeText(path: []const u8, text: []const u8) !void {
     try ensureParent(path);
 
-    var file = try std.fs.cwd().createFile(path, .{
-        .read = true,
-        .truncate = true,
-    });
-    defer file.close();
-
     var buffer: [4096]u8 = undefined;
-    var writer_state = file.writer(&buffer);
-    const writer = &writer_state.interface;
-    try writer.writeAll(text);
-    try writer.flush();
+    var file = try std.fs.cwd().atomicFile(path, .{
+        .write_buffer = &buffer,
+    });
+    defer file.deinit();
+
+    try file.file_writer.interface.writeAll(text);
+    try file.finish();
 }
 
 pub fn appendText(path: []const u8, text: []const u8) !void {
@@ -53,7 +52,7 @@ pub fn appendText(path: []const u8, text: []const u8) !void {
 }
 
 pub fn readTextAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return std.fs.cwd().readFileAlloc(allocator, path, std.math.maxInt(usize));
+    return std.fs.cwd().readFileAlloc(allocator, path, max_text_file_bytes);
 }
 
 pub fn moveFile(old_path: []const u8, new_path: []const u8) !void {

@@ -3,23 +3,24 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>VAR1 Session Client</title>
+    <title>Ventari Session Workbench</title>
+    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <header class="hero">
         <div>
-          <p class="eyebrow">VANTARI ONE / VAR1</p>
-          <h1>External Session Client</h1>
+          <p class="eyebrow">VANTARI ONE</p>
+          <h1>Agent session workbench</h1>
           <p class="lede">
-            A framework-free browser client over the canonical bridge: `POST /rpc`,
-            `GET /events`, and `GET /api/health`.
+            Start, inspect, and continue agent sessions from one local control surface.
+            VAR1 owns the runtime state while this client keeps the workflow clear.
           </p>
         </div>
         <div class="status-cluster">
           <div class="status-card">
-            <span class="status-label">Bridge</span>
+            <span class="status-label">Connection</span>
             <span id="bridge-status" class="status-pill status-idle">Disconnected</span>
           </div>
           <div class="status-card">
@@ -47,7 +48,7 @@
           <div class="section-header">
             <div>
               <p class="section-kicker">Sessions</p>
-              <h2>Canonical Runtime</h2>
+              <h2>Agent sessions</h2>
             </div>
             <span id="session-count" class="badge">0</span>
           </div>
@@ -58,8 +59,8 @@
           <section class="card compose-card">
             <div class="section-header">
               <div>
-                <p class="section-kicker">Create</p>
-                <h2>Start A Session</h2>
+                <p class="section-kicker">New session</p>
+                <h2>Start with a prompt</h2>
               </div>
             </div>
             <form id="create-form" class="stack">
@@ -68,11 +69,11 @@
                 <textarea
                   id="create-prompt"
                   rows="4"
-                  placeholder="Count the lowercase letter r in strawberry."
+                  placeholder="Summarize the current repo changes and suggest the next safe action."
                 ></textarea>
               </label>
               <div class="action-row">
-                <button type="submit" class="primary-button">Create And Run</button>
+                <button type="submit" class="primary-button">Run session</button>
               </div>
             </form>
           </section>
@@ -80,17 +81,18 @@
           <section class="card detail-card">
             <div class="section-header">
               <div>
-                <p class="section-kicker">Selected Session</p>
+                <p class="section-kicker">Selected session</p>
                 <h2 id="detail-title">Nothing selected</h2>
               </div>
               <div class="detail-actions">
                 <button id="resume-button" type="button" class="secondary-button" disabled>Resume</button>
-                <button id="copy-output-button" type="button" class="secondary-button" disabled>Copy Output</button>
+                <button id="copy-output-button" type="button" class="secondary-button" disabled>Copy output</button>
               </div>
             </div>
 
             <div id="detail-empty" class="empty-state">
-              Connect to a bridge and select a session to inspect messages, events, and output.
+              Connect to the local bridge, then start or select a session. Messages,
+              events, and final output stay visible here as the run progresses.
             </div>
 
             <div id="detail-content" class="detail-content hidden">
@@ -138,11 +140,11 @@
                   <textarea
                     id="followup-prompt"
                     rows="3"
-                    placeholder="Tell me more."
+                    placeholder="Add a follow-up instruction for the selected session."
                   ></textarea>
                 </label>
                 <div class="action-row">
-                  <button type="submit" class="primary-button">Send Follow-up</button>
+                  <button type="submit" class="primary-button">Send follow-up</button>
                 </div>
               </form>
             </div>

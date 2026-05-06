@@ -284,6 +284,8 @@ Every session directory contains:
 
 - `src/shared/types.zig`
   shared runtime types and session contracts
+- `src/shared/fsutil.zig`
+  bounded filesystem helpers for text reads, parent-directory creation, and cross-platform path normalization
 - `src/core/sessions/store.zig`
   canonical session storage
 - `src/core/executor/loop.zig`
@@ -352,11 +354,16 @@ The current validation lane should always prove these slices together:
 - derivative memory rejects transcript replay while citing source sequence ranges
 - heartbeat/evaluator evidence appends redacted non-mutating events
 - auto and provider-overflow compaction write observable checkpoint/event records
+- session JSONL ledgers tolerate malformed and partial suffix rows without rewriting append-only history
+- context reconstruction reads `session.json`, latest valid `context.jsonl` checkpoint, and `messages.jsonl` through `core/context/builder.zig`
+- explicit prompt-layer configuration fails closed when the configured file is missing or empty
+- shared text-file reads are bounded by `fsutil.max_text_file_bytes` instead of inheriting unbounded allocator reads
+- shared text-file writes commit through Zig `AtomicFile`, so canonical metadata updates avoid truncate-before-write corruption windows
 - health preflights stale local `VAR1.exe` process diagnostics before build/test gates
 - external client exists at `apps/frontend/var1-client`
 
-Latest local Windows validation on 2026-05-04:
+Latest local Windows validation on 2026-05-06:
 
-- `.\scripts\zigw.ps1 build test --summary all` -> `95/95 tests passed`
+- `.\scripts\zigw.ps1 build test --summary all` -> `402/402 tests passed`
 - `.\scripts\health.ps1` -> `status: ready`
 - `.\zig-out\bin\VAR1.exe tools --json` -> `search_files` includes `external_command` dependency availability for `iex`

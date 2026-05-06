@@ -2,6 +2,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 
 const module = @import("module.zig");
+const types = @import("../../shared/types.zig");
 const list_files = @import("builtin/list_files.zig");
 const search_files = @import("builtin/search_files.zig");
 const read_file = @import("builtin/read_file.zig");
@@ -26,6 +27,19 @@ const AvailabilityEntry = struct {
     name: []const u8,
     spec: module.AvailabilitySpec,
 };
+
+pub const file_tool_definitions = [_]types.ToolDefinition{
+    list_files.definition,
+    search_files.definition,
+    read_file.definition,
+    write_file.definition,
+    append_file.definition,
+    replace_in_file.definition,
+};
+
+pub fn fileDefinitions() []const types.ToolDefinition {
+    return file_tool_definitions[0..];
+}
 
 const availability_entries = [_]AvailabilityEntry{
     .{ .name = list_files.definition.name, .spec = list_files.availability },
@@ -147,6 +161,12 @@ pub fn dependencyKindLabel(kind: module.DependencyKind) []const u8 {
 }
 
 test "availability registry is derived from builtin module definitions" {
+    try std.testing.expectEqual(file_tool_definitions.len, availability_entries.len);
+
+    for (file_tool_definitions, availability_entries) |definition, entry| {
+        try std.testing.expectEqualStrings(definition.name, entry.name);
+    }
+
     const search_spec = availabilitySpec(search_files.definition.name).?;
     try std.testing.expect(search_spec.dependency != null);
     try std.testing.expectEqual(module.DependencyKind.external_command, search_spec.dependency.?.kind);

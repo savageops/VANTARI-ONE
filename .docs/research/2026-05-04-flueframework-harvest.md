@@ -15,7 +15,7 @@ Objective: extract architecture primitives from Flue that improve VAR1 session-r
 Non-goals:
 
 - No direct code transplant from Flue into Zig.
-- No parallel runtime lane next to `apps/backend/variant-1`.
+- No parallel runtime lane next to `apps/backend`.
 - No migration readers for historical store layouts.
 
 ## Primary Signals (Evidence)

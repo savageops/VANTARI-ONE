@@ -2,8 +2,8 @@
 
 <div align="center">
 
-Ventari 1 is a local agent harness for running, extending, and supervising AI agent sessions from a fast Zig runtime.
-`VAR1` is the kernel underneath it: CLI and browser clients drive sessions, tools, context, providers, events, and output through one coherent protocol.
+Ventari 1 is a local agent framework for running useful agent sessions with clear state, durable evidence, and operator control.
+`VAR1` is the Zig kernel underneath it: CLI and browser clients drive sessions, tools, context, providers, events, and output through one coherent protocol.
 
 [![Release](https://img.shields.io/github/v/release/savageops/VANTARI-ONE?display_name=tag&sort=semver&label=Release)](https://github.com/savageops/VANTARI-ONE/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/savageops/VANTARI-ONE/total?label=Downloads)](https://github.com/savageops/VANTARI-ONE/releases)
@@ -28,7 +28,7 @@ Ventari 1 is a local agent harness for running, extending, and supervising AI ag
 
 ## Why Ventari
 
-Ventari is built for people who want to operate agents, not babysit scattered scripts. It gives each agent run a session, a tool surface, provider configuration, context management, event history, and CLI/browser control through one Zig-powered harness.
+Ventari is built for people who want agents to feel dependable, inspectable, and worth returning to. Each run gets a session, tool surface, provider configuration, context window, event history, and CLI/browser control without splitting runtime truth across helper scripts.
 
 ## At a Glance
 
@@ -47,13 +47,13 @@ Ventari is built for people who want to operate agents, not babysit scattered sc
 Build the kernel, verify readiness, then run one prompt from the backend lane:
 
 ```powershell
-cd apps/backend/variant-1
+cd apps/backend
 .\scripts\zigw.ps1 build test --summary all
 .\scripts\health.ps1
 .\zig-out\bin\VAR1.exe run --prompt "Return exactly 3."
 ```
 
-Open the browser client after the bridge is running:
+Open the browser workbench after the bridge is running:
 
 ```powershell
 .\zig-out\bin\VAR1.exe serve --host 127.0.0.1 --port 4310
@@ -121,7 +121,7 @@ flowchart TB
 
 ## Tool Runtime
 
-Tool contracts are kernel-owned. Per-tool file and agent modules live under `apps/backend/variant-1/src/core/tools/builtin/`; each built-in tool exports its `definition`, `availability`, and `execute` contract. `src/core/tools/runtime.zig` composes those modules for dispatch and catalog output, `src/core/tools/registry.zig` resolves capability availability from module-owned tool names/specs, and `src/core/tools/module.zig` owns shared runner/context/envelope/effect-receipt types. Provider schema serialization still flows through `src/core/providers/openai_compatible.zig`.
+Tool contracts are kernel-owned. Per-tool file and agent modules live under `apps/backend/src/core/tools/builtin/`; each built-in tool exports its `definition`, `availability`, and `execute` contract. `src/core/tools/runtime.zig` composes those modules for dispatch and catalog output, `src/core/tools/registry.zig` resolves capability availability from module-owned tool names/specs, and `src/core/tools/module.zig` owns shared runner/context/envelope/effect-receipt types. Provider schema serialization still flows through `src/core/providers/openai_compatible.zig`.
 
 `tools/list` and `VAR1 tools --json` expose the same catalog, including availability metadata. `search_files` is the only content-search tool. It shells to `iex search --json` through the command-runner boundary and declares an `external_command("iex")` dependency. A checkout or packaged install must provide a real `iex` executable on `PATH` or beside the process before that tool is available; missing search dependencies are reported as unavailable capabilities instead of late process-spawn surprises. `list_files` is a native Zig directory/file discovery primitive and does not depend on `iex`.
 
@@ -224,19 +224,19 @@ The executor uses the same compactor for automatic pressure relief. It estimates
 
 ## Configuration
 
-Runtime configuration is resolved from the backend lane at `apps/backend/variant-1`. Provider credentials stay in `.env` or the auth ledger; non-secret context and prompt policy can be overridden in `.var/config/settings.toml`.
+Runtime configuration is resolved from the backend lane at `apps/backend`. Provider credentials stay in `.env` or the auth ledger; non-secret context and prompt policy can be overridden in `.var/config/settings.toml`.
 
 | Parameter | Required | Meaning |
 |---|---|---|
 | `BASE_URL` | yes | OpenAI-compatible provider base URL |
-| `API_KEY` | yes | provider credential or local provider placeholder |
+| `API_KEY` | yes | provider credential for the selected OpenAI-compatible endpoint |
 | `MODEL` | yes | model identifier sent to the provider |
 | `WORKSPACE` | no | workspace root for `.var/` resolution; defaults to `.` |
 | `MAX_STEPS` | no | execution step ceiling; defaults to `1` when resolved from auth-only config |
 | `MAX_TOOL_CALLS_PER_TURN` | no | per-assistant-turn tool-call ceiling; defaults to `8` |
 | `MAX_TOOL_CALLS_PER_SESSION` | no | per-session tool-call ceiling; defaults to `32` |
 
-Reference shape: [`apps/backend/variant-1/.env.example`](./apps/backend/variant-1/.env.example).
+Reference shape: [`apps/backend/.env.example`](./apps/backend/.env.example).
 
 Optional prompt policy:
 
@@ -246,7 +246,7 @@ system_prompt_file = ".var/prompts/system.md"
 developer_prompt_file = ".var/prompts/developer.md"
 ```
 
-Those files are user-editable instruction layers. The hidden kernel guardrail layer and current tool-use contract are assembled by `apps/backend/variant-1/src/core/prompts/` and are not configured through settings.
+Those files are user-editable instruction layers. The hidden kernel guardrail layer and current tool-use contract are assembled by `apps/backend/src/core/prompts/` and are not configured through settings.
 
 Context policy TOML shape:
 
@@ -268,7 +268,7 @@ Unknown keys in `[context]` are rejected rather than ignored, so typoed compacti
 Essential local commands:
 
 ```powershell
-cd apps/backend/variant-1
+cd apps/backend
 .\scripts\zigw.ps1 build test --summary all
 .\scripts\health.ps1
 .\zig-out\bin\VAR1.exe run --prompt "Return exactly 3."
@@ -279,7 +279,7 @@ cd apps/backend/variant-1
 Latest local Windows validation recorded on 2026-05-04:
 
 ```text
-.\scripts\zigw.ps1 build test --summary all  -> 90/90 tests passed
+.\scripts\zigw.ps1 build test --summary all  -> 95/95 tests passed
 .\zig-out\bin\VAR1.exe tools --json          -> search_files reports external_command iex availability
 .\scripts\health.ps1                         -> status: ready
 ```
@@ -288,8 +288,8 @@ Provider-backed smoke validation depends on the configured provider exposing `MO
 
 ## Read Next
 
-- [`apps/backend/variant-1/README.md`](./apps/backend/variant-1/README.md)
-- [`apps/backend/variant-1/architecture.md`](./apps/backend/variant-1/architecture.md)
+- [`apps/backend/README.md`](./apps/backend/README.md)
+- [`apps/backend/architecture.md`](./apps/backend/architecture.md)
 - [`apps/frontend/var1-client/README.md`](./apps/frontend/var1-client/README.md)
 
 ## License

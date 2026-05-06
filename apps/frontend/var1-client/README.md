@@ -1,19 +1,19 @@
-# VAR1 Client
+# Ventari Session Workbench
 
-Framework-free browser client for the `VAR1` bridge.
+Framework-free browser workbench for the `VAR1` bridge.
 
-This folder is the browser operator surface for the harness. It sends session RPC calls to `VAR1 serve`, renders bridge events, and leaves storage, context, tools, and provider calls inside the Zig kernel.
+This folder is the browser operator surface for starting, inspecting, and continuing agent sessions. It sends session RPC calls to `VAR1 serve`, renders bridge events, and leaves storage, context, tools, and provider calls inside the Zig kernel.
 
 ## What it does
 
-- Connects to a running `VAR1` HTTP bridge.
+- Connects to a running local `VAR1` HTTP bridge.
 - Creates, resumes, sends to, lists, and reads sessions through canonical RPC methods.
-- Displays session progress from token-gated bridge event snapshots.
+- Displays session progress, messages, events, and final output from token-gated bridge snapshots.
 - Runs as static HTML, CSS, and JavaScript with no package install step.
 
 ## Quick start
 
-From `apps/backend/variant-1`, start the bridge:
+From `apps/backend`, start the bridge:
 
 ```powershell
 .\zig-out\bin\VAR1.exe serve --host 127.0.0.1 --port 4310
@@ -43,13 +43,13 @@ The client talks to the bridge through the canonical session RPC methods:
 - `session/get`
 - `session/list`
 
-## Operator flow
+## Session flow
 
 1. Confirm bridge health through `GET /api/health` and store the returned bridge token.
-2. Create or select a session.
+2. Start or select a session.
 3. Send prompts through `session/send`.
 4. Read progress from token-authenticated `GET /events` and hydrate details through `session/get`.
 
 ## Boundary
 
-The client does not read `.var/`, construct provider messages, execute tools, or persist transcript state. Those responsibilities belong to `apps/backend/variant-1`. The backend bridge remains local by default and rejects unapproved browser origins before session-mutating RPC is forwarded.
+The client does not read `.var/`, construct provider messages, execute tools, or persist transcript state. Those responsibilities belong to `apps/backend`. The backend bridge remains local by default and rejects unapproved browser origins before session-mutating RPC is forwarded.

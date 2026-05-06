@@ -13,7 +13,7 @@ Acquisition path:
 
 ## VANTARI Baseline
 
-`apps/backend/variant-1` is the only live runtime lane. `VAR1` is the Zig harness kernel, and `.var/sessions/<session-id>/` owns `session.json`, `messages.jsonl`, `context.jsonl`, `events.jsonl`, and `output.txt`.
+`apps/backend` is the only live runtime lane. `VAR1` is the Zig harness kernel, and `.var/sessions/<session-id>/` owns `session.json`, `messages.jsonl`, `context.jsonl`, `events.jsonl`, and `output.txt`.
 
 Current kernel ownership already contains the primitives these papers keep rediscovering under heavier names:
 
@@ -97,7 +97,7 @@ Adopt from CASCADE. The invariant is explicit communication scope under a budget
 ### U2: Capability Profile Direction
 
 ```text
-apps/backend/variant-1/
+apps/backend/
 ├─ src/core/agents/
 │  ├─ profile.zig        // canonical capability profile owner
 │  ├─ policy.zig         // execution and resource constraints

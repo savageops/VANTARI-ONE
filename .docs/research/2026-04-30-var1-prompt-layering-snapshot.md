@@ -1,7 +1,7 @@
 # VAR1 Prompt Layering Snapshot
 
 Date: 2026-04-30
-Runtime lane: `apps/backend/variant-1`
+Runtime lane: `apps/backend`
 Base commit: `56d3eb8 feat(var1): prioritize tool effect receipts`
 
 ## Objective

@@ -2,8 +2,6 @@ const std = @import("std");
 const fsutil = @import("../../shared/fsutil.zig");
 const types = @import("../../shared/types.zig");
 
-// TODO: Keep .var process tracking as a hard gate for progress visibility.
-
 pub fn ensureRunStart(allocator: std.mem.Allocator, workspace_root: []const u8) !void {
     const log_path = try runLogPath(allocator, workspace_root);
     defer allocator.free(log_path);
@@ -11,17 +9,11 @@ pub fn ensureRunStart(allocator: std.mem.Allocator, workspace_root: []const u8) 
         try fsutil.writeText(log_path, "# VAR1 Changelog Log\n\n");
     }
 
-    const log_contents = try fsutil.readTextAlloc(allocator, log_path);
-    allocator.free(log_contents);
-
     const memories_path = try memoriesFilePath(allocator, workspace_root);
     defer allocator.free(memories_path);
     if (!fsutil.fileExists(memories_path)) {
         try fsutil.writeText(memories_path, "# VAR1 Project Memories\n\n");
     }
-
-    const memory_contents = try fsutil.readTextAlloc(allocator, memories_path);
-    allocator.free(memory_contents);
 }
 
 pub fn writePending(allocator: std.mem.Allocator, workspace_root: []const u8, snapshot: types.ProgressSnapshot) !void {

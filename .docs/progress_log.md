@@ -3,12 +3,12 @@
 Updated: 2026-05-04
 Branch: `develop`
 Base HEAD before this slice: `260dd15 docs(var1): record prompt adherence comparison`
-Runtime lane: `apps/backend/variant-1`
+Runtime lane: `apps/backend`
 Kernel executable: `VAR1`
 
 ## Current State
 
-VANTARI-ONE is currently a local agent harness centered on one Zig kernel, `VAR1`. The backend lane at `apps/backend/variant-1` is the only live runtime lane. CLI, browser, and future desktop shells are clients of the same session runtime; they do not own storage, provider wiring, tool dispatch, or context construction.
+VANTARI-ONE is currently a local agent harness centered on one Zig kernel, `VAR1`. The backend lane at `apps/backend` is the only live runtime lane. CLI, browser, and future desktop shells are clients of the same session runtime; they do not own storage, provider wiring, tool dispatch, or context construction.
 
 The tracked git worktree was clean before this progress-log artifact was refreshed. Latest fresh validation in this turn:
 
@@ -31,7 +31,7 @@ Live provider credentials/configuration are not recorded here. The effective pro
 - One model-window checkpoint ledger: `context.jsonl`
 - One protocol: JSON-RPC 2.0 over stdio with `Content-Length` framing
 - One browser bridge surface: `POST /rpc`, `GET /events`, `GET /api/health`
-- One live backend lane: `apps/backend/variant-1`
+- One live backend lane: `apps/backend`
 - One external browser client: `apps/frontend/var1-client`
 - No old `.harness` runtime root, no old task facade, no old `/api/tasks*` HTTP surface, no old storage migration reader
 

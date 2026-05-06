@@ -74,7 +74,7 @@ refs.copyOutputButton.addEventListener("click", async () => {
     setBridgeStatus("Output copied", "ready");
   } catch (error) {
     console.error(error);
-    setBridgeStatus("Clipboard failed", "error");
+    setBridgeStatus("Copy failed", "error");
   }
 });
 
@@ -87,9 +87,15 @@ async function reconnect() {
   localStorage.setItem(STORAGE_KEY, nextOrigin);
   state.bridgeToken = null;
   state.lastEventId = 0;
-  setBridgeStatus("Connecting", "idle");
-  await refreshAll();
-  scheduleEventPoll();
+  if (state.eventTimer) {
+    clearTimeout(state.eventTimer);
+    state.eventTimer = null;
+  }
+  setBridgeStatus("Checking bridge", "idle");
+  const connected = await refreshAll();
+  if (connected) {
+    scheduleEventPoll();
+  }
 }
 
 async function refreshAll() {
@@ -97,10 +103,11 @@ async function refreshAll() {
     await refreshHealth();
     await rpc("initialize", {});
     await refreshSessions();
-    setBridgeStatus("Connected", "ready");
+    setBridgeStatus("Ready", "ready");
+    return true;
   } catch (error) {
-    console.error(error);
-    setBridgeStatus(`Bridge error: ${error.message}`, "error");
+    setBridgeStatus(`Connection issue: ${error.message}`, "error");
+    return false;
   }
 }
 
@@ -163,7 +170,7 @@ async function loadSession(sessionId, silent = false) {
 async function createAndRunSession() {
   const prompt = refs.createPrompt.value.trim();
   if (!prompt) {
-    setBridgeStatus("Prompt required", "error");
+    setBridgeStatus("Add a prompt to start", "error");
     return;
   }
 
@@ -176,7 +183,7 @@ async function createAndRunSession() {
     await refreshSessions();
   } catch (error) {
     console.error(error);
-    setBridgeStatus(`Create failed: ${error.message}`, "error");
+    setBridgeStatus(`Session could not start: ${error.message}`, "error");
   }
 }
 
@@ -195,7 +202,7 @@ async function sendFollowup() {
     await refreshSessions();
   } catch (error) {
     console.error(error);
-    setBridgeStatus(`Follow-up failed: ${error.message}`, "error");
+    setBridgeStatus(`Follow-up was not sent: ${error.message}`, "error");
   }
 }
 
@@ -211,7 +218,7 @@ async function resumeSession() {
     await refreshSessions();
   } catch (error) {
     console.error(error);
-    setBridgeStatus(`Resume failed: ${error.message}`, "error");
+    setBridgeStatus(`Session could not resume: ${error.message}`, "error");
   }
 }
 
@@ -219,7 +226,7 @@ function renderSessionList() {
   refs.sessionList.innerHTML = "";
 
   if (state.sessions.length === 0) {
-    refs.sessionList.innerHTML = '<div class="empty-state">No sessions yet.</div>';
+    refs.sessionList.innerHTML = '<div class="empty-state">No sessions yet. Start one when you are ready.</div>';
     return;
   }
 
@@ -266,7 +273,7 @@ function renderSessionDetail() {
   refs.detailStatus.textContent = humanize(detail.session.status);
   refs.detailUpdated.textContent = formatTimestamp(detail.session.updated_at_ms);
   refs.detailPrompt.textContent = detail.session.prompt || "-";
-  refs.detailOutput.textContent = detail.session.output || "(no output yet)";
+  refs.detailOutput.textContent = detail.session.output || "Output appears after the session completes.";
 
   renderTimeline(
     refs.messageTimeline,
@@ -295,7 +302,7 @@ function renderTimeline(container, items, transform) {
   container.innerHTML = "";
 
   if (!Array.isArray(items) || items.length === 0) {
-    container.innerHTML = '<div class="empty-state">No entries yet.</div>';
+    container.innerHTML = '<div class="empty-state">Nothing recorded yet.</div>';
     return;
   }
 
@@ -334,8 +341,7 @@ function scheduleEventPoll() {
         await refreshSessions();
       }
     } catch (error) {
-      console.error(error);
-      setBridgeStatus(`Event poll failed: ${error.message}`, "error");
+      setBridgeStatus(`Live updates paused: ${error.message}`, "error");
     } finally {
       scheduleEventPoll();
     }

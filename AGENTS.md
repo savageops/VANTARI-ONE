@@ -2,7 +2,7 @@
 
 ## Runtime Ownership
 
-- `apps/backend/variant-1` is the only live code lane until another app/package has real runtime responsibility.
+- `apps/backend` is the only live code lane until another app/package has real runtime responsibility.
 - `VAR1` is the Zig harness kernel. CLI, browser, and future desktop shells are clients of the same agent-session runtime.
 - `.var/` is the only runtime/process state root. Do not add old runtime roots, old storage ownership, or fallback storage readers.
 - Project-local `.var/sessions/<session-id>/` is canonical. Do not copy global home-scoped Codex/Claude project-directory session IDs into this repo.
@@ -46,11 +46,11 @@ Canonical session layout:
 ## Source Hierarchy
 
 - Prefer deep, named ownership modules over flat file sprawl, but do not create empty folder theater.
-- New context work belongs under `apps/backend/variant-1/src/core/context/`.
+- New context work belongs under `apps/backend/src/core/context/`.
 - Core modules are kernel-owned capability domains such as `context`, `sessions`, and `tools`; do not place feature/plugin names directly under `core/`.
-- Tool runtime contracts belong under `apps/backend/variant-1/src/core/tools/`. The runtime body is `src/core/tools/runtime.zig`; do not reintroduce a flat `src/tools.zig` owner.
-- Plugin contract code belongs under `apps/backend/variant-1/src/core/plugins/`. Plugin implementations must not live inside `core/`; future project-local plugins should live under a dedicated plugin root such as `apps/backend/variant-1/plugins/<plugin-id>/` or local `.var/plugins/<plugin-id>/` once loading is implemented.
-- Session storage helpers live under `apps/backend/variant-1/src/core/sessions/`. Do not reintroduce flat session-store files at `src/`.
+- Tool runtime contracts belong under `apps/backend/src/core/tools/`. The runtime body is `src/core/tools/runtime.zig`; do not reintroduce a flat `src/tools.zig` owner.
+- Plugin contract code belongs under `apps/backend/src/core/plugins/`. Plugin implementations must not live inside `core/`; future project-local plugins should live under a dedicated plugin root such as `apps/backend/plugins/<plugin-id>/` or local `.var/plugins/<plugin-id>/` once loading is implemented.
+- Session storage helpers live under `apps/backend/src/core/sessions/`. Do not reintroduce flat session-store files at `src/`.
 - Keep protocol/shared types in `shared/` only when multiple clients or hosts consume them.
 
 ## Pluggability Sockets

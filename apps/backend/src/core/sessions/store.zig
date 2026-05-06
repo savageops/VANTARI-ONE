@@ -253,7 +253,7 @@ pub fn appendEvent(
     });
     defer allocator.free(jsonl);
 
-    try fsutil.appendText(events_path, jsonl);
+    try appendJsonlRecord(events_path, jsonl);
 }
 
 pub fn readLatestEvent(
@@ -377,7 +377,7 @@ pub fn appendSessionMessage(
     });
     defer allocator.free(jsonl);
 
-    try fsutil.appendText(messages_path, jsonl);
+    try appendJsonlRecord(messages_path, jsonl);
 }
 
 pub fn upsertAssistantSessionMessage(
@@ -421,7 +421,7 @@ pub fn appendAssistantToolCallSessionMessage(
     });
     defer allocator.free(jsonl);
 
-    try fsutil.appendText(messages_path, jsonl);
+    try appendJsonlRecord(messages_path, jsonl);
 }
 
 pub fn appendToolSessionMessage(
@@ -455,7 +455,7 @@ pub fn appendToolSessionMessage(
     });
     defer allocator.free(jsonl);
 
-    try fsutil.appendText(messages_path, jsonl);
+    try appendJsonlRecord(messages_path, jsonl);
 }
 
 pub fn appendContextCheckpoint(
@@ -485,7 +485,7 @@ pub fn appendContextCheckpoint(
     });
     defer allocator.free(jsonl);
 
-    try fsutil.appendText(context_path, jsonl);
+    try appendJsonlRecord(context_path, jsonl);
 }
 
 pub fn readLatestContextCheckpoint(
@@ -702,6 +702,34 @@ fn writeSessionMessages(
     }
 
     try fsutil.writeText(messages_path, body.items);
+}
+
+fn appendJsonlRecord(
+    path: []const u8,
+    jsonl: []const u8,
+) !void {
+    try fsutil.ensureParent(path);
+
+    var file = std.fs.cwd().openFile(path, .{ .mode = .read_write }) catch |err| switch (err) {
+        error.FileNotFound => try std.fs.cwd().createFile(path, .{
+            .read = true,
+            .truncate = false,
+        }),
+        else => return err,
+    };
+    defer file.close();
+
+    var end_position = try file.getEndPos();
+    if (end_position > 0) {
+        var tail: [1]u8 = undefined;
+        const read_count = try file.preadAll(tail[0..], end_position - 1);
+        if (read_count == 1 and tail[0] != '\n') {
+            try file.pwriteAll("\n", end_position);
+            end_position += 1;
+        }
+    }
+
+    try file.pwriteAll(jsonl, end_position);
 }
 
 pub fn sessionsRootPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
