@@ -50,7 +50,7 @@ fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
     return count;
 }
 
-test "config loader reads variant env values" {
+test "config loader reads provider env values" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 

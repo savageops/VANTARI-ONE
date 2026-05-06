@@ -3,7 +3,7 @@
 ## Runtime Ownership
 
 - `apps/backend` is the only live code lane until another app/package has real runtime responsibility.
-- `VAR1` is the Zig harness kernel. CLI, browser, and future desktop shells are clients of the same agent-session runtime.
+- `VAR1` is the Zig agent-session kernel. CLI, browser, and future desktop shells are clients of the same runtime.
 - `.var/` is the only runtime/process state root. Do not add old runtime roots, old storage ownership, or fallback storage readers.
 - Project-local `.var/sessions/<session-id>/` is canonical. Do not copy global home-scoped Codex/Claude project-directory session IDs into this repo.
 
@@ -38,7 +38,7 @@ Canonical session layout:
 
 ## Future-First Simplicity
 
-- Build the invariant that should survive later runtime scale, not the dominant harness pattern that exists now.
+- Build the invariant that should survive later runtime scale, not the dominant implementation pattern that exists now.
 - Study references for failure modes, boundary shapes, and useful invariants only. Do not reproduce their incidental architecture.
 - Prefer primitives that are simultaneously smaller and more expressive: append-only session history, typed checkpoints, explicit state machines, and deterministic ownership.
 - A dynamic worker is admissible only when it calls the same proven primitive as manual execution and adds measurable capability beyond scheduling.
@@ -83,3 +83,9 @@ Canonical session layout:
 - Operator scripts must diagnose Windows-owned executable locks and stale local kernel/bridge processes before validation claims fail obscurely.
 - Runtime configuration must fail closed on unknown high-impact policy keys or expose explicit diagnostics through operator surfaces.
 - Context budget heuristics remain acceptable only while tests prove compaction checkpoints/events and provider-overflow recovery; exact tokenizer work requires evidence that the heuristic is insufficient.
+
+## Depth Standard
+
+- Treat shallow completion as an architecture defect. Each retained path must prove the real contract it claims to satisfy, including source ownership, negative states, recovery shape, and operator-visible evidence.
+- Green checks are insufficient when they exercise removed routes, mocks, hidden fallbacks, or parallel surfaces. Validation must traverse the canonical runtime lane.
+- Before closing a high-pass review, scan touched surfaces for stale markers, illusion-of-success probes, compatibility residue, and low-value abstraction. Remove them, justify them as explicit negative tests, or document the unsupported boundary.
