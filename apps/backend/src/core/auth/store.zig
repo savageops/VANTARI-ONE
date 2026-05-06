@@ -63,7 +63,7 @@ fn readActiveProvider(allocator: std.mem.Allocator, path: []const u8) !ResolvedA
     const content = try fsutil.readTextAlloc(allocator, path);
     defer allocator.free(content);
 
-    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, content, .{});
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, stripUtf8Bom(content), .{});
     defer parsed.deinit();
 
     if (parsed.value != .object) return Error.InvalidAuthState;
@@ -111,6 +111,12 @@ fn readActiveProvider(allocator: std.mem.Allocator, path: []const u8) !ResolvedA
         .subscription_plan_label = subscription_plan_label,
         .subscription_status = subscription_status,
     };
+}
+
+fn stripUtf8Bom(content: []const u8) []const u8 {
+    const bom = "\xEF\xBB\xBF";
+    if (std.mem.startsWith(u8, content, bom)) return content[bom.len..];
+    return content;
 }
 
 fn cloneBootstrap(allocator: std.mem.Allocator, bootstrap: AuthBootstrap) !ResolvedAuth {
