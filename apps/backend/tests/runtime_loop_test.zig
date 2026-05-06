@@ -593,6 +593,17 @@ test "loop retries once after provider-declared context overflow" {
     const context_jsonl = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, context_path);
     defer std.testing.allocator.free(context_jsonl);
     try std.testing.expect(std.mem.indexOf(u8, context_jsonl, "provider_overflow") != null);
+
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, result.session_id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
+    try std.testing.expect(events.len >= 4);
+    try std.testing.expectEqualStrings("session_started", events[0].event_type);
+    try std.testing.expectEqualStrings("context_compaction_started", events[1].event_type);
+    try std.testing.expectEqualStrings("context_compaction_completed", events[2].event_type);
+    try std.testing.expectEqualStrings("assistant_response", events[events.len - 1].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[1].message, "provider_overflow") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[2].message, "source_seq=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[2].message, "first_kept_seq=") != null);
 }
 
 test "loop records a failed session when provider transport fails" {
@@ -615,6 +626,13 @@ test "loop records a failed session when provider transport fails" {
     try std.testing.expectEqual(@as(usize, 1), sessions.len);
     try std.testing.expectEqual(VAR1.shared.types.SessionStatus.failed, sessions[0].status);
     try std.testing.expect(std.mem.eql(u8, sessions[0].failure_reason.?, "ConnectionRefused"));
+
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, sessions[0].id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
+    try std.testing.expectEqual(@as(usize, 2), events.len);
+    try std.testing.expectEqualStrings("session_started", events[0].event_type);
+    try std.testing.expectEqualStrings("session_failed", events[1].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[1].message, "ConnectionRefused") != null);
 }
 
 test "loop marks a session cancelled when hooks request cancellation" {
@@ -654,6 +672,12 @@ test "loop marks a session cancelled when hooks request cancellation" {
     defer if (latest_event) |event| event.deinit(std.testing.allocator);
     try std.testing.expect(latest_event != null);
     try std.testing.expectEqualStrings("session_cancelled", latest_event.?.event_type);
+
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
+    try std.testing.expectEqual(@as(usize, 2), events.len);
+    try std.testing.expectEqualStrings("session_started", events[0].event_type);
+    try std.testing.expectEqualStrings("session_cancelled", events[1].event_type);
 }
 
 test "loop sanitizes leaked internal tool names without false child-wait messaging" {

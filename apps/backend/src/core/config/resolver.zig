@@ -4,8 +4,6 @@ const fsutil = @import("../../shared/fsutil.zig");
 const settings = @import("settings.zig");
 const types = @import("../../shared/types.zig");
 
-// TODO: Replace the manual env parsing with a fuller parser only if the simple `.env` contract becomes insufficient.
-
 pub const local_settings = settings;
 
 pub const Error = error{

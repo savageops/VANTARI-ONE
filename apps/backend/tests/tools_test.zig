@@ -581,7 +581,7 @@ test "workspace-state tools scaffold and manage canonical root artifacts" {
     var session_call = try makeToolCall(
         std.testing.allocator,
         "session_record",
-        "{\"action\":\"upsert\",\"session_name\":\"demo-session\",\"status\":\"in_progress\",\"objective\":\"Finalize the workspace-state runtime.\",\"scope\":[\"add missing tools\"],\"evidence_roots\":[\"variant-1/src\",\"variant-1/tests\"]}",
+        "{\"action\":\"upsert\",\"session_name\":\"demo-session\",\"status\":\"in_progress\",\"objective\":\"Finalize the workspace-state runtime.\",\"scope\":[\"add missing tools\"],\"evidence_roots\":[\"src\",\"tests\"]}",
     );
     defer session_call.deinit(std.testing.allocator);
     const session_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), session_call);

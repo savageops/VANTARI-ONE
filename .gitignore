@@ -85,5 +85,5 @@ build/Release/
 **/.playwright-cli/
 
 # Local experiments
-/apps/backend/variant-1/playground/
-/apps/backend/variant-1/src/ui/
+/apps/backend/playground/
+/apps/backend/src/ui/

@@ -66,3 +66,44 @@ test "prompt builder loads project-local system and developer prompt files" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Custom system invariant.") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Custom developer invariant.") != null);
 }
+
+test "prompt builder fails closed for explicit missing or empty prompt layers" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const allocator = std.testing.allocator;
+    const workspace_root = try tmpWorkspacePath(allocator, &tmp);
+    defer allocator.free(workspace_root);
+
+    var missing_policy = VAR1.shared.types.PromptPolicy{
+        .system_prompt_file = try allocator.dupe(u8, ".var/prompts/missing-system.md"),
+    };
+    defer missing_policy.deinit(allocator);
+
+    try std.testing.expectError(
+        VAR1.core.prompts.builder.Error.PromptLayerUnavailable,
+        VAR1.core.prompts.buildAgentSystemPrompt(
+            allocator,
+            execCtx(workspace_root),
+            missing_policy,
+        ),
+    );
+
+    const empty_path = try std.fs.path.join(allocator, &.{ workspace_root, ".var", "prompts", "empty-developer.md" });
+    defer allocator.free(empty_path);
+    try VAR1.shared.fsutil.writeText(empty_path, " \n\t\n");
+
+    var empty_policy = VAR1.shared.types.PromptPolicy{
+        .developer_prompt_file = try allocator.dupe(u8, ".var/prompts/empty-developer.md"),
+    };
+    defer empty_policy.deinit(allocator);
+
+    try std.testing.expectError(
+        VAR1.core.prompts.builder.Error.EmptyPromptLayer,
+        VAR1.core.prompts.buildAgentSystemPrompt(
+            allocator,
+            execCtx(workspace_root),
+            empty_policy,
+        ),
+    );
+}

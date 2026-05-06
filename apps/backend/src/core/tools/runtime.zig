@@ -12,8 +12,6 @@ const append_file = @import("builtin/append_file.zig");
 const replace_in_file = @import("builtin/replace_in_file.zig");
 const agents = @import("builtin/agents.zig");
 
-// TODO: Keep the built-in tool surface small and high-signal.
-
 pub const Error = module.Error;
 pub const CommandOutput = module.CommandOutput;
 pub const CommandRunner = module.CommandRunner;
@@ -22,20 +20,11 @@ pub const AgentService = module.AgentService;
 pub const ExecutionContext = module.ExecutionContext;
 pub const DelegationScope = module.DelegationScope;
 
-const file_tool_definitions = [_]types.ToolDefinition{
-    list_files.definition,
-    search_files.definition,
-    read_file.definition,
-    write_file.definition,
-    append_file.definition,
-    replace_in_file.definition,
-};
-
 const agent_tool_definitions = agents.definitions;
 
 const workspace_state_tool_definitions = workspace_state_tools.definitions;
-const file_plus_workspace_state_tool_definitions = file_tool_definitions ++ workspace_state_tool_definitions;
-const file_plus_agent_tool_definitions = file_tool_definitions ++ agent_tool_definitions;
+const file_plus_workspace_state_tool_definitions = registry.file_tool_definitions ++ workspace_state_tool_definitions;
+const file_plus_agent_tool_definitions = registry.file_tool_definitions ++ agent_tool_definitions;
 const all_tool_definitions = file_plus_workspace_state_tool_definitions ++ agent_tool_definitions;
 
 fn toolDefinitionByName(tool_name: []const u8) ?types.ToolDefinition {
@@ -70,7 +59,7 @@ pub fn workspaceStateRelevant(prompt: []const u8) bool {
 }
 
 pub fn builtinDefinitions(include_agent_tools: bool) []const types.ToolDefinition {
-    return if (include_agent_tools) file_plus_agent_tool_definitions[0..] else file_tool_definitions[0..];
+    return if (include_agent_tools) file_plus_agent_tool_definitions[0..] else registry.fileDefinitions();
 }
 
 pub fn builtinDefinitionsForContext(execution_context: ExecutionContext) []const types.ToolDefinition {

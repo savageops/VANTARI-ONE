@@ -2,8 +2,6 @@ const std = @import("std");
 const context_overflow = @import("../context/overflow.zig");
 const types = @import("../../shared/types.zig");
 
-// TODO: Keep transport details isolated here so the loop stays provider-agnostic.
-
 pub const Error = error{
     BadStatus,
     ContextWindowExceeded,

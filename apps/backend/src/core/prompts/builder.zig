@@ -26,12 +26,17 @@ const default_developer_prompt =
     \\For code changes, preserve existing ownership boundaries, avoid parallel systems, and add tests where behavior, configuration, storage, provider messages, or tool contracts change.
 ;
 
+pub const Error = error{
+    EmptyPromptLayer,
+    PromptLayerUnavailable,
+};
+
 pub fn buildAgentSystemPrompt(
     allocator: std.mem.Allocator,
     execution_context: tools.ExecutionContext,
     prompt_policy: types.PromptPolicy,
 ) ![]u8 {
-    const system_prompt = try readPromptLayerOrDefault(
+    const system_prompt = try readPromptLayer(
         allocator,
         execution_context.workspace_root,
         prompt_policy.system_prompt_file,
@@ -40,7 +45,7 @@ pub fn buildAgentSystemPrompt(
     );
     defer allocator.free(system_prompt);
 
-    const developer_prompt = try readPromptLayerOrDefault(
+    const developer_prompt = try readPromptLayer(
         allocator,
         execution_context.workspace_root,
         prompt_policy.developer_prompt_file,
@@ -98,27 +103,32 @@ pub fn buildAgentSystemPrompt(
     return output.toOwnedSlice();
 }
 
-fn readPromptLayerOrDefault(
+fn readPromptLayer(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
     configured_path: ?[]const u8,
-    fallback_path: []const u8,
-    fallback_content: []const u8,
+    default_path: []const u8,
+    default_content: []const u8,
 ) ![]u8 {
-    const requested_path = configured_path orelse fallback_path;
+    const explicit_path = configured_path != null;
+    const requested_path = configured_path orelse default_path;
     const absolute_path = try fsutil.resolveInWorkspace(allocator, workspace_root, requested_path);
     defer allocator.free(absolute_path);
 
     const content = fsutil.readTextAlloc(allocator, absolute_path) catch |err| switch (err) {
-        error.FileNotFound => return allocator.dupe(u8, fallback_content),
+        error.FileNotFound => {
+            if (explicit_path) return Error.PromptLayerUnavailable;
+            return allocator.dupe(u8, default_content);
+        },
         else => return err,
     };
     errdefer allocator.free(content);
 
     const trimmed = std.mem.trim(u8, content, " \t\r\n");
     if (trimmed.len == 0) {
+        if (explicit_path) return Error.EmptyPromptLayer;
         allocator.free(content);
-        return allocator.dupe(u8, fallback_content);
+        return allocator.dupe(u8, default_content);
     }
 
     return content;

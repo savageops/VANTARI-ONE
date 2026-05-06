@@ -285,7 +285,7 @@ pub fn fileEffectEnvelope(
 
 fn fileEffectContentAlloc(
     allocator: std.mem.Allocator,
-    legacy_content: []const u8,
+    display_content: []const u8,
     action: FileEffectAction,
     requested_path: []const u8,
     resolved_path: []const u8,
@@ -313,8 +313,8 @@ fn fileEffectContentAlloc(
     );
     try writeEffectContentHash(writer, "EFFECT_BEFORE_SHA256", before.sha256_hex);
     try writeEffectContentHash(writer, "EFFECT_AFTER_SHA256", after.sha256_hex);
-    try writer.writeAll("LEGACY_OUTPUT\n");
-    try writer.writeAll(legacy_content);
+    try writer.writeAll("DISPLAY_OUTPUT\n");
+    try writer.writeAll(display_content);
 
     return output.toOwnedSlice();
 }
@@ -520,7 +520,7 @@ test "file effect envelope exposes effect-first content and structured metadata"
     try std.testing.expect(std.mem.indexOf(u8, content, "EFFECT_KEY effect\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "EFFECT_ACTION write_file\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, content, "EFFECT_BYTES_WRITTEN 5\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "LEGACY_OUTPUT\nPATH resolved.txt\nBYTES 5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "DISPLAY_OUTPUT\nPATH resolved.txt\nBYTES 5") != null);
 
     const effect_value = root.get("effect") orelse return error.MissingEffect;
     try std.testing.expect(effect_value == .object);
