@@ -19,6 +19,19 @@ fn makeConfig(
     };
 }
 
+fn makeTestToolCall(
+    allocator: std.mem.Allocator,
+    id: []const u8,
+    name: []const u8,
+    arguments_json: []const u8,
+) !VAR1.shared.types.ToolCall {
+    return .{
+        .id = try allocator.dupe(u8, id),
+        .name = try allocator.dupe(u8, name),
+        .arguments_json = try allocator.dupe(u8, arguments_json),
+    };
+}
+
 fn mockSendSuccess(
     _: ?*anyopaque,
     allocator: std.mem.Allocator,
@@ -72,6 +85,10 @@ const ResumePromptContext = struct {
     fn deinit(self: *ResumePromptContext) void {
         if (self.payload) |value| self.allocator.free(value);
     }
+};
+
+const ProviderCallCapture = struct {
+    called: bool = false,
 };
 
 const OverflowRetryContext = struct {
@@ -307,6 +324,20 @@ fn mockSendOverflowThenSuccess(
 
     return allocator.dupe(u8,
         \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"Recovered after compaction."}}]}
+    );
+}
+
+fn mockSendShouldNotRun(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const u8,
+    _: []const u8,
+) anyerror![]u8 {
+    var ctx: *ProviderCallCapture = @ptrCast(@alignCast(ctx_ptr.?));
+    ctx.called = true;
+    return allocator.dupe(u8,
+        \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"provider should not have run"}}]}
     );
 }
 
@@ -1010,6 +1041,53 @@ test "loop persists multi-tool batches in assistant source order before follow-u
     try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.tool, transcript[3].role);
     try std.testing.expectEqualStrings("call_second", transcript[3].tool_call_id.?);
     try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.assistant, transcript[4].role);
+}
+
+test "loop fails closed before provider dispatch on unresolved persisted tool calls" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeConfig(std.testing.allocator, workspace_root, 4);
+    defer config.deinit(std.testing.allocator);
+
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "Read context.txt");
+    defer session.deinit(std.testing.allocator);
+
+    var tool_call = try makeTestToolCall(std.testing.allocator, "call_unresolved", "read_file", "{\"path\":\"context.txt\"}");
+    defer tool_call.deinit(std.testing.allocator);
+    const tool_calls = [_]VAR1.shared.types.ToolCall{tool_call};
+    try VAR1.core.session_store.appendAssistantToolCallSessionMessage(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        null,
+        tool_calls[0..],
+        200,
+    );
+
+    var capture = ProviderCallCapture{};
+    try std.testing.expectError(
+        VAR1.core.context.builder.Error.UnresolvedToolCallTranscript,
+        VAR1.core.executor.runPromptWithOptions(std.testing.allocator, config, "", .{
+            .transport = .{
+                .context = &capture,
+                .sendFn = mockSendShouldNotRun,
+            },
+            .execution_context = .{
+                .workspace_root = config.workspace_root,
+            },
+            .session_id = session.id,
+        }),
+    );
+    try std.testing.expect(!capture.called);
+
+    var failed = try VAR1.core.session_store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
+    defer failed.deinit(std.testing.allocator);
+    try std.testing.expectEqual(VAR1.shared.types.SessionStatus.failed, failed.status);
+    try std.testing.expectEqualStrings("UnresolvedToolCallTranscript", failed.failure_reason.?);
 }
 
 test "loop blocks undeclared tool calls before execution and returns protocol-visible denial" {
