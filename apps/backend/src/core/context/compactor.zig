@@ -121,6 +121,7 @@ fn buildPlan(
         const bounded_end = start_index + options.max_entries_per_checkpoint - 1;
         segment_end_index = @min(bounded_end, eligible_end_index);
     }
+    segment_end_index = adjustSegmentEndForProviderBoundary(messages, start_index, segment_end_index) orelse return null;
     if (segment_end_index < start_index) return null;
 
     const segment_start_seq = messages[start_index].seq;
@@ -140,6 +141,31 @@ fn buildPlan(
         .compacted_entry_count = @intCast(countMessages(messages, segment_start_seq, segment_end_seq)),
         .recompact = recompact,
     };
+}
+
+fn adjustSegmentEndForProviderBoundary(
+    messages: []const types.SessionMessage,
+    start_index: usize,
+    proposed_end_index: usize,
+) ?usize {
+    const first_kept_index = proposed_end_index + 1;
+    if (first_kept_index >= messages.len or messages[first_kept_index].role != .tool) return proposed_end_index;
+
+    const tool_call_id = messages[first_kept_index].tool_call_id orelse return null;
+    var index = first_kept_index;
+    while (index > 0) {
+        index -= 1;
+        const message = messages[index];
+        if (message.role != .assistant or message.tool_calls.len == 0) continue;
+        for (message.tool_calls) |tool_call| {
+            if (std.mem.eql(u8, tool_call.id, tool_call_id)) {
+                if (index == 0 or index <= start_index) return null;
+                return index - 1;
+            }
+        }
+    }
+
+    return null;
 }
 
 fn renderSummary(

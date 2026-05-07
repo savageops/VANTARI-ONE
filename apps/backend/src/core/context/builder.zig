@@ -5,6 +5,11 @@ const types = @import("../../shared/types.zig");
 const summary_prefix =
     "The conversation history before this point was compacted into the following summary:\n\n";
 
+pub const Error = error{
+    OrphanToolResultTranscript,
+    UnresolvedToolCallTranscript,
+};
+
 pub fn appendProviderMessages(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
@@ -45,25 +50,45 @@ fn appendRawMessages(
     const turns = try store.readSessionMessages(allocator, workspace_root, session_id);
     defer types.deinitSessionMessages(allocator, turns);
 
+    var pending_tool_calls: []const types.ToolCall = &.{};
+    var pending_tool_index: usize = 0;
+
     for (turns) |turn| {
         if (first_kept_seq > 0 and turn.seq < first_kept_seq) continue;
         switch (turn.role) {
-            .user => try messages.append(try types.initTextMessage(allocator, .user, turn.content)),
+            .user => {
+                if (pending_tool_index < pending_tool_calls.len) return Error.UnresolvedToolCallTranscript;
+                try messages.append(try types.initTextMessage(allocator, .user, turn.content));
+            },
             .assistant => {
+                if (pending_tool_index < pending_tool_calls.len) return Error.UnresolvedToolCallTranscript;
                 if (turn.tool_calls.len > 0) {
                     try messages.append(try types.initAssistantToolCallMessage(
                         allocator,
                         if (turn.content.len > 0) turn.content else null,
                         turn.tool_calls,
                     ));
+                    pending_tool_calls = turn.tool_calls;
+                    pending_tool_index = 0;
                 } else {
                     try messages.append(try types.initTextMessage(allocator, .assistant, turn.content));
                 }
             },
             .tool => {
-                const tool_call_id = turn.tool_call_id orelse continue;
+                if (pending_tool_index >= pending_tool_calls.len) return Error.OrphanToolResultTranscript;
+                const tool_call_id = turn.tool_call_id orelse return Error.OrphanToolResultTranscript;
+                if (!std.mem.eql(u8, tool_call_id, pending_tool_calls[pending_tool_index].id)) {
+                    return Error.OrphanToolResultTranscript;
+                }
                 try messages.append(try types.initToolMessage(allocator, tool_call_id, turn.content));
+                pending_tool_index += 1;
+                if (pending_tool_index == pending_tool_calls.len) {
+                    pending_tool_calls = &.{};
+                    pending_tool_index = 0;
+                }
             },
         }
     }
+
+    if (pending_tool_index < pending_tool_calls.len) return Error.UnresolvedToolCallTranscript;
 }

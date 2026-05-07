@@ -74,6 +74,7 @@ sequenceDiagram
   E->>S: load or create session
   E->>X: build model-visible transcript view
   X->>S: read messages and latest context checkpoint
+  X->>X: reject orphan tool results or unresolved assistant tool calls
   X-->>E: summary plus recent raw transcript
   E->>E: estimate provider window against context policy
   alt threshold exceeded
@@ -122,7 +123,9 @@ sequenceDiagram
   X->>S: later reads latest checkpoint plus raw suffix
 ```
 
-Manual and automatic compaction share the same primitive. The manual RPC path is gated by `context.manual_compaction`; the executor path is gated by `context.auto_compaction`, `context.context_window_tokens`, `context.compact_at_ratio`, and `context.reserve_output_tokens`. Provider overflow recovery is separately gated by `context.retry_on_provider_overflow` and retries one provider call after a real checkpoint is written.
+Manual and automatic compaction share the same primitive. The manual RPC path is gated by `context.manual_compaction`; the executor path is gated by `context.auto_compaction`, `context.context_window_tokens`, `context.compact_at_ratio`, and `context.reserve_output_tokens`. Provider overflow recovery is separately gated by `context.retry_on_provider_overflow` and retries one provider call after a real checkpoint is written. Checkpoint planning does not split assistant tool-call batches; if the proposed raw suffix would start at a tool-result row, the compacted segment is moved back so the assistant tool-call message and its tool results remain together in model-visible history.
+
+The context builder also validates OpenAI-compatible tool-call adjacency before any provider dispatch. An assistant message with tool calls must be followed by matching tool-result rows in assistant source order; orphan tool rows and unresolved assistant tool-call tails fail closed as transcript integrity errors. This keeps `.var/sessions/<id>/messages.jsonl` append-only while preventing corrupt or crash-interrupted ledgers from becoming malformed model-visible context.
 
 ```mermaid
 stateDiagram-v2

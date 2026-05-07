@@ -40,6 +40,19 @@ fn makeContextCheckpoint(
     };
 }
 
+fn makeTestToolCall(
+    allocator: std.mem.Allocator,
+    id: []const u8,
+    name: []const u8,
+    arguments_json: []const u8,
+) !VAR1.shared.types.ToolCall {
+    return .{
+        .id = try allocator.dupe(u8, id),
+        .name = try allocator.dupe(u8, name),
+        .arguments_json = try allocator.dupe(u8, arguments_json),
+    };
+}
+
 fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
     var count: usize = 0;
     var offset: usize = 0;
@@ -838,6 +851,72 @@ test "context builder ignores poisoned checkpoint suffix and uses canonical raw 
     try std.testing.expectEqualStrings("Follow-up answer", provider_messages.items[2].content.?);
 }
 
+test "context builder rejects unresolved assistant tool-call transcripts before provider use" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "Read context");
+    defer session.deinit(std.testing.allocator);
+
+    var tool_call = try makeTestToolCall(std.testing.allocator, "call_unresolved", "read_file", "{\"path\":\"context.txt\"}");
+    defer tool_call.deinit(std.testing.allocator);
+    const tool_calls = [_]VAR1.shared.types.ToolCall{tool_call};
+
+    try VAR1.core.session_store.appendAssistantToolCallSessionMessage(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        null,
+        tool_calls[0..],
+        200,
+    );
+
+    var provider_messages = std.array_list.Managed(VAR1.shared.types.ChatMessage).init(std.testing.allocator);
+    defer {
+        for (provider_messages.items) |message| message.deinit(std.testing.allocator);
+        provider_messages.deinit();
+    }
+
+    try std.testing.expectError(
+        VAR1.core.context.builder.Error.UnresolvedToolCallTranscript,
+        VAR1.core.context.appendProviderMessages(std.testing.allocator, workspace_root, &provider_messages, session),
+    );
+}
+
+test "context builder rejects orphan tool results created by corrupt suffix boundaries" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "Read context");
+    defer session.deinit(std.testing.allocator);
+
+    try VAR1.core.session_store.appendToolSessionMessage(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "call_orphan",
+        "orphan output",
+        200,
+    );
+
+    var provider_messages = std.array_list.Managed(VAR1.shared.types.ChatMessage).init(std.testing.allocator);
+    defer {
+        for (provider_messages.items) |message| message.deinit(std.testing.allocator);
+        provider_messages.deinit();
+    }
+
+    try std.testing.expectError(
+        VAR1.core.context.builder.Error.OrphanToolResultTranscript,
+        VAR1.core.context.appendProviderMessages(std.testing.allocator, workspace_root, &provider_messages, session),
+    );
+}
+
 test "context budget and overflow primitives expose explicit capability boundaries" {
     const policy = VAR1.shared.types.ContextPolicy{
         .auto_compaction = true,
@@ -890,6 +969,50 @@ test "context compactor appends a structured checkpoint from stable sequence ran
     defer if (latest) |checkpoint| checkpoint.deinit(std.testing.allocator);
     try std.testing.expect(latest != null);
     try std.testing.expectEqualStrings(result.checkpoint.?.id, latest.?.id);
+}
+
+test "context compactor keeps assistant tool-call batches together in the raw suffix" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "Initial prompt");
+    defer session.deinit(std.testing.allocator);
+
+    var tool_call = try makeTestToolCall(std.testing.allocator, "call_boundary", "read_file", "{\"path\":\"context.txt\"}");
+    defer tool_call.deinit(std.testing.allocator);
+    const tool_calls = [_]VAR1.shared.types.ToolCall{tool_call};
+    try VAR1.core.session_store.appendAssistantToolCallSessionMessage(std.testing.allocator, workspace_root, session.id, null, tool_calls[0..], 200);
+    try VAR1.core.session_store.appendToolSessionMessage(std.testing.allocator, workspace_root, session.id, "call_boundary", "file output", 300);
+    try VAR1.core.session_store.upsertAssistantSessionMessage(std.testing.allocator, workspace_root, session.id, "Final answer", 400);
+
+    const result = try VAR1.core.context.compactor.compactSession(std.testing.allocator, workspace_root, session.id, .{
+        .keep_recent_messages = 2,
+        .trigger = "tool-boundary-test",
+    });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.checkpoint != null);
+    try std.testing.expectEqual(@as(u64, 1), result.checkpoint.?.source_seq_end);
+    try std.testing.expectEqual(@as(u64, 2), result.checkpoint.?.first_kept_seq);
+    try std.testing.expectEqual(@as(u32, 1), result.checkpoint.?.compacted_entry_count);
+
+    var provider_messages = std.array_list.Managed(VAR1.shared.types.ChatMessage).init(std.testing.allocator);
+    defer {
+        for (provider_messages.items) |message| message.deinit(std.testing.allocator);
+        provider_messages.deinit();
+    }
+
+    try VAR1.core.context.appendProviderMessages(std.testing.allocator, workspace_root, &provider_messages, session);
+    try std.testing.expectEqual(@as(usize, 4), provider_messages.items.len);
+    try std.testing.expectEqual(VAR1.shared.types.MessageRole.user, provider_messages.items[0].role);
+    try std.testing.expectEqual(@as(usize, 1), provider_messages.items[1].tool_calls.len);
+    try std.testing.expectEqualStrings("call_boundary", provider_messages.items[1].tool_calls[0].id);
+    try std.testing.expectEqual(VAR1.shared.types.MessageRole.tool, provider_messages.items[2].role);
+    try std.testing.expectEqualStrings("call_boundary", provider_messages.items[2].tool_call_id.?);
+    try std.testing.expectEqualStrings("Final answer", provider_messages.items[3].content.?);
 }
 
 test "context compactor advances from the prior checkpoint without duplicating the raw suffix" {
