@@ -632,6 +632,7 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
     defer session.deinit(server.allocator);
 
     try server.runtime.ensureSession(server.allocator, session.id, parsed.value.enable_agent_tools);
+    try reconcileStaleRunningSession(server, &session);
 
     if (parsed.value.prompt) |next_prompt_raw| {
         const next_prompt = std.mem.trim(u8, next_prompt_raw, " \t\r\n");
@@ -639,7 +640,7 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         const timestamp_ms = std.time.milliTimestamp();
         try store.appendSessionMessage(server.allocator, server.config.workspace_root, session.id, .user, next_prompt, timestamp_ms);
         try store.setSessionPrompt(server.allocator, server.config.workspace_root, &session, next_prompt, .initialized);
-    } else if (session.status == .completed or session.status == .cancelled) {
+    } else if (session.status == .completed or session.status == .failed or session.status == .cancelled) {
         const current_output = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
         defer if (current_output) |value| server.allocator.free(value);
         return renderJsonAlloc(server.allocator, protocol_types.SessionSendResult{
@@ -1509,6 +1510,85 @@ test "session/compact reconciles stale running sessions before running compactio
     defer if (latest_event) |event| event.deinit(std.testing.allocator);
     try std.testing.expect(latest_event != null);
     try std.testing.expectEqualStrings("session_failed", latest_event.?.event_type);
+}
+
+test "session/send without prompt reconciles stale running sessions without implicit execution" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    var stdout_capture = try attachTestStdout(&tmp, &server, "stale-send-stdout.bin");
+    defer stdout_capture.close();
+
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "send stale run", .{
+        .status = .running,
+    });
+    defer session.deinit(std.testing.allocator);
+    try appendStaleStartedEvent(workspace_root, session.id);
+
+    const request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-send-stale\",\"method\":\"session/send\",\"params\":{{\"session_id\":\"{s}\"}}}}",
+        .{session.id},
+    );
+    defer std.testing.allocator.free(request);
+
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"id\":\"req-send-stale\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "no active kernel execution owns it") != null);
+
+    var persisted = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
+    defer persisted.deinit(std.testing.allocator);
+    try std.testing.expectEqual(types.SessionStatus.failed, persisted.status);
+}
+
+test "session/send without prompt returns failed sessions without implicit retry" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "failed run", .{});
+    defer session.deinit(std.testing.allocator);
+    try store.setSessionFailure(std.testing.allocator, workspace_root, &session, "ProviderTransportFailed");
+
+    const request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-send-failed\",\"method\":\"session/send\",\"params\":{{\"session_id\":\"{s}\"}}}}",
+        .{session.id},
+    );
+    defer std.testing.allocator.free(request);
+
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"id\":\"req-send-failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "ProviderTransportFailed") != null);
+
+    var persisted = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
+    defer persisted.deinit(std.testing.allocator);
+    try std.testing.expectEqual(types.SessionStatus.failed, persisted.status);
+    try std.testing.expectEqualStrings("ProviderTransportFailed", persisted.failure_reason.?);
 }
 
 test "session/cancel persists initialized-session cancellation events" {
