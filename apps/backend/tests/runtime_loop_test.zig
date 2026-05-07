@@ -212,6 +212,29 @@ fn mockSendToolLoop(
     );
 }
 
+fn mockSendMultiToolLoop(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const u8,
+    payload: []const u8,
+) anyerror![]u8 {
+    var ctx: *ToolLoopContext = @ptrCast(@alignCast(ctx_ptr.?));
+    ctx.payloads[ctx.call_count] = try ctx.allocator.dupe(u8, payload);
+
+    defer ctx.call_count += 1;
+
+    if (ctx.call_count == 0) {
+        return allocator.dupe(u8,
+            \\{"model":"gemma-4-e2b-it","choices":[{"message":{"tool_calls":[{"id":"call_first","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"context.txt\",\"start_line\":1,\"end_line\":1}"}},{"id":"call_second","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"context.txt\",\"start_line\":2,\"end_line\":2}"}}]}}]}
+        );
+    }
+
+    return allocator.dupe(u8,
+        \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"The first two lines are alpha and beta."}}]}
+    );
+}
+
 fn mockSendBlockedToolLoop(
     ctx_ptr: ?*anyopaque,
     allocator: std.mem.Allocator,
@@ -931,6 +954,62 @@ test "loop executes tool calls and exposes descriptors in the provider payload" 
     try std.testing.expectEqualStrings("call_1", transcript[2].tool_call_id.?);
     try std.testing.expect(std.mem.indexOf(u8, transcript[2].content, "hello from file") != null);
     try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.assistant, transcript[3].role);
+}
+
+test "loop persists multi-tool batches in assistant source order before follow-up context" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const file_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, "context.txt" });
+    defer std.testing.allocator.free(file_path);
+    try VAR1.shared.fsutil.writeText(file_path, "alpha\nbeta\n");
+
+    const config = try makeConfig(std.testing.allocator, workspace_root, 4);
+    defer config.deinit(std.testing.allocator);
+
+    var context = ToolLoopContext{ .allocator = std.testing.allocator };
+    defer context.deinit();
+
+    const result = try VAR1.core.executor.runPromptWithTransport(std.testing.allocator, config, "Read the first two lines in context.txt.", .{
+        .context = &context,
+        .sendFn = mockSendMultiToolLoop,
+    });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(std.mem.indexOf(u8, result.output, "alpha") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.output, "beta") != null);
+    try std.testing.expectEqual(@as(usize, 2), context.call_count);
+    try std.testing.expect(std.mem.indexOf(u8, context.payloads[1].?, "\"role\":\"tool\"") != null);
+    const first_payload_index = std.mem.indexOf(u8, context.payloads[1].?, "call_first").?;
+    const second_payload_index = std.mem.indexOf(u8, context.payloads[1].?, "call_second").?;
+    try std.testing.expect(first_payload_index < second_payload_index);
+
+    const events_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", result.session_id, "events.jsonl" });
+    defer std.testing.allocator.free(events_path);
+    const events = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, events_path);
+    defer std.testing.allocator.free(events);
+    const request_event_index = std.mem.indexOf(u8, events, "tool_requested").?;
+    const first_completed_index = std.mem.indexOf(u8, events, "tool completed: read_file").?;
+    const response_event_index = std.mem.indexOf(u8, events, "assistant_response").?;
+    try std.testing.expect(request_event_index < first_completed_index);
+    try std.testing.expect(first_completed_index < response_event_index);
+
+    const transcript = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, result.session_id);
+    defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, transcript);
+    try std.testing.expectEqual(@as(usize, 5), transcript.len);
+    try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.user, transcript[0].role);
+    try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.assistant, transcript[1].role);
+    try std.testing.expectEqual(@as(usize, 2), transcript[1].tool_calls.len);
+    try std.testing.expectEqualStrings("call_first", transcript[1].tool_calls[0].id);
+    try std.testing.expectEqualStrings("call_second", transcript[1].tool_calls[1].id);
+    try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.tool, transcript[2].role);
+    try std.testing.expectEqualStrings("call_first", transcript[2].tool_call_id.?);
+    try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.tool, transcript[3].role);
+    try std.testing.expectEqualStrings("call_second", transcript[3].tool_call_id.?);
+    try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.assistant, transcript[4].role);
 }
 
 test "loop blocks undeclared tool calls before execution and returns protocol-visible denial" {
