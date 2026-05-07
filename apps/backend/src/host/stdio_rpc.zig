@@ -606,6 +606,7 @@ fn handleSessionResume(server: *Server, params: ?std.json.Value) ![]u8 {
     defer session.deinit(server.allocator);
 
     try server.runtime.ensureSession(server.allocator, session.id, parsed.value.enable_agent_tools);
+    try reconcileStaleRunningSession(server, &session);
 
     const output = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
     defer if (output) |value| server.allocator.free(value);
@@ -717,6 +718,7 @@ fn handleSessionCompact(server: *Server, params: ?std.json.Value) ![]u8 {
     defer session.deinit(server.allocator);
 
     try server.runtime.ensureSession(server.allocator, session.id, null);
+    try reconcileStaleRunningSession(server, &session);
     if (server.runtime.isRunning(session.id)) return Error.SessionRunning;
 
     const trigger = parsed.value.trigger orelse "manual";
@@ -1293,6 +1295,14 @@ fn attachTestStdout(tmp: *std.testing.TmpDir, server: *Server, name: []const u8)
     return file;
 }
 
+fn appendStaleStartedEvent(workspace_root: []const u8, session_id: []const u8) !void {
+    try store.appendEvent(std.testing.allocator, workspace_root, session_id, .{
+        .event_type = "session_started",
+        .message = "VAR1 session initialized.",
+        .timestamp_ms = std.time.milliTimestamp() - stale_running_session_ms - 1,
+    });
+}
+
 test "processRequest returns parse errors for malformed json-rpc payloads" {
     var server = makeTestServer();
     defer server.deinit();
@@ -1358,11 +1368,7 @@ test "session/get reconciles stale running sessions into user-visible failure" {
     });
     defer session.deinit(std.testing.allocator);
 
-    try store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "session_started",
-        .message = "VAR1 session initialized.",
-        .timestamp_ms = std.time.milliTimestamp() - stale_running_session_ms - 1,
-    });
+    try appendStaleStartedEvent(workspace_root, session.id);
 
     const request = try std.fmt.allocPrint(
         std.testing.allocator,
@@ -1406,11 +1412,7 @@ test "session/list reconciles stale running sessions for dashboard surfaces" {
     });
     defer session.deinit(std.testing.allocator);
 
-    try store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "session_started",
-        .message = "VAR1 session initialized.",
-        .timestamp_ms = std.time.milliTimestamp() - stale_running_session_ms - 1,
-    });
+    try appendStaleStartedEvent(workspace_root, session.id);
 
     const response = (try processRequest(&server, "{\"jsonrpc\":\"2.0\",\"id\":\"req-list\",\"method\":\"session/list\",\"params\":{}}")).?;
     defer std.testing.allocator.free(response);
@@ -1422,6 +1424,91 @@ test "session/list reconciles stale running sessions for dashboard surfaces" {
     var persisted = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
     defer persisted.deinit(std.testing.allocator);
     try std.testing.expectEqual(types.SessionStatus.failed, persisted.status);
+}
+
+test "session/resume reconciles stale running sessions before returning state" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    var stdout_capture = try attachTestStdout(&tmp, &server, "stale-resume-stdout.bin");
+    defer stdout_capture.close();
+
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "resume stale run", .{
+        .status = .running,
+    });
+    defer session.deinit(std.testing.allocator);
+    try appendStaleStartedEvent(workspace_root, session.id);
+
+    const request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-resume-stale\",\"method\":\"session/resume\",\"params\":{{\"session_id\":\"{s}\"}}}}",
+        .{session.id},
+    );
+    defer std.testing.allocator.free(request);
+
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "no active kernel execution owns it") != null);
+
+    var persisted = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
+    defer persisted.deinit(std.testing.allocator);
+    try std.testing.expectEqual(types.SessionStatus.failed, persisted.status);
+}
+
+test "session/compact reconciles stale running sessions before running compaction" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    var stdout_capture = try attachTestStdout(&tmp, &server, "stale-compact-stdout.bin");
+    defer stdout_capture.close();
+
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "compact stale run", .{
+        .status = .running,
+    });
+    defer session.deinit(std.testing.allocator);
+    try appendStaleStartedEvent(workspace_root, session.id);
+
+    const request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-compact-stale\",\"method\":\"session/compact\",\"params\":{{\"session_id\":\"{s}\",\"trigger\":\"test\"}}}}",
+        .{session.id},
+    );
+    defer std.testing.allocator.free(request);
+
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"id\":\"req-compact-stale\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"error\"") == null);
+
+    var persisted = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
+    defer persisted.deinit(std.testing.allocator);
+    try std.testing.expectEqual(types.SessionStatus.failed, persisted.status);
+
+    const latest_event = try store.readLatestEvent(std.testing.allocator, workspace_root, session.id);
+    defer if (latest_event) |event| event.deinit(std.testing.allocator);
+    try std.testing.expect(latest_event != null);
+    try std.testing.expectEqualStrings("session_failed", latest_event.?.event_type);
 }
 
 test "session/cancel persists initialized-session cancellation events" {
@@ -1484,11 +1571,7 @@ test "session/cancel closes stale running sessions without live owner" {
     });
     defer session.deinit(std.testing.allocator);
 
-    try store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "session_started",
-        .message = "VAR1 session initialized.",
-        .timestamp_ms = std.time.milliTimestamp() - stale_running_session_ms - 1,
-    });
+    try appendStaleStartedEvent(workspace_root, session.id);
 
     const request = try std.fmt.allocPrint(
         std.testing.allocator,
