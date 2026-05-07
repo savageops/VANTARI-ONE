@@ -500,13 +500,27 @@ test "loop writes runtime state and archives docs on success" {
     const config = try makeConfig(std.testing.allocator, workspace_root, 4);
     defer config.deinit(std.testing.allocator);
 
-    const result = try VAR1.core.executor.runPromptWithTransport(std.testing.allocator, config, "how many r in strawberry", .{
-        .context = null,
-        .sendFn = mockSendSuccess,
+    var capture = EventCapture{ .allocator = std.testing.allocator };
+    defer capture.deinit();
+
+    const result = try VAR1.core.executor.runPromptWithOptions(std.testing.allocator, config, "how many r in strawberry", .{
+        .transport = .{
+            .context = null,
+            .sendFn = mockSendSuccess,
+        },
+        .execution_context = .{
+            .workspace_root = config.workspace_root,
+        },
+        .hooks = .{
+            .context = &capture,
+            .onSessionEventFn = captureSessionEvent,
+        },
     });
     defer result.deinit(std.testing.allocator);
 
     try std.testing.expect(std.mem.indexOf(u8, result.output, "3") != null);
+    try std.testing.expectEqualStrings("assistant_response", capture.last_event_type.?);
+    try std.testing.expectEqualStrings("completed", capture.last_status.?);
 
     const changelog_path = try VAR1.core.docs_sync.changelogSlicePath(std.testing.allocator, workspace_root, result.session_id);
     defer std.testing.allocator.free(changelog_path);

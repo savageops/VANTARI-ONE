@@ -378,6 +378,9 @@ pub fn runPromptWithOptions(
             defer allocator.free(final_output);
 
             const final_timestamp = std.time.milliTimestamp();
+            try store.upsertAssistantSessionMessage(allocator, config.workspace_root, session.id, final_output, final_timestamp);
+            try store.writeOutput(allocator, config.workspace_root, session.id, final_output);
+            try store.setSessionStatus(allocator, config.workspace_root, &session, .completed);
             try store.appendEvent(allocator, config.workspace_root, session.id, .{
                 .event_type = "assistant_response",
                 .message = final_output,
@@ -390,9 +393,6 @@ pub fn runPromptWithOptions(
                 types.statusLabel(session.status),
                 final_timestamp,
             );
-            try store.upsertAssistantSessionMessage(allocator, config.workspace_root, session.id, final_output, final_timestamp);
-            try store.writeOutput(allocator, config.workspace_root, session.id, final_output);
-            try store.setSessionStatus(allocator, config.workspace_root, &session, .completed);
             try docs_sync.completeSession(allocator, config.workspace_root, .{
                 .session_id = session.id,
                 .status = types.statusLabel(session.status),
