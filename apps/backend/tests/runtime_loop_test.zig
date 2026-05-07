@@ -90,6 +90,32 @@ const CancelContext = struct {
     checks: usize = 0,
 };
 
+const EventCapture = struct {
+    allocator: std.mem.Allocator,
+    last_event_type: ?[]u8 = null,
+    last_status: ?[]u8 = null,
+
+    fn deinit(self: *EventCapture) void {
+        if (self.last_event_type) |value| self.allocator.free(value);
+        if (self.last_status) |value| self.allocator.free(value);
+    }
+};
+
+fn captureSessionEvent(
+    ctx: ?*anyopaque,
+    _: []const u8,
+    event_type: []const u8,
+    _: []const u8,
+    status: []const u8,
+    _: i64,
+) anyerror!void {
+    var capture: *EventCapture = @ptrCast(@alignCast(ctx.?));
+    if (capture.last_event_type) |value| capture.allocator.free(value);
+    if (capture.last_status) |value| capture.allocator.free(value);
+    capture.last_event_type = try capture.allocator.dupe(u8, event_type);
+    capture.last_status = try capture.allocator.dupe(u8, status);
+}
+
 const LocalHttpServer = struct {
     server: std.net.Server,
     response: []const u8,
@@ -716,9 +742,21 @@ test "loop records a failed session when provider transport fails" {
     const config = try makeConfig(std.testing.allocator, workspace_root, 4);
     defer config.deinit(std.testing.allocator);
 
-    try std.testing.expectError(error.ConnectionRefused, VAR1.core.executor.runPromptWithTransport(std.testing.allocator, config, "how many r in strawberry", .{
-        .context = null,
-        .sendFn = mockSendFailure,
+    var capture = EventCapture{ .allocator = std.testing.allocator };
+    defer capture.deinit();
+
+    try std.testing.expectError(error.ConnectionRefused, VAR1.core.executor.runPromptWithOptions(std.testing.allocator, config, "how many r in strawberry", .{
+        .transport = .{
+            .context = null,
+            .sendFn = mockSendFailure,
+        },
+        .execution_context = .{
+            .workspace_root = config.workspace_root,
+        },
+        .hooks = .{
+            .context = &capture,
+            .onSessionEventFn = captureSessionEvent,
+        },
     }));
 
     const sessions = try VAR1.core.session_store.listSessionRecords(std.testing.allocator, workspace_root);
@@ -733,6 +771,8 @@ test "loop records a failed session when provider transport fails" {
     try std.testing.expectEqualStrings("session_started", events[0].event_type);
     try std.testing.expectEqualStrings("session_failed", events[1].event_type);
     try std.testing.expect(std.mem.indexOf(u8, events[1].message, "ConnectionRefused") != null);
+    try std.testing.expectEqualStrings("session_failed", capture.last_event_type.?);
+    try std.testing.expectEqualStrings("failed", capture.last_status.?);
 }
 
 test "loop marks a session cancelled when hooks request cancellation" {

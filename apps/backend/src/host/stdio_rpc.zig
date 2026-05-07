@@ -150,6 +150,22 @@ const Server = struct {
         try self.writePayload(payload);
     }
 
+    fn recordAndEmitSessionEvent(
+        self: *Server,
+        session_id: []const u8,
+        event_type: []const u8,
+        message: []const u8,
+        status: []const u8,
+        timestamp_ms: i64,
+    ) !void {
+        try store.appendEvent(self.allocator, self.config.workspace_root, session_id, .{
+            .event_type = event_type,
+            .message = message,
+            .timestamp_ms = timestamp_ms,
+        });
+        try self.emitSessionEvent(session_id, event_type, message, status, timestamp_ms);
+    }
+
     fn writePayload(self: *Server, payload: []const u8) !void {
         self.write_mutex.lock();
         defer self.write_mutex.unlock();
@@ -751,7 +767,7 @@ fn handleSessionCancel(server: *Server, params: ?std.json.Value) ![]u8 {
     if (session.status == .initialized) {
         try store.setSessionStatus(server.allocator, server.config.workspace_root, &session, .cancelled);
         cancellation_requested = true;
-        try server.emitSessionEvent(
+        try server.recordAndEmitSessionEvent(
             session.id,
             "session_cancelled",
             "Cancellation requested before execution started.",
@@ -759,7 +775,19 @@ fn handleSessionCancel(server: *Server, params: ?std.json.Value) ![]u8 {
             session.updated_at_ms,
         );
     } else if (session.status == .running) {
-        cancellation_requested = server.runtime.requestCancel(session.id);
+        if (server.runtime.requestCancel(session.id)) {
+            cancellation_requested = true;
+        } else if (try isStaleUnownedRunningSession(server, &session)) {
+            try store.setSessionStatus(server.allocator, server.config.workspace_root, &session, .cancelled);
+            cancellation_requested = true;
+            try server.recordAndEmitSessionEvent(
+                session.id,
+                "session_cancelled",
+                "Cancellation closed a stale running session with no active kernel execution owner.",
+                types.statusLabel(session.status),
+                session.updated_at_ms,
+            );
+        }
     }
 
     return renderJsonAlloc(server.allocator, protocol_types.SessionCancelResult{
@@ -805,22 +833,24 @@ fn handleSessionGet(server: *Server, params: ?std.json.Value) ![]u8 {
 
 fn reconcileStaleRunningSession(server: *Server, session: *types.SessionRecord) !void {
     if (session.status != .running) return;
-    if (server.runtime.isRunning(session.id)) return;
+    if (!(try isStaleUnownedRunningSession(server, session))) return;
+
+    const timestamp_ms = std.time.milliTimestamp();
+    const failure_reason = "Session was marked running but no active kernel execution owns it.";
+    try server.recordAndEmitSessionEvent(session.id, "session_failed", failure_reason, "failed", timestamp_ms);
+    try store.setSessionFailure(server.allocator, server.config.workspace_root, session, failure_reason);
+}
+
+fn isStaleUnownedRunningSession(server: *Server, session: *const types.SessionRecord) !bool {
+    if (session.status != .running) return false;
+    if (server.runtime.isRunning(session.id)) return false;
 
     const latest_event = try store.readLatestEvent(server.allocator, server.config.workspace_root, session.id);
     defer if (latest_event) |event| event.deinit(server.allocator);
 
     const now = std.time.milliTimestamp();
     const last_observed_ms = if (latest_event) |event| event.timestamp_ms else session.updated_at_ms;
-    if (now - last_observed_ms < stale_running_session_ms) return;
-
-    const failure_reason = "Session was marked running but no active kernel execution owns it.";
-    try store.appendEvent(server.allocator, server.config.workspace_root, session.id, .{
-        .event_type = "session_failed",
-        .message = failure_reason,
-        .timestamp_ms = now,
-    });
-    try store.setSessionFailure(server.allocator, server.config.workspace_root, session, failure_reason);
+    return now - last_observed_ms >= stale_running_session_ms;
 }
 
 fn handleSessionList(server: *Server) ![]u8 {
@@ -830,10 +860,12 @@ fn handleSessionList(server: *Server) ![]u8 {
     var summaries = try server.allocator.alloc(protocol_types.SessionSummary, sessions.len);
     defer server.allocator.free(summaries);
 
-    for (sessions, 0..) |session, index| {
+    for (sessions, 0..) |*session, index| {
+        try reconcileStaleRunningSession(server, session);
+
         const output = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
         defer if (output) |value| server.allocator.free(value);
-        summaries[index] = makeSessionSummary(session, output);
+        summaries[index] = makeSessionSummary(session.*, output);
     }
 
     return renderJsonAlloc(server.allocator, protocol_types.SessionListResult{
@@ -1255,6 +1287,12 @@ fn makeTestConfig(allocator: std.mem.Allocator, workspace_root: []const u8) !typ
     };
 }
 
+fn attachTestStdout(tmp: *std.testing.TmpDir, server: *Server, name: []const u8) !std.fs.File {
+    const file = try tmp.dir.createFile(name, .{ .read = true });
+    server.stdout_file = file;
+    return file;
+}
+
 test "processRequest returns parse errors for malformed json-rpc payloads" {
     var server = makeTestServer();
     defer server.deinit();
@@ -1312,6 +1350,8 @@ test "session/get reconciles stale running sessions into user-visible failure" {
     var server = makeTestServer();
     server.config = &config;
     defer server.deinit();
+    var stdout_capture = try attachTestStdout(&tmp, &server, "stale-get-stdout.bin");
+    defer stdout_capture.close();
 
     var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "show me live progress", .{
         .status = .running,
@@ -1343,4 +1383,133 @@ test "session/get reconciles stale running sessions into user-visible failure" {
     defer persisted.deinit(std.testing.allocator);
     try std.testing.expectEqual(types.SessionStatus.failed, persisted.status);
     try std.testing.expect(std.mem.indexOf(u8, persisted.failure_reason.?, "no active kernel execution owns it") != null);
+}
+
+test "session/list reconciles stale running sessions for dashboard surfaces" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    var stdout_capture = try attachTestStdout(&tmp, &server, "stale-list-stdout.bin");
+    defer stdout_capture.close();
+
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "show active dashboard state", .{
+        .status = .running,
+    });
+    defer session.deinit(std.testing.allocator);
+
+    try store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
+        .event_type = "session_started",
+        .message = "VAR1 session initialized.",
+        .timestamp_ms = std.time.milliTimestamp() - stale_running_session_ms - 1,
+    });
+
+    const response = (try processRequest(&server, "{\"jsonrpc\":\"2.0\",\"id\":\"req-list\",\"method\":\"session/list\",\"params\":{}}")).?;
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"id\":\"req-list\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "no active kernel execution owns it") != null);
+
+    var persisted = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
+    defer persisted.deinit(std.testing.allocator);
+    try std.testing.expectEqual(types.SessionStatus.failed, persisted.status);
+}
+
+test "session/cancel persists initialized-session cancellation events" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    var stdout_capture = try attachTestStdout(&tmp, &server, "cancel-initialized-stdout.bin");
+    defer stdout_capture.close();
+
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "cancel before execution", .{});
+    defer session.deinit(std.testing.allocator);
+
+    const request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-cancel-initialized\",\"method\":\"session/cancel\",\"params\":{{\"session_id\":\"{s}\"}}}}",
+        .{session.id},
+    );
+    defer std.testing.allocator.free(request);
+
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"cancelled\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"cancellation_requested\":true") != null);
+
+    const latest_event = try store.readLatestEvent(std.testing.allocator, workspace_root, session.id);
+    defer if (latest_event) |event| event.deinit(std.testing.allocator);
+    try std.testing.expect(latest_event != null);
+    try std.testing.expectEqualStrings("session_cancelled", latest_event.?.event_type);
+    try std.testing.expect(std.mem.indexOf(u8, latest_event.?.message, "before execution started") != null);
+}
+
+test "session/cancel closes stale running sessions without live owner" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    var stdout_capture = try attachTestStdout(&tmp, &server, "cancel-stale-stdout.bin");
+    defer stdout_capture.close();
+
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "cancel stale run", .{
+        .status = .running,
+    });
+    defer session.deinit(std.testing.allocator);
+
+    try store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
+        .event_type = "session_started",
+        .message = "VAR1 session initialized.",
+        .timestamp_ms = std.time.milliTimestamp() - stale_running_session_ms - 1,
+    });
+
+    const request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-cancel-stale\",\"method\":\"session/cancel\",\"params\":{{\"session_id\":\"{s}\"}}}}",
+        .{session.id},
+    );
+    defer std.testing.allocator.free(request);
+
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"cancelled\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"cancellation_requested\":true") != null);
+
+    var persisted = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
+    defer persisted.deinit(std.testing.allocator);
+    try std.testing.expectEqual(types.SessionStatus.cancelled, persisted.status);
+
+    const latest_event = try store.readLatestEvent(std.testing.allocator, workspace_root, session.id);
+    defer if (latest_event) |event| event.deinit(std.testing.allocator);
+    try std.testing.expect(latest_event != null);
+    try std.testing.expectEqualStrings("session_cancelled", latest_event.?.event_type);
+    try std.testing.expect(std.mem.indexOf(u8, latest_event.?.message, "no active kernel execution owner") != null);
 }

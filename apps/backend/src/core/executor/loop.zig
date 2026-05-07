@@ -830,8 +830,8 @@ fn failSession(
     session: *types.SessionRecord,
     failure_reason: []const u8,
 ) !void {
-    try recordSessionEvent(allocator, workspace_root, hooks, session.id, "session_failed", failure_reason, session.status);
     try store.setSessionFailure(allocator, workspace_root, session, failure_reason);
+    try recordSessionEvent(allocator, workspace_root, hooks, session.id, "session_failed", failure_reason, session.status);
     try docs_sync.writePending(allocator, workspace_root, .{
         .session_id = session.id,
         .status = types.statusLabel(session.status),
