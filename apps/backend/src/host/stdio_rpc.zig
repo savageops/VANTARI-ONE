@@ -24,6 +24,7 @@ pub const Error = error{
 const max_header_line_bytes = 8 * 1024;
 const max_notification_backlog = 512;
 const notification_poll_ms: u64 = 50;
+const stale_running_session_ms: i64 = 120_000;
 
 const SessionRuntimeState = struct {
     enable_agent_tools: bool = true,
@@ -780,6 +781,7 @@ fn handleSessionGet(server: *Server, params: ?std.json.Value) ![]u8 {
         return Error.SessionNotFound;
     };
     defer session.deinit(server.allocator);
+    try reconcileStaleRunningSession(server, &session);
 
     const output = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
     defer if (output) |value| server.allocator.free(value);
@@ -799,6 +801,26 @@ fn handleSessionGet(server: *Server, params: ?std.json.Value) ![]u8 {
         .messages = messages,
         .events = events,
     });
+}
+
+fn reconcileStaleRunningSession(server: *Server, session: *types.SessionRecord) !void {
+    if (session.status != .running) return;
+    if (server.runtime.isRunning(session.id)) return;
+
+    const latest_event = try store.readLatestEvent(server.allocator, server.config.workspace_root, session.id);
+    defer if (latest_event) |event| event.deinit(server.allocator);
+
+    const now = std.time.milliTimestamp();
+    const last_observed_ms = if (latest_event) |event| event.timestamp_ms else session.updated_at_ms;
+    if (now - last_observed_ms < stale_running_session_ms) return;
+
+    const failure_reason = "Session was marked running but no active kernel execution owns it.";
+    try store.appendEvent(server.allocator, server.config.workspace_root, session.id, .{
+        .event_type = "session_failed",
+        .message = failure_reason,
+        .timestamp_ms = now,
+    });
+    try store.setSessionFailure(server.allocator, server.config.workspace_root, session, failure_reason);
 }
 
 fn handleSessionList(server: *Server) ![]u8 {
@@ -1223,6 +1245,16 @@ fn makeTestServer() Server {
     };
 }
 
+fn makeTestConfig(allocator: std.mem.Allocator, workspace_root: []const u8) !types.Config {
+    return .{
+        .openai_base_url = try allocator.dupe(u8, "http://127.0.0.1:1234"),
+        .openai_api_key = try allocator.dupe(u8, "test-key"),
+        .openai_model = try allocator.dupe(u8, "test-model"),
+        .max_steps = 2,
+        .workspace_root = try allocator.dupe(u8, workspace_root),
+    };
+}
+
 test "processRequest returns parse errors for malformed json-rpc payloads" {
     var server = makeTestServer();
     defer server.deinit();
@@ -1265,4 +1297,50 @@ test "processRequest treats id-less initialize requests as notifications" {
     const response = try processRequest(&server, payload);
 
     try std.testing.expect(response == null);
+}
+
+test "session/get reconciles stale running sessions into user-visible failure" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "show me live progress", .{
+        .status = .running,
+    });
+    defer session.deinit(std.testing.allocator);
+
+    try store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
+        .event_type = "session_started",
+        .message = "VAR1 session initialized.",
+        .timestamp_ms = std.time.milliTimestamp() - stale_running_session_ms - 1,
+    });
+
+    const request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-stale\",\"method\":\"session/get\",\"params\":{{\"session_id\":\"{s}\"}}}}",
+        .{session.id},
+    );
+    defer std.testing.allocator.free(request);
+
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"id\":\"req-stale\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"event_type\":\"session_failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "no active kernel execution owns it") != null);
+
+    var persisted = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
+    defer persisted.deinit(std.testing.allocator);
+    try std.testing.expectEqual(types.SessionStatus.failed, persisted.status);
+    try std.testing.expect(std.mem.indexOf(u8, persisted.failure_reason.?, "no active kernel execution owns it") != null);
 }
