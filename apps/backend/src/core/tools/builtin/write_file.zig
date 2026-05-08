@@ -12,7 +12,7 @@ pub const definition = types.ToolDefinition{
     \\  "type": "object",
     \\  "properties": {
     \\    "path": { "type": "string", "description": "Required workspace-relative file path to create or overwrite." },
-    \\    "content": { "type": "string", "description": "Required full file contents to write." }
+    \\    "content": { "type": "string", "maxLength": 8192, "description": "Required full file contents to write. Keep generated content under 8192 bytes per call; split larger artifacts into append_file chunks." }
     \\  },
     \\  "required": ["path", "content"],
     \\  "additionalProperties": false
@@ -39,6 +39,8 @@ pub fn execute(
         .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
+
+    try module.enforceFileToolContentBudget(parsed.value.content);
 
     const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
     defer allocator.free(file_path);

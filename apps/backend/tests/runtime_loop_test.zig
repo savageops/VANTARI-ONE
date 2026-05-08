@@ -78,6 +78,17 @@ const ToolLoopContext = struct {
     }
 };
 
+fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
+    if (needle.len == 0) return 0;
+    var count: usize = 0;
+    var offset: usize = 0;
+    while (std.mem.indexOf(u8, haystack[offset..], needle)) |relative_index| {
+        count += 1;
+        offset += relative_index + needle.len;
+    }
+    return count;
+}
+
 const ResumePromptContext = struct {
     allocator: std.mem.Allocator,
     payload: ?[]u8 = null,
@@ -249,6 +260,30 @@ fn mockSendMultiToolLoop(
 
     return allocator.dupe(u8,
         \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"The first two lines are alpha and beta."}}]}
+    );
+}
+
+fn mockSendToolLoopOverflowThenSuccess(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const u8,
+    payload: []const u8,
+) anyerror![]u8 {
+    var ctx: *ToolLoopContext = @ptrCast(@alignCast(ctx_ptr.?));
+    ctx.payloads[ctx.call_count] = try ctx.allocator.dupe(u8, payload);
+
+    defer ctx.call_count += 1;
+
+    if (ctx.call_count == 0) {
+        return allocator.dupe(u8,
+            \\{"model":"gemma-4-e2b-it","choices":[{"message":{"tool_calls":[{"id":"call_retry_boundary","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"context.txt\",\"start_line\":1,\"end_line\":1}"}}]}}]}
+        );
+    }
+    if (ctx.call_count == 1) return error.ContextWindowExceeded;
+
+    return allocator.dupe(u8,
+        \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"Recovered with the sentinel exactly once."}}]}
     );
 }
 
@@ -1041,6 +1076,53 @@ test "loop persists multi-tool batches in assistant source order before follow-u
     try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.tool, transcript[3].role);
     try std.testing.expectEqualStrings("call_second", transcript[3].tool_call_id.?);
     try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.assistant, transcript[4].role);
+}
+
+test "loop rebuilds provider payload after tool overflow without duplicating durable tool context" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const file_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, "context.txt" });
+    defer std.testing.allocator.free(file_path);
+    try VAR1.shared.fsutil.writeText(file_path, "READ_RESULT_SENTINEL_829\n");
+
+    var config = try makeConfig(std.testing.allocator, workspace_root, 4);
+    defer config.deinit(std.testing.allocator);
+    config.context_policy = .{
+        .auto_compaction = false,
+        .retry_on_provider_overflow = true,
+        .context_window_tokens = 80,
+        .compact_at_ratio_milli = 500,
+        .reserve_output_tokens = 10,
+        .keep_recent_messages = 1,
+        .max_entries_per_checkpoint = 0,
+        .aggressiveness_milli = 350,
+    };
+
+    var context = ToolLoopContext{ .allocator = std.testing.allocator };
+    defer context.deinit();
+
+    const result = try VAR1.core.executor.runPromptWithTransport(std.testing.allocator, config, "Read context.txt and return the first line.", .{
+        .context = &context,
+        .sendFn = mockSendToolLoopOverflowThenSuccess,
+    });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), context.call_count);
+    try std.testing.expect(std.mem.indexOf(u8, result.output, "Recovered") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context.payloads[2].?, "VAR1 context checkpoint") != null);
+    try std.testing.expectEqual(@as(usize, 2), countOccurrences(context.payloads[2].?, "call_retry_boundary"));
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(context.payloads[2].?, "\"role\":\"tool\""));
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(context.payloads[2].?, "READ_RESULT_SENTINEL_829"));
+
+    const context_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", result.session_id, "context.jsonl" });
+    defer std.testing.allocator.free(context_path);
+    const context_jsonl = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, context_path);
+    defer std.testing.allocator.free(context_jsonl);
+    try std.testing.expect(std.mem.indexOf(u8, context_jsonl, "provider_overflow") != null);
 }
 
 test "loop fails closed before provider dispatch on unresolved persisted tool calls" {
