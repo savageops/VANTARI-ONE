@@ -40,10 +40,22 @@ test "cli resolvePromptInput returns empty prompt for resume-only runs" {
 test "cli root help advertises command discovery and tools json export" {
     const help = VAR1.clients.cli.helpText(null).?;
 
+    try std.testing.expect(std.mem.indexOf(u8, help, "var <command> [flags]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "var c") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "VAR1 <command> [flags]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "VAR1 health") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "VAR1 tools --json") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "VAR1 help <command>") != null);
+}
+
+test "cli recent-session help is canonical-store scoped" {
+    const help = VAR1.clients.cli.helpText("c").?;
+
+    try std.testing.expect(std.mem.indexOf(u8, help, "var c [--limit <count>] [--json]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, ".var/sessions") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "legacy or global runtime roots") != null);
+    try std.testing.expect(VAR1.clients.cli.helpText("continue") != null);
+    try std.testing.expect(VAR1.clients.cli.helpText("sessions") != null);
 }
 
 test "cli run help documents prompt-source exclusivity and session resume semantics" {

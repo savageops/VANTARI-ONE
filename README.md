@@ -53,6 +53,15 @@ cd apps/backend
 .\zig-out\bin\VAR1.exe run --prompt "Return exactly 3."
 ```
 
+Install the command-line client as `var`:
+
+```powershell
+cd apps/cli
+.\scripts\install-var.ps1
+vantari c
+# PowerShell reserves bare `var`; use `var.exe c` when you want the exact executable.
+```
+
 Open the browser workbench after the bridge is running:
 
 ```powershell

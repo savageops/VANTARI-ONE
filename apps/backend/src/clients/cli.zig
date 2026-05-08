@@ -1,9 +1,11 @@
 const std = @import("std");
 const agents = @import("../core/agents/service.zig");
 const config = @import("../core/config/resolver.zig");
+const session_store = @import("../core/sessions/store.zig");
 const protocol_types = @import("../shared/protocol/types.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
 const stdio_rpc = @import("../host/stdio_rpc.zig");
+const shared_types = @import("../shared/types.zig");
 const web = @import("../host/http_bridge.zig");
 
 const RunCliOptions = struct {
@@ -21,6 +23,11 @@ const ServeCliOptions = struct {
 
 const ToolsCliOptions = struct {
     json_output: bool = false,
+};
+
+const SessionsCliOptions = struct {
+    json_output: bool = false,
+    limit: usize = 12,
 };
 
 const HealthCliOptions = struct {
@@ -42,6 +49,11 @@ const ParsedToolsArguments = struct {
     help_requested: bool = false,
 };
 
+const ParsedSessionsArguments = struct {
+    options: SessionsCliOptions = .{},
+    help_requested: bool = false,
+};
+
 const ParsedHealthArguments = struct {
     options: HealthCliOptions = .{},
     help_requested: bool = false,
@@ -52,6 +64,13 @@ const ParsedSessionSummary = struct {
     status: []const u8,
     prompt: []const u8,
     output: ?[]const u8 = null,
+    parent_session_id: ?[]const u8 = null,
+    continued_from_session_id: ?[]const u8 = null,
+    display_name: ?[]const u8 = null,
+    agent_profile: ?[]const u8 = null,
+    failure_reason: ?[]const u8 = null,
+    created_at_ms: i64 = 0,
+    updated_at_ms: i64 = 0,
 };
 
 const ParsedSessionCreateResult = struct {
@@ -81,16 +100,20 @@ pub const root_help_text =
     \\VAR1 Zig Kernel
     \\
     \\Usage:
+    \\  var <command> [flags]
     \\  VAR1 <command> [flags]
     \\
     \\Commands:
     \\  run      Execute a prompt or resume a canonical session through the kernel protocol.
+    \\  c        Show recent canonical sessions for this workspace.
+    \\  continue Alias for c.
     \\  health   Report local runtime readiness through the kernel protocol.
     \\  serve    Start the HTTP bridge for /rpc, /events, and /api/health.
     \\  tools    Print the built-in tool catalog and schemas through the kernel protocol.
     \\  help     Print help for a command.
     \\
     \\Examples:
+    \\  var c
     \\  VAR1 run --prompt "Summarize src/cli.zig."
     \\  VAR1 run --prompt-file .\prompt.txt --json
     \\  VAR1 run --session-id session-1776778021956-42e781c4c8b4efb8
@@ -105,8 +128,32 @@ pub const root_help_text =
     \\
 ;
 
+pub const sessions_help_text =
+    \\Usage:
+    \\  var c [--limit <count>] [--json]
+    \\  var continue [--limit <count>] [--json]
+    \\
+    \\Flags:
+    \\  --limit <count>           Maximum sessions to show. Default: 12
+    \\  --json                    Emit the canonical session/list result.
+    \\  -h, --help                Print help for the recent-session command.
+    \\
+    \\Behavior:
+    \\  c is a canonical recent-session selector seed. It reads only the current workspace
+    \\  .var/sessions store and does not inspect legacy or global runtime roots.
+    \\
+    \\Examples:
+    \\  var c
+    \\  var c --limit 5
+    \\  var continue --json
+    \\
+;
+
 pub const run_help_text =
     \\Usage:
+    \\  var run --prompt <text> [--json] [--no-agent-tools]
+    \\  var run --prompt-file <path> [--json] [--no-agent-tools]
+    \\  var run --session-id <session-id> [--json] [--no-agent-tools]
     \\  VAR1 run --prompt <text> [--json] [--no-agent-tools]
     \\  VAR1 run --prompt-file <path> [--json] [--no-agent-tools]
     \\  VAR1 run --session-id <session-id> [--json] [--no-agent-tools]
@@ -244,6 +291,19 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
             return;
         }
         try executeRunViaKernel(allocator, parsed.options);
+        return;
+    }
+
+    if (std.mem.eql(u8, command, "c") or std.mem.eql(u8, command, "continue") or std.mem.eql(u8, command, "sessions")) {
+        const parsed = parseSessionsArguments(iter) catch |err| {
+            try printInvalidArguments("c", sessions_help_text);
+            return err;
+        };
+        if (parsed.help_requested) {
+            try writeStdout(sessions_help_text);
+            return;
+        }
+        try executeSessionsFromStore(allocator, parsed.options);
         return;
     }
 
@@ -441,9 +501,117 @@ fn executeToolsViaKernel(allocator: std.mem.Allocator, options: ToolsCliOptions)
     if (options.json_output) try writeStdout("\n");
 }
 
+fn executeSessionsFromStore(allocator: std.mem.Allocator, options: SessionsCliOptions) !void {
+    const sessions = try session_store.listSessionRecords(allocator, ".");
+    defer shared_types.deinitSessionRecords(allocator, sessions);
+
+    var summaries = try allocator.alloc(protocol_types.SessionSummary, sessions.len);
+    defer allocator.free(summaries);
+
+    for (sessions, 0..) |session, index| {
+        const output = try session_store.readOutput(allocator, ".", session.id);
+        defer if (output) |value| allocator.free(value);
+        summaries[index] = makeCliSessionSummary(session, output);
+    }
+
+    if (options.json_output) {
+        const result_json = try renderJsonAlloc(allocator, protocol_types.SessionListResult{
+            .sessions = summaries,
+        });
+        defer allocator.free(result_json);
+        try writeStdout(result_json);
+        try writeStdout("\n");
+        return;
+    }
+
+    if (summaries.len == 0) {
+        try writeStdout("No VAR1 sessions in this workspace.\n");
+        return;
+    }
+
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const writer = &stdout_writer.interface;
+
+    try writer.writeAll("Recent VAR1 sessions\n");
+    const visible_count = @min(options.limit, summaries.len);
+    for (summaries[0..visible_count], 0..) |session, index| {
+        try writeSessionSummaryLine(writer, index + 1, session);
+    }
+    if (visible_count < summaries.len) {
+        try writer.print("... {d} more session(s). Use var c --limit {d}.\n", .{
+            summaries.len - visible_count,
+            summaries.len,
+        });
+    }
+    try writer.writeAll("Resume explicitly with: var run --session-id <session-id>\n");
+    try writer.flush();
+}
+
+fn makeCliSessionSummary(session: shared_types.SessionRecord, output: ?[]const u8) protocol_types.SessionSummary {
+    return .{
+        .session_id = session.id,
+        .status = shared_types.statusLabel(session.status),
+        .prompt = session.prompt,
+        .output = output,
+        .parent_session_id = session.parent_session_id,
+        .continued_from_session_id = session.continued_from_session_id,
+        .display_name = session.display_name,
+        .agent_profile = session.agent_profile,
+        .failure_reason = session.failure_reason,
+        .created_at_ms = session.created_at_ms,
+        .updated_at_ms = session.updated_at_ms,
+    };
+}
+
+fn writeSessionSummaryLine(writer: anytype, index: usize, session: protocol_types.SessionSummary) !void {
+    try writer.print("{d}. {s}  {s}  updated_ms={d}\n", .{
+        index,
+        session.session_id,
+        session.status,
+        session.updated_at_ms,
+    });
+
+    const title = session.display_name orelse firstLine(session.prompt);
+    try writer.writeAll("   ");
+    try writeTruncated(writer, title, 96);
+    try writer.writeAll("\n");
+
+    if (session.failure_reason) |reason| {
+        try writer.writeAll("   failure: ");
+        try writeTruncated(writer, firstLine(reason), 96);
+        try writer.writeAll("\n");
+    }
+}
+
+fn firstLine(value: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    const end = std.mem.indexOfAny(u8, trimmed, "\r\n") orelse trimmed.len;
+    return trimmed[0..end];
+}
+
+fn writeTruncated(writer: anytype, value: []const u8, max_bytes: usize) !void {
+    if (value.len <= max_bytes) {
+        try writer.writeAll(value);
+        return;
+    }
+
+    const suffix = "...";
+    if (max_bytes <= suffix.len) {
+        try writer.writeAll(value[0..max_bytes]);
+        return;
+    }
+
+    try writer.writeAll(value[0 .. max_bytes - suffix.len]);
+    try writer.writeAll(suffix);
+}
+
 pub fn helpText(command: ?[]const u8) ?[]const u8 {
     const name = command orelse return root_help_text;
     if (std.mem.eql(u8, name, "run")) return run_help_text;
+    if (std.mem.eql(u8, name, "c")) return sessions_help_text;
+    if (std.mem.eql(u8, name, "continue")) return sessions_help_text;
+    if (std.mem.eql(u8, name, "sessions")) return sessions_help_text;
     if (std.mem.eql(u8, name, "health")) return health_help_text;
     if (std.mem.eql(u8, name, "serve")) return serve_help_text;
     if (std.mem.eql(u8, name, "tools")) return tools_help_text;
@@ -489,6 +657,32 @@ fn parseRunArguments(iter: *std.process.ArgIterator) !ParsedRunArguments {
 
     if (parsed.help_requested) return parsed;
     if (prompt_source_count != 1) return error.InvalidArgs;
+    return parsed;
+}
+
+fn parseSessionsArguments(iter: *std.process.ArgIterator) !ParsedSessionsArguments {
+    var parsed = ParsedSessionsArguments{};
+
+    while (iter.next()) |arg| {
+        if (parsed.help_requested) continue;
+        if (isHelpFlag(arg)) {
+            parsed.help_requested = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--json")) {
+            parsed.options.json_output = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--limit")) {
+            const limit_text = iter.next() orelse return error.InvalidArgs;
+            const limit = std.fmt.parseInt(usize, limit_text, 10) catch return error.InvalidArgs;
+            if (limit == 0 or limit > 100) return error.InvalidArgs;
+            parsed.options.limit = limit;
+            continue;
+        }
+        return error.InvalidArgs;
+    }
+
     return parsed;
 }
 
