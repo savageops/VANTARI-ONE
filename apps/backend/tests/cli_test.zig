@@ -40,8 +40,10 @@ test "cli resolvePromptInput returns empty prompt for resume-only runs" {
 test "cli root help advertises command discovery and tools json export" {
     const help = VAR1.clients.cli.helpText(null).?;
 
+    try std.testing.expect(std.mem.indexOf(u8, help, "vantari") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "var <command> [flags]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "var c") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "PowerShell reserves bare var") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "VAR1 <command> [flags]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "VAR1 health") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "VAR1 tools --json") != null);
@@ -122,6 +124,16 @@ test "cli kernel error envelope handles non-object remote error JSON" {
 
     try std.testing.expectEqualStrings(
         "VAR1_ERROR category=kernel_rpc code=RemoteError message=\"kernel returned a non-object error envelope\"\n",
+        envelope,
+    );
+}
+
+test "cli kernel transport error envelope names child stdio failure" {
+    const envelope = try VAR1.clients.cli.renderKernelTransportErrorEnvelope(std.testing.allocator, error.InvalidRpcResponse);
+    defer std.testing.allocator.free(envelope);
+
+    try std.testing.expectEqualStrings(
+        "VAR1_ERROR category=kernel_transport code=InvalidRpcResponse message=\"kernel stdio host closed before returning a valid JSON-RPC response\"\n",
         envelope,
     );
 }

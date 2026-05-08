@@ -59,3 +59,5 @@ var CLI / future TUI / browser
 Create `apps/cli` as the first real package. It imports the backend module and delegates execution to the existing CLI/kernel surface. This makes `var` install/build ownership explicit while keeping runtime state, provider calls, tools, and sessions in the backend kernel.
 
 On Windows PowerShell, `var` is a reserved language keyword. The package still ships `var.exe` for cmd/Git Bash/Unix parity, and also ships `vantari.exe` as the PowerShell-safe alias.
+
+Workspace ownership follows execution context. The installed client resolves `VANTARI_WORKSPACE` first, then the terminal's current directory and ancestors, then an explicit installed override created by `vantari workspace set <path>`. The installer must not bind a default repository workspace.

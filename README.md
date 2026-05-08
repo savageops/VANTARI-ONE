@@ -62,6 +62,14 @@ vantari c
 # PowerShell reserves bare `var`; use `var.exe c` when you want the exact executable.
 ```
 
+`vantari` resolves the active workspace from the terminal's current directory and parent folders. Use an explicit override only when you want a fixed installed-client workspace:
+
+```powershell
+vantari workspace show
+vantari workspace set E:\Workspaces\01_Projects\01_Github\VANTARI-ONE\apps\backend
+vantari workspace clear
+```
+
 Open the browser workbench after the bridge is running:
 
 ```powershell

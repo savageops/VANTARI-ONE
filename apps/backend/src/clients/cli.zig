@@ -25,6 +25,12 @@ const ToolsCliOptions = struct {
     json_output: bool = false,
 };
 
+const WorkspaceCliAction = union(enum) {
+    show,
+    set: []const u8,
+    clear,
+};
+
 const SessionsCliOptions = struct {
     json_output: bool = false,
     limit: usize = 12,
@@ -46,6 +52,11 @@ const ParsedServeArguments = struct {
 
 const ParsedToolsArguments = struct {
     options: ToolsCliOptions = .{},
+    help_requested: bool = false,
+};
+
+const ParsedWorkspaceArguments = struct {
+    action: WorkspaceCliAction = .show,
     help_requested: bool = false,
 };
 
@@ -100,6 +111,8 @@ pub const root_help_text =
     \\VAR1 Zig Kernel
     \\
     \\Usage:
+    \\  vantari
+    \\  vantari <command> [flags]
     \\  var <command> [flags]
     \\  VAR1 <command> [flags]
     \\
@@ -108,11 +121,17 @@ pub const root_help_text =
     \\  c        Show recent canonical sessions for this workspace.
     \\  continue Alias for c.
     \\  health   Report local runtime readiness through the kernel protocol.
+    \\  workspace Show or set an explicit installed-client workspace override.
     \\  serve    Start the HTTP bridge for /rpc, /events, and /api/health.
     \\  tools    Print the built-in tool catalog and schemas through the kernel protocol.
     \\  help     Print help for a command.
     \\
     \\Examples:
+    \\  vantari
+    \\  vantari "List the files under src."
+    \\  vantari c
+    \\  vantari workspace show
+    \\  vantari workspace set E:\Workspaces\01_Projects\01_Github\VANTARI-ONE\apps\backend
     \\  var c
     \\  VAR1 run --prompt "Summarize src/cli.zig."
     \\  VAR1 run --prompt-file .\prompt.txt --json
@@ -123,8 +142,22 @@ pub const root_help_text =
     \\
     \\Notes:
     \\  zig build run -- <command> ... accepts the same command and flag surface.
+    \\  PowerShell reserves bare var; use vantari or var.exe there.
     \\  VAR1 reads .env from the current workspace for run, health, serve, and tools execution.
+    \\  Workspace resolution checks VANTARI_WORKSPACE, current directory ancestors, then explicit installed override.
     \\  Use VAR1 help <command> or VAR1 <command> --help for command-specific details.
+    \\
+;
+
+pub const workspace_help_text =
+    \\Usage:
+    \\  vantari workspace show
+    \\  vantari workspace set <path>
+    \\  vantari workspace clear
+    \\
+    \\Behavior:
+    \\  The default workspace is the terminal's current directory, resolved upward to a Ventari marker.
+    \\  Use set only for an explicit installed-client override. VANTARI_WORKSPACE has highest precedence.
     \\
 ;
 
@@ -252,7 +285,7 @@ pub const tools_help_text =
 pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
     _ = iter.next();
     const command = iter.next() orelse {
-        try writeStdout(root_help_text);
+        try executeInteractive(allocator);
         return;
     };
 
@@ -290,7 +323,10 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
             try writeStdout(run_help_text);
             return;
         }
-        try executeRunViaKernel(allocator, parsed.options);
+        const workspace_root = try resolveWorkspaceRoot(allocator);
+        defer allocator.free(workspace_root);
+        try ensureKernelConfigAvailable(allocator, workspace_root);
+        try executeRunViaKernel(allocator, workspace_root, parsed.options);
         return;
     }
 
@@ -303,7 +339,22 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
             try writeStdout(sessions_help_text);
             return;
         }
-        try executeSessionsFromStore(allocator, parsed.options);
+        const workspace_root = try resolveWorkspaceRoot(allocator);
+        defer allocator.free(workspace_root);
+        try executeSessionsFromStore(allocator, workspace_root, parsed.options);
+        return;
+    }
+
+    if (std.mem.eql(u8, command, "workspace")) {
+        const parsed = parseWorkspaceArguments(iter) catch |err| {
+            try printInvalidArguments("workspace", workspace_help_text);
+            return err;
+        };
+        if (parsed.help_requested) {
+            try writeStdout(workspace_help_text);
+            return;
+        }
+        try executeWorkspaceCommand(allocator, parsed.action);
         return;
     }
 
@@ -316,7 +367,9 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
             try writeStdout(health_help_text);
             return;
         }
-        try executeHealthViaKernel(allocator, parsed.options);
+        const workspace_root = try resolveWorkspaceRoot(allocator);
+        defer allocator.free(workspace_root);
+        try executeHealthViaKernel(allocator, workspace_root, parsed.options);
         return;
     }
 
@@ -330,7 +383,12 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
             return;
         }
 
-        const loaded_config = try config.loadDefault(allocator, ".");
+        const workspace_root = try resolveWorkspaceRoot(allocator);
+        defer allocator.free(workspace_root);
+        const loaded_config = config.loadDefault(allocator, workspace_root) catch |err| {
+            try writeConfigLoadErrorEnvelope(err, workspace_root);
+            std.process.exit(1);
+        };
         defer loaded_config.deinit(allocator);
 
         const transport = provider.Transport{
@@ -346,7 +404,12 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
     }
 
     if (std.mem.eql(u8, command, "kernel-stdio")) {
-        const loaded_config = try config.loadDefault(allocator, ".");
+        const workspace_root = try resolveWorkspaceRoot(allocator);
+        defer allocator.free(workspace_root);
+        const loaded_config = config.loadDefault(allocator, workspace_root) catch |err| {
+            try writeConfigLoadErrorEnvelope(err, workspace_root);
+            std.process.exit(1);
+        };
         defer loaded_config.deinit(allocator);
 
         const transport = provider.Transport{
@@ -367,7 +430,20 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
             try writeStdout(tools_help_text);
             return;
         }
-        try executeToolsViaKernel(allocator, parsed.options);
+        const workspace_root = try resolveWorkspaceRoot(allocator);
+        defer allocator.free(workspace_root);
+        try ensureKernelConfigAvailable(allocator, workspace_root);
+        try executeToolsViaKernel(allocator, workspace_root, parsed.options);
+        return;
+    }
+
+    if (!std.mem.startsWith(u8, command, "-")) {
+        const prompt = try collectPromptArguments(allocator, command, iter);
+        defer allocator.free(prompt);
+        const workspace_root = try resolveWorkspaceRoot(allocator);
+        defer allocator.free(workspace_root);
+        try ensureKernelConfigAvailable(allocator, workspace_root);
+        try executeRunViaKernel(allocator, workspace_root, .{ .prompt = prompt });
         return;
     }
 
@@ -375,59 +451,80 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
     return error.InvalidArgs;
 }
 
-fn executeRunViaKernel(allocator: std.mem.Allocator, run_options: RunCliOptions) !void {
-    var client = try stdio_rpc.LocalClient.init(allocator);
+fn executeInteractive(allocator: std.mem.Allocator) !void {
+    const workspace_root = try resolveWorkspaceRoot(allocator);
+    defer allocator.free(workspace_root);
+    try ensureKernelConfigAvailable(allocator, workspace_root);
+
+    var client = try stdio_rpc.LocalClient.initInWorkspace(allocator, workspace_root);
     defer client.deinit();
 
-    const initialize = try client.call(protocol_types.methods.initialize, "{}");
+    const initialize = try callKernelOrExit(allocator, &client, protocol_types.methods.initialize, "{}");
     defer initialize.deinit(allocator);
     const initialize_result = try expectKernelResult(allocator, initialize);
     defer allocator.free(initialize_result);
 
-    const session_id = if (run_options.session_id) |existing_session_id|
-        try allocator.dupe(u8, existing_session_id)
-    else blk: {
-        const prompt = try resolvePromptInput(allocator, run_options.prompt, run_options.prompt_file);
+    try writeStdout("Vantari interactive\n");
+    try writeStdout("workspace: ");
+    try writeStdout(workspace_root);
+    try writeStdout("\nType /exit to close the session.\n\n");
+
+    var stdin_buffer: [8192]u8 = undefined;
+    var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
+    var active_session_id: ?[]u8 = null;
+    defer if (active_session_id) |value| allocator.free(value);
+
+    while (true) {
+        try writeStdout("vantari> ");
+        const raw_line = stdin_reader.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
+            error.EndOfStream => return,
+            error.StreamTooLong => {
+                try writeStderr("VAR1_ERROR category=cli code=InputTooLong message=\"interactive input line exceeded 8192 bytes\"\n");
+                continue;
+            },
+            else => return err,
+        };
+        const line = std.mem.trim(u8, raw_line, " \t\r\n");
+        if (line.len == 0) continue;
+        if (std.mem.eql(u8, line, "/exit") or std.mem.eql(u8, line, "/quit")) return;
+
+        const prompt = try allocator.dupe(u8, line);
         defer allocator.free(prompt);
+        const turn = try executePromptTurn(allocator, &client, active_session_id, prompt, true);
+        defer if (turn.output) |output| allocator.free(output);
+        if (active_session_id == null) {
+            active_session_id = turn.session_id;
+        } else {
+            allocator.free(turn.session_id);
+        }
+        if (turn.output) |output| {
+            try writeStdout(output);
+            try writeStdout("\n");
+        }
+    }
+}
 
-        const create_params = try renderJsonAlloc(allocator, .{
-            .prompt = prompt,
-            .enable_agent_tools = run_options.enable_agent_tools,
-        });
-        defer allocator.free(create_params);
+fn executeRunViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8, run_options: RunCliOptions) !void {
+    var client = try stdio_rpc.LocalClient.initInWorkspace(allocator, workspace_root);
+    defer client.deinit();
 
-        const create_call = try client.call(protocol_types.methods.session_create, create_params);
-        defer create_call.deinit(allocator);
-        const create_result_json = try expectKernelResult(allocator, create_call);
-        defer allocator.free(create_result_json);
+    const initialize = try callKernelOrExit(allocator, &client, protocol_types.methods.initialize, "{}");
+    defer initialize.deinit(allocator);
+    const initialize_result = try expectKernelResult(allocator, initialize);
+    defer allocator.free(initialize_result);
 
-        var parsed_create = try std.json.parseFromSlice(ParsedSessionCreateResult, allocator, create_result_json, .{
-            .ignore_unknown_fields = true,
-        });
-        defer parsed_create.deinit();
+    const prompt = if (run_options.session_id == null)
+        try resolvePromptInput(allocator, run_options.prompt, run_options.prompt_file)
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(prompt);
 
-        break :blk try allocator.dupe(u8, parsed_create.value.session.session_id);
-    };
-    defer allocator.free(session_id);
+    const turn = try executePromptTurn(allocator, &client, run_options.session_id, prompt, run_options.enable_agent_tools);
+    defer allocator.free(turn.session_id);
+    defer if (turn.output) |output| allocator.free(output);
 
-    const send_params = try renderJsonAlloc(allocator, .{
-        .session_id = session_id,
-        .enable_agent_tools = run_options.enable_agent_tools,
-    });
-    defer allocator.free(send_params);
-
-    const send_call = try client.call(protocol_types.methods.session_send, send_params);
-    defer send_call.deinit(allocator);
-    const send_result_json = try expectKernelResult(allocator, send_call);
-    defer allocator.free(send_result_json);
-
-    var parsed_send = try std.json.parseFromSlice(ParsedSessionSendResult, allocator, send_result_json, .{
-        .ignore_unknown_fields = true,
-    });
-    defer parsed_send.deinit();
-
-    const output = parsed_send.value.session.output orelse "";
-    const json_payload = try renderRunResultJson(allocator, parsed_send.value.session.session_id, output);
+    const output = turn.output orelse "";
+    const json_payload = try renderRunResultJson(allocator, turn.session_id, output);
     defer allocator.free(json_payload);
 
     if (run_options.json_output) {
@@ -439,11 +536,77 @@ fn executeRunViaKernel(allocator: std.mem.Allocator, run_options: RunCliOptions)
     try writeStdout("\n");
 }
 
-fn executeHealthViaKernel(allocator: std.mem.Allocator, options: HealthCliOptions) !void {
-    var client = try stdio_rpc.LocalClient.init(allocator);
+const PromptTurn = struct {
+    session_id: []u8,
+    output: ?[]u8 = null,
+};
+
+fn executePromptTurn(
+    allocator: std.mem.Allocator,
+    client: *stdio_rpc.LocalClient,
+    existing_session_id: ?[]const u8,
+    prompt: []const u8,
+    enable_agent_tools: bool,
+) !PromptTurn {
+    const session_id = if (existing_session_id) |value|
+        try allocator.dupe(u8, value)
+    else blk: {
+        const create_params = try renderJsonAlloc(allocator, .{
+            .prompt = prompt,
+            .enable_agent_tools = enable_agent_tools,
+        });
+        defer allocator.free(create_params);
+
+        const create_call = try callKernelOrExit(allocator, client, protocol_types.methods.session_create, create_params);
+        defer create_call.deinit(allocator);
+        const create_result_json = try expectKernelResult(allocator, create_call);
+        defer allocator.free(create_result_json);
+
+        var parsed_create = try std.json.parseFromSlice(ParsedSessionCreateResult, allocator, create_result_json, .{
+            .ignore_unknown_fields = true,
+        });
+        defer parsed_create.deinit();
+
+        break :blk try allocator.dupe(u8, parsed_create.value.session.session_id);
+    };
+    errdefer allocator.free(session_id);
+
+    const send_params = if (existing_session_id != null and prompt.len > 0)
+        try renderJsonAlloc(allocator, .{
+            .session_id = session_id,
+            .prompt = prompt,
+            .enable_agent_tools = enable_agent_tools,
+        })
+    else
+        try renderJsonAlloc(allocator, .{
+            .session_id = session_id,
+            .enable_agent_tools = enable_agent_tools,
+        });
+    defer allocator.free(send_params);
+
+    const send_call = try callKernelOrExit(allocator, client, protocol_types.methods.session_send, send_params);
+    defer send_call.deinit(allocator);
+    const send_result_json = try expectKernelResult(allocator, send_call);
+    defer allocator.free(send_result_json);
+
+    var parsed_send = try std.json.parseFromSlice(ParsedSessionSendResult, allocator, send_result_json, .{
+        .ignore_unknown_fields = true,
+    });
+    defer parsed_send.deinit();
+
+    return .{
+        .session_id = session_id,
+        .output = if (parsed_send.value.session.output) |value| try allocator.dupe(u8, value) else null,
+    };
+}
+
+fn executeHealthViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8, options: HealthCliOptions) !void {
+    try ensureKernelConfigAvailable(allocator, workspace_root);
+
+    var client = try stdio_rpc.LocalClient.initInWorkspace(allocator, workspace_root);
     defer client.deinit();
 
-    const call = try client.call(protocol_types.methods.health_get, "{}");
+    const call = try callKernelOrExit(allocator, &client, protocol_types.methods.health_get, "{}");
     defer call.deinit(allocator);
     const result_json = try expectKernelResult(allocator, call);
     defer allocator.free(result_json);
@@ -478,8 +641,8 @@ fn executeHealthViaKernel(allocator: std.mem.Allocator, options: HealthCliOption
     try writeStdout(text_payload);
 }
 
-fn executeToolsViaKernel(allocator: std.mem.Allocator, options: ToolsCliOptions) !void {
-    var client = try stdio_rpc.LocalClient.init(allocator);
+fn executeToolsViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8, options: ToolsCliOptions) !void {
+    var client = try stdio_rpc.LocalClient.initInWorkspace(allocator, workspace_root);
     defer client.deinit();
 
     const params_json = try renderJsonAlloc(allocator, .{
@@ -487,7 +650,7 @@ fn executeToolsViaKernel(allocator: std.mem.Allocator, options: ToolsCliOptions)
     });
     defer allocator.free(params_json);
 
-    const call = try client.call(protocol_types.methods.tools_list, params_json);
+    const call = try callKernelOrExit(allocator, &client, protocol_types.methods.tools_list, params_json);
     defer call.deinit(allocator);
     const result_json = try expectKernelResult(allocator, call);
     defer allocator.free(result_json);
@@ -501,15 +664,155 @@ fn executeToolsViaKernel(allocator: std.mem.Allocator, options: ToolsCliOptions)
     if (options.json_output) try writeStdout("\n");
 }
 
-fn executeSessionsFromStore(allocator: std.mem.Allocator, options: SessionsCliOptions) !void {
-    const sessions = try session_store.listSessionRecords(allocator, ".");
+fn ensureKernelConfigAvailable(allocator: std.mem.Allocator, workspace_root: []const u8) !void {
+    const loaded_config = config.loadDefault(allocator, workspace_root) catch |err| {
+        try writeConfigLoadErrorEnvelope(err, workspace_root);
+        std.process.exit(1);
+    };
+    loaded_config.deinit(allocator);
+}
+
+fn callKernelOrExit(
+    allocator: std.mem.Allocator,
+    client: *stdio_rpc.LocalClient,
+    method: []const u8,
+    params_json: []const u8,
+) !stdio_rpc.RpcCallResult {
+    return client.call(method, params_json) catch |err| {
+        try writeKernelTransportErrorEnvelope(allocator, err);
+        std.process.exit(1);
+    };
+}
+
+fn resolveWorkspaceRoot(allocator: std.mem.Allocator) ![]u8 {
+    const env_workspace_maybe = std.process.getEnvVarOwned(allocator, "VANTARI_WORKSPACE") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    if (env_workspace_maybe) |env_workspace| {
+        defer allocator.free(env_workspace);
+        const resolved = try std.fs.cwd().realpathAlloc(allocator, env_workspace);
+        errdefer allocator.free(resolved);
+        if (try workspaceHasConfigMarker(allocator, resolved)) return resolved;
+        if (try workspaceHasSessions(allocator, resolved)) return resolved;
+        allocator.free(resolved);
+    }
+
+    const cwd_abs = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd_abs);
+
+    var fallback_sessions_root: ?[]u8 = null;
+    errdefer if (fallback_sessions_root) |value| allocator.free(value);
+
+    var current = try allocator.dupe(u8, cwd_abs);
+    defer allocator.free(current);
+
+    while (true) {
+        if (try workspaceHasConfigMarker(allocator, current)) return allocator.dupe(u8, current);
+        if (fallback_sessions_root == null and try workspaceHasSessions(allocator, current)) {
+            fallback_sessions_root = try allocator.dupe(u8, current);
+        }
+
+        const backend_candidate = try std.fs.path.join(allocator, &.{ current, "apps", "backend" });
+        defer allocator.free(backend_candidate);
+        if (try workspaceHasConfigMarker(allocator, backend_candidate)) return allocator.dupe(u8, backend_candidate);
+        if (fallback_sessions_root == null and try workspaceHasSessions(allocator, backend_candidate)) {
+            fallback_sessions_root = try allocator.dupe(u8, backend_candidate);
+        }
+
+        const parent = std.fs.path.dirname(current) orelse break;
+        if (std.mem.eql(u8, parent, current)) break;
+        const next = try allocator.dupe(u8, parent);
+        allocator.free(current);
+        current = next;
+    }
+
+    if (fallback_sessions_root) |value| {
+        fallback_sessions_root = null;
+        return value;
+    }
+
+    if (try readInstalledWorkspaceRoot(allocator)) |installed_workspace| return installed_workspace;
+
+    return allocator.dupe(u8, cwd_abs);
+}
+
+fn workspaceHasConfigMarker(allocator: std.mem.Allocator, workspace_root: []const u8) !bool {
+    const env_path = try std.fs.path.join(allocator, &.{ workspace_root, ".env" });
+    defer allocator.free(env_path);
+    if (fileExistsAbsolute(env_path)) return true;
+
+    const auth_path = try std.fs.path.join(allocator, &.{ workspace_root, ".var", "auth", "auth.json" });
+    defer allocator.free(auth_path);
+    return fileExistsAbsolute(auth_path);
+}
+
+fn workspaceHasSessions(allocator: std.mem.Allocator, workspace_root: []const u8) !bool {
+    const sessions_path = try std.fs.path.join(allocator, &.{ workspace_root, ".var", "sessions" });
+    defer allocator.free(sessions_path);
+    if (!fileExistsAbsolute(sessions_path)) return false;
+
+    var dir = std.fs.openDirAbsolute(sessions_path, .{ .iterate = true }) catch return false;
+    defer dir.close();
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind == .directory) return true;
+    }
+    return false;
+}
+
+fn fileExistsAbsolute(path: []const u8) bool {
+    std.fs.accessAbsolute(path, .{}) catch return false;
+    return true;
+}
+
+fn readInstalledWorkspaceRoot(allocator: std.mem.Allocator) !?[]u8 {
+    const workspace_file = try installedWorkspaceFilePath(allocator);
+    defer allocator.free(workspace_file);
+    if (!fileExistsAbsolute(workspace_file)) return null;
+
+    const raw = std.fs.openFileAbsolute(workspace_file, .{}) catch return null;
+    defer raw.close();
+    const content = try raw.readToEndAlloc(allocator, 4096);
+    defer allocator.free(content);
+    const workspace_root = std.mem.trim(u8, content, " \t\r\n");
+    if (workspace_root.len == 0) return null;
+    if (try workspaceHasConfigMarker(allocator, workspace_root)) {
+        const resolved = try allocator.dupe(u8, workspace_root);
+        return resolved;
+    }
+    if (try workspaceHasSessions(allocator, workspace_root)) {
+        const resolved = try allocator.dupe(u8, workspace_root);
+        return resolved;
+    }
+    return null;
+}
+
+fn installedWorkspaceFilePath(allocator: std.mem.Allocator) ![]u8 {
+    const exe_path = try std.fs.selfExePathAlloc(allocator);
+    defer allocator.free(exe_path);
+    const exe_dir = std.fs.path.dirname(exe_path) orelse return error.InvalidArgs;
+    return std.fs.path.join(allocator, &.{ exe_dir, "workspace.txt" });
+}
+
+fn writeSmallFile(path: []const u8, content: []const u8) !void {
+    const file = try std.fs.createFileAbsolute(path, .{ .truncate = true });
+    defer file.close();
+    var buffer: [1024]u8 = undefined;
+    var writer = file.writer(&buffer);
+    try writer.interface.writeAll(content);
+    try writer.interface.flush();
+}
+
+fn executeSessionsFromStore(allocator: std.mem.Allocator, workspace_root: []const u8, options: SessionsCliOptions) !void {
+    const sessions = try session_store.listSessionRecords(allocator, workspace_root);
     defer shared_types.deinitSessionRecords(allocator, sessions);
 
     var summaries = try allocator.alloc(protocol_types.SessionSummary, sessions.len);
     defer allocator.free(summaries);
 
     for (sessions, 0..) |session, index| {
-        const output = try session_store.readOutput(allocator, ".", session.id);
+        const output = try session_store.readOutput(allocator, workspace_root, session.id);
         defer if (output) |value| allocator.free(value);
         summaries[index] = makeCliSessionSummary(session, output);
     }
@@ -546,6 +849,42 @@ fn executeSessionsFromStore(allocator: std.mem.Allocator, options: SessionsCliOp
     }
     try writer.writeAll("Resume explicitly with: var run --session-id <session-id>\n");
     try writer.flush();
+}
+
+fn executeWorkspaceCommand(allocator: std.mem.Allocator, action: WorkspaceCliAction) !void {
+    switch (action) {
+        .show => {
+            const workspace_root = try resolveWorkspaceRoot(allocator);
+            defer allocator.free(workspace_root);
+            try writeStdout("workspace: ");
+            try writeStdout(workspace_root);
+            try writeStdout("\n");
+        },
+        .set => |path| {
+            const resolved = try std.fs.cwd().realpathAlloc(allocator, path);
+            defer allocator.free(resolved);
+            const workspace_file = try installedWorkspaceFilePath(allocator);
+            defer allocator.free(workspace_file);
+            const parent = std.fs.path.dirname(workspace_file) orelse return error.InvalidArgs;
+            std.fs.makeDirAbsolute(parent) catch |err| switch (err) {
+                error.PathAlreadyExists => {},
+                else => return err,
+            };
+            try writeSmallFile(workspace_file, resolved);
+            try writeStdout("workspace override set: ");
+            try writeStdout(resolved);
+            try writeStdout("\n");
+        },
+        .clear => {
+            const workspace_file = try installedWorkspaceFilePath(allocator);
+            defer allocator.free(workspace_file);
+            std.fs.deleteFileAbsolute(workspace_file) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => return err,
+            };
+            try writeStdout("workspace override cleared\n");
+        },
+    }
 }
 
 fn makeCliSessionSummary(session: shared_types.SessionRecord, output: ?[]const u8) protocol_types.SessionSummary {
@@ -612,6 +951,7 @@ pub fn helpText(command: ?[]const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "c")) return sessions_help_text;
     if (std.mem.eql(u8, name, "continue")) return sessions_help_text;
     if (std.mem.eql(u8, name, "sessions")) return sessions_help_text;
+    if (std.mem.eql(u8, name, "workspace")) return workspace_help_text;
     if (std.mem.eql(u8, name, "health")) return health_help_text;
     if (std.mem.eql(u8, name, "serve")) return serve_help_text;
     if (std.mem.eql(u8, name, "tools")) return tools_help_text;
@@ -686,6 +1026,32 @@ fn parseSessionsArguments(iter: *std.process.ArgIterator) !ParsedSessionsArgumen
     return parsed;
 }
 
+fn parseWorkspaceArguments(iter: *std.process.ArgIterator) !ParsedWorkspaceArguments {
+    var parsed = ParsedWorkspaceArguments{};
+    const action = iter.next() orelse return parsed;
+    if (isHelpFlag(action)) {
+        parsed.help_requested = true;
+        return parsed;
+    }
+    if (std.mem.eql(u8, action, "show")) {
+        if (iter.next() != null) return error.InvalidArgs;
+        parsed.action = .show;
+        return parsed;
+    }
+    if (std.mem.eql(u8, action, "set")) {
+        const path = iter.next() orelse return error.InvalidArgs;
+        if (iter.next() != null) return error.InvalidArgs;
+        parsed.action = .{ .set = path };
+        return parsed;
+    }
+    if (std.mem.eql(u8, action, "clear")) {
+        if (iter.next() != null) return error.InvalidArgs;
+        parsed.action = .clear;
+        return parsed;
+    }
+    return error.InvalidArgs;
+}
+
 fn parseHealthArguments(iter: *std.process.ArgIterator) !ParsedHealthArguments {
     var parsed = ParsedHealthArguments{};
 
@@ -746,6 +1112,18 @@ fn parseToolsArguments(iter: *std.process.ArgIterator) !ParsedToolsArguments {
     }
 
     return parsed;
+}
+
+fn collectPromptArguments(
+    allocator: std.mem.Allocator,
+    first: []const u8,
+    iter: *std.process.ArgIterator,
+) ![]u8 {
+    var parts = std.array_list.Managed([]const u8).init(allocator);
+    defer parts.deinit();
+    try parts.append(first);
+    while (iter.next()) |arg| try parts.append(arg);
+    return std.mem.join(allocator, " ", parts.items);
 }
 
 pub fn resolvePromptInput(
@@ -829,6 +1207,27 @@ pub fn renderKernelErrorEnvelope(allocator: std.mem.Allocator, error_json: []con
         allocator,
         "VAR1_ERROR category=kernel_rpc code=RemoteError message={f}\n",
         .{std.json.fmt(message, .{})},
+    );
+}
+
+fn writeKernelTransportErrorEnvelope(allocator: std.mem.Allocator, err: anyerror) !void {
+    const envelope = try renderKernelTransportErrorEnvelope(allocator, err);
+    defer allocator.free(envelope);
+    try writeStderr(envelope);
+}
+
+pub fn renderKernelTransportErrorEnvelope(allocator: std.mem.Allocator, err: anyerror) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "VAR1_ERROR category=kernel_transport code={s} message=\"kernel stdio host closed before returning a valid JSON-RPC response\"\n",
+        .{@errorName(err)},
+    );
+}
+
+fn writeConfigLoadErrorEnvelope(err: anyerror, workspace_root: []const u8) !void {
+    try writeStderrFmt(
+        "VAR1_ERROR category=config code={s} message=\"workspace is not configured for provider execution\" workspace={f}\n",
+        .{ @errorName(err), std.json.fmt(workspace_root, .{}) },
     );
 }
 
