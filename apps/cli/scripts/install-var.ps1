@@ -39,6 +39,21 @@ if (Test-Path -LiteralPath $workspaceTarget) {
     }
 }
 
+$sourceAuth = Join-Path $repoRoot "apps/backend/.var/auth/auth.json"
+$installedAuthDir = Join-Path $env:LOCALAPPDATA "Vantari/auth"
+$installedAuth = Join-Path $installedAuthDir "auth.json"
+$authInstallStatus = "No repository auth ledger found; configure provider auth before model execution."
+if (Test-Path -LiteralPath $sourceAuth) {
+    New-Item -ItemType Directory -Force -Path $installedAuthDir | Out-Null
+    if (Test-Path -LiteralPath $installedAuth) {
+        $authInstallStatus = "Retained existing installed provider auth -> $installedAuth"
+    }
+    else {
+        Copy-Item -LiteralPath $sourceAuth -Destination $installedAuth -Force
+        $authInstallStatus = "Seeded installed provider auth -> $installedAuth"
+    }
+}
+
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $pathParts = @()
 if ($userPath) {
@@ -64,6 +79,7 @@ if (($env:Path -split ';') -notcontains $installDir) {
 
 Write-Host "Installed var.exe -> $varTarget"
 Write-Host "Installed vantari.exe -> $vantariTarget"
+Write-Host $authInstallStatus
 Write-Host "Default workspace resolves from the current terminal directory."
 Write-Host "Optional custom workspace: vantari workspace set <path>"
 Write-Host "PowerShell reserves bare 'var'; use 'var.exe' or 'vantari' in PowerShell."

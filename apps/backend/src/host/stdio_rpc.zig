@@ -690,7 +690,17 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
                 .session = makeSessionSummary(cancelled, cancelled_output),
             });
         },
-        else => return Error.ExecutionFailed,
+        else => {
+            var failed = store.readSessionRecord(server.allocator, server.config.workspace_root, session.id) catch return Error.ExecutionFailed;
+            defer failed.deinit(server.allocator);
+            if (failed.status != .failed) return Error.ExecutionFailed;
+
+            const failed_output = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
+            defer if (failed_output) |value| server.allocator.free(value);
+            return renderJsonAlloc(server.allocator, protocol_types.SessionSendResult{
+                .session = makeSessionSummary(failed, failed_output),
+            });
+        },
     };
     defer result.deinit(server.allocator);
 

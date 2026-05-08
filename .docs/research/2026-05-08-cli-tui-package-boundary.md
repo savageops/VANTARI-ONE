@@ -60,4 +60,4 @@ Create `apps/cli` as the first real package. It imports the backend module and d
 
 On Windows PowerShell, `var` is a reserved language keyword. The package still ships `var.exe` for cmd/Git Bash/Unix parity, and also ships `vantari.exe` as the PowerShell-safe alias.
 
-Workspace ownership follows execution context. The installed client resolves `VANTARI_WORKSPACE` first, then the terminal's current directory and ancestors, then an explicit installed override created by `vantari workspace set <path>`. The installer must not bind a default repository workspace.
+Workspace ownership follows execution context. The installed client resolves `VANTARI_WORKSPACE` first, then an explicit installed override created by `vantari workspace set <path>`, then the terminal's current directory and ancestors. The installer must not bind a default repository workspace. Provider credentials are different from workspace ownership: installed clients may read `%LOCALAPPDATA%\Vantari\auth\auth.json`, while session artifacts remain under the resolved workspace `.var/sessions`.

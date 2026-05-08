@@ -62,7 +62,7 @@ vantari c
 # PowerShell reserves bare `var`; use `var.exe c` when you want the exact executable.
 ```
 
-`vantari` resolves the active workspace from the terminal's current directory and parent folders. Use an explicit override only when you want a fixed installed-client workspace:
+`vantari` resolves the active workspace from the terminal's current directory by default. Provider credentials live in the installed Vantari profile, so running from `C:\Users\Savage` or any project directory does not require copying auth into that workspace. Use an explicit override only when you want a fixed installed-client workspace:
 
 ```powershell
 vantari workspace show

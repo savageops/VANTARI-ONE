@@ -43,11 +43,31 @@ pub fn resolveOrSeed(
     workspace_root: []const u8,
     bootstrap: ?AuthBootstrap,
 ) !ResolvedAuth {
+    const installed_path = if (bootstrap == null) try installedAuthFilePath(allocator) else null;
+    defer if (installed_path) |value| allocator.free(value);
+
+    return resolveOrSeedWithInstalledAuthPath(allocator, workspace_root, bootstrap, installed_path);
+}
+
+pub fn resolveOrSeedWithInstalledAuthPath(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    bootstrap: ?AuthBootstrap,
+    installed_path: ?[]const u8,
+) !ResolvedAuth {
     const path = try authFilePath(allocator, workspace_root);
     defer allocator.free(path);
 
     if (fsutil.fileExists(path)) {
         return readActiveProvider(allocator, path);
+    }
+
+    if (bootstrap == null) {
+        if (installed_path) |fallback_path| {
+            if (fsutil.fileExists(fallback_path)) {
+                return readActiveProvider(allocator, fallback_path);
+            }
+        }
     }
 
     const seed = bootstrap orelse return Error.MissingAuth;
@@ -57,6 +77,43 @@ pub fn resolveOrSeed(
 
 pub fn authFilePath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
     return fsutil.join(allocator, &.{ workspace_root, ".var", "auth", "auth.json" });
+}
+
+pub fn installedAuthFilePath(allocator: std.mem.Allocator) !?[]u8 {
+    if (try installedConfigRoot(allocator)) |root| {
+        defer allocator.free(root);
+        return try installedAuthFilePathFromRoot(allocator, root);
+    }
+    return null;
+}
+
+pub fn installedAuthFilePathFromRoot(allocator: std.mem.Allocator, root: []const u8) ![]u8 {
+    return fsutil.join(allocator, &.{ root, "Vantari", "auth", "auth.json" });
+}
+
+fn installedConfigRoot(allocator: std.mem.Allocator) !?[]u8 {
+    const local_app_data = std.process.getEnvVarOwned(allocator, "LOCALAPPDATA") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    if (local_app_data) |value| return value;
+
+    const xdg_config_home = std.process.getEnvVarOwned(allocator, "XDG_CONFIG_HOME") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    if (xdg_config_home) |value| return value;
+
+    const home = std.process.getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    if (home) |value| {
+        defer allocator.free(value);
+        return try fsutil.join(allocator, &.{ value, ".config" });
+    }
+
+    return null;
 }
 
 fn readActiveProvider(allocator: std.mem.Allocator, path: []const u8) !ResolvedAuth {
