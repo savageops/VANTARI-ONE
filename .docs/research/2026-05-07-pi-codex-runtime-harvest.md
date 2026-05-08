@@ -41,4 +41,6 @@ Added context-builder transcript integrity checks for unresolved assistant tool-
 
 Updated checkpoint planning so compaction does not split assistant tool-call batches. If a proposed checkpoint would make the raw suffix start at a tool-result row, the planner moves the compacted segment boundary back so the assistant tool-call row and its tool results remain together in model-visible history.
 
+Closed the executor retry duplication gap by transferring ownership of completed durable tool batches back to the context builder before any later compaction rebuild. The regression test forces provider overflow after a tool result, then proves the retry payload contains one assistant tool-call boundary, one tool message, and one unique tool output sentinel.
+
 This is the current highest-leverage correction because it pins the invariant that protects future tool execution upgrades and crash recovery without adding architecture mass.

@@ -357,6 +357,62 @@ test "file tools reject undeclared arguments before side effects" {
     try std.testing.expect(!VAR1.shared.fsutil.fileExists(file_path));
 }
 
+test "file tools reject oversized generated payloads before side effects" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const oversized = try std.testing.allocator.alloc(u8, VAR1.core.tools.module.max_file_tool_content_bytes + 1);
+    defer std.testing.allocator.free(oversized);
+    @memset(oversized, 'x');
+
+    const write_args = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"path\":\"notes/large.txt\",\"content\":{f}}}",
+        .{std.json.fmt(oversized, .{})},
+    );
+    defer std.testing.allocator.free(write_args);
+
+    var write_call = try makeToolCall(std.testing.allocator, "write_file", write_args);
+    defer write_call.deinit(std.testing.allocator);
+
+    try std.testing.expectError(error.ToolPayloadExceeded, VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), write_call));
+
+    const file_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, "notes", "large.txt" });
+    defer std.testing.allocator.free(file_path);
+    try std.testing.expect(!VAR1.shared.fsutil.fileExists(file_path));
+
+    const append_args = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"path\":\"notes/large.txt\",\"content\":{f}}}",
+        .{std.json.fmt(oversized, .{})},
+    );
+    defer std.testing.allocator.free(append_args);
+
+    var append_call = try makeToolCall(std.testing.allocator, "append_file", append_args);
+    defer append_call.deinit(std.testing.allocator);
+    try std.testing.expectError(error.ToolPayloadExceeded, VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), append_call));
+
+    try VAR1.shared.fsutil.writeText(file_path, "stable\n");
+
+    const replace_args = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"path\":\"notes/large.txt\",\"old_text\":{f},\"new_text\":\"changed\"}}",
+        .{std.json.fmt(oversized, .{})},
+    );
+    defer std.testing.allocator.free(replace_args);
+
+    var replace_call = try makeToolCall(std.testing.allocator, "replace_in_file", replace_args);
+    defer replace_call.deinit(std.testing.allocator);
+    try std.testing.expectError(error.ToolPayloadExceeded, VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), replace_call));
+
+    const contents = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, file_path);
+    defer std.testing.allocator.free(contents);
+    try std.testing.expectEqualStrings("stable\n", contents);
+}
+
 test "list_files defaults to the workspace root and returns relative paths" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

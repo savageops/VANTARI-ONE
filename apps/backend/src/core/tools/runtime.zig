@@ -174,6 +174,10 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
         return "The requested path escaped the workspace root. Retry with a workspace-relative path only and never use .. or an absolute path.";
     }
 
+    if (std.mem.eql(u8, error_name, "ToolPayloadExceeded")) {
+        return "The tool payload exceeded the reliability budget. Retry with smaller deterministic chunks under 8192 bytes per write or replacement field.";
+    }
+
     if (std.mem.eql(u8, error_name, "FileNotFound")) {
         if (std.mem.eql(u8, tool_name, "search_files")) {
             return "The search path or the iex executable was not found. Re-check the workspace-relative path with list_files, or switch to read_file if you already know the target file.";

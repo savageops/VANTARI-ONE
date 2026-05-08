@@ -328,6 +328,7 @@ pub fn runPromptWithOptions(
                 );
             }
 
+            base_message_count = messages.items.len;
             continue;
         }
 

@@ -12,8 +12,8 @@ pub const definition = types.ToolDefinition{
     \\  "type": "object",
     \\  "properties": {
     \\    "path": { "type": "string", "description": "Required existing workspace-relative file path to edit." },
-    \\    "old_text": { "type": "string", "description": "Required exact text to replace." },
-    \\    "new_text": { "type": "string", "description": "Required replacement text." },
+    \\    "old_text": { "type": "string", "maxLength": 8192, "description": "Required exact text to replace. Keep replacement windows under 8192 bytes; use narrower anchors for larger files." },
+    \\    "new_text": { "type": "string", "maxLength": 8192, "description": "Required replacement text. Keep replacement windows under 8192 bytes; use append_file chunks for large generated blocks." },
     \\    "replace_all": { "type": "boolean", "description": "When true, replace every match instead of only the first one." }
     \\  },
     \\  "required": ["path", "old_text", "new_text"],
@@ -43,6 +43,9 @@ pub fn execute(
         .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
+
+    try module.enforceFileToolContentBudget(parsed.value.old_text);
+    try module.enforceFileToolContentBudget(parsed.value.new_text);
 
     const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
     defer allocator.free(file_path);

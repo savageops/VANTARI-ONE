@@ -127,6 +127,8 @@ Manual and automatic compaction share the same primitive. The manual RPC path is
 
 The context builder also validates OpenAI-compatible tool-call adjacency before any provider dispatch. An assistant message with tool calls must be followed by matching tool-result rows in assistant source order; orphan tool rows and unresolved assistant tool-call tails fail closed as transcript integrity errors. This keeps `.var/sessions/<id>/messages.jsonl` append-only while preventing corrupt or crash-interrupted ledgers from becoming malformed model-visible context.
 
+The executor keeps a preserved in-memory suffix only for non-durable internal continuations. After a complete assistant tool-call batch and its tool-result rows are appended to `messages.jsonl`, ownership transfers back to the context builder. Provider-overflow recovery and threshold compaction therefore rebuild durable tool context from the session ledger instead of replaying both the ledger copy and an executor-local copy into the same provider retry payload.
+
 ```mermaid
 stateDiagram-v2
   [*] --> ProviderWindowBuilt
@@ -139,7 +141,7 @@ stateDiagram-v2
   ProviderOverflow --> Failed: no checkpoint can be written
   ProviderCall --> Completed: assistant content persisted
   ProviderCall --> ToolLoop: tool calls returned
-  ToolLoop --> ProviderWindowBuilt: tool results appended to in-memory turn
+  ToolLoop --> ProviderWindowBuilt: tool batch persisted and rebuild-owned
 ```
 
 ## Tool initialization flow
@@ -353,6 +355,7 @@ The current validation lane should always prove these slices together:
 - audited bridge RPCs append redacted audit records to `.var/audit/bridge.jsonl`
 - tool catalog reports availability metadata
 - tool calls record `tool_reviewed` before `tool_completed` or `tool_blocked`
+- file mutation tools declare and enforce bounded generated payloads before write side effects
 - delegated agent launches validate scoped delegation and capability profile fields
 - derivative memory rejects transcript replay while citing source sequence ranges
 - heartbeat/evaluator evidence appends redacted non-mutating events
@@ -365,8 +368,8 @@ The current validation lane should always prove these slices together:
 - health preflights stale local `VAR1.exe` process diagnostics before build/test gates
 - external client exists at `apps/frontend/var1-client`
 
-Latest local Windows validation on 2026-05-06:
+Latest local Windows validation on 2026-05-08:
 
-- `.\scripts\zigw.ps1 build test --summary all` -> `402/402 tests passed`
+- `.\scripts\zigw.ps1 build test --summary all` -> `416/416 tests passed`
 - `.\scripts\health.ps1` -> `status: ready`
 - `.\zig-out\bin\VAR1.exe tools --json` -> `search_files` includes `external_command` dependency availability for `iex`
