@@ -522,6 +522,12 @@ fn executeRunViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8,
     const turn = try executePromptTurn(allocator, &client, run_options.session_id, prompt, run_options.enable_agent_tools);
     defer allocator.free(turn.session_id);
     defer if (turn.output) |output| allocator.free(output);
+    defer if (turn.failure_reason) |reason| allocator.free(reason);
+
+    if (turn.failure_reason) |reason| {
+        try writeSessionFailureEnvelope(allocator, turn.session_id, reason);
+        std.process.exit(1);
+    }
 
     const output = turn.output orelse "";
     const json_payload = try renderRunResultJson(allocator, turn.session_id, output);
@@ -539,6 +545,7 @@ fn executeRunViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8,
 const PromptTurn = struct {
     session_id: []u8,
     output: ?[]u8 = null,
+    failure_reason: ?[]u8 = null,
 };
 
 fn executePromptTurn(
@@ -597,6 +604,7 @@ fn executePromptTurn(
     return .{
         .session_id = session_id,
         .output = if (parsed_send.value.session.output) |value| try allocator.dupe(u8, value) else null,
+        .failure_reason = if (parsed_send.value.session.failure_reason) |value| try allocator.dupe(u8, value) else null,
     };
 }
 
@@ -698,6 +706,8 @@ fn resolveWorkspaceRoot(allocator: std.mem.Allocator) ![]u8 {
         allocator.free(resolved);
     }
 
+    if (try readInstalledWorkspaceRoot(allocator)) |installed_workspace| return installed_workspace;
+
     const cwd_abs = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_abs);
 
@@ -731,8 +741,6 @@ fn resolveWorkspaceRoot(allocator: std.mem.Allocator) ![]u8 {
         fallback_sessions_root = null;
         return value;
     }
-
-    if (try readInstalledWorkspaceRoot(allocator)) |installed_workspace| return installed_workspace;
 
     return allocator.dupe(u8, cwd_abs);
 }
@@ -1164,6 +1172,20 @@ fn writeKernelErrorEnvelope(allocator: std.mem.Allocator, error_json: []const u8
     const envelope = try renderKernelErrorEnvelope(allocator, error_json);
     defer allocator.free(envelope);
     try writeStderr(envelope);
+}
+
+fn writeSessionFailureEnvelope(allocator: std.mem.Allocator, session_id: []const u8, failure_reason: []const u8) !void {
+    const envelope = try renderSessionFailureEnvelope(allocator, session_id, failure_reason);
+    defer allocator.free(envelope);
+    try writeStderr(envelope);
+}
+
+pub fn renderSessionFailureEnvelope(allocator: std.mem.Allocator, session_id: []const u8, failure_reason: []const u8) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "VAR1_ERROR category=session code={s} message=\"session failed\" session_id={f}\n",
+        .{ failure_reason, std.json.fmt(session_id, .{}) },
+    );
 }
 
 pub fn renderKernelErrorEnvelope(allocator: std.mem.Allocator, error_json: []const u8) ![]u8 {

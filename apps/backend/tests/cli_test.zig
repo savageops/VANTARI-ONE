@@ -137,3 +137,17 @@ test "cli kernel transport error envelope names child stdio failure" {
         envelope,
     );
 }
+
+test "cli session failure envelope preserves durable failure reason and session id" {
+    const envelope = try VAR1.clients.cli.renderSessionFailureEnvelope(
+        std.testing.allocator,
+        "session-1",
+        "BadStatus",
+    );
+    defer std.testing.allocator.free(envelope);
+
+    try std.testing.expectEqualStrings(
+        "VAR1_ERROR category=session code=BadStatus message=\"session failed\" session_id=\"session-1\"\n",
+        envelope,
+    );
+}

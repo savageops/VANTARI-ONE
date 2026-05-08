@@ -338,29 +338,28 @@ test "loadDefault accepts UTF-8 BOM auth ledger" {
     const auth_path = try VAR1.core.auth_store.authFilePath(std.testing.allocator, seeded_config.workspace_root);
     defer std.testing.allocator.free(auth_path);
 
-    try VAR1.shared.fsutil.writeText(auth_path,
-        "\xEF\xBB\xBF" ++
-            \\{
-            \\  "version": 1,
-            \\  "active_provider": "zai",
-            \\  "providers": {
-            \\    "zai": {
-            \\      "auth_type": "api_key",
-            \\      "api_key": "bom-ledger-key",
-            \\      "base_url": "https://api.z.ai/api/coding/paas/v4",
-            \\      "model": "GLM-5.1",
-            \\      "subscription": {
-            \\        "plan_id": "zai-coding-plan",
-            \\        "plan_label": "GLM-5.1",
-            \\        "status": "active",
-            \\        "source": "manual",
-            \\        "last_verified_at_ms": 100
-            \\      },
-            \\      "updated_at_ms": 100
-            \\    }
-            \\  }
-            \\}
-            \\
+    try VAR1.shared.fsutil.writeText(auth_path, "\xEF\xBB\xBF" ++
+        \\{
+        \\  "version": 1,
+        \\  "active_provider": "zai",
+        \\  "providers": {
+        \\    "zai": {
+        \\      "auth_type": "api_key",
+        \\      "api_key": "bom-ledger-key",
+        \\      "base_url": "https://api.z.ai/api/coding/paas/v4",
+        \\      "model": "GLM-5.1",
+        \\      "subscription": {
+        \\        "plan_id": "zai-coding-plan",
+        \\        "plan_label": "GLM-5.1",
+        \\        "status": "active",
+        \\        "source": "manual",
+        \\        "last_verified_at_ms": 100
+        \\      },
+        \\      "updated_at_ms": 100
+        \\    }
+        \\  }
+        \\}
+        \\
     );
 
     const ledger_config = try VAR1.core.config.loadDefault(std.testing.allocator, ".");
@@ -369,6 +368,61 @@ test "loadDefault accepts UTF-8 BOM auth ledger" {
     try std.testing.expectEqualStrings("bom-ledger-key", ledger_config.openai_api_key);
     try std.testing.expectEqualStrings("zai", ledger_config.auth_provider.?);
     try std.testing.expectEqualStrings("GLM-5.1", ledger_config.openai_model);
+}
+
+test "auth store falls back to installed provider auth without changing workspace ownership" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const installed_root = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, "installed-profile-root" });
+    defer std.testing.allocator.free(installed_root);
+
+    const installed_auth_path = try VAR1.core.auth_store.installedAuthFilePathFromRoot(std.testing.allocator, installed_root);
+    defer std.testing.allocator.free(installed_auth_path);
+
+    try VAR1.shared.fsutil.writeText(installed_auth_path,
+        \\{
+        \\  "version": 1,
+        \\  "active_provider": "zai",
+        \\  "providers": {
+        \\    "zai": {
+        \\      "auth_type": "api_key",
+        \\      "api_key": "installed-key",
+        \\      "base_url": "https://api.z.ai/api/coding/paas/v4",
+        \\      "model": "GLM-5.1",
+        \\      "subscription": {
+        \\        "plan_id": "zai-coding-plan",
+        \\        "plan_label": "GLM-5.1",
+        \\        "status": "active",
+        \\        "source": "installed",
+        \\        "last_verified_at_ms": 100
+        \\      },
+        \\      "updated_at_ms": 100
+        \\    }
+        \\  }
+        \\}
+        \\
+    );
+
+    const workspace_auth_path = try VAR1.core.auth_store.authFilePath(std.testing.allocator, workspace_root);
+    defer std.testing.allocator.free(workspace_auth_path);
+    try std.testing.expect(!VAR1.shared.fsutil.fileExists(workspace_auth_path));
+
+    const auth = try VAR1.core.auth_store.resolveOrSeedWithInstalledAuthPath(
+        std.testing.allocator,
+        workspace_root,
+        null,
+        installed_auth_path,
+    );
+    defer auth.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("installed-key", auth.api_key);
+    try std.testing.expectEqualStrings("zai", auth.provider_id);
+    try std.testing.expectEqualStrings("GLM-5.1", auth.model);
+    try std.testing.expect(!VAR1.shared.fsutil.fileExists(workspace_auth_path));
 }
 
 test "resolveInWorkspace anchors dot workspace roots against cwd" {
@@ -660,7 +714,8 @@ test "store preserves append-only message ledger across corrupted and partial ro
     const before = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, messages_path);
     defer std.testing.allocator.free(before);
 
-    try VAR1.shared.fsutil.appendText(messages_path,
+    try VAR1.shared.fsutil.appendText(
+        messages_path,
         "{\"id\":\"msg-99\",\"seq\":99,\"role\":\"user\",\"content\":\"poison\",\"timestamp_ms\":99\n" ++
             "{\"id\":\"msg-2\"",
     );
@@ -832,7 +887,8 @@ test "context builder ignores poisoned checkpoint suffix and uses canonical raw 
 
     const context_path = try VAR1.core.session_store.contextFilePath(std.testing.allocator, workspace_root, session.id);
     defer std.testing.allocator.free(context_path);
-    try VAR1.shared.fsutil.appendText(context_path,
+    try VAR1.shared.fsutil.appendText(
+        context_path,
         "{\"id\":\"ctx-poison\",\"type\":\"summary_checkpoint\",\"created_at_ms\":1,\"source_seq_start\":1,\"source_seq_end\":99,\"first_kept_seq\":100,\"trigger\":\"bad\",\"summary\":\"Poisoned summary.\"\n",
     );
 
