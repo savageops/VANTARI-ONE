@@ -61,3 +61,12 @@ Create `apps/cli` as the first real package. It imports the backend module and d
 On Windows PowerShell, `var` is a reserved language keyword. The package still ships `var.exe` for cmd/Git Bash/Unix parity, and also ships `vantari.exe` as the PowerShell-safe alias.
 
 Workspace ownership follows execution context. The installed client resolves `VANTARI_WORKSPACE` first, then an explicit installed override created by `vantari workspace set <path>`, then the terminal's current directory and ancestors. The installer must not bind a default repository workspace. Provider credentials are different from workspace ownership: installed clients may read `%LOCALAPPDATA%\Vantari\auth\auth.json`, while session artifacts remain under the resolved workspace `.var/sessions`.
+## Zig TUI Reference Probe
+
+Checked `E:\Workspaces\04_Repo_Collection\zig` after the first interactive CLI probe failed operator expectations.
+
+- `zml-master/bin/zml-smi/tui` uses `vaxis`/`vxfw` with explicit init, tick, key press, mouse, redraw, and surface drawing. This is the strongest candidate for a future fullscreen `apps/tui` package because it already models terminal UI as an evented application rather than styled stdout.
+- `ziex-main/src/tui` exposes `Printer`, `Colors`, and `Box`; useful for CLI output polish, but not enough for the agent chat TUI core.
+- `attyx-main` has Windows terminal/editor dispatch patterns worth mining for platform edges, not for the main UI framework.
+
+Immediate conclusion: repair the line-mode CLI first; use `vaxis` as the reference candidate when `apps/tui` becomes a real package.

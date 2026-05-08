@@ -40,6 +40,11 @@ const HealthCliOptions = struct {
     json_output: bool = false,
 };
 
+const TurnStatusMode = enum {
+    silent,
+    stderr,
+};
+
 const ParsedRunArguments = struct {
     options: RunCliOptions = .{},
     help_requested: bool = false,
@@ -490,8 +495,20 @@ fn executeInteractive(allocator: std.mem.Allocator) !void {
 
         const prompt = try allocator.dupe(u8, line);
         defer allocator.free(prompt);
-        const turn = try executePromptTurn(allocator, &client, active_session_id, prompt, true);
+        const turn = try executePromptTurn(allocator, &client, active_session_id, prompt, true, .stderr);
         defer if (turn.output) |output| allocator.free(output);
+        defer if (turn.failure_reason) |reason| allocator.free(reason);
+
+        if (turn.failure_reason) |reason| {
+            try writeSessionFailureEnvelope(allocator, turn.session_id, reason);
+            if (active_session_id) |value| {
+                allocator.free(value);
+                active_session_id = null;
+            }
+            allocator.free(turn.session_id);
+            continue;
+        }
+
         if (active_session_id == null) {
             active_session_id = turn.session_id;
         } else {
@@ -519,7 +536,14 @@ fn executeRunViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8,
         try allocator.dupe(u8, "");
     defer allocator.free(prompt);
 
-    const turn = try executePromptTurn(allocator, &client, run_options.session_id, prompt, run_options.enable_agent_tools);
+    const turn = try executePromptTurn(
+        allocator,
+        &client,
+        run_options.session_id,
+        prompt,
+        run_options.enable_agent_tools,
+        if (run_options.json_output) .silent else .stderr,
+    );
     defer allocator.free(turn.session_id);
     defer if (turn.output) |output| allocator.free(output);
     defer if (turn.failure_reason) |reason| allocator.free(reason);
@@ -554,6 +578,7 @@ fn executePromptTurn(
     existing_session_id: ?[]const u8,
     prompt: []const u8,
     enable_agent_tools: bool,
+    status_mode: TurnStatusMode,
 ) !PromptTurn {
     const session_id = if (existing_session_id) |value|
         try allocator.dupe(u8, value)
@@ -577,6 +602,10 @@ fn executePromptTurn(
         break :blk try allocator.dupe(u8, parsed_create.value.session.session_id);
     };
     errdefer allocator.free(session_id);
+
+    if (status_mode == .stderr) {
+        try writeSessionRunningEnvelope(allocator, session_id);
+    }
 
     const send_params = if (existing_session_id != null and prompt.len > 0)
         try renderJsonAlloc(allocator, .{
@@ -1178,6 +1207,20 @@ fn writeSessionFailureEnvelope(allocator: std.mem.Allocator, session_id: []const
     const envelope = try renderSessionFailureEnvelope(allocator, session_id, failure_reason);
     defer allocator.free(envelope);
     try writeStderr(envelope);
+}
+
+fn writeSessionRunningEnvelope(allocator: std.mem.Allocator, session_id: []const u8) !void {
+    const envelope = try renderSessionRunningEnvelope(allocator, session_id);
+    defer allocator.free(envelope);
+    try writeStderr(envelope);
+}
+
+pub fn renderSessionRunningEnvelope(allocator: std.mem.Allocator, session_id: []const u8) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "VAR1_STATUS category=session code=Running message=\"provider execution started\" session_id={f}\n",
+        .{std.json.fmt(session_id, .{})},
+    );
 }
 
 pub fn renderSessionFailureEnvelope(allocator: std.mem.Allocator, session_id: []const u8, failure_reason: []const u8) ![]u8 {

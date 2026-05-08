@@ -28,6 +28,28 @@ New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 $varTarget = Join-Path $installDir "var.exe"
 $vantariTarget = Join-Path $installDir "vantari.exe"
 $workspaceTarget = Join-Path $installDir "workspace.txt"
+
+function Stop-InstalledExecutableProcesses {
+    param(
+        [Parameter(Mandatory = $true)][string]$ExecutablePath
+    )
+
+    $target = [System.IO.Path]::GetFullPath($ExecutablePath)
+    $name = [System.IO.Path]::GetFileNameWithoutExtension($target)
+    $processes = Get-Process -Name $name -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and [string]::Equals([System.IO.Path]::GetFullPath($_.Path), $target, [StringComparison]::OrdinalIgnoreCase)
+    }
+
+    foreach ($process in $processes) {
+        Write-Host "Stopping locked installed process $($process.ProcessName) pid=$($process.Id) path=$($process.Path)"
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        Wait-Process -Id $process.Id -Timeout 5 -ErrorAction SilentlyContinue
+    }
+}
+
+Stop-InstalledExecutableProcesses -ExecutablePath $varTarget
+Stop-InstalledExecutableProcesses -ExecutablePath $vantariTarget
+
 Copy-Item -LiteralPath $varSource -Destination $varTarget -Force
 Copy-Item -LiteralPath $vantariSource -Destination $vantariTarget -Force
 
