@@ -27,8 +27,17 @@ New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
 $varTarget = Join-Path $installDir "var.exe"
 $vantariTarget = Join-Path $installDir "vantari.exe"
+$workspaceTarget = Join-Path $installDir "workspace.txt"
 Copy-Item -LiteralPath $varSource -Destination $varTarget -Force
 Copy-Item -LiteralPath $vantariSource -Destination $vantariTarget -Force
+
+$legacyDefaultWorkspace = Join-Path $repoRoot "apps/backend"
+if (Test-Path -LiteralPath $workspaceTarget) {
+    $currentWorkspaceBinding = (Get-Content -LiteralPath $workspaceTarget -Raw).Trim()
+    if ([string]::Equals($currentWorkspaceBinding.TrimEnd('\'), $legacyDefaultWorkspace.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
+        Remove-Item -LiteralPath $workspaceTarget -Force
+    }
+}
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $pathParts = @()
@@ -55,4 +64,6 @@ if (($env:Path -split ';') -notcontains $installDir) {
 
 Write-Host "Installed var.exe -> $varTarget"
 Write-Host "Installed vantari.exe -> $vantariTarget"
+Write-Host "Default workspace resolves from the current terminal directory."
+Write-Host "Optional custom workspace: vantari workspace set <path>"
 Write-Host "PowerShell reserves bare 'var'; use 'var.exe' or 'vantari' in PowerShell."

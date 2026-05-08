@@ -325,11 +325,16 @@ pub const LocalClient = struct {
     reader_thread: ?std.Thread = null,
 
     pub fn init(allocator: std.mem.Allocator) !LocalClient {
+        return initInWorkspace(allocator, null);
+    }
+
+    pub fn initInWorkspace(allocator: std.mem.Allocator, workspace_root: ?[]const u8) !LocalClient {
         const exe_path = try std.fs.selfExePathAlloc(allocator);
         defer allocator.free(exe_path);
 
         var argv = [_][]const u8{ exe_path, "kernel-stdio" };
         var child = std.process.Child.init(&argv, allocator);
+        child.cwd = workspace_root;
         child.stdin_behavior = .Pipe;
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Ignore;
