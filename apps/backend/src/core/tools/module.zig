@@ -39,6 +39,7 @@ pub const Error = error{
     AgentServiceUnavailable,
     CommandFailed,
     CommandTerminated,
+    CommandTimedOut,
     InvalidArguments,
     MissingParentSession,
     PatternNotFound,
@@ -57,11 +58,45 @@ pub const CommandOutput = struct {
     exit_code: i32,
     stdout: []u8,
     stderr: []u8,
+    timed_out: bool = false,
 
     pub fn deinit(self: CommandOutput, allocator: std.mem.Allocator) void {
         allocator.free(self.stdout);
         allocator.free(self.stderr);
     }
+};
+
+pub const CommandOutputStream = enum {
+    stdout,
+    stderr,
+};
+
+pub const CommandOutputCallback = struct {
+    context: ?*anyopaque = null,
+    onOutputFn: ?*const fn (
+        ctx: ?*anyopaque,
+        stream: CommandOutputStream,
+        chunk: []const u8,
+        cap_reached: bool,
+    ) anyerror!void = null,
+
+    pub fn onOutput(
+        self: CommandOutputCallback,
+        stream: CommandOutputStream,
+        chunk: []const u8,
+        cap_reached: bool,
+    ) !void {
+        if (chunk.len == 0 and !cap_reached) return;
+        if (self.onOutputFn) |callback| {
+            try callback(self.context, stream, chunk, cap_reached);
+        }
+    }
+};
+
+pub const CommandLimits = struct {
+    timeout_ms: usize = 10_000,
+    max_output_bytes: usize = 16 * 1024,
+    output_callback: CommandOutputCallback = .{},
 };
 
 pub const CommandRunner = struct {
@@ -72,6 +107,13 @@ pub const CommandRunner = struct {
         cwd: []const u8,
         argv: []const []const u8,
     ) anyerror!CommandOutput,
+    runWithLimitsFn: ?*const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        cwd: []const u8,
+        argv: []const []const u8,
+        limits: CommandLimits,
+    ) anyerror!CommandOutput = null,
 
     pub fn run(
         self: CommandRunner,
@@ -79,6 +121,19 @@ pub const CommandRunner = struct {
         cwd: []const u8,
         argv: []const []const u8,
     ) anyerror!CommandOutput {
+        return self.runFn(self.context, allocator, cwd, argv);
+    }
+
+    pub fn runWithLimits(
+        self: CommandRunner,
+        allocator: std.mem.Allocator,
+        cwd: []const u8,
+        argv: []const []const u8,
+        limits: CommandLimits,
+    ) anyerror!CommandOutput {
+        if (self.runWithLimitsFn) |run_limited| {
+            return run_limited(self.context, allocator, cwd, argv, limits);
+        }
         return self.runFn(self.context, allocator, cwd, argv);
     }
 };
@@ -151,11 +206,38 @@ pub const AgentService = struct {
     }
 };
 
+pub const ToolEventSink = struct {
+    context: ?*anyopaque = null,
+    onOutputDeltaFn: ?*const fn (
+        ctx: ?*anyopaque,
+        tool_call_id: []const u8,
+        tool_name: []const u8,
+        stream: CommandOutputStream,
+        chunk: []const u8,
+        cap_reached: bool,
+    ) anyerror!void = null,
+
+    pub fn onOutputDelta(
+        self: ToolEventSink,
+        tool_call_id: []const u8,
+        tool_name: []const u8,
+        stream: CommandOutputStream,
+        chunk: []const u8,
+        cap_reached: bool,
+    ) !void {
+        if (chunk.len == 0 and !cap_reached) return;
+        if (self.onOutputDeltaFn) |callback| {
+            try callback(self.context, tool_call_id, tool_name, stream, chunk, cap_reached);
+        }
+    }
+};
+
 pub const ExecutionContext = struct {
     workspace_root: []const u8,
     parent_session_id: ?[]const u8 = null,
     agent_service: ?AgentService = null,
     command_probe: ?CommandProbe = null,
+    tool_events: ?ToolEventSink = null,
     workspace_state_enabled: bool = false,
 };
 

@@ -399,6 +399,7 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
         const transport = provider.Transport{
             .context = null,
             .sendFn = provider.httpSend,
+            .streamFn = provider.httpSendStreaming,
         };
         try web.serve(allocator, loaded_config, .{
             .host = parsed.options.host,
@@ -420,6 +421,7 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
         const transport = provider.Transport{
             .context = null,
             .sendFn = provider.httpSend,
+            .streamFn = provider.httpSendStreaming,
         };
         var agent_service = agents.Service.init(&loaded_config);
         try stdio_rpc.serveKernel(allocator, &loaded_config, transport, agent_service.handle());
@@ -729,17 +731,23 @@ fn resolveWorkspaceRoot(allocator: std.mem.Allocator) ![]u8 {
     if (env_workspace_maybe) |env_workspace| {
         defer allocator.free(env_workspace);
         const resolved = try std.fs.cwd().realpathAlloc(allocator, env_workspace);
-        errdefer allocator.free(resolved);
-        if (try workspaceHasConfigMarker(allocator, resolved)) return resolved;
-        if (try workspaceHasSessions(allocator, resolved)) return resolved;
-        allocator.free(resolved);
+        return resolved;
     }
-
-    if (try readInstalledWorkspaceRoot(allocator)) |installed_workspace| return installed_workspace;
 
     const cwd_abs = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_abs);
 
+    const installed_workspace_root = try readInstalledWorkspaceRoot(allocator);
+    defer if (installed_workspace_root) |value| allocator.free(value);
+
+    return resolveWorkspaceRootFromCwd(allocator, cwd_abs, installed_workspace_root);
+}
+
+fn resolveWorkspaceRootFromCwd(
+    allocator: std.mem.Allocator,
+    cwd_abs: []const u8,
+    installed_workspace_root: ?[]const u8,
+) ![]u8 {
     var fallback_sessions_root: ?[]u8 = null;
     errdefer if (fallback_sessions_root) |value| allocator.free(value);
 
@@ -747,10 +755,16 @@ fn resolveWorkspaceRoot(allocator: std.mem.Allocator) ![]u8 {
     defer allocator.free(current);
 
     while (true) {
-        if (try workspaceHasConfigMarker(allocator, current)) return allocator.dupe(u8, current);
-        if (fallback_sessions_root == null and try workspaceHasSessions(allocator, current)) {
+        const is_invocation_root = std.mem.eql(u8, current, cwd_abs);
+        const has_project_marker = try workspaceHasProjectMarker(allocator, current);
+        const has_config_marker = try workspaceHasConfigMarker(allocator, current);
+        if (shouldUseConfigMarkerForCandidate(is_invocation_root, has_project_marker, has_config_marker)) {
+            return allocator.dupe(u8, current);
+        }
+        if (fallback_sessions_root == null and shouldUseSessionsForCandidate(is_invocation_root, has_project_marker) and try workspaceHasSessions(allocator, current)) {
             fallback_sessions_root = try allocator.dupe(u8, current);
         }
+        if (has_project_marker) return allocator.dupe(u8, current);
 
         const backend_candidate = try std.fs.path.join(allocator, &.{ current, "apps", "backend" });
         defer allocator.free(backend_candidate);
@@ -771,7 +785,21 @@ fn resolveWorkspaceRoot(allocator: std.mem.Allocator) ![]u8 {
         return value;
     }
 
+    if (installed_workspace_root) |installed_workspace| return allocator.dupe(u8, installed_workspace);
+
     return allocator.dupe(u8, cwd_abs);
+}
+
+fn shouldUseConfigMarkerForCandidate(
+    is_invocation_root: bool,
+    has_project_marker: bool,
+    has_config_marker: bool,
+) bool {
+    return has_config_marker and (is_invocation_root or has_project_marker);
+}
+
+fn shouldUseSessionsForCandidate(is_invocation_root: bool, has_project_marker: bool) bool {
+    return is_invocation_root or has_project_marker;
 }
 
 fn workspaceHasConfigMarker(allocator: std.mem.Allocator, workspace_root: []const u8) !bool {
@@ -796,6 +824,16 @@ fn workspaceHasSessions(allocator: std.mem.Allocator, workspace_root: []const u8
         if (entry.kind == .directory) return true;
     }
     return false;
+}
+
+fn workspaceHasProjectMarker(allocator: std.mem.Allocator, workspace_root: []const u8) !bool {
+    const agents_path = try std.fs.path.join(allocator, &.{ workspace_root, "AGENTS.md" });
+    defer allocator.free(agents_path);
+    if (fileExistsAbsolute(agents_path)) return true;
+
+    const git_path = try std.fs.path.join(allocator, &.{ workspace_root, ".git" });
+    defer allocator.free(git_path);
+    return fileExistsAbsolute(git_path);
 }
 
 fn fileExistsAbsolute(path: []const u8) bool {
@@ -1351,3 +1389,21 @@ fn printUnknownCommand(command: []const u8) !void {
 fn isHelpFlag(arg: []const u8) bool {
     return std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h");
 }
+
+pub const testing_hooks = struct {
+    pub fn resolveWorkspaceRootForCwd(
+        allocator: std.mem.Allocator,
+        cwd_abs: []const u8,
+        installed_workspace_root: ?[]const u8,
+    ) ![]u8 {
+        return resolveWorkspaceRootFromCwd(allocator, cwd_abs, installed_workspace_root);
+    }
+
+    pub fn acceptsConfigMarkerCandidate(is_invocation_root: bool, has_project_marker: bool, has_config_marker: bool) bool {
+        return shouldUseConfigMarkerForCandidate(is_invocation_root, has_project_marker, has_config_marker);
+    }
+
+    pub fn acceptsSessionsCandidate(is_invocation_root: bool, has_project_marker: bool) bool {
+        return shouldUseSessionsForCandidate(is_invocation_root, has_project_marker);
+    }
+};

@@ -67,6 +67,7 @@ pub fn runPrompt(allocator: std.mem.Allocator, config: types.Config, prompt: []c
         .transport = .{
             .context = null,
             .sendFn = provider.httpSend,
+            .streamFn = provider.httpSendStreaming,
         },
         .execution_context = .{
             .workspace_root = config.workspace_root,
@@ -136,6 +137,17 @@ pub fn runPromptWithOptions(
     if (execution_context.parent_session_id == null) {
         execution_context.parent_session_id = session.id;
     }
+    var tool_delta_context = ToolDeltaContext{
+        .allocator = allocator,
+        .workspace_root = config.workspace_root,
+        .hooks = options.hooks,
+        .session_id = session.id,
+        .status = session.status,
+    };
+    execution_context.tool_events = .{
+        .context = &tool_delta_context,
+        .onOutputDeltaFn = onToolOutputDelta,
+    };
     if (!execution_context.workspace_state_enabled and tools.workspaceStateRelevant(session.prompt)) {
         execution_context.workspace_state_enabled = true;
     }
@@ -302,10 +314,43 @@ pub fn runPromptWithOptions(
                     continue;
                 }
 
+                const tool_started_at_ms = std.time.milliTimestamp();
+                const tool_started_event = try renderToolStartedEvent(allocator, tool_call, tool_started_at_ms);
+                defer allocator.free(tool_started_event);
+                try recordSessionEvent(
+                    allocator,
+                    config.workspace_root,
+                    options.hooks,
+                    session.id,
+                    "tool_started",
+                    tool_started_event,
+                    session.status,
+                );
+
                 const tool_result = try executeToolCall(allocator, execution_context, tool_call);
                 defer allocator.free(tool_result.output);
                 defer allocator.free(tool_result.log_line);
                 if (tool_result.launched_child) requires_child_supervision = true;
+
+                const tool_finished_at_ms = std.time.milliTimestamp();
+                const tool_finished_event = try renderToolFinishedEvent(
+                    allocator,
+                    tool_call,
+                    tool_result.ok,
+                    tool_result.error_name,
+                    tool_started_at_ms,
+                    tool_finished_at_ms,
+                );
+                defer allocator.free(tool_finished_event);
+                try recordSessionEvent(
+                    allocator,
+                    config.workspace_root,
+                    options.hooks,
+                    session.id,
+                    "tool_finished",
+                    tool_finished_event,
+                    session.status,
+                );
 
                 try recordSessionEvent(
                     allocator,
@@ -507,10 +552,22 @@ fn completeWithContextRecovery(
     base_message_count: *usize,
     transport: provider.Transport,
 ) !types.CompletionResponse {
-    return provider.completeWithTransport(allocator, config, .{
+    var stream_context = ProviderDeltaContext{
+        .allocator = allocator,
+        .workspace_root = config.workspace_root,
+        .hooks = hooks,
+        .session_id = session.id,
+        .status = session.status,
+    };
+    const stream_hooks = provider.StreamHooks{
+        .context = &stream_context,
+        .onAssistantDeltaFn = onProviderAssistantDelta,
+    };
+
+    return provider.completeWithTransportAndHooks(allocator, config, .{
         .messages = messages.items,
         .tool_definitions = tools.builtinDefinitionsForContext(execution_context),
-    }, transport) catch |err| {
+    }, transport, stream_hooks) catch |err| {
         if (err != error.ContextWindowExceeded or !config.context_policy.retry_on_provider_overflow) return err;
 
         const estimate = context_builder.budget.estimateChatMessages(messages.items);
@@ -533,11 +590,153 @@ fn completeWithContextRecovery(
             base_message_count.*,
         );
 
-        return provider.completeWithTransport(allocator, config, .{
+        return provider.completeWithTransportAndHooks(allocator, config, .{
             .messages = messages.items,
             .tool_definitions = tools.builtinDefinitionsForContext(execution_context),
-        }, transport);
+        }, transport, stream_hooks);
     };
+}
+
+const ProviderDeltaContext = struct {
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    hooks: Hooks,
+    session_id: []const u8,
+    status: types.SessionStatus,
+};
+
+fn onProviderAssistantDelta(ctx: ?*anyopaque, delta: []const u8) !void {
+    const delta_context: *ProviderDeltaContext = @ptrCast(@alignCast(ctx.?));
+    try recordSessionEvent(
+        delta_context.allocator,
+        delta_context.workspace_root,
+        delta_context.hooks,
+        delta_context.session_id,
+        "assistant_delta",
+        delta,
+        delta_context.status,
+    );
+}
+
+const ToolDeltaContext = struct {
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    hooks: Hooks,
+    session_id: []const u8,
+    status: types.SessionStatus,
+};
+
+fn onToolOutputDelta(
+    ctx: ?*anyopaque,
+    tool_call_id: []const u8,
+    tool_name: []const u8,
+    stream: tools.CommandOutputStream,
+    chunk: []const u8,
+    cap_reached: bool,
+) !void {
+    const delta_context: *ToolDeltaContext = @ptrCast(@alignCast(ctx.?));
+    const message = try renderToolOutputDelta(
+        delta_context.allocator,
+        tool_call_id,
+        tool_name,
+        streamLabel(stream),
+        chunk,
+        cap_reached,
+    );
+    defer delta_context.allocator.free(message);
+
+    try recordSessionEvent(
+        delta_context.allocator,
+        delta_context.workspace_root,
+        delta_context.hooks,
+        delta_context.session_id,
+        "tool_output_delta",
+        message,
+        delta_context.status,
+    );
+}
+
+fn renderToolOutputDelta(
+    allocator: std.mem.Allocator,
+    tool_call_id: []const u8,
+    tool_name: []const u8,
+    stream: []const u8,
+    chunk: []const u8,
+    cap_reached: bool,
+) ![]u8 {
+    const encoded_len = std.base64.standard.Encoder.calcSize(chunk.len);
+    const encoded = try allocator.alloc(u8, encoded_len);
+    defer allocator.free(encoded);
+    _ = std.base64.standard.Encoder.encode(encoded, chunk);
+
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"var1.tool_output_delta.v1\",\"tool_call_id\":{f},\"tool\":{f},\"stream\":{f},\"chunk_b64\":{f},\"cap_reached\":{s}}}",
+        .{
+            std.json.fmt(tool_call_id, .{}),
+            std.json.fmt(tool_name, .{}),
+            std.json.fmt(stream, .{}),
+            std.json.fmt(encoded, .{}),
+            if (cap_reached) "true" else "false",
+        },
+    );
+}
+
+fn streamLabel(stream: tools.CommandOutputStream) []const u8 {
+    return switch (stream) {
+        .stdout => "stdout",
+        .stderr => "stderr",
+    };
+}
+
+fn renderToolStartedEvent(
+    allocator: std.mem.Allocator,
+    tool_call: types.ToolCall,
+    timestamp_ms: i64,
+) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"var1.tool_started.v1\",\"tool_call_id\":{f},\"tool\":{f},\"timestamp_ms\":{d}}}",
+        .{
+            std.json.fmt(tool_call.id, .{}),
+            std.json.fmt(tool_call.name, .{}),
+            timestamp_ms,
+        },
+    );
+}
+
+fn renderToolFinishedEvent(
+    allocator: std.mem.Allocator,
+    tool_call: types.ToolCall,
+    ok: bool,
+    error_name: ?[]const u8,
+    started_at_ms: i64,
+    finished_at_ms: i64,
+) ![]u8 {
+    const duration_ms: i64 = @max(@as(i64, 0), finished_at_ms - started_at_ms);
+    if (error_name) |name| {
+        return std.fmt.allocPrint(
+            allocator,
+            "{{\"schema\":\"var1.tool_finished.v1\",\"tool_call_id\":{f},\"tool\":{f},\"ok\":{s},\"error_name\":{f},\"duration_ms\":{d}}}",
+            .{
+                std.json.fmt(tool_call.id, .{}),
+                std.json.fmt(tool_call.name, .{}),
+                if (ok) "true" else "false",
+                std.json.fmt(name, .{}),
+                duration_ms,
+            },
+        );
+    }
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"var1.tool_finished.v1\",\"tool_call_id\":{f},\"tool\":{f},\"ok\":{s},\"duration_ms\":{d}}}",
+        .{
+            std.json.fmt(tool_call.id, .{}),
+            std.json.fmt(tool_call.name, .{}),
+            if (ok) "true" else "false",
+            duration_ms,
+        },
+    );
 }
 
 fn compactSessionForRuntime(
@@ -604,7 +803,7 @@ fn executeToolCall(
     allocator: std.mem.Allocator,
     execution_context: tools.ExecutionContext,
     tool_call: types.ToolCall,
-) !struct { output: []u8, log_line: []u8, launched_child: bool } {
+) !struct { output: []u8, log_line: []u8, launched_child: bool, ok: bool, error_name: ?[]const u8 } {
     const tool_output = tools.execute(allocator, execution_context, tool_call) catch |err| {
         const error_name = @errorName(err);
         const error_output = try tools.renderExecutionError(allocator, tool_call.name, error_name, tool_call.arguments_json);
@@ -619,7 +818,7 @@ fn executeToolCall(
                 tools.toolCallLogLabel(tool_call.name),
                 error_name,
             });
-        return .{ .output = error_output, .log_line = error_log, .launched_child = false };
+        return .{ .output = error_output, .log_line = error_log, .launched_child = false, .ok = false, .error_name = error_name };
     };
 
     const success_log = try std.fmt.allocPrint(allocator, "tool completed: {s}", .{tools.toolCallLogLabel(tool_call.name)});
@@ -627,6 +826,8 @@ fn executeToolCall(
         .output = tool_output,
         .log_line = success_log,
         .launched_child = std.mem.eql(u8, tool_call.name, "launch_agent"),
+        .ok = true,
+        .error_name = null,
     };
 }
 

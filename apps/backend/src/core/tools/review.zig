@@ -41,6 +41,12 @@ fn approveDefinition(definition: types.ToolDefinition) ToolReviewDecision {
             .event_type = "tool_reviewed",
             .reason = "declared write-capable capability",
         },
+        .command_execution => .{
+            .approved = true,
+            .risk = .command_execution,
+            .event_type = "tool_reviewed",
+            .reason = "declared bounded command-execution capability",
+        },
         .delegating => .{
             .approved = true,
             .risk = .delegating,
@@ -61,6 +67,7 @@ pub fn riskLabel(risk: ToolReviewRisk) []const u8 {
     return switch (risk) {
         .read_only => "read_only",
         .write_capable => "write_capable",
+        .command_execution => "command_execution",
         .delegating => "delegating",
         .unknown_high_impact => "unknown_high_impact",
     };

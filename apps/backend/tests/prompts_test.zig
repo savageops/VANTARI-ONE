@@ -30,8 +30,22 @@ test "prompt builder emits ordered guardrails and tool contract" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "# System Prompt") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "# Developer Prompt") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "# Tool Use Contract") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "# Skill Routing Contract") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "- list_files:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "- skill_info:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "- planning-spec:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "- insect:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "- dupe-audit:") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Call contract: pass one JSON object") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Large artifact protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "under 7000 bytes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "all paths are relative to the displayed workspace root") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "operator-visible progress before tool batches") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "not hidden chain-of-thought") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "do not collapse long work into one silent tool burst") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Skills are reusable operating protocols") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "wait_agent accepts timeout_ms") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "run-insect-rs.ps1") != null);
 }
 
 test "prompt builder loads project-local system and developer prompt files" {

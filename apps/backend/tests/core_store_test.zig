@@ -95,6 +95,31 @@ test "config loader reads provider env values" {
     try std.testing.expectEqual(@as(usize, 12), config.max_tool_calls_per_session);
 }
 
+test "config loader defaults to a post-tool response budget" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const env_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".env" });
+    defer std.testing.allocator.free(env_path);
+
+    try VAR1.shared.fsutil.writeText(env_path,
+        \\BASE_URL=http://127.0.0.1:1234
+        \\API_KEY=test-key
+        \\MODEL=test-model
+        \\
+    );
+
+    const config = try VAR1.core.config.loadFromEnvFile(std.testing.allocator, env_path);
+    defer config.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 32), config.max_steps);
+    try std.testing.expectEqual(@as(usize, 16), config.max_tool_calls_per_turn);
+    try std.testing.expectEqual(@as(usize, 96), config.max_tool_calls_per_session);
+}
+
 test "config loader rejects missing required keys" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

@@ -18,12 +18,14 @@ const default_system_prompt =
     \\# System Prompt
     \\You are VAR1, a coding kernel agent operating inside the active workspace. Inspect before editing, execute through the declared tools, and finish with a direct operator response grounded in observed tool results.
     \\Use deterministic state-machine discipline: observe the repository, select the smallest durable architecture slice, make the change, validate the changed contract, and report residual risk.
+    \\Emit concise operator-visible progress before tool batches, after meaningful observations, and before long-running waits. These updates are streamed work narration, not hidden chain-of-thought; expose decisions, evidence, and next actions without revealing private reasoning text.
 ;
 
 const default_developer_prompt =
     \\# Developer Prompt
     \\Prioritize contract-correct output over fluent narration. When paths are unknown, discover them with list_files or search_files before reading or editing. When a tool schema is known, send only the declared JSON keys.
     \\For code changes, preserve existing ownership boundaries, avoid parallel systems, and add tests where behavior, configuration, storage, provider messages, or tool contracts change.
+    \\For generated artifacts, never place a large full artifact in one tool argument. If content may exceed the declared maxLength, create the file with a small write_file seed, then append deterministic chunks with append_file. Keep every generated content argument under 7000 bytes so JSON escaping cannot cross the 8192-byte tool limit.
 ;
 
 pub const Error = error{
@@ -83,20 +85,30 @@ pub fn buildAgentSystemPrompt(
         \\2. search_files locates symbols or text.
         \\3. read_file inspects known files.
         \\4. replace_in_file performs exact local edits.
-        \\5. write_file creates or overwrites full files when intentional.
-        \\6. append_file performs additive ledger/text writes.
-        \\If agent tools are available, launch bounded child work only when the child can make independent progress; supervise child lifecycle until terminal state.
+        \\5. write_file creates or overwrites small complete files when the full content is safely under the declared maxLength.
+        \\6. append_file performs additive ledger/text writes and is the required path for large generated artifacts.
+        \\Large artifact protocol: first write_file an empty or header-only file at the final workspace-relative path, then append_file numbered chunks. Each chunk must be independently valid continuation text, under 7000 bytes, and include enough newline boundaries that the final file can be inspected incrementally. After chunking, read_file or shell_exec may validate size, line count, or syntax.
+        \\Path protocol: all paths are relative to the displayed workspace root. Never pass an absolute path or .. to file tools. If the operator intends another directory, state the current workspace root and ask them to launch from that directory or set VANTARI_WORKSPACE before editing.
+        \\Streaming protocol: do not collapse long work into one silent tool burst and one final answer. Produce small streamed assistant updates that declare the current observable step, then call tools, then summarize the result before the next step.
+        \\If agent tools are available, launch bounded child work only when the child can make independent progress; supervise child lifecycle until terminal state. wait_agent accepts timeout_ms; set an explicit longer timeout such as 60000ms for substantial child work instead of many tiny wait loops.
         \\When child runs remain in flight after an assistant response, continue supervising internally. If an operator-visible waiting update is required, use exactly: "I will continue once agents complete; if any fail, I will follow up."
         \\{s}
-        \\When the work is done, return a direct final answer. Never invent tool output, validation results, or file changes.
         \\
-        \\{s}
+        \\
     , .{
         execution_context.workspace_root,
         internal_guardrails,
         system_prompt,
         developer_prompt,
         workspace_state_note,
+    });
+    try tools.skills.renderPromptCapsules(writer);
+    try writer.print(
+        \\
+        \\When the work is done, return a direct final answer. Never invent tool output, validation results, or file changes.
+        \\
+        \\{s}
+    , .{
         catalog,
     });
 
