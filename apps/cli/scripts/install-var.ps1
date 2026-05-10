@@ -7,7 +7,7 @@ $zigw = Join-Path $repoRoot "apps/backend/scripts/zigw.ps1"
 
 Push-Location $cliRoot
 try {
-    & $zigw build --summary all
+    & $zigw build -Doptimize=ReleaseSafe --summary all
 }
 finally {
     Pop-Location

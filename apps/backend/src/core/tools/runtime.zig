@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const module = @import("module.zig");
 const registry = @import("registry.zig");
 pub const review = @import("review.zig");
@@ -10,13 +11,18 @@ const read_file = @import("builtin/read_file.zig");
 const write_file = @import("builtin/write_file.zig");
 const append_file = @import("builtin/append_file.zig");
 const replace_in_file = @import("builtin/replace_in_file.zig");
+const shell_exec = @import("builtin/shell_exec.zig");
+pub const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
 
 pub const Error = module.Error;
 pub const CommandOutput = module.CommandOutput;
 pub const CommandRunner = module.CommandRunner;
 pub const CommandProbe = module.CommandProbe;
+pub const CommandOutputStream = module.CommandOutputStream;
+pub const CommandLimits = module.CommandLimits;
 pub const AgentService = module.AgentService;
+pub const ToolEventSink = module.ToolEventSink;
 pub const ExecutionContext = module.ExecutionContext;
 pub const DelegationScope = module.DelegationScope;
 
@@ -175,6 +181,18 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
     }
 
     if (std.mem.eql(u8, error_name, "ToolPayloadExceeded")) {
+        if (std.mem.eql(u8, tool_name, "shell_exec")) {
+            return "shell_exec exceeded the stdout/stderr capture budget. Retry with max_output_bytes large enough for the bounded result, or narrow the command output.";
+        }
+        if (std.mem.eql(u8, tool_name, "write_file")) {
+            return "write_file content exceeded the 8192-byte argument budget. Retry by creating a small seed file, then append deterministic continuation chunks with append_file; keep each content argument under 7000 bytes.";
+        }
+        if (std.mem.eql(u8, tool_name, "append_file")) {
+            return "append_file content exceeded the 8192-byte argument budget. Retry with smaller sequential chunks under 7000 bytes and continue from the last confirmed append.";
+        }
+        if (std.mem.eql(u8, tool_name, "replace_in_file")) {
+            return "replace_in_file exceeded the 8192-byte text budget. Retry with a narrower exact replacement window or generate large additions through append_file chunks.";
+        }
         return "The tool payload exceeded the reliability budget. Retry with smaller deterministic chunks under 8192 bytes per write or replacement field.";
     }
 
@@ -191,8 +209,15 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
         if (std.mem.eql(u8, tool_name, "replace_in_file")) {
             return "The requested file was not found. Confirm the existing workspace-relative file path with list_files or read_file before retrying.";
         }
+        if (std.mem.eql(u8, tool_name, "shell_exec")) {
+            return "shell_exec could not resolve argv[0] or the requested shell executable. Retry with argv mode and an installed executable, or use powershell mode on Windows.";
+        }
 
         return "The requested workspace path or file was not found. Re-check the workspace-relative path before retrying.";
+    }
+
+    if (std.mem.eql(u8, error_name, "CommandTimedOut") and std.mem.eql(u8, tool_name, "shell_exec")) {
+        return "shell_exec reached timeout_ms and terminated the process. Retry only with a smaller command scope or an explicitly larger timeout_ms within the declared maximum.";
     }
 
     if (std.mem.eql(u8, error_name, "CommandFailed") and std.mem.eql(u8, tool_name, "search_files")) {
@@ -282,6 +307,7 @@ pub fn execute(
     return executeWithRunner(allocator, execution_context, tool_call, .{
         .context = null,
         .runFn = runCommand,
+        .runWithLimitsFn = runCommandWithLimits,
     });
 }
 
@@ -309,6 +335,12 @@ pub fn executeWithRunner(
     if (std.mem.eql(u8, tool_call.name, "replace_in_file")) {
         return replace_in_file.execute(allocator, execution_context, tool_call.arguments_json, runner);
     }
+    if (std.mem.eql(u8, tool_call.name, "shell_exec")) {
+        return shell_exec.executeToolCall(allocator, execution_context, tool_call.arguments_json, runner, tool_call.id);
+    }
+    if (std.mem.eql(u8, tool_call.name, "skill_info")) {
+        return skills.execute(allocator, tool_call.arguments_json);
+    }
     if (workspace_state_tools.handles(tool_call.name)) {
         return workspace_state_tools.execute(allocator, execution_context.workspace_root, tool_call.name, tool_call.arguments_json, runner);
     }
@@ -325,10 +357,25 @@ fn runCommand(
     cwd: []const u8,
     argv: []const []const u8,
 ) anyerror!CommandOutput {
+    return runCommandWithLimits(null, allocator, cwd, argv, .{});
+}
+
+fn runCommandWithLimits(
+    _: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    cwd: []const u8,
+    argv: []const []const u8,
+    limits: module.CommandLimits,
+) anyerror!CommandOutput {
+    if (builtin.os.tag == .windows) {
+        return runCommandWithLimitsWindows(allocator, cwd, argv, limits);
+    }
+
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = argv,
         .cwd = cwd,
+        .max_output_bytes = limits.max_output_bytes,
     });
 
     const exit_code = switch (result.term) {
@@ -336,10 +383,137 @@ fn runCommand(
         else => return Error.CommandTerminated,
     };
 
+    try limits.output_callback.onOutput(.stdout, result.stdout, result.stdout.len >= limits.max_output_bytes);
+    try limits.output_callback.onOutput(.stderr, result.stderr, result.stderr.len >= limits.max_output_bytes);
+
     return .{
         .exit_code = exit_code,
         .stdout = result.stdout,
         .stderr = result.stderr,
+    };
+}
+
+const PipeCollector = struct {
+    allocator: std.mem.Allocator,
+    file: std.fs.File,
+    stream: module.CommandOutputStream,
+    output: *std.ArrayList(u8),
+    max_output_bytes: usize,
+    callback: module.CommandOutputCallback,
+    err: ?anyerror = null,
+    cap_reached: bool = false,
+
+    fn run(self: *PipeCollector) void {
+        defer self.file.close();
+        self.readLoop() catch |err| {
+            self.err = err;
+        };
+    }
+
+    fn readLoop(self: *PipeCollector) !void {
+        var buffer: [4096]u8 = undefined;
+        while (true) {
+            const n = try self.file.read(&buffer);
+            if (n == 0) break;
+            if (self.output.items.len >= self.max_output_bytes) {
+                if (!self.cap_reached) {
+                    self.cap_reached = true;
+                    try self.callback.onOutput(self.stream, "", true);
+                }
+                continue;
+            }
+
+            const remaining = self.max_output_bytes - self.output.items.len;
+            const kept_len = @min(remaining, n);
+            const kept = buffer[0..kept_len];
+            try self.output.appendSlice(self.allocator, kept);
+            const cap_reached = kept_len < n or self.output.items.len >= self.max_output_bytes;
+            if (cap_reached) self.cap_reached = true;
+            try self.callback.onOutput(self.stream, kept, cap_reached);
+        }
+    }
+};
+
+fn runCommandWithLimitsWindows(
+    allocator: std.mem.Allocator,
+    cwd: []const u8,
+    argv: []const []const u8,
+    limits: module.CommandLimits,
+) anyerror!CommandOutput {
+    const windows = std.os.windows;
+
+    var child = std.process.Child.init(argv, allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    child.cwd = cwd;
+    child.create_no_window = true;
+
+    var stdout: std.ArrayList(u8) = .empty;
+    defer stdout.deinit(allocator);
+    var stderr: std.ArrayList(u8) = .empty;
+    defer stderr.deinit(allocator);
+
+    try child.spawn();
+    var spawned = true;
+    errdefer if (spawned) {
+        _ = child.kill() catch {};
+    };
+
+    const stdout_file = child.stdout.?;
+    child.stdout = null;
+    const stderr_file = child.stderr.?;
+    child.stderr = null;
+
+    var stdout_collector = PipeCollector{
+        .allocator = allocator,
+        .file = stdout_file,
+        .stream = .stdout,
+        .output = &stdout,
+        .max_output_bytes = limits.max_output_bytes,
+        .callback = limits.output_callback,
+    };
+    var stderr_collector = PipeCollector{
+        .allocator = allocator,
+        .file = stderr_file,
+        .stream = .stderr,
+        .output = &stderr,
+        .max_output_bytes = limits.max_output_bytes,
+        .callback = limits.output_callback,
+    };
+    const stdout_thread = try std.Thread.spawn(.{}, PipeCollector.run, .{&stdout_collector});
+    const stderr_thread = try std.Thread.spawn(.{}, PipeCollector.run, .{&stderr_collector});
+
+    const timeout_ms: windows.DWORD = @intCast(@min(limits.timeout_ms, std.math.maxInt(windows.DWORD)));
+    var timed_out = false;
+    windows.WaitForSingleObjectEx(child.id, timeout_ms, false) catch |err| switch (err) {
+        error.WaitTimeOut => {
+            timed_out = true;
+            try windows.TerminateProcess(child.id, 1);
+            try windows.WaitForSingleObjectEx(child.id, windows.INFINITE, false);
+        },
+        else => return err,
+    };
+
+    stdout_thread.join();
+    stderr_thread.join();
+
+    if (stdout_collector.err) |err| return err;
+    if (stderr_collector.err) |err| return err;
+
+    const term = try child.wait();
+    spawned = false;
+
+    const exit_code: i32 = switch (term) {
+        .Exited => |code| code,
+        else => return Error.CommandTerminated,
+    };
+
+    return .{
+        .exit_code = exit_code,
+        .stdout = try stdout.toOwnedSlice(allocator),
+        .stderr = try stderr.toOwnedSlice(allocator),
+        .timed_out = timed_out,
     };
 }
 
@@ -352,6 +526,7 @@ test "tool catalog includes the built-in coding tools" {
     try std.testing.expect(std.mem.indexOf(u8, catalog, "read_file") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "search_files") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "replace_in_file") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "shell_exec") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "Example JSON: {\"pattern\":\"read_file\",\"path\":\"src\",\"glob\":\"*.zig\",\"max_results\":20}") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "todo_slice") == null);
 }

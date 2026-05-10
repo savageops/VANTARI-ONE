@@ -5,6 +5,7 @@ const settings = @import("settings.zig");
 const types = @import("../../shared/types.zig");
 
 pub const local_settings = settings;
+pub const default_max_steps: usize = 32;
 
 pub const Error = error{
     MissingKey,
@@ -19,9 +20,9 @@ pub fn loadFromEnvFile(allocator: std.mem.Allocator, env_path: []const u8) !type
     var openai_api_key: ?[]u8 = null;
     var openai_model: ?[]u8 = null;
     var workspace_root: ?[]u8 = null;
-    var max_steps: usize = 1;
-    var max_tool_calls_per_turn: usize = 8;
-    var max_tool_calls_per_session: usize = 32;
+    var max_steps: usize = default_max_steps;
+    var max_tool_calls_per_turn: usize = 16;
+    var max_tool_calls_per_session: usize = 96;
 
     errdefer if (openai_base_url) |value| allocator.free(value);
     errdefer if (openai_api_key) |value| allocator.free(value);
@@ -128,7 +129,7 @@ fn loadDefaultFromAuthOnly(allocator: std.mem.Allocator, workspace_root: []const
         .auth_provider = try allocator.dupe(u8, resolved_auth.provider_id),
         .subscription_plan_label = if (resolved_auth.subscription_plan_label) |value| try allocator.dupe(u8, value) else null,
         .subscription_status = if (resolved_auth.subscription_status) |value| try allocator.dupe(u8, value) else null,
-        .max_steps = 1,
+        .max_steps = default_max_steps,
         .workspace_root = canonical_workspace_root,
     };
     root_owned = false;

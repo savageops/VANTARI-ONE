@@ -8,8 +8,8 @@ pub const Config = struct {
     subscription_plan_label: ?[]u8 = null,
     subscription_status: ?[]u8 = null,
     max_steps: usize,
-    max_tool_calls_per_turn: usize = 8,
-    max_tool_calls_per_session: usize = 32,
+    max_tool_calls_per_turn: usize = 16,
+    max_tool_calls_per_session: usize = 96,
     workspace_root: []u8,
     context_policy: ContextPolicy = .{},
     prompt_policy: PromptPolicy = .{},
@@ -185,6 +185,7 @@ pub fn deinitContextCheckpoints(allocator: std.mem.Allocator, checkpoints: []Con
 pub const ToolRiskClass = enum {
     read_only,
     write_capable,
+    command_execution,
     delegating,
     unknown_high_impact,
 };

@@ -62,6 +62,45 @@ const MockCommandContext = struct {
     }
 };
 
+const CountingRunnerContext = struct {
+    calls: usize = 0,
+    timeout_ms: usize = 0,
+    max_output_bytes: usize = 0,
+};
+
+const OutputDeltaRecord = struct {
+    tool_call_id: []const u8 = "",
+    tool_name: []const u8 = "",
+    stream: VAR1.core.tool_runtime.CommandOutputStream = .stdout,
+    chunk: []const u8 = "",
+    cap_reached: bool = false,
+};
+
+const OutputDeltaCapture = struct {
+    records: [8]OutputDeltaRecord = [_]OutputDeltaRecord{.{}} ** 8,
+    count: usize = 0,
+};
+
+fn captureToolOutputDelta(
+    ctx: ?*anyopaque,
+    tool_call_id: []const u8,
+    tool_name: []const u8,
+    stream: VAR1.core.tool_runtime.CommandOutputStream,
+    chunk: []const u8,
+    cap_reached: bool,
+) anyerror!void {
+    var capture: *OutputDeltaCapture = @ptrCast(@alignCast(ctx.?));
+    if (capture.count >= capture.records.len) return error.TooManyOutputDeltas;
+    capture.records[capture.count] = .{
+        .tool_call_id = tool_call_id,
+        .tool_name = tool_name,
+        .stream = stream,
+        .chunk = chunk,
+        .cap_reached = cap_reached,
+    };
+    capture.count += 1;
+}
+
 fn mockCommandRunner(
     ctx_ptr: ?*anyopaque,
     allocator: std.mem.Allocator,
@@ -98,6 +137,57 @@ fn mockCommandRunner(
         .exit_code = 0,
         .stdout = stdout,
         .stderr = try allocator.dupe(u8, ""),
+    };
+}
+
+fn mockCountingRunner(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const []const u8,
+) anyerror!VAR1.core.tool_runtime.CommandOutput {
+    var ctx: *CountingRunnerContext = @ptrCast(@alignCast(ctx_ptr.?));
+    ctx.calls += 1;
+    return .{
+        .exit_code = 0,
+        .stdout = try allocator.dupe(u8, "ok"),
+        .stderr = try allocator.dupe(u8, ""),
+    };
+}
+
+fn mockCountingLimitedRunner(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const []const u8,
+    limits: VAR1.core.tool_runtime.CommandLimits,
+) anyerror!VAR1.core.tool_runtime.CommandOutput {
+    var ctx: *CountingRunnerContext = @ptrCast(@alignCast(ctx_ptr.?));
+    ctx.calls += 1;
+    ctx.timeout_ms = limits.timeout_ms;
+    ctx.max_output_bytes = limits.max_output_bytes;
+    return .{
+        .exit_code = 0,
+        .stdout = try allocator.dupe(u8, "ok"),
+        .stderr = try allocator.dupe(u8, ""),
+    };
+}
+
+fn mockStreamingShellRunner(
+    _: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const []const u8,
+    limits: VAR1.core.tool_runtime.CommandLimits,
+) anyerror!VAR1.core.tool_runtime.CommandOutput {
+    try limits.output_callback.onOutput(.stdout, "alpha", false);
+    try limits.output_callback.onOutput(.stderr, "warn", false);
+    try limits.output_callback.onOutput(.stdout, "", true);
+
+    return .{
+        .exit_code = 7,
+        .stdout = try allocator.dupe(u8, "alpha"),
+        .stderr = try allocator.dupe(u8, "warn"),
     };
 }
 
@@ -800,6 +890,131 @@ test "tool execution errors include search_files contract details for file-not-f
     try std.testing.expect(std.mem.indexOf(u8, error_payload, "iex executable") != null);
 }
 
+test "shell_exec forwards stdout stderr and cap deltas through the tool event sink" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var capture = OutputDeltaCapture{};
+    var shell_call = try makeToolCall(
+        std.testing.allocator,
+        "shell_exec",
+        "{\"mode\":\"argv\",\"argv\":[\"fake\",\"arg\"],\"max_output_bytes\":5}",
+    );
+    defer shell_call.deinit(std.testing.allocator);
+
+    const output = try VAR1.core.tool_runtime.executeWithRunner(std.testing.allocator, .{
+        .workspace_root = workspace_root,
+        .tool_events = .{
+            .context = &capture,
+            .onOutputDeltaFn = captureToolOutputDelta,
+        },
+    }, shell_call, .{
+        .context = null,
+        .runFn = mockCommandRunner,
+        .runWithLimitsFn = mockStreamingShellRunner,
+    });
+    defer std.testing.allocator.free(output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"exit_code\":7") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"stdout\":\"alpha\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"stderr\":\"warn\"") != null);
+    try std.testing.expectEqual(@as(usize, 3), capture.count);
+    try std.testing.expectEqualStrings("call-1", capture.records[0].tool_call_id);
+    try std.testing.expectEqualStrings("shell_exec", capture.records[0].tool_name);
+    try std.testing.expectEqual(VAR1.core.tool_runtime.CommandOutputStream.stdout, capture.records[0].stream);
+    try std.testing.expectEqualStrings("alpha", capture.records[0].chunk);
+    try std.testing.expect(!capture.records[0].cap_reached);
+    try std.testing.expectEqual(VAR1.core.tool_runtime.CommandOutputStream.stderr, capture.records[1].stream);
+    try std.testing.expectEqualStrings("warn", capture.records[1].chunk);
+    try std.testing.expectEqual(VAR1.core.tool_runtime.CommandOutputStream.stdout, capture.records[2].stream);
+    try std.testing.expectEqualStrings("", capture.records[2].chunk);
+    try std.testing.expect(capture.records[2].cap_reached);
+}
+
+test "shell_exec rejects contradictory command shapes before process launch" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const cases = [_][]const u8{
+        "{\"mode\":\"argv\",\"argv\":[]}",
+        "{\"mode\":\"argv\",\"command\":\"echo no\",\"argv\":[\"echo\",\"no\"]}",
+        "{\"mode\":\"shell\",\"argv\":[\"echo\",\"no\"]}",
+        "{\"mode\":\"shell\",\"command\":\"   \\t\\n\"}",
+    };
+
+    for (cases) |arguments_json| {
+        var context = CountingRunnerContext{};
+        var shell_call = try makeToolCall(std.testing.allocator, "shell_exec", arguments_json);
+        defer shell_call.deinit(std.testing.allocator);
+
+        const result = VAR1.core.tool_runtime.executeWithRunner(std.testing.allocator, execCtx(workspace_root), shell_call, .{
+            .context = &context,
+            .runFn = mockCountingRunner,
+            .runWithLimitsFn = mockCountingLimitedRunner,
+        });
+        try std.testing.expectError(error.InvalidArguments, result);
+        try std.testing.expectEqual(@as(usize, 0), context.calls);
+    }
+}
+
+test "shell_exec rejects cwd escape before process launch" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var context = CountingRunnerContext{};
+    var shell_call = try makeToolCall(
+        std.testing.allocator,
+        "shell_exec",
+        "{\"mode\":\"argv\",\"argv\":[\"echo\",\"no\"],\"cwd\":\"..\"}",
+    );
+    defer shell_call.deinit(std.testing.allocator);
+
+    const result = VAR1.core.tool_runtime.executeWithRunner(std.testing.allocator, execCtx(workspace_root), shell_call, .{
+        .context = &context,
+        .runFn = mockCountingRunner,
+        .runWithLimitsFn = mockCountingLimitedRunner,
+    });
+    try std.testing.expectError(error.PathOutsideWorkspace, result);
+    try std.testing.expectEqual(@as(usize, 0), context.calls);
+}
+
+test "shell_exec clamps command limits before runner dispatch" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var context = CountingRunnerContext{};
+    var shell_call = try makeToolCall(
+        std.testing.allocator,
+        "shell_exec",
+        "{\"mode\":\"argv\",\"argv\":[\"fake\"],\"timeout_ms\":999999,\"max_output_bytes\":999999}",
+    );
+    defer shell_call.deinit(std.testing.allocator);
+
+    const output = try VAR1.core.tool_runtime.executeWithRunner(std.testing.allocator, execCtx(workspace_root), shell_call, .{
+        .context = &context,
+        .runFn = mockCountingRunner,
+        .runWithLimitsFn = mockCountingLimitedRunner,
+    });
+    defer std.testing.allocator.free(output);
+
+    try std.testing.expectEqual(@as(usize, 1), context.calls);
+    try std.testing.expectEqual(@as(usize, 60_000), context.timeout_ms);
+    try std.testing.expectEqual(@as(usize, 64 * 1024), context.max_output_bytes);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"stdout\":\"ok\"") != null);
+}
+
 test "catalog keeps workspace-state tools out of normal coding contexts" {
     const catalog = try VAR1.core.tool_runtime.renderCatalog(std.testing.allocator, .{
         .workspace_root = ".",
@@ -807,7 +1022,43 @@ test "catalog keeps workspace-state tools out of normal coding contexts" {
     defer std.testing.allocator.free(catalog);
 
     try std.testing.expect(std.mem.indexOf(u8, catalog, "read_file") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "skill_info") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "todo_slice") == null);
+}
+
+test "skill_info exposes native skill capsules without workspace path escape" {
+    var exact_call = try makeToolCall(std.testing.allocator, "skill_info", "{\"name\":\"planning-spec\"}");
+    defer exact_call.deinit(std.testing.allocator);
+
+    const exact = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx("."), exact_call);
+    defer std.testing.allocator.free(exact);
+
+    try std.testing.expect(std.mem.indexOf(u8, exact, "\"ok\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, exact, "SKILL planning-spec") != null);
+    try std.testing.expect(std.mem.indexOf(u8, exact, "TIER native") != null);
+    try std.testing.expect(std.mem.indexOf(u8, exact, "cold-start handoff") != null);
+    try std.testing.expect(std.mem.indexOf(u8, exact, "todo_chain_templates.md") != null);
+
+    var insect_call = try makeToolCall(std.testing.allocator, "skill_info", "{\"name\":\"insect\"}");
+    defer insect_call.deinit(std.testing.allocator);
+
+    const insect = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx("."), insect_call);
+    defer std.testing.allocator.free(insect);
+
+    try std.testing.expect(std.mem.indexOf(u8, insect, "SKILL insect") != null);
+    try std.testing.expect(std.mem.indexOf(u8, insect, "insect-rs-runtime") != null);
+    try std.testing.expect(std.mem.indexOf(u8, insect, "run-insect-rs.ps1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, insect, "engine --query") != null);
+
+    var query_call = try makeToolCall(std.testing.allocator, "skill_info", "{\"query\":\"scrape\",\"include_addons\":false}");
+    defer query_call.deinit(std.testing.allocator);
+
+    const query = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx("."), query_call);
+    defer std.testing.allocator.free(query);
+
+    try std.testing.expect(std.mem.indexOf(u8, query, "NATIVE SKILLS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, query, "insect") != null);
+    try std.testing.expect(std.mem.indexOf(u8, query, "ADDON SKILLS") == null);
 }
 
 test "catalog enables workspace-state tools only for workspace-state contexts" {
@@ -830,6 +1081,7 @@ test "catalog json exposes schema and example objects for default coding tools" 
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"workspace_root\":\".\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"read_file\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"search_files\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"skill_info\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"parameters_schema\":{") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"type\": \"object\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"contract_example\":{\"path\":\"src/core/tools/runtime.zig\",\"start_line\":1,\"end_line\":80}") != null);
@@ -857,6 +1109,9 @@ test "availability registry uses builtin module-owned names" {
 
     const agent_spec = VAR1.core.tools.registry.availabilitySpec("launch_agent").?;
     try std.testing.expect(agent_spec.dependency == null);
+
+    const skill_spec = VAR1.core.tools.registry.availabilitySpec("skill_info").?;
+    try std.testing.expect(skill_spec.dependency == null);
 }
 
 test "catalog json reports available command-backed tools when dependency resolves" {
@@ -902,6 +1157,7 @@ test "agent system prompt teaches schema repair and file-tool roles" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "search_files locates symbols or text") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Keep hidden runtime mechanics private") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "I will continue once agents complete; if any fail, I will follow up.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "wait_agent accepts timeout_ms") != null);
 }
 
 test "tool call summary masks child supervision tool names in logs" {

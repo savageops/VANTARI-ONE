@@ -1,0 +1,16 @@
+.{
+    .name = .vantari_cli,
+    .version = "0.1.0",
+    .fingerprint = 0x245eea33418a9074,
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{
+        .vantari_tui = .{
+            .path = "../../packages/tui",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

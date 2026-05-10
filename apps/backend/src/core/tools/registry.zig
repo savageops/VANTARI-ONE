@@ -9,6 +9,8 @@ const read_file = @import("builtin/read_file.zig");
 const write_file = @import("builtin/write_file.zig");
 const append_file = @import("builtin/append_file.zig");
 const replace_in_file = @import("builtin/replace_in_file.zig");
+const shell_exec = @import("builtin/shell_exec.zig");
+const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
 
 pub const AvailabilityStatus = enum {
@@ -35,6 +37,8 @@ pub const file_tool_definitions = [_]types.ToolDefinition{
     write_file.definition,
     append_file.definition,
     replace_in_file.definition,
+    shell_exec.definition,
+    skills.definition,
 };
 
 pub fn fileDefinitions() []const types.ToolDefinition {
@@ -48,6 +52,8 @@ const availability_entries = [_]AvailabilityEntry{
     .{ .name = write_file.definition.name, .spec = write_file.availability },
     .{ .name = append_file.definition.name, .spec = append_file.availability },
     .{ .name = replace_in_file.definition.name, .spec = replace_in_file.availability },
+    .{ .name = shell_exec.definition.name, .spec = shell_exec.availability },
+    .{ .name = skills.definition.name, .spec = skills.availability },
 };
 
 pub fn availabilitySpec(tool_name: []const u8) ?module.AvailabilitySpec {

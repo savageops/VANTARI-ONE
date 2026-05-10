@@ -78,6 +78,18 @@ const ToolLoopContext = struct {
     }
 };
 
+const StreamingToolLoopContext = struct {
+    allocator: std.mem.Allocator,
+    call_count: usize = 0,
+    payloads: [3]?[]u8 = .{ null, null, null },
+
+    fn deinit(self: *StreamingToolLoopContext) void {
+        for (self.payloads) |payload| {
+            if (payload) |value| self.allocator.free(value);
+        }
+    }
+};
+
 fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
     if (needle.len == 0) return 0;
     var count: usize = 0;
@@ -260,6 +272,44 @@ fn mockSendMultiToolLoop(
 
     return allocator.dupe(u8,
         \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"The first two lines are alpha and beta."}}]}
+    );
+}
+
+fn mockStreamingSendShouldNotBeUsed(
+    _: ?*anyopaque,
+    _: std.mem.Allocator,
+    _: []const u8,
+    _: []const u8,
+    _: []const u8,
+) anyerror![]u8 {
+    return error.TestExpectedStreamingTransport;
+}
+
+fn mockStreamAssistantToolAssistantLoop(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const u8,
+    payload: []const u8,
+    hooks: VAR1.core.provider_runtime.StreamHooks,
+) anyerror![]u8 {
+    var ctx: *StreamingToolLoopContext = @ptrCast(@alignCast(ctx_ptr.?));
+    ctx.payloads[ctx.call_count] = try ctx.allocator.dupe(u8, payload);
+
+    defer ctx.call_count += 1;
+
+    if (ctx.call_count == 0) {
+        try hooks.onAssistantDelta("I will inspect ");
+        try hooks.onAssistantDelta("the file first.");
+        return allocator.dupe(u8,
+            \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"I will inspect the file first.","tool_calls":[{"id":"call_stream_read","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"context.txt\",\"start_line\":1,\"end_line\":1}"}}]}}]}
+        );
+    }
+
+    try hooks.onAssistantDelta("Observed ");
+    try hooks.onAssistantDelta("alpha.");
+    return allocator.dupe(u8,
+        \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"Observed alpha."}}]}
     );
 }
 
@@ -1004,9 +1054,16 @@ test "loop executes tool calls and exposes descriptors in the provider payload" 
 
     try std.testing.expect(std.mem.indexOf(u8, events, "tool_requested") != null);
     try std.testing.expect(std.mem.indexOf(u8, events, "tool_reviewed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_started") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_finished") != null);
     try std.testing.expect(std.mem.indexOf(u8, events, "tool_completed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "var1.tool_started.v1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "var1.tool_finished.v1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "\\\"duration_ms\\\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, events, "tool_requested").? < std.mem.indexOf(u8, events, "tool_reviewed").?);
-    try std.testing.expect(std.mem.indexOf(u8, events, "tool_reviewed").? < std.mem.indexOf(u8, events, "tool_completed").?);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_reviewed").? < std.mem.indexOf(u8, events, "tool_started").?);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_started").? < std.mem.indexOf(u8, events, "tool_finished").?);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_finished").? < std.mem.indexOf(u8, events, "tool_completed").?);
 
     const transcript = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, result.session_id);
     defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, transcript);
@@ -1020,6 +1077,57 @@ test "loop executes tool calls and exposes descriptors in the provider payload" 
     try std.testing.expectEqualStrings("call_1", transcript[2].tool_call_id.?);
     try std.testing.expect(std.mem.indexOf(u8, transcript[2].content, "hello from file") != null);
     try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.assistant, transcript[3].role);
+}
+
+test "loop persists streamed assistant deltas around tool execution without collapsing phase order" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const file_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, "context.txt" });
+    defer std.testing.allocator.free(file_path);
+    try VAR1.shared.fsutil.writeText(file_path, "alpha\nbeta\n");
+
+    const config = try makeConfig(std.testing.allocator, workspace_root, 5);
+    defer config.deinit(std.testing.allocator);
+
+    var context = StreamingToolLoopContext{ .allocator = std.testing.allocator };
+    defer context.deinit();
+
+    const result = try VAR1.core.executor.runPromptWithTransport(std.testing.allocator, config, "Read context.txt and narrate the tool step while streaming.", .{
+        .context = &context,
+        .sendFn = mockStreamingSendShouldNotBeUsed,
+        .streamFn = mockStreamAssistantToolAssistantLoop,
+    });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), context.call_count);
+    try std.testing.expect(std.mem.indexOf(u8, context.payloads[0].?, "\"stream\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context.payloads[1].?, "\"role\":\"tool\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.output, "Observed alpha.") != null);
+
+    const events_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", result.session_id, "events.jsonl" });
+    defer std.testing.allocator.free(events_path);
+    const events = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, events_path);
+    defer std.testing.allocator.free(events);
+
+    const first_delta = std.mem.indexOf(u8, events, "I will inspect").?;
+    const tool_requested = std.mem.indexOf(u8, events, "tool_requested").?;
+    const tool_started = std.mem.indexOf(u8, events, "tool_started").?;
+    const tool_finished = std.mem.indexOf(u8, events, "tool_finished").?;
+    const second_delta = std.mem.indexOfPos(u8, events, tool_finished, "Observed").?;
+    const final_response = std.mem.indexOf(u8, events, "assistant_response").?;
+
+    try std.testing.expect(first_delta < tool_requested);
+    try std.testing.expect(tool_requested < tool_started);
+    try std.testing.expect(tool_started < tool_finished);
+    try std.testing.expect(tool_finished < second_delta);
+    try std.testing.expect(second_delta < final_response);
+    try std.testing.expectEqual(@as(usize, 4), countOccurrences(events, "assistant_delta"));
+    try std.testing.expect(std.mem.indexOf(u8, events, "call_stream_read") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "var1.tool_finished.v1") != null);
 }
 
 test "loop persists multi-tool batches in assistant source order before follow-up context" {

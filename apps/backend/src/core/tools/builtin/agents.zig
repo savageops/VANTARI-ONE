@@ -60,8 +60,8 @@ pub const definitions = [_]types.ToolDefinition{
         \\  "additionalProperties": false
         \\}
         ,
-        .example_json = "{\"name\":\"search-audit\",\"timeout_ms\":30000}",
-        .usage_hint = "Use wait_agent only when you are ready to spend bounded time collecting a result or current snapshot.",
+        .example_json = "{\"name\":\"search-audit\",\"timeout_ms\":60000}",
+        .usage_hint = "Use wait_agent only when you are ready to spend bounded time collecting a result or current snapshot. Set timeout_ms explicitly for long child work; use longer waits instead of repeated short polling when the child is expected to keep running.",
     },
     .{
         .name = "list_agents",
