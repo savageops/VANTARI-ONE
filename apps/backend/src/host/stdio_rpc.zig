@@ -163,6 +163,7 @@ const Server = struct {
             .message = message,
             .timestamp_ms = timestamp_ms,
         });
+        try store.touchSessionUpdatedAt(self.allocator, self.config.workspace_root, session_id, timestamp_ms);
         try self.emitSessionEvent(session_id, event_type, message, status, timestamp_ms);
     }
 
@@ -1413,6 +1414,54 @@ test "session/get reconciles stale running sessions into user-visible failure" {
     defer persisted.deinit(std.testing.allocator);
     try std.testing.expectEqual(types.SessionStatus.failed, persisted.status);
     try std.testing.expect(std.mem.indexOf(u8, persisted.failure_reason.?, "no active kernel execution owns it") != null);
+}
+
+test "session/get preserves fresh running sessions without live owner" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    var stdout_capture = try attachTestStdout(&tmp, &server, "fresh-get-stdout.bin");
+    defer stdout_capture.close();
+
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "active stream", .{
+        .status = .running,
+    });
+    defer session.deinit(std.testing.allocator);
+
+    const now_ms = std.time.milliTimestamp();
+    try store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
+        .event_type = "assistant_delta",
+        .message = "still streaming",
+        .timestamp_ms = now_ms,
+    });
+    try store.touchSessionUpdatedAt(std.testing.allocator, workspace_root, session.id, now_ms);
+
+    const request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-fresh\",\"method\":\"session/get\",\"params\":{{\"session_id\":\"{s}\"}}}}",
+        .{session.id},
+    );
+    defer std.testing.allocator.free(request);
+
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"id\":\"req-fresh\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"running\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"event_type\":\"session_failed\"") == null);
+
+    var persisted = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
+    defer persisted.deinit(std.testing.allocator);
+    try std.testing.expectEqual(types.SessionStatus.running, persisted.status);
 }
 
 test "session/list reconciles stale running sessions for dashboard surfaces" {

@@ -24,6 +24,7 @@ pub const CommandLimits = module.CommandLimits;
 pub const AgentService = module.AgentService;
 pub const ToolEventSink = module.ToolEventSink;
 pub const ExecutionContext = module.ExecutionContext;
+pub const FileInspectionLedger = module.FileInspectionLedger;
 pub const DelegationScope = module.DelegationScope;
 
 const agent_tool_definitions = agents.definitions;
@@ -182,6 +183,13 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
 
     if (std.mem.eql(u8, error_name, "PathOutsideWorkspace")) {
         return "The requested path escaped the workspace root. Retry with a workspace-relative path only and never use .. or an absolute path.";
+    }
+
+    if (std.mem.eql(u8, error_name, "FileNotInspected")) {
+        if (std.mem.eql(u8, tool_name, "write_file") or std.mem.eql(u8, tool_name, "append_file") or std.mem.eql(u8, tool_name, "replace_in_file")) {
+            return "Read the exact target with read_file before using write_file, append_file, or replace_in_file. For a new file, call read_file first and use its FileNotFound result as absence proof.";
+        }
+        return "The target was not inspected through the read ledger before this side effect. Inspect the exact workspace-relative target and retry.";
     }
 
     if (std.mem.eql(u8, error_name, "ToolPayloadExceeded")) {

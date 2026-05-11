@@ -55,6 +55,7 @@ pub fn execute(
 
     const before = try module.fileSnapshotFromContents(allocator, true, original);
     defer before.deinit(allocator);
+    try module.requireFileInspection(execution_context, file_path, true);
 
     const replace_result = try module.replaceText(
         allocator,
@@ -68,6 +69,7 @@ pub fn execute(
     if (replace_result.replacements == 0) return module.Error.PatternNotFound;
 
     try fsutil.writeText(file_path, replace_result.contents);
+    try module.recordFileInspection(allocator, execution_context, file_path, true);
 
     const after = try module.fileSnapshotFromContents(allocator, true, replace_result.contents);
     defer after.deinit(allocator);

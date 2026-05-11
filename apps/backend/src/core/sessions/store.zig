@@ -193,6 +193,20 @@ pub fn writeSessionRecord(
     try fsutil.writeText(session_path, json);
 }
 
+pub fn touchSessionUpdatedAt(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    timestamp_ms: i64,
+) !void {
+    var session = try readSessionRecord(allocator, workspace_root, session_id);
+    defer session.deinit(allocator);
+
+    if (timestamp_ms <= session.updated_at_ms) return;
+    session.updated_at_ms = timestamp_ms;
+    try writeSessionRecord(allocator, workspace_root, session);
+}
+
 pub fn setSessionStatus(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,

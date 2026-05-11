@@ -107,12 +107,26 @@ definition + availability + review_risk + execute
 
 - Built-in tools remain the default capability surface. Plugin tools are opt-in and must not silently alter the model-visible tool list.
 - Tool sockets use lowercase snake_case names and JSON-object parameter schemas.
+- Tool discovery is catalog-first. The model-visible catalog must explain available tools, unavailable dependencies, examples, usage hints, review risk, and exact JSON fields; no prompt layer may imply hidden tool names or backend-only escape hatches.
+- Agent-facing tools and backend-only primitives share one module-owned capability boundary. A primitive becomes agent-reachable only through a registered tool definition, availability contract, review risk, and dispatch path.
 - Unknown tools, context-unavailable tools, invalid arguments, and unsupported capability profiles fail before side effects.
 - Write-capable tools must emit effect evidence: resolved path, byte counts, hashes where available, operation counts, and error class.
 - `shell_exec` is command execution, not shell-shaped convenience. It must preserve argv mode, workspace-contained cwd, timeout, output budgets, process termination, and stdout/stderr draining.
-- Search is `iex`-backed. If `iex` is unavailable, search capability is unavailable; do not add `rg`, `grep`, `sed`, or ad hoc readers as hidden substitutes.
+- Search is IX/IEX-backed. `search_files` uses the native IX expression contract (`lit:needle`, `re:TODO|FIXME`, `lit:a || lit:b`) through the executable dependency currently advertised as `iex`. If that executable is unavailable, search capability is unavailable; do not add `rg`, `grep`, `sed`, or ad hoc readers as hidden substitutes.
 
-## VI. Skill Routing Contract
+## VI. Parent/Child Agent Orchestration
+
+Sub-agents are normal VAR1 sessions launched by a parent and supervised through typed child-run tools. Delegation exists to reduce latency and increase recon breadth; it is not a parallel authority layer.
+
+- Launch child agents only for branchable work that can progress independently from a self-contained prompt: parallel external research, independent directory/codebase reconnaissance, file-level audits, validation probes, or isolated comparison passes.
+- Keep the parent on critical-path synthesis: decide whether delegation is useful, launch children with finite scope, continue any non-overlapping local work, collect child SITREPs, reconcile contradictions, and publish one parent-owned conclusion.
+- Child prompts must specify objective, path/scope bounds, allowed evidence, expected SITREP shape, blocker protocol, and terminal success criteria.
+- Child SITREPs must return findings, evidence paths/commands, uncertainty, blockers, and residual risk. They do not mutate parent conclusions directly.
+- Use `list_agents` for inventory, `agent_status` for non-blocking progress, and `wait_agent` with explicit bounded `timeout_ms` when the parent is ready to collect a result. Avoid repeated tiny wait loops.
+- Do not delegate the immediate edit or decision if the parent needs that result before its next local action.
+- Child lifecycle state is append-only session/event evidence. Parent supervision must preserve heartbeat, terminal status, failure class, and resume-safe reconciliation.
+
+## VII. Skill Routing Contract
 
 Skills are operating protocols. Tools execute actions; skills choose method, evidence shape, validation discipline, and when to read deeper instructions.
 
@@ -134,7 +148,7 @@ Native high-leverage skills:
 - Add-on skills are discoverable. Treat them as demand-loaded protocols, not always-on prompt mass.
 - A skill request is not satisfied by naming the skill. The task must route into the skill's execution contract.
 
-## VII. Future-First Architecture
+## VIII. Future-First Architecture
 
 - Build the invariant that should survive later runtime scale, not the dominant implementation pattern that exists now.
 - Study references for failure modes, boundary shapes, and useful invariants only. Do not reproduce incidental architecture.
@@ -142,7 +156,7 @@ Native high-leverage skills:
 - A dynamic worker is admissible only when it calls the same proven primitive as manual execution and adds measurable capability beyond scheduling.
 - Health, readiness, and diagnostics stay thinner than capability. They expose enough state to operate the system; they do not become a parallel product.
 
-## VIII. Source Hierarchy
+## IX. Source Hierarchy
 
 - Prefer deep, named ownership modules over flat file sprawl. Do not create empty folder theater.
 - New context work belongs under `apps/backend/src/core/context/`.
@@ -152,7 +166,7 @@ Native high-leverage skills:
 - Plugin contract code belongs under `apps/backend/src/core/plugins/`. Plugin implementations must not live inside `core/`.
 - Keep protocol/shared types in `shared/` only when multiple clients or hosts consume them.
 
-## IX. Mechanical Cost Model
+## X. Mechanical Cost Model
 
 This repository prices changes against runtime mechanics, not aesthetics.
 
@@ -167,7 +181,7 @@ This repository prices changes against runtime mechanics, not aesthetics.
 
 Directive: before adding abstraction, name which cost center it lowers. If the answer is "organization", keep the code local until duplication or boundary pressure becomes measurable.
 
-## X. Reference Discipline
+## XI. Reference Discipline
 
 - Use `iex` for repository search in this checkout.
 - Before intricate kernel changes, inspect `.refs/openai__codex` and `.refs/badlogic__pi-mono`.
@@ -175,7 +189,7 @@ Directive: before adding abstraction, name which cost center it lowers. If the a
 - Every reference-harvested idea must pass the VANTARI compression test: fewer concepts at the call site, stronger guarantees in the core, lower runtime ambiguity, clearer recovery evidence.
 - Comparable-agent parity means live assistant deltas, typed tool lifecycle spans, bounded process I/O, resumable ledgers, cancellation semantics, and cold-start replay before decorative UI or optional extension systems.
 
-## XI. Forbidden Anti-Patterns
+## XII. Forbidden Anti-Patterns
 
 - Parallel systems for the same responsibility.
 - Hidden fallback readers, hidden provider paths, or late runtime crashes for unsupported capability.
@@ -188,7 +202,7 @@ Directive: before adding abstraction, name which cost center it lowers. If the a
 - "Green" tests that exercise removed routes, mocks, stale fallback paths, or non-canonical runtime lanes.
 - Shell workarounds for contracts that should exist as typed kernel capability.
 
-## XII. Proof-Gated Promotion Lifecycle
+## XIII. Proof-Gated Promotion Lifecycle
 
 Every non-trivial runtime change follows:
 
@@ -214,7 +228,7 @@ Rejection protocol:
 - Remove the rejected code path.
 - State the next mechanism to investigate.
 
-## XIII. Testing Integrity
+## XIV. Testing Integrity
 
 Tests must behave like adversarial pipeline probes:
 
@@ -234,14 +248,14 @@ Tests must behave like adversarial pipeline probes:
 
 A passing test is valuable only when the assertion proves an invariant a shallow implementation would violate.
 
-## XIV. Windows-Native Runtime Discipline
+## XV. Windows-Native Runtime Discipline
 
 - WSL or POSIX success may support analysis. It is not shipped proof for user-facing Windows behavior.
 - Operator scripts must diagnose locked installed binaries and stale local processes before failing obscurely.
 - Process supervision must account for Windows handle lifetime, pipe draining, timeout, and child termination.
 - Installed `%LOCALAPPDATA%\Vantari\bin\vantari.exe` proof is mandatory after CLI/TUI/provider/workspace/auth changes.
 
-## XV. Communication Standard
+## XVI. Communication Standard
 
 Every output in this repository is calibrated for experienced systems engineers.
 
@@ -253,7 +267,7 @@ Every output in this repository is calibrated for experienced systems engineers.
 
 Capability claims carry mechanism and proof. "Works" is not a mechanism. "Fast" is not a unit. "Safer" is not an invariant.
 
-## XVI. Definition Of Done
+## XVII. Definition Of Done
 
 - Capability implemented end-to-end.
 - State machine named: ingress, mutation, emission, persistence, recovery, terminal state.
@@ -265,7 +279,7 @@ Capability claims carry mechanism and proof. "Works" is not a mechanism. "Fast" 
 - Native installed binary validated for user-facing changes.
 - Handoff is cold-start ready from repository state.
 
-## XVII. Frontier Roadmap
+## XVIII. Frontier Roadmap
 
 1. Typed turn/item event grammar: replace mixed string progress with versioned `turn_started`, `assistant_delta`, `tool_started`, `tool_output_delta`, `tool_finished`, `turn_finished`, and `turn_failed` schemas while keeping legacy readers read-only.
 2. Binary-safe event spine: store event payloads as canonical JSON plus optional base64 byte fields, stable sequence numbers, monotonic causal order, and replay cursors.

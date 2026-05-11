@@ -137,6 +137,9 @@ pub fn runPromptWithOptions(
     if (execution_context.parent_session_id == null) {
         execution_context.parent_session_id = session.id;
     }
+    var file_inspection_ledger = tools.FileInspectionLedger.init(allocator);
+    defer file_inspection_ledger.deinit();
+    execution_context.file_inspection_ledger = &file_inspection_ledger;
     var tool_delta_context = ToolDeltaContext{
         .allocator = allocator,
         .workspace_root = config.workspace_root,
@@ -1095,5 +1098,6 @@ fn recordSessionEvent(
         .message = message,
         .timestamp_ms = timestamp_ms,
     });
+    try store.touchSessionUpdatedAt(allocator, workspace_root, session_id, timestamp_ms);
     try hooks.onSessionEvent(session_id, event_type, message, types.statusLabel(status), timestamp_ms);
 }

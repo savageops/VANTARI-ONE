@@ -7,7 +7,7 @@ const module = @import("../module.zig");
 pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "launch_agent",
-        .description = "Launch a bounded child VAR1 agent. Arguments require prompt and optionally accept name plus an explicit delegation scope. Use only when the child can make independent progress from a self-contained task statement.",
+        .description = "Launch a bounded child VAR1 agent. Arguments require prompt and optionally accept name plus an explicit delegation scope. Use only for branchable work where the child can make independent progress from a self-contained task statement and return a SITREP for parent integration.",
         .review_risk = .delegating,
         .parameters_json =
         \\{
@@ -26,7 +26,7 @@ pub const definitions = [_]types.ToolDefinition{
         \\}
         ,
         .example_json = "{\"prompt\":\"Inspect src/core/tools/runtime.zig and summarize search_files.\",\"name\":\"search-audit\",\"scope_depth\":1,\"contact_budget\":1,\"validation_status\":\"unverified\"}",
-        .usage_hint = "Keep the child prompt concrete, finite, and self-contained. Expanding scope_depth or contact_budget requires escalation_reason and remains bounded by the kernel capability profile.",
+        .usage_hint = "Use for parallel research, independent directory/codebase reconnaissance, file-level audits, or validation probes. Keep the child prompt concrete, finite, scoped, and explicit about expected SITREP evidence. The parent owns integration and final response. Expanding scope_depth or contact_budget requires escalation_reason and remains bounded by the kernel capability profile.",
     },
     .{
         .name = "agent_status",

@@ -57,8 +57,10 @@ pub fn execute(
 
     const before = try module.fileSnapshotFromContents(allocator, before_exists, before_contents);
     defer before.deinit(allocator);
+    try module.requireFileInspection(execution_context, file_path, before_exists);
 
     try fsutil.appendText(file_path, parsed.value.content);
+    try module.recordFileInspection(allocator, execution_context, file_path, true);
 
     const after = try module.fileSnapshotFromParts(
         allocator,

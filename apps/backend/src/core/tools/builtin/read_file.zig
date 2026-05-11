@@ -49,8 +49,15 @@ pub fn execute(
     const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
     defer allocator.free(file_path);
 
-    const contents = try fsutil.readTextAlloc(allocator, file_path);
+    const contents = fsutil.readTextAlloc(allocator, file_path) catch |err| switch (err) {
+        error.FileNotFound => {
+            try module.recordFileInspection(allocator, execution_context, file_path, false);
+            return err;
+        },
+        else => return err,
+    };
     defer allocator.free(contents);
+    try module.recordFileInspection(allocator, execution_context, file_path, true);
 
     const selected = try module.renderLineRange(allocator, contents, parsed.value.start_line, parsed.value.end_line);
     defer allocator.free(selected);

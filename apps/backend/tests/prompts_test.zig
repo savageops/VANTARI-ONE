@@ -37,6 +37,13 @@ test "prompt builder emits ordered guardrails and tool contract" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "- insect:") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "- dupe-audit:") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Call contract: pass one JSON object") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Treat the catalog below as the authoritative executable API") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "native IX expressions such as lit:needle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Delegation protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "parallel external research") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "required SITREP") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Memory protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "messages.jsonl remains transcript truth") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Large artifact protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "under 7000 bytes") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "all paths are relative to the displayed workspace root") != null);
