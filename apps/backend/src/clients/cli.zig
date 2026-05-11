@@ -97,6 +97,19 @@ const ParsedSessionSendResult = struct {
     session: ParsedSessionSummary,
 };
 
+const SessionListProjection = struct {
+    summaries: []protocol_types.SessionSummary,
+    outputs: []?[]u8,
+
+    fn deinit(self: SessionListProjection, allocator: std.mem.Allocator) void {
+        for (self.outputs) |maybe_output| {
+            if (maybe_output) |output| allocator.free(output);
+        }
+        allocator.free(self.outputs);
+        allocator.free(self.summaries);
+    }
+};
+
 const ParsedHealthResult = struct {
     ok: bool,
     model: []const u8,
@@ -117,6 +130,7 @@ pub const root_help_text =
     \\
     \\Usage:
     \\  vantari
+    \\  vantari -c
     \\  vantari <command> [flags]
     \\  var <command> [flags]
     \\  VAR1 <command> [flags]
@@ -133,6 +147,7 @@ pub const root_help_text =
     \\
     \\Examples:
     \\  vantari
+    \\  vantari -c
     \\  vantari "List the files under src."
     \\  vantari c
     \\  vantari workspace show
@@ -150,6 +165,7 @@ pub const root_help_text =
     \\  PowerShell reserves bare var; use vantari or var.exe there.
     \\  VAR1 reads .env from the current workspace for run, health, serve, and tools execution.
     \\  Workspace resolution checks VANTARI_WORKSPACE, current directory ancestors, then explicit installed override.
+    \\  vantari -c opens the TUI on the most recently updated session in the current workspace.
     \\  Use VAR1 help <command> or VAR1 <command> --help for command-specific details.
     \\
 ;
@@ -883,26 +899,18 @@ fn executeSessionsFromStore(allocator: std.mem.Allocator, workspace_root: []cons
     const sessions = try session_store.listSessionRecords(allocator, workspace_root);
     defer shared_types.deinitSessionRecords(allocator, sessions);
 
-    var summaries = try allocator.alloc(protocol_types.SessionSummary, sessions.len);
-    defer allocator.free(summaries);
-
-    for (sessions, 0..) |session, index| {
-        const output = try session_store.readOutput(allocator, workspace_root, session.id);
-        defer if (output) |value| allocator.free(value);
-        summaries[index] = makeCliSessionSummary(session, output);
-    }
+    const projection = try buildSessionListProjection(allocator, workspace_root, sessions);
+    defer projection.deinit(allocator);
 
     if (options.json_output) {
-        const result_json = try renderJsonAlloc(allocator, protocol_types.SessionListResult{
-            .sessions = summaries,
-        });
+        const result_json = try renderSessionListJsonFromProjection(allocator, projection);
         defer allocator.free(result_json);
         try writeStdout(result_json);
         try writeStdout("\n");
         return;
     }
 
-    if (summaries.len == 0) {
+    if (projection.summaries.len == 0) {
         try writeStdout("No VAR1 sessions in this workspace.\n");
         return;
     }
@@ -912,18 +920,63 @@ fn executeSessionsFromStore(allocator: std.mem.Allocator, workspace_root: []cons
     const writer = &stdout_writer.interface;
 
     try writer.writeAll("Recent VAR1 sessions\n");
-    const visible_count = @min(options.limit, summaries.len);
-    for (summaries[0..visible_count], 0..) |session, index| {
+    const visible_count = @min(options.limit, projection.summaries.len);
+    for (projection.summaries[0..visible_count], 0..) |session, index| {
         try writeSessionSummaryLine(writer, index + 1, session);
     }
-    if (visible_count < summaries.len) {
+    if (visible_count < projection.summaries.len) {
         try writer.print("... {d} more session(s). Use var c --limit {d}.\n", .{
-            summaries.len - visible_count,
-            summaries.len,
+            projection.summaries.len - visible_count,
+            projection.summaries.len,
         });
     }
     try writer.writeAll("Resume explicitly with: var run --session-id <session-id>\n");
     try writer.flush();
+}
+
+pub fn renderSessionListJson(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
+    const sessions = try session_store.listSessionRecords(allocator, workspace_root);
+    defer shared_types.deinitSessionRecords(allocator, sessions);
+
+    const projection = try buildSessionListProjection(allocator, workspace_root, sessions);
+    defer projection.deinit(allocator);
+
+    return renderSessionListJsonFromProjection(allocator, projection);
+}
+
+fn renderSessionListJsonFromProjection(allocator: std.mem.Allocator, projection: SessionListProjection) ![]u8 {
+    return renderJsonAlloc(allocator, protocol_types.SessionListResult{
+        .sessions = projection.summaries,
+    });
+}
+
+fn buildSessionListProjection(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    sessions: []const shared_types.SessionRecord,
+) !SessionListProjection {
+    var summaries = try allocator.alloc(protocol_types.SessionSummary, sessions.len);
+    errdefer allocator.free(summaries);
+
+    var outputs = try allocator.alloc(?[]u8, sessions.len);
+    errdefer allocator.free(outputs);
+    @memset(outputs, null);
+
+    errdefer {
+        for (outputs) |maybe_output| {
+            if (maybe_output) |output| allocator.free(output);
+        }
+    }
+
+    for (sessions, 0..) |session, index| {
+        outputs[index] = try session_store.readOutput(allocator, workspace_root, session.id);
+        summaries[index] = makeCliSessionSummary(session, outputs[index]);
+    }
+
+    return .{
+        .summaries = summaries,
+        .outputs = outputs,
+    };
 }
 
 fn executeWorkspaceCommand(allocator: std.mem.Allocator, action: WorkspaceCliAction) !void {
@@ -1351,6 +1404,32 @@ fn renderJsonAlloc(allocator: std.mem.Allocator, value: anytype) ![]u8 {
     return std.fmt.allocPrint(allocator, "{f}", .{
         std.json.fmt(value, .{}),
     });
+}
+
+test "cli session list projection keeps output slices alive through JSON render" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(workspace_root);
+
+    var session = try session_store.initSession(std.testing.allocator, workspace_root, "resume this session");
+    defer session.deinit(std.testing.allocator);
+    try session_store.writeOutput(std.testing.allocator, workspace_root, session.id, "assistant output survives projection");
+
+    const sessions = try session_store.listSessionRecords(std.testing.allocator, workspace_root);
+    defer shared_types.deinitSessionRecords(std.testing.allocator, sessions);
+
+    const projection = try buildSessionListProjection(std.testing.allocator, workspace_root, sessions);
+    defer projection.deinit(std.testing.allocator);
+
+    const rendered = try renderJsonAlloc(std.testing.allocator, protocol_types.SessionListResult{
+        .sessions = projection.summaries,
+    });
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "assistant output survives projection") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, session.id) != null);
 }
 
 fn writeStdout(text: []const u8) !void {

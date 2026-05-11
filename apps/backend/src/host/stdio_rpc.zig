@@ -875,15 +875,23 @@ fn handleSessionList(server: *Server) ![]u8 {
     const sessions = try store.listSessionRecords(server.allocator, server.config.workspace_root);
     defer types.deinitSessionRecords(server.allocator, sessions);
 
+    var outputs = try server.allocator.alloc(?[]u8, sessions.len);
+    defer {
+        for (outputs) |maybe_output| {
+            if (maybe_output) |output| server.allocator.free(output);
+        }
+        server.allocator.free(outputs);
+    }
+    @memset(outputs, null);
+
     var summaries = try server.allocator.alloc(protocol_types.SessionSummary, sessions.len);
     defer server.allocator.free(summaries);
 
     for (sessions, 0..) |*session, index| {
         try reconcileStaleRunningSession(server, session);
 
-        const output = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
-        defer if (output) |value| server.allocator.free(value);
-        summaries[index] = makeSessionSummary(session.*, output);
+        outputs[index] = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
+        summaries[index] = makeSessionSummary(session.*, outputs[index]);
     }
 
     return renderJsonAlloc(server.allocator, protocol_types.SessionListResult{
@@ -1440,6 +1448,36 @@ test "session/list reconciles stale running sessions for dashboard surfaces" {
     var persisted = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
     defer persisted.deinit(std.testing.allocator);
     try std.testing.expectEqual(types.SessionStatus.failed, persisted.status);
+}
+
+test "session/list keeps hydrated outputs alive through response render" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    var stdout_capture = try attachTestStdout(&tmp, &server, "list-output-lifetime-stdout.bin");
+    defer stdout_capture.close();
+
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "resume visible transcript", .{
+        .status = .completed,
+    });
+    defer session.deinit(std.testing.allocator);
+    try store.writeOutput(std.testing.allocator, workspace_root, session.id, "assistant output must survive stdio render");
+
+    const response = (try processRequest(&server, "{\"jsonrpc\":\"2.0\",\"id\":\"req-list-output\",\"method\":\"session/list\",\"params\":{}}")).?;
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"id\":\"req-list-output\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "assistant output must survive stdio render") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, session.id) != null);
 }
 
 test "session/resume reconciles stale running sessions before returning state" {

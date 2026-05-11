@@ -529,6 +529,7 @@ test "cli root help advertises command discovery and tools json export" {
     const help = VAR1.clients.cli.helpText(null).?;
 
     try std.testing.expect(std.mem.indexOf(u8, help, "vantari") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "vantari -c") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "var <command> [flags]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "var c") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "PowerShell reserves bare var") != null);
@@ -536,6 +537,7 @@ test "cli root help advertises command discovery and tools json export" {
     try std.testing.expect(std.mem.indexOf(u8, help, "VAR1 health") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "VAR1 tools --json") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "VAR1 help <command>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "most recently updated session") != null);
 }
 
 test "cli recent-session help is canonical-store scoped" {
@@ -546,6 +548,24 @@ test "cli recent-session help is canonical-store scoped" {
     try std.testing.expect(std.mem.indexOf(u8, help, "legacy or global runtime roots") != null);
     try std.testing.expect(VAR1.clients.cli.helpText("continue") != null);
     try std.testing.expect(VAR1.clients.cli.helpText("sessions") != null);
+}
+
+test "cli recent-session json keeps hydrated outputs alive through render" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(workspace_root);
+
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "resume this session");
+    defer session.deinit(std.testing.allocator);
+    try VAR1.core.session_store.writeOutput(std.testing.allocator, workspace_root, session.id, "assistant output survives projection");
+
+    const rendered = try VAR1.clients.cli.renderSessionListJson(std.testing.allocator, workspace_root);
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "assistant output survives projection") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, session.id) != null);
 }
 
 test "cli run help documents prompt-source exclusivity and session resume semantics" {

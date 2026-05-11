@@ -18,6 +18,11 @@ const Event = union(enum) {
     focus_out,
 };
 
+pub const StartupMode = enum {
+    blank,
+    continue_latest,
+};
+
 const Role = enum {
     user,
     assistant,
@@ -76,6 +81,74 @@ const ChatState = struct {
             .role = role,
             .text = try self.allocator.dupe(u8, text),
         });
+    }
+
+    fn loadLatestSession(self: *ChatState) !bool {
+        const list_call = try self.client.call(protocol.methods.session_list, "{}");
+        defer list_call.deinit(self.allocator);
+        const list_result_json = try expectKernelResult(self.allocator, list_call);
+        defer self.allocator.free(list_result_json);
+
+        var parsed_list = try std.json.parseFromSlice(protocol.SessionListResult, self.allocator, list_result_json, .{
+            .ignore_unknown_fields = true,
+        });
+        defer parsed_list.deinit();
+
+        if (parsed_list.value.sessions.len == 0) return false;
+        try self.loadSession(parsed_list.value.sessions[0].session_id);
+        return true;
+    }
+
+    fn loadSession(self: *ChatState, session_id: []const u8) !void {
+        const params = try renderJsonAlloc(self.allocator, .{ .session_id = session_id });
+        defer self.allocator.free(params);
+
+        const get_call = try self.client.call(protocol.methods.session_get, params);
+        defer get_call.deinit(self.allocator);
+        const get_result_json = try expectKernelResult(self.allocator, get_call);
+        defer self.allocator.free(get_result_json);
+
+        var parsed_get = try std.json.parseFromSlice(protocol.SessionGetResult, self.allocator, get_result_json, .{
+            .ignore_unknown_fields = true,
+        });
+        defer parsed_get.deinit();
+
+        if (self.session_id) |value| self.allocator.free(value);
+        self.session_id = try self.allocator.dupe(u8, parsed_get.value.session.session_id);
+        self.status = "READY";
+
+        for (self.messages.items) |message| message.deinit(self.allocator);
+        self.messages.clearRetainingCapacity();
+        for (self.seen_progress_events.items) |event_key| self.allocator.free(event_key);
+        self.seen_progress_events.clearRetainingCapacity();
+        self.last_notification_sequence = 0;
+        self.last_durable_sync_ms = 0;
+        self.last_durable_event_count = parsed_get.value.events.len;
+        self.scroll_offset = 0;
+        self.waiting = false;
+        self.cancel_requested = false;
+        self.received_assistant_delta = false;
+        self.pending_assistant_placeholder = false;
+
+        try self.hydrateTranscript(parsed_get.value.messages);
+        for (parsed_get.value.events) |event| {
+            _ = try self.markProgressEventSeen(event.event_type, event.message, event.timestamp_ms);
+        }
+        self.jumpToBottom();
+    }
+
+    fn hydrateTranscript(self: *ChatState, messages: []const VAR1.shared.types.SessionMessage) !void {
+        for (messages) |message| {
+            switch (message.role) {
+                .user => try self.add(.user, message.content),
+                .assistant => if (message.content.len > 0) try self.add(.assistant, message.content),
+                .tool => if (message.content.len > 0) {
+                    const preview = try formatToolTranscriptMessage(self.allocator, message.content);
+                    defer self.allocator.free(preview);
+                    try self.add(.progress, preview);
+                },
+            }
+        }
     }
 
     fn submit(
@@ -671,6 +744,18 @@ fn runSessionSend(job: *SendJob) void {
 }
 
 pub fn main(allocator: std.mem.Allocator) !void {
+    return mainWithMode(allocator, .blank);
+}
+
+pub fn mainContinueLatest(allocator: std.mem.Allocator) !void {
+    return mainWithMode(allocator, .continue_latest);
+}
+
+fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
+    var buffer: [1024]u8 = undefined;
+    var tty = try tui.Tty.init(&buffer);
+    defer tty.deinit();
+
     var client = try stdio_rpc.LocalClient.initInWorkspace(allocator, null);
     defer client.deinit();
 
@@ -693,10 +778,6 @@ pub fn main(allocator: std.mem.Allocator) !void {
         .ignore_unknown_fields = true,
     });
     defer parsed_health.deinit();
-
-    var buffer: [1024]u8 = undefined;
-    var tty = try tui.Tty.init(&buffer);
-    defer tty.deinit();
 
     const writer = tty.anyWriter();
     var vx = try tui.init(allocator, .{
@@ -731,6 +812,12 @@ pub fn main(allocator: std.mem.Allocator) !void {
         .subscription_status = parsed_health.value.subscription_status orelse "unknown",
     };
     defer state.deinit();
+
+    if (startup_mode == .continue_latest) {
+        if (!try state.loadLatestSession()) {
+            try state.add(.system, "No sessions in this workspace yet.");
+        }
+    }
 
     while (true) {
         try draw(&vx, writer, &state, &input);
@@ -772,6 +859,43 @@ pub fn main(allocator: std.mem.Allocator) !void {
             else => {},
         }
     }
+}
+
+pub fn writeStartupFailure(allocator: std.mem.Allocator, err: anyerror) !void {
+    const rendered = try renderStartupFailure(allocator, err);
+    defer allocator.free(rendered);
+    var buffer: [1024]u8 = undefined;
+    var stderr = std.fs.File.stderr().writer(&buffer);
+    try stderr.interface.writeAll(rendered);
+    try stderr.interface.flush();
+}
+
+pub fn renderStartupFailure(allocator: std.mem.Allocator, err: anyerror) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "VAR1_ERROR category=tui code={s} message={f}\n",
+        .{ startupFailureCode(err), std.json.fmt(startupFailureMessage(err), .{}) },
+    );
+}
+
+fn startupFailureCode(err: anyerror) []const u8 {
+    return switch (err) {
+        error.InvalidHandle => "TerminalUnavailable",
+        error.InvalidRpcResponse => "KernelInvalidRpcResponse",
+        error.RpcRemoteError => "KernelRemoteError",
+        error.MissingChildPipes => "KernelPipeUnavailable",
+        else => @errorName(err),
+    };
+}
+
+fn startupFailureMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.InvalidHandle => "TUI requires an interactive terminal handle. Run from a real console, or use commands such as `vantari health --json` and `vantari c --json` in non-interactive shells.",
+        error.InvalidRpcResponse => "Kernel stdio returned an invalid JSON-RPC response during TUI startup.",
+        error.RpcRemoteError => "Kernel stdio returned an error during TUI startup.",
+        error.MissingChildPipes => "Kernel stdio child process did not expose the required pipes.",
+        else => "TUI startup failed before the chat surface became interactive.",
+    };
 }
 
 fn applyMouseScroll(state: *ChatState, mouse: tui.Mouse) bool {
@@ -1539,6 +1663,13 @@ fn compactOutputPreview(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
     return std.fmt.allocPrint(allocator, "{s}...", .{output.items[0..keep]});
 }
 
+fn formatToolTranscriptMessage(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    const preview = try compactOutputPreview(allocator, value);
+    defer allocator.free(preview);
+    if (preview.len == 0) return allocator.dupe(u8, "tool: <empty result>");
+    return std.fmt.allocPrint(allocator, "tool: {s}", .{preview});
+}
+
 fn stripPrefix(value: []const u8, prefix: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, value, prefix)) return null;
     return value[prefix.len..];
@@ -1669,6 +1800,68 @@ test "tui progress renders hostile output chunks without corrupting the transcri
     const binary_chunk = (try formatProgress(allocator, "tool_output_delta", "{\"schema\":\"var1.tool_output_delta.v1\",\"tool\":\"shell_exec\",\"tool_call_id\":\"call_1\",\"stream\":\"stdout\",\"chunk_b64\":\"QQBCfw==\",\"cap_reached\":false}")) orelse return error.TestUnexpectedNull;
     defer allocator.free(binary_chunk);
     try std.testing.expectEqualStrings("stdout: A.B.", binary_chunk);
+}
+
+test "tui startup errors render typed operator-facing envelopes" {
+    const invalid_handle = try renderStartupFailure(std.testing.allocator, error.InvalidHandle);
+    defer std.testing.allocator.free(invalid_handle);
+    try std.testing.expect(std.mem.indexOf(u8, invalid_handle, "code=TerminalUnavailable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, invalid_handle, "interactive terminal handle") != null);
+
+    const invalid_rpc = try renderStartupFailure(std.testing.allocator, error.InvalidRpcResponse);
+    defer std.testing.allocator.free(invalid_rpc);
+    try std.testing.expect(std.mem.indexOf(u8, invalid_rpc, "code=KernelInvalidRpcResponse") != null);
+    try std.testing.expect(std.mem.indexOf(u8, invalid_rpc, "invalid JSON-RPC response") != null);
+}
+
+test "tui latest-session hydration restores transcript rows before the next turn" {
+    const allocator = std.testing.allocator;
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\MEMBRANE-FRAMEWORK",
+        .model = "glm-5.1",
+        .base_url = "https://api.z.ai/api/coding/paas/v4",
+        .auth_provider = "zai",
+        .plan = "coding",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    var messages = [_]VAR1.shared.types.SessionMessage{
+        .{
+            .id = try allocator.dupe(u8, "msg-1"),
+            .seq = 1,
+            .role = .user,
+            .content = try allocator.dupe(u8, "hi"),
+            .timestamp_ms = 1,
+        },
+        .{
+            .id = try allocator.dupe(u8, "msg-2"),
+            .seq = 2,
+            .role = .assistant,
+            .content = try allocator.dupe(u8, "hello back"),
+            .timestamp_ms = 2,
+        },
+        .{
+            .id = try allocator.dupe(u8, "msg-3"),
+            .seq = 3,
+            .role = .tool,
+            .content = try allocator.dupe(u8, "alpha\nbeta\n"),
+            .timestamp_ms = 3,
+        },
+    };
+    defer for (&messages) |message| message.deinit(allocator);
+
+    try state.hydrateTranscript(&messages);
+
+    try std.testing.expectEqual(@as(usize, 3), state.messages.items.len);
+    try std.testing.expectEqual(.user, state.messages.items[0].role);
+    try std.testing.expectEqualStrings("hi", state.messages.items[0].text);
+    try std.testing.expectEqual(.assistant, state.messages.items[1].role);
+    try std.testing.expectEqualStrings("hello back", state.messages.items[1].text);
+    try std.testing.expectEqual(.progress, state.messages.items[2].role);
+    try std.testing.expectEqualStrings("tool: alpha beta (3 lines)", state.messages.items[2].text);
 }
 
 test "tui progress keeps stdout and stderr streams separated for one tool call" {

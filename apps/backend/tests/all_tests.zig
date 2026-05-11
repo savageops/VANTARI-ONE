@@ -11,6 +11,7 @@ test {
     _ = @import("provider_test.zig");
     _ = @import("runtime_loop_test.zig");
     _ = @import("tools_test.zig");
+    _ = @import("user_flow_trellis_test.zig");
     _ = @import("web_test.zig");
     _ = @import("workspace_resolution_test.zig");
     std.testing.refAllDeclsRecursive(VAR1.clients.cli);
