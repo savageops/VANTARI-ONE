@@ -24,6 +24,13 @@ fn execCtx(workspace_root: []const u8) VAR1.core.tool_runtime.ExecutionContext {
     };
 }
 
+fn guardedExecCtx(workspace_root: []const u8, ledger: *VAR1.core.tool_runtime.FileInspectionLedger) VAR1.core.tool_runtime.ExecutionContext {
+    return .{
+        .workspace_root = workspace_root,
+        .file_inspection_ledger = ledger,
+    };
+}
+
 fn execCtxWithProbe(
     workspace_root: []const u8,
     probe_fn: *const fn (?*anyopaque, std.mem.Allocator, []const u8) anyerror!bool,
@@ -430,6 +437,100 @@ test "file tools reject paths outside the workspace" {
     try std.testing.expectError(VAR1.shared.fsutil.PathError.PathOutsideWorkspace, VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), write_call));
 }
 
+test "write-capable file tools require exact read ledger evidence" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var ledger = VAR1.core.tool_runtime.FileInspectionLedger.init(std.testing.allocator);
+    defer ledger.deinit();
+    const ctx = guardedExecCtx(workspace_root, &ledger);
+
+    var write_call = try makeToolCall(std.testing.allocator, "write_file", "{\"path\":\"notes/new.txt\",\"content\":\"alpha\\n\"}");
+    defer write_call.deinit(std.testing.allocator);
+    try std.testing.expectError(VAR1.core.tool_runtime.Error.FileNotInspected, VAR1.core.tool_runtime.execute(std.testing.allocator, ctx, write_call));
+
+    var missing_read_call = try makeToolCall(std.testing.allocator, "read_file", "{\"path\":\"notes/new.txt\"}");
+    defer missing_read_call.deinit(std.testing.allocator);
+    try std.testing.expectError(error.FileNotFound, VAR1.core.tool_runtime.execute(std.testing.allocator, ctx, missing_read_call));
+
+    const write_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, ctx, write_call);
+    defer std.testing.allocator.free(write_output);
+    try std.testing.expect(std.mem.indexOf(u8, write_output, "\"before_exists\":false") != null);
+
+    var append_call = try makeToolCall(std.testing.allocator, "append_file", "{\"path\":\"notes/new.txt\",\"content\":\"beta\\n\"}");
+    defer append_call.deinit(std.testing.allocator);
+    const append_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, ctx, append_call);
+    defer std.testing.allocator.free(append_output);
+    try std.testing.expect(std.mem.indexOf(u8, append_output, "\"before_exists\":true") != null);
+
+    var replace_call = try makeToolCall(std.testing.allocator, "replace_in_file", "{\"path\":\"notes/new.txt\",\"old_text\":\"beta\",\"new_text\":\"gamma\"}");
+    defer replace_call.deinit(std.testing.allocator);
+    const replace_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, ctx, replace_call);
+    defer std.testing.allocator.free(replace_output);
+    try std.testing.expect(std.mem.indexOf(u8, replace_output, "\"replacements\":1") != null);
+}
+
+test "read ledger does not authorize adjacent file mutations" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const first_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, "notes", "first.txt" });
+    defer std.testing.allocator.free(first_path);
+    const second_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, "notes", "second.txt" });
+    defer std.testing.allocator.free(second_path);
+    try VAR1.shared.fsutil.writeText(first_path, "alpha\n");
+    try VAR1.shared.fsutil.writeText(second_path, "beta\n");
+
+    var ledger = VAR1.core.tool_runtime.FileInspectionLedger.init(std.testing.allocator);
+    defer ledger.deinit();
+    const ctx = guardedExecCtx(workspace_root, &ledger);
+
+    var read_first_call = try makeToolCall(std.testing.allocator, "read_file", "{\"path\":\"notes/first.txt\"}");
+    defer read_first_call.deinit(std.testing.allocator);
+    const read_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, ctx, read_first_call);
+    defer std.testing.allocator.free(read_output);
+
+    var replace_second_call = try makeToolCall(std.testing.allocator, "replace_in_file", "{\"path\":\"notes/second.txt\",\"old_text\":\"beta\",\"new_text\":\"delta\"}");
+    defer replace_second_call.deinit(std.testing.allocator);
+    try std.testing.expectError(VAR1.core.tool_runtime.Error.FileNotInspected, VAR1.core.tool_runtime.execute(std.testing.allocator, ctx, replace_second_call));
+
+    var append_missing_call = try makeToolCall(std.testing.allocator, "append_file", "{\"path\":\"notes/third.txt\",\"content\":\"new\\n\"}");
+    defer append_missing_call.deinit(std.testing.allocator);
+    try std.testing.expectError(VAR1.core.tool_runtime.Error.FileNotInspected, VAR1.core.tool_runtime.execute(std.testing.allocator, ctx, append_missing_call));
+}
+
+test "tool error envelope teaches read-before-write recovery" {
+    const rendered = try VAR1.core.tool_runtime.renderExecutionError(std.testing.allocator, "write_file", "FileNotInspected", "{\"path\":\"notes/new.txt\",\"content\":\"x\"}");
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"error\":\"FileNotInspected\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Read the exact target with read_file") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "FileNotFound result as absence proof") != null);
+}
+
+test "agent prompt carries file inspection and mutating shell guidance" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const prompt = try VAR1.core.prompts.buildAgentSystemPrompt(std.testing.allocator, execCtx(workspace_root), .{});
+    defer std.testing.allocator.free(prompt);
+
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Existing targets require read_file success") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "New targets require a read_file FileNotFound result") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "list_files and search_files discover paths but do not satisfy write inspection") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "For shell_exec commands that mutate files, inspect targets first") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "wait_agent accepts timeout_ms") != null);
+}
+
 test "file tools reject undeclared arguments before side effects" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -662,6 +763,8 @@ test "agent tools use the agent service contract and surface agent tool catalog"
     defer std.testing.allocator.free(catalog);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "launch_agent") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "wait_agent") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "branchable work") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "SITREP") != null);
 
     var launch_call = try makeToolCall(std.testing.allocator, "launch_agent", "{\"prompt\":\"how many r in strawberry\",\"name\":\"berry-child\"}");
     defer launch_call.deinit(std.testing.allocator);
@@ -1261,6 +1364,12 @@ test "agent system prompt teaches schema repair and file-tool roles" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "list_files discovers paths") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Example JSON: {\"pattern\":\"read_file\",\"path\":\"src\",\"glob\":\"*.zig\",\"max_results\":20}") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "search_files locates symbols or text") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "IX/IEX expression engine") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Do not invent rg flags") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "branchable tasks") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "required SITREP") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "one canonical parent-owned conclusion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "messages.jsonl remains transcript truth") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Keep hidden runtime mechanics private") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "I will continue once agents complete; if any fail, I will follow up.") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "wait_agent accepts timeout_ms") != null);

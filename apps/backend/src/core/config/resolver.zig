@@ -5,7 +5,7 @@ const settings = @import("settings.zig");
 const types = @import("../../shared/types.zig");
 
 pub const local_settings = settings;
-pub const default_max_steps: usize = 32;
+pub const default_max_steps: usize = 4096;
 
 pub const Error = error{
     MissingKey,

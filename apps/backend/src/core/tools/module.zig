@@ -40,6 +40,7 @@ pub const Error = error{
     CommandFailed,
     CommandTerminated,
     CommandTimedOut,
+    FileNotInspected,
     InvalidArguments,
     MissingParentSession,
     PatternNotFound,
@@ -238,8 +239,80 @@ pub const ExecutionContext = struct {
     agent_service: ?AgentService = null,
     command_probe: ?CommandProbe = null,
     tool_events: ?ToolEventSink = null,
+    file_inspection_ledger: ?*FileInspectionLedger = null,
     workspace_state_enabled: bool = false,
 };
+
+pub const FileInspectionState = enum {
+    exists,
+    missing,
+};
+
+pub const FileInspectionMark = struct {
+    resolved_path: []u8,
+    state: FileInspectionState,
+
+    fn deinit(self: FileInspectionMark, allocator: std.mem.Allocator) void {
+        allocator.free(self.resolved_path);
+    }
+};
+
+pub const FileInspectionLedger = struct {
+    marks: std.array_list.Managed(FileInspectionMark),
+
+    pub fn init(allocator: std.mem.Allocator) FileInspectionLedger {
+        return .{ .marks = std.array_list.Managed(FileInspectionMark).init(allocator) };
+    }
+
+    pub fn deinit(self: *FileInspectionLedger) void {
+        for (self.marks.items) |mark| mark.deinit(self.marks.allocator);
+        self.marks.deinit();
+    }
+
+    pub fn record(self: *FileInspectionLedger, allocator: std.mem.Allocator, resolved_path: []const u8, exists: bool) !void {
+        const next_state: FileInspectionState = if (exists) .exists else .missing;
+        for (self.marks.items) |*mark| {
+            if (std.mem.eql(u8, mark.resolved_path, resolved_path)) {
+                mark.state = next_state;
+                return;
+            }
+        }
+
+        try self.marks.append(.{
+            .resolved_path = try allocator.dupe(u8, resolved_path),
+            .state = next_state,
+        });
+    }
+
+    pub fn has(self: *const FileInspectionLedger, resolved_path: []const u8, exists: bool) bool {
+        const required_state: FileInspectionState = if (exists) .exists else .missing;
+        for (self.marks.items) |mark| {
+            if (mark.state == required_state and std.mem.eql(u8, mark.resolved_path, resolved_path)) return true;
+        }
+        return false;
+    }
+};
+
+pub fn recordFileInspection(
+    allocator: std.mem.Allocator,
+    execution_context: ExecutionContext,
+    resolved_path: []const u8,
+    exists: bool,
+) !void {
+    if (execution_context.file_inspection_ledger) |ledger| {
+        try ledger.record(allocator, resolved_path, exists);
+    }
+}
+
+pub fn requireFileInspection(
+    execution_context: ExecutionContext,
+    resolved_path: []const u8,
+    exists: bool,
+) Error!void {
+    if (execution_context.file_inspection_ledger) |ledger| {
+        if (!ledger.has(resolved_path, exists)) return Error.FileNotInspected;
+    }
+}
 
 pub fn okEnvelope(allocator: std.mem.Allocator, tool_name: []const u8, content: []const u8) ![]u8 {
     return std.fmt.allocPrint(

@@ -6,7 +6,7 @@ const registry = @import("../registry.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "search_files",
-    .description = "Find text or symbols with iex under an existing workspace path. Use for content discovery, not file reading. Arguments require pattern and optionally accept path, glob, and max_results.",
+    .description = "Find text or symbols with the IX/IEX expression engine under an existing workspace path. Use for content discovery, not file reading. Arguments require pattern and optionally accept path, glob, and max_results.",
     .review_risk = .read_only,
     .parameters_json =
     \\{
@@ -22,7 +22,7 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"pattern\":\"read_file\",\"path\":\"src\",\"glob\":\"*.zig\",\"max_results\":20}",
-    .usage_hint = "Use list_files first when unsure about the search root. Use read_file after search_files identifies a target. pattern is an iex expression or literal; do not invent regex flags or shell syntax.",
+    .usage_hint = "Use list_files first when unsure about the search root. Use read_file after search_files identifies a target. pattern is a native IX/IEX expression or literal: lit:needle, re:TODO|FIXME, lit:a || lit:b. Do not invent rg flags, grep syntax, or shell pipelines.",
 };
 
 pub const availability = module.AvailabilitySpec{

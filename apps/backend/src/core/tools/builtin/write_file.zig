@@ -47,8 +47,10 @@ pub fn execute(
 
     const before = try module.captureFileSnapshot(allocator, file_path);
     defer before.deinit(allocator);
+    try module.requireFileInspection(execution_context, file_path, before.exists);
 
     try fsutil.writeText(file_path, parsed.value.content);
+    try module.recordFileInspection(allocator, execution_context, file_path, true);
 
     const after = try module.fileSnapshotFromContents(allocator, true, parsed.value.content);
     defer after.deinit(allocator);

@@ -115,7 +115,8 @@ test "config loader defaults to a post-tool response budget" {
     const config = try VAR1.core.config.loadFromEnvFile(std.testing.allocator, env_path);
     defer config.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(@as(usize, 32), config.max_steps);
+    try std.testing.expectEqual(@as(usize, 4096), config.max_steps);
+    try std.testing.expect(config.max_steps > 32);
     try std.testing.expectEqual(@as(usize, 16), config.max_tool_calls_per_turn);
     try std.testing.expectEqual(@as(usize, 96), config.max_tool_calls_per_session);
 }
@@ -512,6 +513,34 @@ test "store writes session json and event entries" {
     defer std.testing.allocator.free(events);
 
     try std.testing.expect(std.mem.indexOf(u8, events, "session_started") != null);
+}
+
+test "session heartbeat row advances from event spine activity" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var session = try VAR1.core.session_store.initSessionWithOptions(std.testing.allocator, workspace_root, "long running work", .{
+        .status = .running,
+    });
+    defer session.deinit(std.testing.allocator);
+
+    const original_updated_at = session.updated_at_ms;
+    const heartbeat_ms = original_updated_at + 30_000;
+    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
+        .event_type = "assistant_delta",
+        .message = "working",
+        .timestamp_ms = heartbeat_ms,
+    });
+    try VAR1.core.session_store.touchSessionUpdatedAt(std.testing.allocator, workspace_root, session.id, heartbeat_ms);
+
+    const refreshed = try VAR1.core.session_store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
+    defer refreshed.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(VAR1.shared.types.SessionStatus.running, refreshed.status);
+    try std.testing.expectEqual(heartbeat_ms, refreshed.updated_at_ms);
 }
 
 test "store can list sessions newest first and read full event history" {
