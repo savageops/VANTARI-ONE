@@ -1219,7 +1219,7 @@ test "tool execution errors expose specialized repair hints across failure class
         .{ .tool = "shell_exec", .error_name = "CommandTimedOut", .args = "{\"mode\":\"argv\",\"argv\":[\"slow\"]}", .expected = "timeout_ms" },
         .{ .tool = "shell_exec", .error_name = "ToolPayloadExceeded", .args = "{\"mode\":\"argv\",\"argv\":[\"loud\"]}", .expected = "stdout/stderr capture budget" },
         .{ .tool = "shell_exec", .error_name = "FileNotFound", .args = "{\"mode\":\"argv\",\"argv\":[\"missing\"]}", .expected = "argv[0]" },
-        .{ .tool = "write_file", .error_name = "ToolPayloadExceeded", .args = "{\"path\":\"big.txt\",\"content\":\"...\"}", .expected = "reliability budget" },
+        .{ .tool = "write_file", .error_name = "ToolPayloadExceeded", .args = "{\"path\":\"big.txt\",\"content\":\"...\"}", .expected = "append_file chunks" },
         .{ .tool = "replace_in_file", .error_name = "PathOutsideWorkspace", .args = "{\"path\":\"..\\\\x\",\"old_text\":\"a\",\"new_text\":\"b\"}", .expected = "workspace-relative path" },
     };
 

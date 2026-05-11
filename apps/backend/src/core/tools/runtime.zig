@@ -198,6 +198,9 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
         if (std.mem.eql(u8, tool_name, "shell_exec")) {
             return "shell_exec exceeded the stdout/stderr capture budget. Retry with max_output_bytes large enough for the bounded result, or narrow the command output.";
         }
+        if (std.mem.eql(u8, tool_name, "write_file") or std.mem.eql(u8, tool_name, "append_file") or std.mem.eql(u8, tool_name, "replace_in_file")) {
+            return "The tool payload exceeded the transport reliability budget. Retry with a small write_file seed followed by append_file chunks split on record, syntax, or newline boundaries.";
+        }
         return "The tool payload exceeded the reliability budget. Retry with a narrower request or a tool-specific bounded output setting.";
     }
 
