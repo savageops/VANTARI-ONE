@@ -5,21 +5,21 @@ const module = @import("../module.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "append_file",
-    .description = "Append text to a workspace file, creating it only when absent. Arguments require path and content. Use for additive logs, ledgers, and notes.",
+    .description = "Append text to a workspace file, creating it only when absent. Arguments require path and content. Use for additive logs, ledgers, long generated artifacts, and resumable chunks.",
     .review_risk = .write_capable,
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
     \\    "path": { "type": "string", "description": "Required workspace-relative file path to append to." },
-    \\    "content": { "type": "string", "maxLength": 8192, "description": "Required text to append. Keep generated content under 8192 bytes per call; split larger artifacts into deterministic chunks." }
+    \\    "content": { "type": "string", "description": "Required text to append. Preferred for long generated artifacts, append-only ledgers, and resumable chunks split on recoverable boundaries." }
     \\  },
     \\  "required": ["path", "content"],
     \\  "additionalProperties": false
     \\}
     ,
     .example_json = "{\"path\":\"notes/todo.md\",\"content\":\"beta\\n\"}",
-    .usage_hint = "Use for additive writes only. Include your own newline when needed. Use write_file for full replacement and replace_in_file for exact local edits.",
+    .usage_hint = "Use for additive writes only. Include your own newline when needed. Use write_file for full replacement or a seed file, and replace_in_file for exact local edits.",
 };
 
 pub const availability = module.AvailabilitySpec{};
@@ -39,8 +39,6 @@ pub fn execute(
         .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
-
-    try module.enforceFileToolContentBudget(parsed.value.content);
 
     const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
     defer allocator.free(file_path);

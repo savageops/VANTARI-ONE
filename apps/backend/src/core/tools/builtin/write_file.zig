@@ -12,14 +12,14 @@ pub const definition = types.ToolDefinition{
     \\  "type": "object",
     \\  "properties": {
     \\    "path": { "type": "string", "description": "Required workspace-relative file path to create or overwrite." },
-    \\    "content": { "type": "string", "maxLength": 8192, "description": "Required full file contents to write. Keep generated content under 8192 bytes per call; split larger artifacts into append_file chunks." }
+    \\    "content": { "type": "string", "description": "Required full file contents to write. For long generated artifacts, append_file chunks remain preferred for progress, recovery, and lower provider payload pressure." }
     \\  },
     \\  "required": ["path", "content"],
     \\  "additionalProperties": false
     \\}
     ,
     .example_json = "{\"path\":\"notes/todo.md\",\"content\":\"alpha\\n\"}",
-    .usage_hint = "Use only for full-file writes. For narrow edits prefer replace_in_file; for ledger/additive writes prefer append_file. Path must stay inside the workspace root.",
+    .usage_hint = "Use only for full-file writes or a small seed before append_file chunks. For narrow edits prefer replace_in_file; for ledger/additive writes prefer append_file. Path must stay inside the workspace root.",
 };
 
 pub const availability = module.AvailabilitySpec{};
@@ -39,8 +39,6 @@ pub fn execute(
         .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
-
-    try module.enforceFileToolContentBudget(parsed.value.content);
 
     const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
     defer allocator.free(file_path);

@@ -548,60 +548,107 @@ test "file tools reject undeclared arguments before side effects" {
     try std.testing.expect(!VAR1.shared.fsutil.fileExists(file_path));
 }
 
-test "file tools reject oversized generated payloads before side effects" {
+test "file tools accept generated payloads above the former 8192 byte ceiling" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
     defer std.testing.allocator.free(workspace_root);
 
-    const oversized = try std.testing.allocator.alloc(u8, VAR1.core.tools.module.max_file_tool_content_bytes + 1);
-    defer std.testing.allocator.free(oversized);
-    @memset(oversized, 'x');
+    const write_body = try std.testing.allocator.alloc(u8, 9 * 1024);
+    defer std.testing.allocator.free(write_body);
+    @memset(write_body, 'w');
 
     const write_args = try std.fmt.allocPrint(
         std.testing.allocator,
         "{{\"path\":\"notes/large.txt\",\"content\":{f}}}",
-        .{std.json.fmt(oversized, .{})},
+        .{std.json.fmt(write_body, .{})},
     );
     defer std.testing.allocator.free(write_args);
 
     var write_call = try makeToolCall(std.testing.allocator, "write_file", write_args);
     defer write_call.deinit(std.testing.allocator);
 
-    try std.testing.expectError(error.ToolPayloadExceeded, VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), write_call));
+    const write_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), write_call);
+    defer std.testing.allocator.free(write_output);
+    try std.testing.expect(std.mem.indexOf(u8, write_output, "\"bytes_written\":9216") != null);
 
     const file_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, "notes", "large.txt" });
     defer std.testing.allocator.free(file_path);
-    try std.testing.expect(!VAR1.shared.fsutil.fileExists(file_path));
+    try std.testing.expect(VAR1.shared.fsutil.fileExists(file_path));
+
+    const append_body = try std.testing.allocator.alloc(u8, 9 * 1024 + 17);
+    defer std.testing.allocator.free(append_body);
+    @memset(append_body, 'a');
 
     const append_args = try std.fmt.allocPrint(
         std.testing.allocator,
         "{{\"path\":\"notes/large.txt\",\"content\":{f}}}",
-        .{std.json.fmt(oversized, .{})},
+        .{std.json.fmt(append_body, .{})},
     );
     defer std.testing.allocator.free(append_args);
 
     var append_call = try makeToolCall(std.testing.allocator, "append_file", append_args);
     defer append_call.deinit(std.testing.allocator);
-    try std.testing.expectError(error.ToolPayloadExceeded, VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), append_call));
+    const append_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), append_call);
+    defer std.testing.allocator.free(append_output);
+    try std.testing.expect(std.mem.indexOf(u8, append_output, "\"bytes_appended\":9233") != null);
 
-    try VAR1.shared.fsutil.writeText(file_path, "stable\n");
+    const replace_body = try std.testing.allocator.alloc(u8, 9 * 1024 + 33);
+    defer std.testing.allocator.free(replace_body);
+    @memset(replace_body, 'r');
 
     const replace_args = try std.fmt.allocPrint(
         std.testing.allocator,
-        "{{\"path\":\"notes/large.txt\",\"old_text\":{f},\"new_text\":\"changed\"}}",
-        .{std.json.fmt(oversized, .{})},
+        "{{\"path\":\"notes/large.txt\",\"old_text\":{f},\"new_text\":{f}}}",
+        .{ std.json.fmt(write_body, .{}), std.json.fmt(replace_body, .{}) },
     );
     defer std.testing.allocator.free(replace_args);
 
     var replace_call = try makeToolCall(std.testing.allocator, "replace_in_file", replace_args);
     defer replace_call.deinit(std.testing.allocator);
-    try std.testing.expectError(error.ToolPayloadExceeded, VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), replace_call));
+    const replace_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), replace_call);
+    defer std.testing.allocator.free(replace_output);
+    try std.testing.expect(std.mem.indexOf(u8, replace_output, "\"replacements\":1") != null);
 
     const contents = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, file_path);
     defer std.testing.allocator.free(contents);
-    try std.testing.expectEqualStrings("stable\n", contents);
+    try std.testing.expectEqual(@as(usize, replace_body.len + append_body.len), contents.len);
+    try std.testing.expect(std.mem.startsWith(u8, contents, replace_body));
+    try std.testing.expect(std.mem.endsWith(u8, contents, append_body));
+}
+
+test "tool error envelope summarizes oversized failed arguments" {
+    const oversized_content = try std.testing.allocator.alloc(u8, VAR1.core.tool_runtime.max_error_arguments_json_echo_bytes + 256);
+    defer std.testing.allocator.free(oversized_content);
+    @memset(oversized_content, 'z');
+
+    const arguments_json = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"path\":\"notes/large.txt\",\"content\":{f}}}",
+        .{std.json.fmt(oversized_content, .{})},
+    );
+    defer std.testing.allocator.free(arguments_json);
+
+    const rendered = try VAR1.core.tool_runtime.renderExecutionError(std.testing.allocator, "write_file", "FileNotInspected", arguments_json);
+    defer std.testing.allocator.free(rendered);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"arguments_json_omitted\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"arguments_json_bytes\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"arguments_json_sha256\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, oversized_content) == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\"parameters_schema\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Read the exact target with read_file") != null);
+}
+
+test "file tool catalog omits artificial content maxLength ceilings" {
+    const catalog = try VAR1.core.tool_runtime.renderCatalog(std.testing.allocator, execCtx("."));
+    defer std.testing.allocator.free(catalog);
+
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"maxLength\": 8192") == null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "former 8192") == null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "resumable chunks") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "Large replacements are allowed") != null);
 }
 
 test "list_files defaults to the workspace root and returns relative paths" {
@@ -1172,7 +1219,7 @@ test "tool execution errors expose specialized repair hints across failure class
         .{ .tool = "shell_exec", .error_name = "CommandTimedOut", .args = "{\"mode\":\"argv\",\"argv\":[\"slow\"]}", .expected = "timeout_ms" },
         .{ .tool = "shell_exec", .error_name = "ToolPayloadExceeded", .args = "{\"mode\":\"argv\",\"argv\":[\"loud\"]}", .expected = "stdout/stderr capture budget" },
         .{ .tool = "shell_exec", .error_name = "FileNotFound", .args = "{\"mode\":\"argv\",\"argv\":[\"missing\"]}", .expected = "argv[0]" },
-        .{ .tool = "write_file", .error_name = "ToolPayloadExceeded", .args = "{\"path\":\"big.txt\",\"content\":\"...\"}", .expected = "append_file" },
+        .{ .tool = "write_file", .error_name = "ToolPayloadExceeded", .args = "{\"path\":\"big.txt\",\"content\":\"...\"}", .expected = "reliability budget" },
         .{ .tool = "replace_in_file", .error_name = "PathOutsideWorkspace", .args = "{\"path\":\"..\\\\x\",\"old_text\":\"a\",\"new_text\":\"b\"}", .expected = "workspace-relative path" },
     };
 

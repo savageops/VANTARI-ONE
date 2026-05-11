@@ -49,12 +49,6 @@ pub const Error = error{
     UnknownTool,
 };
 
-pub const max_file_tool_content_bytes: usize = 8 * 1024;
-
-pub fn enforceFileToolContentBudget(content: []const u8) Error!void {
-    if (content.len > max_file_tool_content_bytes) return Error.ToolPayloadExceeded;
-}
-
 pub const CommandOutput = struct {
     exit_code: i32,
     stdout: []u8,

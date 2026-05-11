@@ -5,15 +5,15 @@ const module = @import("../module.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "replace_in_file",
-    .description = "Perform exact text replacement in an existing workspace file. Arguments require path, old_text, and new_text, plus optional replace_all.",
+    .description = "Perform exact text replacement in an existing workspace file. Arguments require path, old_text, and new_text, plus optional replace_all. Large replacements are allowed when exact and intentional.",
     .review_risk = .write_capable,
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
     \\    "path": { "type": "string", "description": "Required existing workspace-relative file path to edit." },
-    \\    "old_text": { "type": "string", "maxLength": 8192, "description": "Required exact text to replace. Keep replacement windows under 8192 bytes; use narrower anchors for larger files." },
-    \\    "new_text": { "type": "string", "maxLength": 8192, "description": "Required replacement text. Keep replacement windows under 8192 bytes; use append_file chunks for large generated blocks." },
+    \\    "old_text": { "type": "string", "description": "Required exact text to replace. Prefer the narrowest stable replacement window." },
+    \\    "new_text": { "type": "string", "description": "Required replacement text. Large replacements are allowed when exact and intentional; append_file chunks remain preferred for long generated additions." },
     \\    "replace_all": { "type": "boolean", "description": "When true, replace every match instead of only the first one." }
     \\  },
     \\  "required": ["path", "old_text", "new_text"],
@@ -21,7 +21,7 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"path\":\"src/core/tools/runtime.zig\",\"old_text\":\"alpha\",\"new_text\":\"beta\",\"replace_all\":false}",
-    .usage_hint = "This is exact string replacement, not regex. Read the target first, copy old_text precisely, and keep replace_all false unless every occurrence must change.",
+    .usage_hint = "This is exact string replacement, not regex. Read the target first, copy old_text precisely, prefer narrow anchors, and keep replace_all false unless every occurrence must change.",
 };
 
 pub const availability = module.AvailabilitySpec{};
@@ -43,9 +43,6 @@ pub fn execute(
         .ignore_unknown_fields = false,
     });
     defer parsed.deinit();
-
-    try module.enforceFileToolContentBudget(parsed.value.old_text);
-    try module.enforceFileToolContentBudget(parsed.value.new_text);
 
     const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
     defer allocator.free(file_path);

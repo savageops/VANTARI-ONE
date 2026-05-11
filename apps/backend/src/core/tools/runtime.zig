@@ -15,6 +15,8 @@ const shell_exec = @import("builtin/shell_exec.zig");
 pub const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
 
+pub const max_error_arguments_json_echo_bytes: usize = 4096;
+
 pub const Error = module.Error;
 pub const CommandOutput = module.CommandOutput;
 pub const CommandRunner = module.CommandRunner;
@@ -196,16 +198,7 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
         if (std.mem.eql(u8, tool_name, "shell_exec")) {
             return "shell_exec exceeded the stdout/stderr capture budget. Retry with max_output_bytes large enough for the bounded result, or narrow the command output.";
         }
-        if (std.mem.eql(u8, tool_name, "write_file")) {
-            return "write_file content exceeded the 8192-byte argument budget. Retry by creating a small seed file, then append deterministic continuation chunks with append_file; keep each content argument under 7000 bytes.";
-        }
-        if (std.mem.eql(u8, tool_name, "append_file")) {
-            return "append_file content exceeded the 8192-byte argument budget. Retry with smaller sequential chunks under 7000 bytes and continue from the last confirmed append.";
-        }
-        if (std.mem.eql(u8, tool_name, "replace_in_file")) {
-            return "replace_in_file exceeded the 8192-byte text budget. Retry with a narrower exact replacement window or generate large additions through append_file chunks.";
-        }
-        return "The tool payload exceeded the reliability budget. Retry with smaller deterministic chunks under 8192 bytes per write or replacement field.";
+        return "The tool payload exceeded the reliability budget. Retry with a narrower request or a tool-specific bounded output setting.";
     }
 
     if (std.mem.eql(u8, error_name, "FileNotFound")) {
@@ -284,8 +277,7 @@ pub fn renderExecutionError(
     try output.writer().print("{f}", .{std.json.fmt(tool_name, .{})});
     try output.writer().writeAll(",\"error\":");
     try output.writer().print("{f}", .{std.json.fmt(error_name, .{})});
-    try output.writer().writeAll(",\"arguments_json\":");
-    try output.writer().print("{f}", .{std.json.fmt(arguments_json, .{})});
+    try writeErrorArgumentsJson(output.writer(), arguments_json);
 
     if (toolDefinitionByName(tool_name)) |tool_definition| {
         try output.writer().writeAll(",\"parameters_schema\":");
@@ -309,6 +301,30 @@ pub fn renderExecutionError(
 
     try output.writer().writeAll("}");
     return output.toOwnedSlice();
+}
+
+fn writeErrorArgumentsJson(writer: anytype, arguments_json: []const u8) !void {
+    if (arguments_json.len <= max_error_arguments_json_echo_bytes) {
+        try writer.writeAll(",\"arguments_json\":");
+        try writer.print("{f}", .{std.json.fmt(arguments_json, .{})});
+        return;
+    }
+
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(arguments_json, &digest, .{});
+    var hex: [digest.len * 2]u8 = undefined;
+    const hex_chars = "0123456789abcdef";
+    for (digest, 0..) |byte, index| {
+        hex[index * 2] = hex_chars[@as(usize, byte >> 4)];
+        hex[index * 2 + 1] = hex_chars[@as(usize, byte & 0x0f)];
+    }
+
+    try writer.writeAll(",\"arguments_json\":");
+    try writer.print("{f}", .{std.json.fmt("<omitted oversized tool arguments>", .{})});
+    try writer.writeAll(",\"arguments_json_omitted\":true");
+    try writer.print(",\"arguments_json_bytes\":{d}", .{arguments_json.len});
+    try writer.writeAll(",\"arguments_json_sha256\":");
+    try writer.print("{f}", .{std.json.fmt(hex[0..], .{})});
 }
 
 pub fn execute(
