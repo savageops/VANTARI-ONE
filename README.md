@@ -332,7 +332,7 @@ Nine built-in tool modules, each exporting a typed `definition`, `availability` 
 
 All tool definitions are schema-first. The registry resolves availability from module-owned specs — `search_files` probes the `iex` executable at startup and reports unavailable if absent, rather than failing at invocation time. `tools/list` and `VAR1 tools --json` expose the same catalog with availability metadata, examples, and usage hints.
 
-**Bounded payloads:** File tool content arguments are capped at 8KB. Shell output capture is capped at 64KB per stream. Violations return `ToolPayloadExceeded` with repair hints instead of silent truncation.
+**Bounded output:** File tools accept full content when the provider delivers it; long generated artifacts still prefer `write_file` seed plus `append_file` chunks for progress and recovery. Shell output capture is capped at 64KB per stream. Output-budget violations return `ToolPayloadExceeded` with repair hints instead of silent truncation.
 
 <br/>
 
@@ -463,7 +463,7 @@ flowchart LR
 | Empty configured prompt file | Error, not silent fallback |
 | Unknown `[context]` config key | Rejected, not ignored |
 | Transcript integrity violation | `OrphanToolResultTranscript` / `UnresolvedToolCallTranscript` error |
-| Tool payload exceeds limit | `ToolPayloadExceeded` with repair hints |
+| Command output payload exceeds limit | `ToolPayloadExceeded` with repair hints |
 | External search binary absent | Tool reported unavailable at startup, not at invocation |
 | Bridge audit write failure | Action aborted |
 | Delegation scope zero-value | Rejected |

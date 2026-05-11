@@ -45,7 +45,10 @@ test "prompt builder emits ordered guardrails and tool contract" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Memory protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "messages.jsonl remains transcript truth") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Large artifact protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "under 7000 bytes") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "recovery, progress, and reviewability discipline") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "write_file may write the complete file") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "8192-byte tool limit") == null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "under 7000 bytes") == null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "all paths are relative to the displayed workspace root") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "operator-visible progress before tool batches") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "not hidden chain-of-thought") != null);
