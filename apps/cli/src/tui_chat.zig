@@ -662,7 +662,7 @@ const ChatState = struct {
                         continue;
                     }
                     if (key.matches(tui.Key.home, .{ .ctrl = true })) {
-                        self.scrollUp(self.messages.items.len);
+                        self.scrollUp(self.maxScrollOffsetRows());
                         continue;
                     }
                     if (key.matches(tui.Key.end, .{ .ctrl = true })) {
@@ -969,6 +969,14 @@ const ChatLayout = struct {
     meta_y: u16,
 };
 
+const startup_intro_lines = [_][]const u8{
+    "╷ ╷╭─╮╭╮╷╶┬╴╭─╮╭─╮╷   ╭─╮╭╮╷╭─╴",
+    "│╭╯├─┤│╰┤ │ ├─┤├┬╯│╶─╴│ ││╰┤├╴ ",
+    "╰╯ ╵ ╵╵ ╵ ╵ ╵ ╵╵╰╴╵   ╰─╯╵ ╵╰─╴",
+};
+
+const startup_intro_gap_rows: usize = 1;
+
 fn computeLayout(root_height: u16) ChatLayout {
     const footer_height: u16 = @min(@as(u16, 3), root_height);
     return .{
@@ -990,6 +998,7 @@ const styles = struct {
     const thinking: Style = .{ .fg = Color.rgbFromUint(0x8ff5d2), .bg = Color.rgbFromUint(0x08110f), .dim = true, .blink = true };
     const progress: Style = .{ .fg = Color.rgbFromUint(0x9fbeb5), .bg = Color.rgbFromUint(0x08110f), .dim = true };
     const system: Style = .{ .fg = Color.rgbFromUint(0x78958d), .bg = Color.rgbFromUint(0x08110f), .dim = true };
+    const intro: Style = .{ .fg = Color.rgbFromUint(0x8ff5d2), .bg = Color.rgbFromUint(0x08110f), .bold = true };
     const text: Style = .{ .fg = Color.rgbFromUint(0xd9f7ef), .bg = Color.rgbFromUint(0x08110f) };
     const meta_label: Style = .{ .fg = Color.rgbFromUint(0x5d746e), .bg = Color.rgbFromUint(0x08110f), .dim = true };
     const meta_value: Style = .{ .fg = Color.rgbFromUint(0x78958d), .bg = Color.rgbFromUint(0x08110f), .dim = true };
@@ -1056,6 +1065,7 @@ const TranscriptRow = struct {
     text: []const u8,
     pending: bool = false,
     gap: bool = false,
+    intro: bool = false,
 };
 
 fn buildTranscriptRows(allocator: std.mem.Allocator, win: Window, state: *const ChatState) !std.ArrayList(TranscriptRow) {
@@ -1063,10 +1073,33 @@ fn buildTranscriptRows(allocator: std.mem.Allocator, win: Window, state: *const 
     errdefer rows.deinit(allocator);
 
     const body_width = @max(@as(usize, 1), @as(usize, win.width -| 4));
+    try appendStartupIntroRows(allocator, &rows);
     for (state.messages.items) |message| {
         try appendMessageRows(allocator, &rows, message, body_width);
     }
     return rows;
+}
+
+fn appendStartupIntroRows(
+    allocator: std.mem.Allocator,
+    rows: *std.ArrayList(TranscriptRow),
+) !void {
+    for (startup_intro_lines) |line| {
+        try rows.append(allocator, .{
+            .role = .system,
+            .text = line,
+            .intro = true,
+        });
+    }
+    var gap: usize = 0;
+    while (gap < startup_intro_gap_rows) : (gap += 1) {
+        try rows.append(allocator, .{
+            .role = .system,
+            .text = "",
+            .gap = true,
+            .intro = true,
+        });
+    }
 }
 
 fn visibleTranscriptRowCount(rows: []const TranscriptRow) usize {
@@ -1165,6 +1198,10 @@ fn appendWrappedSegmentRows(
 
 fn drawTranscriptRow(win: Window, row: u16, transcript_row: TranscriptRow) void {
     if (transcript_row.gap) return;
+    if (transcript_row.intro) {
+        drawIntroRow(win, row, transcript_row.text);
+        return;
+    }
     const role_style = if (transcript_row.pending) styles.thinking else roleStyle(transcript_row.role);
     const body_width = win.width -| 4;
     const block = win.child(.{
@@ -1182,6 +1219,23 @@ fn drawTranscriptRow(win: Window, row: u16, transcript_row: TranscriptRow) void 
     });
 }
 
+fn drawIntroRow(win: Window, row: u16, text: []const u8) void {
+    const visual_width = introVisualWidth(text);
+    const col: u16 = if (win.width > visual_width)
+        @intCast((@as(usize, win.width) - visual_width) / 2)
+    else
+        0;
+    _ = win.print(&.{.{ .text = text, .style = styles.intro }}, .{
+        .row_offset = row,
+        .col_offset = col,
+        .wrap = .none,
+    });
+}
+
+fn introVisualWidth(text: []const u8) usize {
+    return std.unicode.utf8CountCodepoints(text) catch text.len;
+}
+
 fn messageRowCount(role: Role, text: []const u8, pending: bool, body_width: usize) usize {
     if (pending) return 2;
     if (isCompactRole(role)) return 1;
@@ -1189,7 +1243,7 @@ fn messageRowCount(role: Role, text: []const u8, pending: bool, body_width: usiz
 }
 
 fn transcriptRowCount(state: *const ChatState, body_width: usize) usize {
-    var rows: usize = 0;
+    var rows: usize = startup_intro_lines.len + startup_intro_gap_rows;
     for (state.messages.items) |message| {
         rows += messageRowCount(message.role, message.text, message.pending, body_width);
     }
@@ -1237,7 +1291,7 @@ fn wrappedSegmentTake(segment: []const u8, offset: usize, width: usize) usize {
 
 fn expectRowsBorrowMessageStorage(rows: []const TranscriptRow, messages: []const Message) !void {
     for (rows) |row| {
-        if (row.gap or row.pending or row.text.len == 0) continue;
+        if (row.gap or row.pending or row.intro or row.text.len == 0) continue;
         try std.testing.expect(sliceBorrowedFromMessages(row.text, messages));
     }
 }
@@ -1248,8 +1302,21 @@ fn expectScreenTextBorrowMessageStorage(screen: tui.Screen, messages: []const Me
         if (text.len == 0) continue;
         if (std.mem.eql(u8, text, " ")) continue;
         if (std.mem.eql(u8, text, "│")) continue;
+        if (sliceBorrowedFromStartupIntro(text)) continue;
         try std.testing.expect(sliceBorrowedFromMessages(text, messages));
     }
+}
+
+fn sliceBorrowedFromStartupIntro(slice: []const u8) bool {
+    if (slice.len == 0) return true;
+    const slice_start = @intFromPtr(slice.ptr);
+    const slice_end = slice_start + slice.len;
+    for (startup_intro_lines) |line| {
+        const line_start = @intFromPtr(line.ptr);
+        const line_end = line_start + line.len;
+        if (slice_start >= line_start and slice_end <= line_end) return true;
+    }
+    return false;
 }
 
 fn sliceBorrowedFromMessages(slice: []const u8, messages: []const Message) bool {
@@ -1864,6 +1931,47 @@ test "tui latest-session hydration restores transcript rows before the next turn
     try std.testing.expectEqualStrings("tool: alpha beta (3 lines)", state.messages.items[2].text);
 }
 
+test "tui transcript prepends startup intro without creating a message" {
+    const allocator = std.testing.allocator;
+    var unicode = try tui.Unicode.init(allocator);
+    defer unicode.deinit(allocator);
+    var screen = try tui.Screen.init(allocator, .{ .rows = 10, .cols = 52, .x_pixel = 0, .y_pixel = 0 });
+    defer screen.deinit(allocator);
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "glm-5.1",
+        .base_url = "https://api.z.ai/api/coding/paas/v4",
+        .auth_provider = "zai",
+        .plan = "coding",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    try state.add(.user, "first operator message");
+    const win = Window{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = screen.width,
+        .height = screen.height,
+        .screen = &screen,
+        .unicode = &unicode,
+    };
+
+    var rows = try buildTranscriptRows(allocator, win, &state);
+    defer rows.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
+    try std.testing.expect(rows.items[0].intro);
+    try std.testing.expectEqualStrings(startup_intro_lines[0], rows.items[0].text);
+    try std.testing.expect(rows.items[startup_intro_lines.len].gap);
+    try std.testing.expectEqualStrings("first operator message", rows.items[startup_intro_lines.len + startup_intro_gap_rows].text);
+    try std.testing.expectEqual(@as(usize, 5), visibleTranscriptRowCount(rows.items));
+}
+
 test "tui progress keeps stdout and stderr streams separated for one tool call" {
     var state = ChatState{
         .allocator = std.testing.allocator,
@@ -2158,10 +2266,10 @@ test "tui scrollback keeps transcript navigable without mutating input state" {
     try state.add(.progress, "newest");
 
     const row_count = transcriptRowCount(&state, 80);
-    try std.testing.expectEqual(@as(usize, 5), row_count);
-    try std.testing.expectEqual(@as(usize, 5), visibleEndRow(&state, row_count));
+    try std.testing.expectEqual(@as(usize, 9), row_count);
+    try std.testing.expectEqual(@as(usize, 9), visibleEndRow(&state, row_count));
     state.scrollUp(1);
-    try std.testing.expectEqual(@as(usize, 4), visibleEndRow(&state, row_count));
+    try std.testing.expectEqual(@as(usize, 8), visibleEndRow(&state, row_count));
     try std.testing.expect(applyMouseScroll(&state, .{
         .col = 0,
         .row = 0,
@@ -2169,7 +2277,7 @@ test "tui scrollback keeps transcript navigable without mutating input state" {
         .mods = .{},
         .type = .press,
     }));
-    try std.testing.expectEqual(@as(usize, 1), visibleEndRow(&state, row_count));
+    try std.testing.expectEqual(@as(usize, 5), visibleEndRow(&state, row_count));
     try std.testing.expect(applyMouseScroll(&state, .{
         .col = 0,
         .row = 0,
@@ -2177,13 +2285,13 @@ test "tui scrollback keeps transcript navigable without mutating input state" {
         .mods = .{},
         .type = .press,
     }));
-    try std.testing.expectEqual(@as(usize, 4), visibleEndRow(&state, row_count));
+    try std.testing.expectEqual(@as(usize, 8), visibleEndRow(&state, row_count));
     state.scrollUp(100);
     try std.testing.expectEqual(@as(usize, 1), visibleEndRow(&state, row_count));
     state.scrollDown(1);
     try std.testing.expectEqual(@as(usize, 2), visibleEndRow(&state, row_count));
     state.jumpToBottom();
-    try std.testing.expectEqual(@as(usize, 5), visibleEndRow(&state, row_count));
+    try std.testing.expectEqual(@as(usize, 9), visibleEndRow(&state, row_count));
 }
 
 test "tui keeps the operator's scroll anchor while live output continues below" {
@@ -2207,8 +2315,8 @@ test "tui keeps the operator's scroll anchor while live output continues below" 
     state.scrollUp(2);
     try std.testing.expectEqual(@as(usize, 2), state.scroll_offset);
     const before_rows = transcriptRowCount(&state, 80);
-    try std.testing.expectEqual(@as(usize, 7), before_rows);
-    try std.testing.expectEqual(@as(usize, 5), visibleEndRow(&state, before_rows));
+    try std.testing.expectEqual(@as(usize, 11), before_rows);
+    try std.testing.expectEqual(@as(usize, 9), visibleEndRow(&state, before_rows));
 
     const output_event = "{\"schema\":\"var1.tool_output_delta.v1\",\"tool\":\"shell_exec\",\"tool_call_id\":\"call_1\",\"stream\":\"stdout\",\"chunk_b64\":\"bGl2ZS1saW5l\",\"cap_reached\":false}";
     try state.addProgress("tool_output_delta", output_event);
@@ -2216,8 +2324,8 @@ test "tui keeps the operator's scroll anchor while live output continues below" 
 
     try std.testing.expectEqual(@as(usize, 3), state.scroll_offset);
     const after_rows = transcriptRowCount(&state, 80);
-    try std.testing.expectEqual(@as(usize, 8), after_rows);
-    try std.testing.expectEqual(@as(usize, 5), visibleEndRow(&state, after_rows));
+    try std.testing.expectEqual(@as(usize, 12), after_rows);
+    try std.testing.expectEqual(@as(usize, 9), visibleEndRow(&state, after_rows));
     try std.testing.expectEqual(@as(usize, 5), state.messages.items.len);
     try std.testing.expectEqualStrings("stdout: live-line | live-line", state.messages.items[4].text);
 }
@@ -2462,15 +2570,15 @@ test "tui streamed assistant deltas preserve row scroll anchor as wrapping grows
 
     try state.addAssistantDelta("alpha beta");
     const before_rows = transcriptRowCount(&state, 6);
-    try std.testing.expectEqual(@as(usize, 3), before_rows);
+    try std.testing.expectEqual(@as(usize, 7), before_rows);
 
     state.scrollUp(1);
     try state.addAssistantDelta(" gamma delta");
 
     const after_rows = transcriptRowCount(&state, 6);
-    try std.testing.expectEqual(@as(usize, 5), after_rows);
+    try std.testing.expectEqual(@as(usize, 9), after_rows);
     try std.testing.expectEqual(@as(usize, 3), state.scroll_offset);
-    try std.testing.expectEqual(@as(usize, 2), visibleEndRow(&state, after_rows));
+    try std.testing.expectEqual(@as(usize, 6), visibleEndRow(&state, after_rows));
 }
 
 test "tui assistant deltas after progress open a new readable response block" {
