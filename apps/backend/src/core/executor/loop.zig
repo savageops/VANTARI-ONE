@@ -715,6 +715,20 @@ fn renderToolFinishedEvent(
 ) ![]u8 {
     const duration_ms: i64 = @max(@as(i64, 0), finished_at_ms - started_at_ms);
     if (error_name) |name| {
+        if (tools.toolErrorHint(tool_call.name, name)) |hint| {
+            return std.fmt.allocPrint(
+                allocator,
+                "{{\"schema\":\"var1.tool_finished.v1\",\"tool_call_id\":{f},\"tool\":{f},\"ok\":{s},\"error_name\":{f},\"duration_ms\":{d},\"hint\":{f}}}",
+                .{
+                    std.json.fmt(tool_call.id, .{}),
+                    std.json.fmt(tool_call.name, .{}),
+                    if (ok) "true" else "false",
+                    std.json.fmt(name, .{}),
+                    duration_ms,
+                    std.json.fmt(hint, .{}),
+                },
+            );
+        }
         return std.fmt.allocPrint(
             allocator,
             "{{\"schema\":\"var1.tool_finished.v1\",\"tool_call_id\":{f},\"tool\":{f},\"ok\":{s},\"error_name\":{f},\"duration_ms\":{d}}}",
@@ -737,6 +751,25 @@ fn renderToolFinishedEvent(
             duration_ms,
         },
     );
+}
+
+test "tool finished schema errors carry actionable typed repair hints" {
+    const allocator = std.testing.allocator;
+    var tool_call = types.ToolCall{
+        .id = try allocator.dupe(u8, "call_schema"),
+        .name = try allocator.dupe(u8, "shell_exec"),
+        .arguments_json = try allocator.dupe(u8, "{\"mode\":\"shell\",\"argv\":[\"cmd\",\"/c\",\"find\"]}"),
+    };
+    defer tool_call.deinit(allocator);
+
+    const event = try renderToolFinishedEvent(allocator, tool_call, false, "InvalidArguments", 10, 14);
+    defer allocator.free(event);
+
+    try std.testing.expect(std.mem.indexOf(u8, event, "\"schema\":\"var1.tool_finished.v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, event, "\"error_name\":\"InvalidArguments\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, event, "\"hint\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, event, "mode=argv") != null);
+    try std.testing.expect(std.mem.indexOf(u8, event, "Select-String") != null);
 }
 
 fn compactSessionForRuntime(

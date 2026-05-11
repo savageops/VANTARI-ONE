@@ -1015,6 +1015,74 @@ test "shell_exec clamps command limits before runner dispatch" {
     try std.testing.expect(std.mem.indexOf(u8, output, "\"stdout\":\"ok\"") != null);
 }
 
+test "shell_exec dispatches argv and Windows shell modes through distinct command shapes" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var context = MockCommandContext{ .allocator = std.testing.allocator };
+    defer context.deinit();
+
+    var argv_call = try makeToolCall(std.testing.allocator, "shell_exec", "{\"mode\":\"argv\",\"argv\":[\"node\",\"--version\"],\"cwd\":\".\"}");
+    defer argv_call.deinit(std.testing.allocator);
+    const argv_output = try VAR1.core.tool_runtime.executeWithRunner(std.testing.allocator, execCtx(workspace_root), argv_call, .{
+        .context = &context,
+        .runFn = mockCommandRunner,
+    });
+    defer std.testing.allocator.free(argv_output);
+    try std.testing.expectEqualStrings("node --version", context.last_command.?);
+
+    var powershell_call = try makeToolCall(std.testing.allocator, "shell_exec", "{\"mode\":\"powershell\",\"command\":\"(Select-String -Path 'tests/*.zig' -Pattern 'test').Count\",\"cwd\":\".\"}");
+    defer powershell_call.deinit(std.testing.allocator);
+    const powershell_output = try VAR1.core.tool_runtime.executeWithRunner(std.testing.allocator, execCtx(workspace_root), powershell_call, .{
+        .context = &context,
+        .runFn = mockCommandRunner,
+    });
+    defer std.testing.allocator.free(powershell_output);
+    try std.testing.expect(std.mem.indexOf(u8, context.last_command.?, "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context.last_command.?, "Select-String") != null);
+
+    var shell_call = try makeToolCall(std.testing.allocator, "shell_exec", "{\"mode\":\"shell\",\"command\":\"Get-ChildItem -Name\",\"cwd\":\".\"}");
+    defer shell_call.deinit(std.testing.allocator);
+    const shell_output = try VAR1.core.tool_runtime.executeWithRunner(std.testing.allocator, execCtx(workspace_root), shell_call, .{
+        .context = &context,
+        .runFn = mockCommandRunner,
+    });
+    defer std.testing.allocator.free(shell_output);
+    if (builtin.os.tag == .windows) {
+        try std.testing.expect(std.mem.indexOf(u8, context.last_command.?, "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command") != null);
+        try std.testing.expect(std.mem.indexOf(u8, context.last_command.?, "Get-ChildItem") != null);
+    } else {
+        try std.testing.expect(std.mem.indexOf(u8, context.last_command.?, "/bin/sh -lc") != null);
+    }
+}
+
+test "tool execution errors expose specialized repair hints across failure classes" {
+    const cases = [_]struct {
+        tool: []const u8,
+        error_name: []const u8,
+        args: []const u8,
+        expected: []const u8,
+    }{
+        .{ .tool = "shell_exec", .error_name = "CommandTimedOut", .args = "{\"mode\":\"argv\",\"argv\":[\"slow\"]}", .expected = "timeout_ms" },
+        .{ .tool = "shell_exec", .error_name = "ToolPayloadExceeded", .args = "{\"mode\":\"argv\",\"argv\":[\"loud\"]}", .expected = "stdout/stderr capture budget" },
+        .{ .tool = "shell_exec", .error_name = "FileNotFound", .args = "{\"mode\":\"argv\",\"argv\":[\"missing\"]}", .expected = "argv[0]" },
+        .{ .tool = "write_file", .error_name = "ToolPayloadExceeded", .args = "{\"path\":\"big.txt\",\"content\":\"...\"}", .expected = "append_file" },
+        .{ .tool = "replace_in_file", .error_name = "PathOutsideWorkspace", .args = "{\"path\":\"..\\\\x\",\"old_text\":\"a\",\"new_text\":\"b\"}", .expected = "workspace-relative path" },
+    };
+
+    for (cases) |case| {
+        const output = try VAR1.core.tool_runtime.renderExecutionError(std.testing.allocator, case.tool, case.error_name, case.args);
+        defer std.testing.allocator.free(output);
+
+        try std.testing.expect(std.mem.indexOf(u8, output, "\"ok\":false") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output, "\"hint\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output, case.expected) != null);
+    }
+}
+
 test "catalog keeps workspace-state tools out of normal coding contexts" {
     const catalog = try VAR1.core.tool_runtime.renderCatalog(std.testing.allocator, .{
         .workspace_root = ".",
@@ -1090,6 +1158,44 @@ test "catalog json exposes schema and example objects for default coding tools" 
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"todo_slice\"") == null);
 }
 
+test "catalog json exposes shell_exec command-shape and Windows query guidance" {
+    const catalog = try VAR1.core.tool_runtime.renderCatalogJson(std.testing.allocator, .{
+        .workspace_root = ".",
+    });
+    defer std.testing.allocator.free(catalog);
+
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"shell_exec\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"enum\": [\"shell\", \"bash\", \"powershell\", \"argv\"]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"contract_example\":{\"mode\":\"argv\",\"argv\":[\"zig\",\"version\"]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "Use mode=argv with argv only") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "mode=powershell/shell/bash with command only") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "Select-String/Get-ChildItem") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "find/findstr") != null);
+}
+
+test "shell_exec schema error output is self-repairing before process launch" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var shell_call = try makeToolCall(std.testing.allocator, "shell_exec", "{\"mode\":\"shell\",\"argv\":[\"cmd\",\"/c\",\"find\"]}");
+    defer shell_call.deinit(std.testing.allocator);
+
+    try std.testing.expectError(error.InvalidArguments, VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), shell_call));
+
+    const error_output = try VAR1.core.tool_runtime.renderExecutionError(std.testing.allocator, shell_call.name, "InvalidArguments", shell_call.arguments_json);
+    defer std.testing.allocator.free(error_output);
+
+    try std.testing.expect(std.mem.indexOf(u8, error_output, "\"ok\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, error_output, "\"parameters_schema\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, error_output, "\"usage_hint\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, error_output, "\"hint\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, error_output, "Use mode=argv") != null);
+    try std.testing.expect(std.mem.indexOf(u8, error_output, "Select-String") != null);
+}
+
 test "catalog json reports unavailable command-backed tools explicitly" {
     const catalog = try VAR1.core.tool_runtime.renderCatalogJson(std.testing.allocator, execCtxWithProbe(".", mockCommandUnavailable));
     defer std.testing.allocator.free(catalog);
@@ -1158,6 +1264,9 @@ test "agent system prompt teaches schema repair and file-tool roles" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Keep hidden runtime mechanics private") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "I will continue once agents complete; if any fail, I will follow up.") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "wait_agent accepts timeout_ms") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Use mode=argv with argv only") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "mode=powershell/shell/bash with command only") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Select-String/Get-ChildItem") != null);
 }
 
 test "tool call summary masks child supervision tool names in logs" {

@@ -199,15 +199,15 @@ Before the first prompt run, the smoke scripts verify that the configured provid
 
 ## Configuration
 
-Required `.env` keys:
+`.env` keys:
 
 - `BASE_URL`
 - `API_KEY`
 - `MODEL`
-- `MAX_STEPS`
-- `MAX_TOOL_CALLS_PER_TURN`
-- `MAX_TOOL_CALLS_PER_SESSION`
-- `WORKSPACE`
+- `MAX_STEPS` is optional and defaults to `32`
+- `MAX_TOOL_CALLS_PER_TURN` is optional and defaults to `16`
+- `MAX_TOOL_CALLS_PER_SESSION` is optional and defaults to `96`
+- `WORKSPACE` is optional and defaults to `.`
 
 Use `.env.example` as the public template. Keep live `.env` values local. `.env` seeds auth on first run; after `.var/auth/auth.json` exists, the active provider record is the effective model/auth source reported by `VAR1 health`. Non-secret context and prompt policy lives in `.var/config/settings.toml` when an override is needed:
 

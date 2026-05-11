@@ -173,6 +173,10 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
             return "Use valid JSON. session_record upsert requires session_name, status, and objective.";
         }
 
+        if (std.mem.eql(u8, tool_name, "shell_exec")) {
+            return "Use mode=argv with argv only, or mode=powershell/shell/bash with command only. On Windows, use PowerShell-native commands such as Select-String and Get-ChildItem for compound queries; do not pipe cmd find/findstr patterns through PowerShell.";
+        }
+
         return "Arguments did not match the tool schema. Repair the JSON object and retry with only the declared fields.";
     }
 
