@@ -25,7 +25,7 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"mode\":\"argv\",\"argv\":[\"zig\",\"version\"],\"cwd\":\".\",\"timeout_ms\":10000,\"max_output_bytes\":4096}",
-    .usage_hint = "Use argv mode for precise execution. Use shell mode for compound operators only. cwd is always resolved inside the workspace. Inspect exit_code; nonzero exits are returned as data, not transport failure.",
+    .usage_hint = "Use mode=argv with argv only for precise execution. Use mode=powershell/shell/bash with command only for compound operators. On Windows, prefer PowerShell-native commands such as Select-String/Get-ChildItem instead of cmd find/findstr pipelines. cwd is always resolved inside the workspace. Inspect exit_code; nonzero exits are returned as data, not transport failure.",
 };
 
 pub const availability = module.AvailabilitySpec{};

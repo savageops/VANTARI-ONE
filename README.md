@@ -2,8 +2,8 @@
 
 <div align="center">
 
-Ventari 1 is a local agent framework for running useful agent sessions with clear state, durable evidence, and operator control.
-`VAR1` is the Zig kernel underneath it: CLI and browser clients drive sessions, tools, context, providers, events, and output through one coherent protocol.
+Ventari 1 is a local agent kernel for running frontier-style sessions with live deltas, typed tool spans, durable evidence, and operator control.
+`VAR1` is the Zig runtime underneath it: CLI, TUI, and browser clients drive sessions, tools, context, providers, skills, events, and output through one coherent protocol.
 
 [![Release](https://img.shields.io/github/v/release/savageops/VANTARI-ONE?display_name=tag&sort=semver&label=Release)](https://github.com/savageops/VANTARI-ONE/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/savageops/VANTARI-ONE/total?label=Downloads)](https://github.com/savageops/VANTARI-ONE/releases)
@@ -28,7 +28,30 @@ Ventari 1 is a local agent framework for running useful agent sessions with clea
 
 ## Why Ventari
 
-Ventari is built for people who want agents to feel dependable, inspectable, and worth returning to. Each run gets a session, tool surface, provider configuration, context window, event history, and CLI/browser control without splitting runtime truth across helper scripts.
+Ventari is built for people who want agents to feel dependable, inspectable, and worth returning to. Each run gets a session, tool surface, provider configuration, context window, event history, skill-routing contract, and CLI/TUI/browser control without splitting runtime truth across helper scripts.
+
+## Execution Doctrine
+
+VANTARI treats an agent run as a replayable execution graph, not a blob of chat text. The kernel preserves the causal chain:
+
+```text
+operator input -> transcript ledger -> context compiler -> provider stream
+               -> assistant deltas / tool calls -> reviewed side effects
+               -> typed events -> terminal session state
+```
+
+The design target is smaller public surfaces with stronger core mechanics. Prompting alone is not a capability. A capability needs a typed owner, schema, failure class, event evidence, recovery behavior, and Windows-native proof through the installed binary.
+
+The runtime is priced against concrete mechanisms:
+
+| Mechanism | What VANTARI Proves |
+|---|---|
+| Provider streaming | SSE deltas are reconstructed, persisted as `assistant_delta`, and rendered before final output. |
+| Tool lifecycle | Calls move through review, start, bounded output deltas, finish, and completion events. |
+| Context compilation | Provider messages are compiled from `session.json`, immutable `messages.jsonl`, and valid `context.jsonl` checkpoints. |
+| Command execution | `shell_exec` runs inside the workspace with timeout, output caps, stdout/stderr streaming, and Windows process supervision. |
+| Skill routing | Native skills are summarized in the prompt; exact capsules are loaded through `skill_info` only when needed. |
+| Recovery | Stale sessions, malformed transcript tails, and provider overflow paths leave durable evidence instead of silent fallback behavior. |
 
 ## At a Glance
 
@@ -38,9 +61,10 @@ Ventari is built for people who want agents to feel dependable, inspectable, and
 | Agent sessions | `.var/sessions/<id>/` with transcript, context checkpoints, events, and output |
 | Protocol | JSON-RPC 2.0 over stdio, plus an HTTP bridge for browser clients |
 | Context | Builder-owned model windows from immutable messages plus compact checkpoints |
-| Tools | Per-tool module registry with availability metadata and explicit external command boundaries |
+| Tools | Per-tool module registry with availability metadata, review risk, and explicit external command boundaries |
+| Skills | Native skill capsules plus `skill_info` retrieval for planning-spec, Insect, dupe-audit, UX, recon, and audit protocols |
 | Capability governance | Review-before-effect tool events, scoped delegation, typed capability profiles, derivative memory boundaries, and non-mutating evaluator evidence |
-| Clients | CLI and framework-free browser shell; neither owns runtime state |
+| Clients | Native TUI, CLI, and framework-free browser shell; none owns runtime state |
 
 ## Quick Start
 
@@ -126,7 +150,9 @@ flowchart TB
 | Checkpointed compaction path | Generates deterministic Zig-native summary checkpoints in `context.jsonl` without replacing the complete transcript. |
 | Event persistence | Records runtime progress, tool lifecycle entries, bridge notifications, and terminal state in `events.jsonl`. |
 | Tool integration | Publishes built-in tool contracts, review-risk metadata, and availability metadata from the kernel registry as JSON schemas for provider calls, `tools/list`, and `VAR1 tools --json`; write-capable file tools return typed effect receipts. |
-| Tool review gate | Records `tool_requested -> tool_reviewed -> tool_completed` for approved calls and `tool_requested -> tool_reviewed -> tool_blocked` for denied calls before an unknown, context-unavailable, or high-impact tool reaches implementation dispatch. |
+| Tool review gate | Records reviewed tool lifecycle spans before side effects: request, review, start, bounded output deltas, finish, and completion/blocking. |
+| Streaming TUI | Renders assistant token deltas, one-row tool span updates, bounded command output, scrollback, and an immediate pending assistant row from canonical session events. |
+| Skill routing | Teaches native skill categories in the prompt and exposes `skill_info` for exact native/add-on capsules without loading every global skill body. |
 | Scoped delegation | Validates `launch_agent` scope fields before child-session creation: `scope_depth`, `contact_budget`, `validation_status`, `escalation_reason`, and `parent_capability_profile`. |
 | Capability profiles | Keeps `root` and `subagent` capability profiles as typed runtime boundaries for tool classes, budgets, delegation policy, and provider inheritance; they are not product roles or copied org charts. |
 | Derivative memory and evaluator evidence | Defines sequence-bound derivative memory entries and append-only heartbeat/evaluator events without creating another transcript or mutating executor state from an evaluator side channel. |
@@ -138,9 +164,11 @@ flowchart TB
 
 ## Tool Runtime
 
-Tool contracts are kernel-owned. Per-tool file and agent modules live under `apps/backend/src/core/tools/builtin/`; each built-in tool exports its `definition`, `availability`, and `execute` contract. `src/core/tools/runtime.zig` composes those modules for dispatch and catalog output, `src/core/tools/registry.zig` resolves capability availability from module-owned tool names/specs, and `src/core/tools/module.zig` owns shared runner/context/envelope/effect-receipt types. Provider schema serialization still flows through `src/core/providers/openai_compatible.zig`.
+Tool contracts are kernel-owned. Per-tool file, shell, skill, and agent modules live under `apps/backend/src/core/tools/builtin/`; each built-in tool exports its `definition`, `availability`, and `execute` contract. `src/core/tools/runtime.zig` composes those modules for dispatch and catalog output, `src/core/tools/registry.zig` resolves capability availability from module-owned tool names/specs, and `src/core/tools/module.zig` owns shared runner/context/envelope/effect-receipt types. Provider schema serialization still flows through `src/core/providers/openai_compatible.zig`.
 
 `tools/list` and `VAR1 tools --json` expose the same catalog, including availability metadata. `search_files` is the only content-search tool. It shells to `iex search --json` through the command-runner boundary and declares an `external_command("iex")` dependency. A checkout or packaged install must provide a real `iex` executable on `PATH` or beside the process before that tool is available; missing search dependencies are reported as unavailable capabilities instead of late process-spawn surprises. `list_files` is a native Zig directory/file discovery primitive and does not depend on `iex`.
+
+`skill_info` is the skill retrieval socket. The system prompt carries compact native capsules for high-value protocols such as `planning-spec`, `insect`, `dupe-audit`, `recon-intel`, `ux-playbook`, `t3-tape`, `repo-harvester`, and `task-audit`; the tool returns exact capsules on demand so the model can route into a skill without injecting every global `SKILL.md` into every prompt.
 
 `write_file`, `append_file`, and `replace_in_file` preserve the stable `ok/tool/content` response shape and add an `effect` object with schema `var1.tool_effect.v1`. The receipt records the requested path, resolved path, before/after existence and byte counts, operation-specific counts, and SHA-256 hashes where content exists. The model-visible `content` now starts with `EFFECT_SCHEMA var1.tool_effect.v1` and `EFFECT_KEY effect` before the legacy `PATH`/`BYTES` output, so smaller local models see the file-effect semantics before low-signal byte accounting. This gives the harness deterministic file-effect evidence without adding a separate verifier worker.
 
@@ -249,9 +277,9 @@ Runtime configuration is resolved from the backend lane at `apps/backend`. Provi
 | `API_KEY` | yes | provider credential for the selected OpenAI-compatible endpoint |
 | `MODEL` | yes | model identifier sent to the provider |
 | `WORKSPACE` | no | workspace root for `.var/` resolution; defaults to `.` |
-| `MAX_STEPS` | no | execution step ceiling; defaults to `1` when resolved from auth-only config |
-| `MAX_TOOL_CALLS_PER_TURN` | no | per-assistant-turn tool-call ceiling; defaults to `8` |
-| `MAX_TOOL_CALLS_PER_SESSION` | no | per-session tool-call ceiling; defaults to `32` |
+| `MAX_STEPS` | no | execution step ceiling; defaults to `32` when omitted or resolved from auth-only config |
+| `MAX_TOOL_CALLS_PER_TURN` | no | per-assistant-turn tool-call ceiling; defaults to `16` |
+| `MAX_TOOL_CALLS_PER_SESSION` | no | per-session tool-call ceiling; defaults to `96` |
 
 Reference shape: [`apps/backend/.env.example`](./apps/backend/.env.example).
 
@@ -293,12 +321,14 @@ cd apps/backend
 
 ## Validation
 
-Latest local Windows validation recorded on 2026-05-04:
+Latest local Windows validation recorded on 2026-05-09:
 
 ```text
-.\scripts\zigw.ps1 build test --summary all  -> 95/95 tests passed
-.\zig-out\bin\VAR1.exe tools --json          -> search_files reports external_command iex availability
-.\scripts\health.ps1                         -> status: ready
+apps/backend .\scripts\zigw.ps1 build test --summary all        -> 651/651 tests passed
+apps/cli     ..\backend\scripts\zigw.ps1 build test --summary all -> 16/16 tests passed
+packages/tui ..\..\apps\backend\scripts\zigw.ps1 build test      -> 103/104 tests passed; 1 skipped
+installed    vantari.exe health --json                            -> ok: true, Z.AI glm-5.1
+installed    vantari.exe tools --json                             -> shell_exec, skill_info, agent tools available
 ```
 
 Provider-backed smoke validation depends on the configured provider exposing `MODEL` through its authenticated model list.

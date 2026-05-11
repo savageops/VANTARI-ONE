@@ -14,6 +14,7 @@
 **/.toolchain/
 **/.zig-cache/
 **/zig-out/
+**/zig-pkg/
 **/output/
 
 # Node dependencies and package-manager state

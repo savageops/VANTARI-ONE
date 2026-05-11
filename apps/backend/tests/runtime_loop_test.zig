@@ -252,6 +252,29 @@ fn mockSendToolLoop(
     );
 }
 
+fn mockSendInvalidShellExecThenSuccess(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const u8,
+    payload: []const u8,
+) anyerror![]u8 {
+    var ctx: *ToolLoopContext = @ptrCast(@alignCast(ctx_ptr.?));
+    ctx.payloads[ctx.call_count] = try ctx.allocator.dupe(u8, payload);
+
+    defer ctx.call_count += 1;
+
+    if (ctx.call_count == 0) {
+        return allocator.dupe(u8,
+            \\{"model":"gemma-4-e2b-it","choices":[{"message":{"tool_calls":[{"id":"call_bad_shell","type":"function","function":{"name":"shell_exec","arguments":"{\"mode\":\"shell\",\"argv\":[\"cmd\",\"/c\",\"find\"]}"}}]}}]}
+        );
+    }
+
+    return allocator.dupe(u8,
+        \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"I saw the shell_exec schema failure and corrected the command contract."}}]}
+    );
+}
+
 fn mockSendMultiToolLoop(
     ctx_ptr: ?*anyopaque,
     allocator: std.mem.Allocator,
@@ -1077,6 +1100,47 @@ test "loop executes tool calls and exposes descriptors in the provider payload" 
     try std.testing.expectEqualStrings("call_1", transcript[2].tool_call_id.?);
     try std.testing.expect(std.mem.indexOf(u8, transcript[2].content, "hello from file") != null);
     try std.testing.expectEqual(VAR1.shared.types.SessionMessageRole.assistant, transcript[3].role);
+}
+
+test "loop turns malformed shell_exec arguments into provider-visible repair evidence" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const config = try makeConfig(std.testing.allocator, workspace_root, 4);
+    defer config.deinit(std.testing.allocator);
+
+    var context = ToolLoopContext{ .allocator = std.testing.allocator };
+    defer context.deinit();
+
+    const result = try VAR1.core.executor.runPromptWithTransport(std.testing.allocator, config, "Count tests with a Windows-safe command.", .{
+        .context = &context,
+        .sendFn = mockSendInvalidShellExecThenSuccess,
+    });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), context.call_count);
+    try std.testing.expect(std.mem.indexOf(u8, result.output, "schema failure") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context.payloads[1].?, "\"role\":\"tool\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context.payloads[1].?, "\\\"error\\\":\\\"InvalidArguments\\\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context.payloads[1].?, "\\\"usage_hint\\\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context.payloads[1].?, "Use mode=argv") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context.payloads[1].?, "Select-String") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context.payloads[1].?, "find/findstr") != null);
+
+    const events_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", result.session_id, "events.jsonl" });
+    defer std.testing.allocator.free(events_path);
+    const events = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, events_path);
+    defer std.testing.allocator.free(events);
+
+    try std.testing.expect(std.mem.indexOf(u8, events, "var1.tool_finished.v1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "\\\"error_name\\\":\\\"InvalidArguments\\\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "\\\"hint\\\":\\\"Use mode=argv") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "Select-String") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_completed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events, "tool_finished").? < std.mem.indexOf(u8, events, "tool_completed").?);
 }
 
 test "loop persists streamed assistant deltas around tool execution without collapsing phase order" {
