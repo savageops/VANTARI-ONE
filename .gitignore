@@ -88,3 +88,8 @@ build/Release/
 # Local experiments
 /apps/backend/playground/
 /apps/backend/src/ui/
+
+# Frontend — local-only, never committed to the shared branches
+/apps/frontend/
+.playwright-mcp/
+**/*.sqlite
