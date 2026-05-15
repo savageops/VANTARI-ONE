@@ -163,7 +163,7 @@ pub fn runPromptWithOptions(
         &messages,
         0,
     ) catch |err| {
-        try failSession(allocator, config.workspace_root, options.hooks, &session, @errorName(err));
+        try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err));
         return err;
     };
 
@@ -185,7 +185,7 @@ pub fn runPromptWithOptions(
             &messages,
             base_message_count,
         ) catch |err| {
-            try failSession(allocator, config.workspace_root, options.hooks, &session, @errorName(err));
+            try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err));
             return err;
         };
 
@@ -199,7 +199,7 @@ pub fn runPromptWithOptions(
             &base_message_count,
             options.transport,
         ) catch |err| {
-            try failSession(allocator, config.workspace_root, options.hooks, &session, @errorName(err));
+            try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err));
             return err;
         };
         defer completion.deinit(allocator);

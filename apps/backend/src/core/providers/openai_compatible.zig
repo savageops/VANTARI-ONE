@@ -21,6 +21,11 @@ const plain_write_buffer_size = 1024;
 const tls_record_buffer_size = std.crypto.tls.Client.min_buffer_len;
 const tls_plaintext_write_buffer_size = tls_record_buffer_size;
 const tls_read_buffer_size = tls_record_buffer_size + max_head_bytes;
+const bad_status_diagnostic_bytes = 2048;
+const bad_status_body_prefix_bytes = 768;
+
+threadlocal var latest_bad_status_diagnostic: [bad_status_diagnostic_bytes]u8 = undefined;
+threadlocal var latest_bad_status_diagnostic_len: usize = 0;
 
 const Scheme = enum {
     http,
@@ -90,6 +95,17 @@ pub const StreamHooks = struct {
         }
     }
 };
+
+pub fn clearFailureDiagnostic() void {
+    latest_bad_status_diagnostic_len = 0;
+}
+
+pub fn failureDiagnosticForError(err: anyerror) []const u8 {
+    if (err == Error.BadStatus and latest_bad_status_diagnostic_len > 0) {
+        return latest_bad_status_diagnostic[0..latest_bad_status_diagnostic_len];
+    }
+    return @errorName(err);
+}
 
 pub fn complete(
     allocator: std.mem.Allocator,
@@ -178,6 +194,7 @@ pub fn completeWithTransportAndHooks(
     const payload = try buildRequestJson(allocator, config.openai_model, request, stream_hooks.hasHandlers());
     defer allocator.free(payload);
 
+    clearFailureDiagnostic();
     const response_body = try transport.send(allocator, url, config.openai_api_key, payload, stream_hooks);
     defer allocator.free(response_body);
 
@@ -866,6 +883,7 @@ fn parseRawHttpResponse(allocator: std.mem.Allocator, raw_response: []const u8) 
         if (status_code == 413 or context_overflow.isContextOverflowText(headers) or context_overflow.isContextOverflowText(body)) {
             return Error.ContextWindowExceeded;
         }
+        recordBadStatusDiagnostic(status_code, status_line, body);
         return Error.BadStatus;
     }
 
@@ -900,6 +918,36 @@ fn parseRawHttpResponse(allocator: std.mem.Allocator, raw_response: []const u8) 
     }
 
     return allocator.dupe(u8, body);
+}
+
+fn recordBadStatusDiagnostic(status_code: u16, status_line: []const u8, body: []const u8) void {
+    var status_line_buffer: [256]u8 = undefined;
+    const status_line_clean = sanitizedPrefix(&status_line_buffer, status_line);
+    var body_buffer: [bad_status_body_prefix_bytes]u8 = undefined;
+    const body_clean = sanitizedPrefix(&body_buffer, body);
+
+    const diagnostic = std.fmt.bufPrint(
+        &latest_bad_status_diagnostic,
+        "BadStatus status={d} status_line=\"{s}\" body_prefix=\"{s}\"",
+        .{ status_code, status_line_clean, body_clean },
+    ) catch |err| switch (err) {
+        error.NoSpaceLeft => "BadStatus status=unknown diagnostic_truncated",
+    };
+    latest_bad_status_diagnostic_len = diagnostic.len;
+}
+
+fn sanitizedPrefix(buffer: []u8, value: []const u8) []const u8 {
+    if (buffer.len == 0) return buffer[0..0];
+    const max_len = @min(buffer.len, value.len);
+    var index: usize = 0;
+    while (index < max_len) : (index += 1) {
+        buffer[index] = switch (value[index]) {
+            '\r', '\n', '\t' => ' ',
+            '"' => '\'',
+            else => |char| if (std.ascii.isPrint(char)) char else ' ',
+        };
+    }
+    return buffer[0..index];
 }
 
 fn decodeChunkedBody(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
@@ -1081,6 +1129,21 @@ test "provider parses streamed tool-call deltas into normal tool calls" {
     try std.testing.expectEqualStrings("call_1", response.tool_calls[0].id);
     try std.testing.expectEqualStrings("read_file", response.tool_calls[0].name);
     try std.testing.expectEqualStrings("{\"path\":\"README.md\"}", response.tool_calls[0].arguments_json);
+}
+
+test "provider preserves non-200 HTTP status diagnostic for session failure" {
+    clearFailureDiagnostic();
+    const raw_response =
+        "HTTP/1.1 503 Service Unavailable\r\n" ++
+        "content-type: application/json\r\n" ++
+        "\r\n" ++
+        "{\"error\":{\"message\":\"runtime warming\\nretry later\"}}";
+
+    try std.testing.expectError(Error.BadStatus, parseRawHttpResponse(std.testing.allocator, raw_response));
+    const diagnostic = failureDiagnosticForError(Error.BadStatus);
+    try std.testing.expect(std.mem.indexOf(u8, diagnostic, "BadStatus status=503") != null);
+    try std.testing.expect(std.mem.indexOf(u8, diagnostic, "HTTP/1.1 503 Service Unavailable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, diagnostic, "runtime warming retry later") != null);
 }
 
 test "provider reconstructs CRLF SSE streams with sparse multi-tool indexes" {
