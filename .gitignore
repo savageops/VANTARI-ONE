@@ -8,12 +8,13 @@
 **/.refs/
 **/.var/
 **/.untrack/
-**/.harness/
+/data/
 
 # Zig toolchains and build outputs
 **/.toolchain/
 **/.zig-cache/
 **/zig-out/
+**/zig-pkg/
 **/output/
 
 # Node dependencies and package-manager state
@@ -85,5 +86,10 @@ build/Release/
 **/.playwright-cli/
 
 # Local experiments
-/apps/backend/variant-1/playground/
-/apps/backend/variant-1/src/ui/
+/apps/backend/playground/
+/apps/backend/src/ui/
+
+# Frontend — local-only, never committed to the shared branches
+/apps/frontend/
+.playwright-mcp/
+**/*.sqlite

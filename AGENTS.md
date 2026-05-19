@@ -1,13 +1,28 @@
 # VANTARI-ONE Agent Rules
 
-## Runtime Ownership
+## Mission
 
-- `apps/backend/variant-1` is the only live code lane until another app/package has real runtime responsibility.
-- `VAR1` is the Zig harness kernel. CLI, browser, and future desktop shells are clients of the same agent-session runtime.
+VANTARI is a local agent kernel. The product is not a chat wrapper; it is a deterministic execution substrate where prompts compile into session state, provider turns, typed tool spans, context checkpoints, command I/O, and recoverable evidence. `VAR1` is the Zig kernel underneath every client surface.
+
+The objective is frontier-agent parity by mechanical proof, not by UI mimicry. A session is correct only when the operator can observe the same causal chain the kernel will replay after cold start:
+
+```text
+input -> append-only transcript -> context compiler -> provider turn
+      -> assistant deltas / tool calls -> reviewed effects
+      -> typed events -> durable terminal state
+```
+
+Every retained subsystem must reduce ambiguity at the call site while increasing guarantees in the core. If a feature cannot identify its owner, state machine, failure class, and recovery evidence, it is not a feature yet.
+
+## I. Runtime Ownership
+
+- `apps/backend` is the only live code lane until another app/package has real runtime responsibility.
+- `VAR1` is the Zig agent-session kernel. CLI, browser, and future desktop shells are clients of the same runtime.
 - `.var/` is the only runtime/process state root. Do not add old runtime roots, old storage ownership, or fallback storage readers.
 - Project-local `.var/sessions/<session-id>/` is canonical. Do not copy global home-scoped Codex/Claude project-directory session IDs into this repo.
+- CLI/TUI/browser clients never assemble provider context, infer tool state, or maintain their own transcript truth. They render kernel-owned state.
 
-## Session Storage
+## II. Session Storage Contract
 
 Canonical session layout:
 
@@ -20,56 +35,265 @@ Canonical session layout:
   output.txt
 ```
 
-- `messages.jsonl` is the complete durable transcript. It must be append-only after the context baseline lands.
-- `context.jsonl` is the compacted/model-ready checkpoint history. It must not become a second full transcript.
-- Add stable message IDs and monotonic sequence numbers before compaction boundaries depend on message positions.
-- Do not add migration readers for pre-`.var/sessions` layouts; this product starts from the current session contract.
+### Storage Semantics
 
-## Context Builder Contract
+| Artifact | Owner | Invariant |
+|---|---|---|
+| `session.json` | session lifecycle | One durable lifecycle row for status, parent/continuation, display, and failure state. |
+| `messages.jsonl` | transcript ledger | Complete append-only transcript. Never compact, truncate, or rewrite after append. |
+| `context.jsonl` | context compiler / compactor | Model-visible checkpoints only. Never become a second transcript. |
+| `events.jsonl` | runtime event spine | Ordered observable causality: turn, delta, tool, output, failure, cancellation. |
+| `output.txt` | terminal assistant output | Latest assistant terminal projection, not source truth. |
 
-- The context builder is the only owner allowed to turn session storage into provider messages.
+- Add stable message IDs and monotonic sequence numbers before any compaction boundary depends on message position.
+- Manual `session/compact` is the only live compaction writer. Auto/background compaction requires proven token accounting, cancellation behavior, idempotent range marks, and cold-start recovery.
+- Compaction is entry-aware. Checkpoints mark `source_seq_start`, `source_seq_end`, `first_kept_seq`, compacted entry count, and `aggressiveness_milli`.
+- Bounded compaction advances over stable JSONL entries. Higher aggressiveness may recompact an already summarized range because the full transcript remains source truth.
+- JSONL readers must preserve valid prefix state across poisoned suffixes, torn writes, BOMs, duplicated sequence IDs, and malformed trailing rows.
+
+## III. Context Compiler Contract
+
+The context builder is the only owner allowed to turn session storage into provider messages.
+
+```text
+session.json + messages.jsonl + latest valid context.jsonl
+  -> system/runtime context
+  -> latest compacted summary
+  -> recent raw transcript suffix
+  -> provider message window
+```
+
 - `loop.zig`, CLI clients, HTTP bridge, and provider adapters must not manually assemble chat history.
-- The builder reads `session.json`, `messages.jsonl`, and the latest valid `context.jsonl` checkpoint, then emits model-ready messages as: system/runtime context, latest compacted summary, recent raw transcript.
-- Full transcript retention and model-visible context are separate concerns. Truncate or summarize only model-visible context.
-- Manual `session/compact` is the only live compaction writer. Auto/background compaction requires proven token accounting, cancellation behavior, idempotent range marks, and cold-start recovery before it becomes runtime behavior.
-- Compaction is entry-aware. `messages.jsonl` stays immutable; `context.jsonl` checkpoints mark the covered message sequence range, the advanced `first_kept_seq`, the compacted entry count, and the `aggressiveness_milli` level.
-- Bounded compaction advances by stable JSONL entries. Higher aggressiveness may recompact an already summarized range because the full transcript remains the source of truth.
-- Use simple approximate token estimates first. Add exact tokenizer integration only when evidence proves the heuristic is insufficient.
+- Full transcript retention and model-visible context are separate control planes.
+- Context overflow recovery must rebuild through the compiler after checkpoint writes. It must not append in-memory duplicates over persisted tool batches.
+- Unsupported transcript topology, such as orphan tool results or unresolved assistant tool-call tails, must fail before provider dispatch with durable evidence.
+- Exact tokenizer integration is admissible only when tests prove approximate heuristics misclassify real provider windows.
 
-## Future-First Simplicity
+## IV. Event Spine And Streaming Mechanics
 
-- Build the invariant that should survive later runtime scale, not the dominant harness pattern that exists now.
-- Study references for failure modes, boundary shapes, and useful invariants only. Do not reproduce their incidental architecture.
-- Prefer primitives that are simultaneously smaller and more expressive: append-only session history, typed checkpoints, explicit state machines, and deterministic ownership.
+Typed events are the runtime's nervous system. String breadcrumbs may exist only as legacy read models; new behavior uses versioned event payloads.
+
+### Event Grammar Floor
+
+| Phase | Required Event Shape |
+|---|---|
+| Turn ingress | `turn_started` / `session_started` with session and prompt boundary evidence. |
+| Assistant text | `assistant_delta` chunks before final `assistant_response`. |
+| Tool lifecycle | `tool_requested -> tool_reviewed -> tool_started -> tool_output_delta* -> tool_finished -> tool_completed`. |
+| Command output | bounded stdout/stderr deltas with stream id, cap marker, and byte-safe payload. |
+| Failure | typed terminal event before final client response. |
+| Cancellation | cancellation intent plus terminal reconciliation evidence. |
+
+### Directives
+
+- Provider streaming is a kernel contract. If a provider supports SSE deltas, deltas must persist before the final assistant response.
+- TUI progress is a read model over `events.jsonl`, not a separate speculative status bus.
+- Tool spans update a single keyed row in clients. Do not append request/start/done rows for one tool invocation.
+- Command stdout/stderr are untrusted data. Parse only runtime-owned envelopes; render output as bounded display text.
+- Event cursors use monotonic ledger position plus replay suppression. Timestamp-only cursors are insufficient under same-millisecond bursts.
+
+## V. Tool Runtime Contract
+
+Tool capability truth is contractual. Module-owned definitions are the only source for provider schema, catalog JSON, availability, review risk, and dispatch.
+
+```text
+definition + availability + review_risk + execute
+  -> catalog
+  -> provider tool schema
+  -> review gate
+  -> runtime dispatch
+  -> effect/event evidence
+```
+
+- Built-in tools remain the default capability surface. Plugin tools are opt-in and must not silently alter the model-visible tool list.
+- Tool sockets use lowercase snake_case names and JSON-object parameter schemas.
+- Tool discovery is catalog-first. The model-visible catalog must explain available tools, unavailable dependencies, examples, usage hints, review risk, and exact JSON fields; no prompt layer may imply hidden tool names or backend-only escape hatches.
+- Agent-facing tools and backend-only primitives share one module-owned capability boundary. A primitive becomes agent-reachable only through a registered tool definition, availability contract, review risk, and dispatch path.
+- Unknown tools, context-unavailable tools, invalid arguments, and unsupported capability profiles fail before side effects.
+- Write-capable tools must emit effect evidence: resolved path, byte counts, hashes where available, operation counts, and error class.
+- `shell_exec` is command execution, not shell-shaped convenience. It must preserve argv mode, workspace-contained cwd, timeout, output budgets, process termination, and stdout/stderr draining.
+- Search is IX/IEX-backed. `search_files` uses the native IX expression contract (`lit:needle`, `re:TODO|FIXME`, `lit:a || lit:b`) through the executable dependency currently advertised as `iex`. If that executable is unavailable, search capability is unavailable; do not add `rg`, `grep`, `sed`, or ad hoc readers as hidden substitutes.
+
+## VI. Parent/Child Agent Orchestration
+
+Sub-agents are normal VAR1 sessions launched by a parent and supervised through typed child-run tools. Delegation exists to reduce latency and increase recon breadth; it is not a parallel authority layer.
+
+- Launch child agents only for branchable work that can progress independently from a self-contained prompt: parallel external research, independent directory/codebase reconnaissance, file-level audits, validation probes, or isolated comparison passes.
+- Keep the parent on critical-path synthesis: decide whether delegation is useful, launch children with finite scope, continue any non-overlapping local work, collect child SITREPs, reconcile contradictions, and publish one parent-owned conclusion.
+- Child prompts must specify objective, path/scope bounds, allowed evidence, expected SITREP shape, blocker protocol, and terminal success criteria.
+- Child SITREPs must return findings, evidence paths/commands, uncertainty, blockers, and residual risk. They do not mutate parent conclusions directly.
+- Use `list_agents` for inventory, `agent_status` for non-blocking progress, and `wait_agent` with explicit bounded `timeout_ms` when the parent is ready to collect a result. Avoid repeated tiny wait loops.
+- Do not delegate the immediate edit or decision if the parent needs that result before its next local action.
+- Child lifecycle state is append-only session/event evidence. Parent supervision must preserve heartbeat, terminal status, failure class, and resume-safe reconciliation.
+
+## VII. Skill Routing Contract
+
+Skills are operating protocols. Tools execute actions; skills choose method, evidence shape, validation discipline, and when to read deeper instructions.
+
+Native high-leverage skills:
+
+| Skill | Use When |
+|---|---|
+| `planning-spec` | Work requires decomposed execution chains, state-machine handoff, invariant preservation, or crash recovery. |
+| `insect` / `insect-rs-runtime` | External research, crawling, scraping, search extraction, web scouting, or YouTube transcript retrieval. |
+| `dupe-audit` | Large implementations, refactors, parity checks, related-code discovery, or duplicate ownership risk. |
+| `recon-intel` | Unfamiliar code areas, orchestration/storage/auth/runtime changes, or stale/duplicated architecture suspicion. |
+| `ux-playbook` | TUI/browser/frontend layout, hierarchy, disclosure, feedback, or operator workflow design. |
+| `t3-tape` | PatchMD/T3 Tape state, patch import/export, validation, migration, or hook governance. |
+| `repo-harvester` | Global source corpus harvesting and indexed repository collection work. |
+| `task-audit` | Findings-first implementation correctness review. |
+
+- The prompt may include compact native skill capsules.
+- `skill_info` is the retrieval primitive for exact skill capsules. Do not inject every global `SKILL.md` into the prompt.
+- Add-on skills are discoverable. Treat them as demand-loaded protocols, not always-on prompt mass.
+- A skill request is not satisfied by naming the skill. The task must route into the skill's execution contract.
+
+## VIII. Future-First Architecture
+
+- Build the invariant that should survive later runtime scale, not the dominant implementation pattern that exists now.
+- Study references for failure modes, boundary shapes, and useful invariants only. Do not reproduce incidental architecture.
+- Prefer primitives that are smaller and more expressive: append-only ledgers, typed checkpoints, explicit state machines, deterministic readers, bounded allocators, and crash-recoverable writes.
 - A dynamic worker is admissible only when it calls the same proven primitive as manual execution and adds measurable capability beyond scheduling.
+- Health, readiness, and diagnostics stay thinner than capability. They expose enough state to operate the system; they do not become a parallel product.
 
-## Source Hierarchy
+## IX. Source Hierarchy
 
-- Prefer deep, named ownership modules over flat file sprawl, but do not create empty folder theater.
-- New context work belongs under `apps/backend/variant-1/src/core/context/`.
-- Core modules are kernel-owned capability domains such as `context`, `sessions`, and `tools`; do not place feature/plugin names directly under `core/`.
-- Tool runtime contracts belong under `apps/backend/variant-1/src/core/tools/`. The runtime body is `src/core/tools/runtime.zig`; do not reintroduce a flat `src/tools.zig` owner.
-- Plugin contract code belongs under `apps/backend/variant-1/src/core/plugins/`. Plugin implementations must not live inside `core/`; future project-local plugins should live under a dedicated plugin root such as `apps/backend/variant-1/plugins/<plugin-id>/` or local `.var/plugins/<plugin-id>/` once loading is implemented.
-- Session storage helpers live under `apps/backend/variant-1/src/core/sessions/`. Do not reintroduce flat session-store files at `src/`.
+- Prefer deep, named ownership modules over flat file sprawl. Do not create empty folder theater.
+- New context work belongs under `apps/backend/src/core/context/`.
+- Core modules are kernel-owned capability domains such as `context`, `sessions`, `tools`, `providers`, and `agents`.
+- Tool runtime contracts belong under `apps/backend/src/core/tools/`. The runtime body is `src/core/tools/runtime.zig`; do not reintroduce flat `src/tools.zig`.
+- Session storage helpers live under `apps/backend/src/core/sessions/`.
+- Plugin contract code belongs under `apps/backend/src/core/plugins/`. Plugin implementations must not live inside `core/`.
 - Keep protocol/shared types in `shared/` only when multiple clients or hosts consume them.
 
-## Pluggability Sockets
+## X. Mechanical Cost Model
 
-- A socket is a typed connector contract: stable name, schema, owner, capability boundary, and tests.
-- Add sockets before feature-specific plugins, but do not add empty loader machinery or placeholder adapters.
-- Tool sockets use lowercase snake_case names and JSON-object parameter schemas.
-- Plugin manifests declare sockets; they do not get direct store/provider/tool access unless the kernel passes a scoped capability.
-- Auto-discovery requires manifest validation, deterministic load order, explicit enablement, and lifecycle tests before it becomes runtime behavior.
-- Built-in tools remain the default capability surface. Plugin tools are opt-in and must not silently alter the model-visible tool list.
+This repository prices changes against runtime mechanics, not aesthetics.
 
-## Reference Discipline
+| Mechanism | Cost Center | Required Question |
+|---|---|---|
+| Provider turn | network latency, stream parse, tool-call reconstruction | Does the operator see deltas before terminal output? |
+| Context compile | JSONL scan, checkpoint selection, allocation, provider payload bytes | Is the window built once through the compiler and replayable after cold start? |
+| Tool dispatch | review gate, schema parse, side effect, event append | Is the effect reserved, executed, and evidenced in one causal span? |
+| Command run | process spawn, pipe draining, timeout, kill, output cap | Are stdout/stderr visible while the process runs and bounded at source? |
+| TUI frame | event replay, wrapping, terminal render, scroll state | Does the interface preserve transcript comprehension under live updates? |
+| Session recovery | prefix salvage, stale owner reconciliation, terminal status | Can a dead process leave the next client with truthful state? |
+
+Directive: before adding abstraction, name which cost center it lowers. If the answer is "organization", keep the code local until duplication or boundary pressure becomes measurable.
+
+## XI. Reference Discipline
 
 - Use `iex` for repository search in this checkout.
-- Before intricate kernel changes, inspect the local references in `.refs/`, especially `badlogic__pi-mono` and `openai__codex`.
-- Copy ownership patterns, not complexity. Borrow Pi-style checkpoint boundaries and Codex-style context ownership without importing extension trees, branch graphs, or global session stores prematurely.
+- Before intricate kernel changes, inspect `.refs/openai__codex` and `.refs/badlogic__pi-mono`.
+- Copy ownership patterns, not complexity. Borrow checkpoint boundaries, item lifecycle pressure, and context ownership; reject extension forests, branch graphs, and global session stores until proven necessary.
+- Every reference-harvested idea must pass the VANTARI compression test: fewer concepts at the call site, stronger guarantees in the core, lower runtime ambiguity, clearer recovery evidence.
+- Comparable-agent parity means live assistant deltas, typed tool lifecycle spans, bounded process I/O, resumable ledgers, cancellation semantics, and cold-start replay before decorative UI or optional extension systems.
 
-## Planning Boundary
+## XII. Forbidden Anti-Patterns
 
-- Plan first for storage/context architecture changes. Implement only after the target contract, storage behavior, and tests are explicit.
-- No parallel systems, hidden fallbacks, or prompt-scaffolding leakage into user-facing output.
-- Public docs must describe current runtime truth, not intended future state.
+- Parallel systems for the same responsibility.
+- Hidden fallback readers, hidden provider paths, or late runtime crashes for unsupported capability.
+- Prompt scaffolding leaking into product UI.
+- Tool schema drift between template, runtime, API endpoint, and frontend optimistic state.
+- Diagnostics fatter than the capability being diagnosed.
+- Timestamp-only event replay.
+- Background workers without cancellation, idempotent marks, measurable benefit, and cold-start reconciliation.
+- Broad rewrites driven by intuition instead of a named state transition or measured bottleneck.
+- "Green" tests that exercise removed routes, mocks, stale fallback paths, or non-canonical runtime lanes.
+- Shell workarounds for contracts that should exist as typed kernel capability.
+
+## XIII. Proof-Gated Promotion Lifecycle
+
+Every non-trivial runtime change follows:
+
+```text
+Recon -> Contract -> Smallest durable slice -> Canonical tests
+      -> Native installed proof -> Event/session evidence -> Docs/changelog
+```
+
+Promotion gates:
+
+1. The changed capability is implemented end-to-end through the canonical runtime lane.
+2. Tests cover the user-visible pipeline and at least one falsification pressure case.
+3. No duplicate ownership, prompt-only behavior, or parallel state surface is introduced.
+4. Windows-native installed binary proof exists for user-facing changes.
+5. Session/event evidence proves the claimed runtime behavior when provider/tool execution is involved.
+6. Public docs describe shipped runtime truth, not intended future state.
+
+Rejection protocol:
+
+- Record the hypothesis.
+- Name the exact seam.
+- Keep the failed evidence.
+- Remove the rejected code path.
+- State the next mechanism to investigate.
+
+## XIV. Testing Integrity
+
+Tests must behave like adversarial pipeline probes:
+
+- corrupted JSONL suffixes
+- stale running sessions
+- failed no-prompt resumes
+- invalid tool batches
+- orphan tool results
+- duplicate context after provider overflow
+- command timeout and process locks
+- stdout/stderr cap markers
+- oversized write payloads
+- cwd escape before process launch
+- same-millisecond event bursts
+- terminal scrollback under live streaming
+- installed binary auth/workspace resolution
+
+A passing test is valuable only when the assertion proves an invariant a shallow implementation would violate.
+
+## XV. Windows-Native Runtime Discipline
+
+- WSL or POSIX success may support analysis. It is not shipped proof for user-facing Windows behavior.
+- Operator scripts must diagnose locked installed binaries and stale local processes before failing obscurely.
+- Process supervision must account for Windows handle lifetime, pipe draining, timeout, and child termination.
+- Installed `%LOCALAPPDATA%\Vantari\bin\vantari.exe` proof is mandatory after CLI/TUI/provider/workspace/auth changes.
+
+## XVI. Communication Standard
+
+Every output in this repository is calibrated for experienced systems engineers.
+
+- Say `append-only event spine with monotonic replay cursor`, not "status updates".
+- Say `context compiler from transcript/checkpoint ledgers`, not "chat history".
+- Say `tool span with reviewed side effect and bounded stdout/stderr deltas`, not "tool ran".
+- Say `provider SSE delta reconstruction`, not "streaming response".
+- Say `stale owner reconciliation`, not "session cleanup".
+
+Capability claims carry mechanism and proof. "Works" is not a mechanism. "Fast" is not a unit. "Safer" is not an invariant.
+
+## XVII. Definition Of Done
+
+- Capability implemented end-to-end.
+- State machine named: ingress, mutation, emission, persistence, recovery, terminal state.
+- Tests cover changed contract and negative pressure.
+- No architecture drift or parallel systems introduced.
+- UX/state lifecycle parity preserved for operator-facing surfaces.
+- Docs/changelog updated in `.docs/todo/changelog/_log.md`.
+- Large implementations run dupe-audit or explicitly justify deferral.
+- Native installed binary validated for user-facing changes.
+- Handoff is cold-start ready from repository state.
+
+## XVIII. Frontier Roadmap
+
+1. Typed turn/item event grammar: replace mixed string progress with versioned `turn_started`, `assistant_delta`, `tool_started`, `tool_output_delta`, `tool_finished`, `turn_finished`, and `turn_failed` schemas while keeping legacy readers read-only.
+2. Binary-safe event spine: store event payloads as canonical JSON plus optional base64 byte fields, stable sequence numbers, monotonic causal order, and replay cursors.
+3. Tool execution spans: every tool call gets start/end timestamps, duration, risk decision, capability owner, output caps, side-effect summary, and failure class.
+4. Interruptible process supervision: long commands support timeout, operator cancellation, stdout/stderr draining, process-tree termination, and post-kill evidence.
+5. C ABI acceleration socket: add a narrow `extern` boundary only after profiling identifies a real bottleneck; candidate domains are tokenizer probes, SIMD search, JSONL scanning, and terminal width/grapheme kernels.
+6. Arena/quota discipline: split allocators by turn, provider payload, tool result, and UI frame.
+7. Deterministic context compiler: context assembly becomes a replayable compiler with diagnostics emitted as typed compile errors rather than late provider failures.
+8. Tool-result structural diffing: file mutation tools emit compact effect records with before/after metadata, byte counts, hashes, and optional localized hunks.
+9. Write-intent ledger: write-capable tools reserve intent records before mutation, commit effect records after mutation, and reconcile abandoned intents at cold start.
+10. Frontier TUI workbench: terminal renders live item graph, assistant token stream, tool spans, command output, cancellation affordance, session navigation, and optional raw event inspection.
+11. Provider capability probing: adapters cache verified streaming, tool-call shape, max payload, refusal/error envelopes, and context overflow signatures; unknown capability fails closed.
+12. Agent delegation supervision: parent sessions track child runs through typed edges, scoped capability profiles, heartbeat events, terminal status reconciliation, and resume-safe wait semantics.
+13. Deep pipeline test mesh: adversarial suites for provider recovery, tool loops, context rebuilds, TUI event consumption, installed auth/workspace resolution, and Windows process behavior.
+14. Byte-level session integrity: JSONL append/read paths detect torn writes, BOMs, invalid UTF-8, duplicated sequence IDs, and poisoned trailing rows without corrupting valid prefix state.
+15. Local performance telemetry: measure token compilation, JSONL scan, event replay, terminal frame render, process spawn, and tool dispatch latencies with low-noise counters gated behind explicit commands.
+16. Reference pressure loop: periodically re-harvest `.refs/openai__codex` and `.refs/badlogic__pi-mono`, but land only primitives that reduce VANTARI surface complexity while increasing runtime proof strength.

@@ -1,0 +1,707 @@
+const std = @import("std");
+const agent_scope = @import("../agents/scope.zig");
+const fsutil = @import("../../shared/fsutil.zig");
+
+pub const DelegationScope = agent_scope.DelegationScope;
+
+pub const DependencyKind = enum {
+    none,
+    external_command,
+};
+
+pub const Dependency = struct {
+    kind: DependencyKind,
+    name: []const u8,
+};
+
+pub const AvailabilitySpec = struct {
+    dependency: ?Dependency = null,
+};
+
+pub const CommandProbe = struct {
+    context: ?*anyopaque = null,
+    commandExistsFn: *const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        command_name: []const u8,
+    ) anyerror!bool,
+    commandMatchesFn: ?*const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        command_name: []const u8,
+        argv: []const []const u8,
+        stdout_needles: []const []const u8,
+    ) anyerror!bool = null,
+
+    pub fn commandExists(
+        self: CommandProbe,
+        allocator: std.mem.Allocator,
+        command_name: []const u8,
+    ) anyerror!bool {
+        return self.commandExistsFn(self.context, allocator, command_name);
+    }
+
+    pub fn commandMatches(
+        self: CommandProbe,
+        allocator: std.mem.Allocator,
+        command_name: []const u8,
+        argv: []const []const u8,
+        stdout_needles: []const []const u8,
+    ) anyerror!bool {
+        if (self.commandMatchesFn) |matches| {
+            return matches(self.context, allocator, command_name, argv, stdout_needles);
+        }
+        return self.commandExists(allocator, command_name);
+    }
+};
+
+pub const Error = error{
+    AgentServiceUnavailable,
+    CommandFailed,
+    CommandTerminated,
+    CommandTimedOut,
+    FileNotInspected,
+    InvalidArguments,
+    MissingParentSession,
+    PatternNotFound,
+    ToolPayloadExceeded,
+    ToolUnavailable,
+    UnknownTool,
+};
+
+pub const CommandOutput = struct {
+    exit_code: i32,
+    stdout: []u8,
+    stderr: []u8,
+    timed_out: bool = false,
+
+    pub fn deinit(self: CommandOutput, allocator: std.mem.Allocator) void {
+        allocator.free(self.stdout);
+        allocator.free(self.stderr);
+    }
+};
+
+pub const CommandOutputStream = enum {
+    stdout,
+    stderr,
+};
+
+pub const CommandOutputCallback = struct {
+    context: ?*anyopaque = null,
+    onOutputFn: ?*const fn (
+        ctx: ?*anyopaque,
+        stream: CommandOutputStream,
+        chunk: []const u8,
+        cap_reached: bool,
+    ) anyerror!void = null,
+
+    pub fn onOutput(
+        self: CommandOutputCallback,
+        stream: CommandOutputStream,
+        chunk: []const u8,
+        cap_reached: bool,
+    ) !void {
+        if (chunk.len == 0 and !cap_reached) return;
+        if (self.onOutputFn) |callback| {
+            try callback(self.context, stream, chunk, cap_reached);
+        }
+    }
+};
+
+pub const CommandLimits = struct {
+    timeout_ms: usize = 10_000,
+    max_output_bytes: usize = 16 * 1024,
+    output_callback: CommandOutputCallback = .{},
+};
+
+pub const CommandRunner = struct {
+    context: ?*anyopaque,
+    runFn: *const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        cwd: []const u8,
+        argv: []const []const u8,
+    ) anyerror!CommandOutput,
+    runWithLimitsFn: ?*const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        cwd: []const u8,
+        argv: []const []const u8,
+        limits: CommandLimits,
+    ) anyerror!CommandOutput = null,
+
+    pub fn run(
+        self: CommandRunner,
+        allocator: std.mem.Allocator,
+        cwd: []const u8,
+        argv: []const []const u8,
+    ) anyerror!CommandOutput {
+        return self.runFn(self.context, allocator, cwd, argv);
+    }
+
+    pub fn runWithLimits(
+        self: CommandRunner,
+        allocator: std.mem.Allocator,
+        cwd: []const u8,
+        argv: []const []const u8,
+        limits: CommandLimits,
+    ) anyerror!CommandOutput {
+        if (self.runWithLimitsFn) |run_limited| {
+            return run_limited(self.context, allocator, cwd, argv, limits);
+        }
+        return self.runFn(self.context, allocator, cwd, argv);
+    }
+};
+
+pub const AgentService = struct {
+    context: ?*anyopaque,
+    launchFn: *const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+        prompt: []const u8,
+        name: ?[]const u8,
+        scope: DelegationScope,
+    ) anyerror![]u8,
+    statusFn: *const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+        agent_name: []const u8,
+    ) anyerror![]u8,
+    waitFn: *const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+        agent_name: []const u8,
+        timeout_ms: usize,
+    ) anyerror![]u8,
+    listFn: *const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+    ) anyerror![]u8,
+
+    pub fn launch(
+        self: AgentService,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+        prompt: []const u8,
+        name: ?[]const u8,
+        scope: DelegationScope,
+    ) anyerror![]u8 {
+        return self.launchFn(self.context, allocator, parent_session_id, prompt, name, scope);
+    }
+
+    pub fn status(
+        self: AgentService,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+        agent_name: []const u8,
+    ) anyerror![]u8 {
+        return self.statusFn(self.context, allocator, parent_session_id, agent_name);
+    }
+
+    pub fn wait(
+        self: AgentService,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+        agent_name: []const u8,
+        timeout_ms: usize,
+    ) anyerror![]u8 {
+        return self.waitFn(self.context, allocator, parent_session_id, agent_name, timeout_ms);
+    }
+
+    pub fn list(
+        self: AgentService,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+    ) anyerror![]u8 {
+        return self.listFn(self.context, allocator, parent_session_id);
+    }
+};
+
+pub const ToolEventSink = struct {
+    context: ?*anyopaque = null,
+    onOutputDeltaFn: ?*const fn (
+        ctx: ?*anyopaque,
+        tool_call_id: []const u8,
+        tool_name: []const u8,
+        stream: CommandOutputStream,
+        chunk: []const u8,
+        cap_reached: bool,
+    ) anyerror!void = null,
+
+    pub fn onOutputDelta(
+        self: ToolEventSink,
+        tool_call_id: []const u8,
+        tool_name: []const u8,
+        stream: CommandOutputStream,
+        chunk: []const u8,
+        cap_reached: bool,
+    ) !void {
+        if (chunk.len == 0 and !cap_reached) return;
+        if (self.onOutputDeltaFn) |callback| {
+            try callback(self.context, tool_call_id, tool_name, stream, chunk, cap_reached);
+        }
+    }
+};
+
+pub const ExecutionContext = struct {
+    workspace_root: []const u8,
+    parent_session_id: ?[]const u8 = null,
+    agent_service: ?AgentService = null,
+    command_probe: ?CommandProbe = null,
+    tool_events: ?ToolEventSink = null,
+    file_inspection_ledger: ?*FileInspectionLedger = null,
+    workspace_state_enabled: bool = false,
+};
+
+pub const FileInspectionState = enum {
+    exists,
+    missing,
+};
+
+pub const FileInspectionMark = struct {
+    resolved_path: []u8,
+    state: FileInspectionState,
+
+    fn deinit(self: FileInspectionMark, allocator: std.mem.Allocator) void {
+        allocator.free(self.resolved_path);
+    }
+};
+
+pub const FileInspectionLedger = struct {
+    marks: std.array_list.Managed(FileInspectionMark),
+
+    pub fn init(allocator: std.mem.Allocator) FileInspectionLedger {
+        return .{ .marks = std.array_list.Managed(FileInspectionMark).init(allocator) };
+    }
+
+    pub fn deinit(self: *FileInspectionLedger) void {
+        for (self.marks.items) |mark| mark.deinit(self.marks.allocator);
+        self.marks.deinit();
+    }
+
+    pub fn record(self: *FileInspectionLedger, allocator: std.mem.Allocator, resolved_path: []const u8, exists: bool) !void {
+        const next_state: FileInspectionState = if (exists) .exists else .missing;
+        for (self.marks.items) |*mark| {
+            if (std.mem.eql(u8, mark.resolved_path, resolved_path)) {
+                mark.state = next_state;
+                return;
+            }
+        }
+
+        try self.marks.append(.{
+            .resolved_path = try allocator.dupe(u8, resolved_path),
+            .state = next_state,
+        });
+    }
+
+    pub fn has(self: *const FileInspectionLedger, resolved_path: []const u8, exists: bool) bool {
+        const required_state: FileInspectionState = if (exists) .exists else .missing;
+        for (self.marks.items) |mark| {
+            if (mark.state == required_state and std.mem.eql(u8, mark.resolved_path, resolved_path)) return true;
+        }
+        return false;
+    }
+};
+
+pub fn recordFileInspection(
+    allocator: std.mem.Allocator,
+    execution_context: ExecutionContext,
+    resolved_path: []const u8,
+    exists: bool,
+) !void {
+    if (execution_context.file_inspection_ledger) |ledger| {
+        try ledger.record(allocator, resolved_path, exists);
+    }
+}
+
+pub fn requireFileInspection(
+    execution_context: ExecutionContext,
+    resolved_path: []const u8,
+    exists: bool,
+) Error!void {
+    if (execution_context.file_inspection_ledger) |ledger| {
+        if (!ledger.has(resolved_path, exists)) return Error.FileNotInspected;
+    }
+}
+
+pub fn okEnvelope(allocator: std.mem.Allocator, tool_name: []const u8, content: []const u8) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"ok\":true,\"tool\":{f},\"content\":{f}}}",
+        .{
+            std.json.fmt(tool_name, .{}),
+            std.json.fmt(content, .{}),
+        },
+    );
+}
+
+pub const FileSnapshot = struct {
+    exists: bool,
+    len: usize,
+    sha256_hex: ?[]u8 = null,
+
+    pub fn deinit(self: FileSnapshot, allocator: std.mem.Allocator) void {
+        if (self.sha256_hex) |hash| allocator.free(hash);
+    }
+};
+
+pub const FileEffectAction = enum {
+    write_file,
+    append_file,
+    replace_in_file,
+};
+
+pub const FileEffectMetricName = enum {
+    bytes_written,
+    bytes_appended,
+    replacements,
+};
+
+pub const FileEffectMetric = struct {
+    name: FileEffectMetricName,
+    value: usize,
+};
+
+const file_effect_schema_version = "var1.tool_effect.v1";
+
+pub fn captureFileSnapshot(allocator: std.mem.Allocator, path: []const u8) !FileSnapshot {
+    const contents = fsutil.readTextAlloc(allocator, path) catch |err| switch (err) {
+        error.FileNotFound => return .{ .exists = false, .len = 0 },
+        else => return err,
+    };
+    defer allocator.free(contents);
+
+    return fileSnapshotFromContents(allocator, true, contents);
+}
+
+pub fn fileSnapshotFromContents(
+    allocator: std.mem.Allocator,
+    exists: bool,
+    contents: []const u8,
+) !FileSnapshot {
+    if (!exists) return .{ .exists = false, .len = 0 };
+
+    return .{
+        .exists = exists,
+        .len = contents.len,
+        .sha256_hex = try sha256HexAlloc(allocator, contents),
+    };
+}
+
+pub fn fileSnapshotFromParts(
+    allocator: std.mem.Allocator,
+    exists: bool,
+    len: usize,
+    parts: []const []const u8,
+) !FileSnapshot {
+    if (!exists) return .{ .exists = false, .len = 0 };
+
+    return .{
+        .exists = exists,
+        .len = len,
+        .sha256_hex = try sha256HexPartsAlloc(allocator, parts),
+    };
+}
+
+pub fn fileEffectEnvelope(
+    allocator: std.mem.Allocator,
+    tool_name: []const u8,
+    content: []const u8,
+    action: FileEffectAction,
+    requested_path: []const u8,
+    resolved_path: []const u8,
+    before: FileSnapshot,
+    after: FileSnapshot,
+    metric: FileEffectMetric,
+) ![]u8 {
+    const effect_content = try fileEffectContentAlloc(
+        allocator,
+        content,
+        action,
+        requested_path,
+        resolved_path,
+        before,
+        after,
+        metric,
+    );
+    defer allocator.free(effect_content);
+
+    var output = std.array_list.Managed(u8).init(allocator);
+    errdefer output.deinit();
+
+    const writer = output.writer();
+    try writer.writeAll("{\"ok\":true,\"tool\":");
+    try writer.print("{f}", .{std.json.fmt(tool_name, .{})});
+    try writer.writeAll(",\"content\":");
+    try writer.print("{f}", .{std.json.fmt(effect_content, .{})});
+    try writer.writeAll(",\"effect\":{\"schema_version\":");
+    try writer.print("{f}", .{std.json.fmt(file_effect_schema_version, .{})});
+    try writer.writeAll(",\"action\":");
+    try writer.print("{f}", .{std.json.fmt(fileEffectActionLabel(action), .{})});
+    try writer.writeAll(",\"path\":");
+    try writer.print("{f}", .{std.json.fmt(requested_path, .{})});
+    try writer.writeAll(",\"resolved_path\":");
+    try writer.print("{f}", .{std.json.fmt(resolved_path, .{})});
+    try writer.writeAll(",\"before_exists\":");
+    try writer.writeAll(if (before.exists) "true" else "false");
+    try writer.print(",\"before_bytes\":{d},\"after_bytes\":{d},", .{ before.len, after.len });
+    try writer.print("\"{s}\":{d},", .{ fileEffectMetricLabel(metric.name), metric.value });
+    try writer.writeAll("\"before_sha256\":");
+    try writeOptionalHash(writer, before.sha256_hex);
+    try writer.writeAll(",\"after_sha256\":");
+    try writeOptionalHash(writer, after.sha256_hex);
+    try writer.writeAll("}}");
+
+    return output.toOwnedSlice();
+}
+
+fn fileEffectContentAlloc(
+    allocator: std.mem.Allocator,
+    display_content: []const u8,
+    action: FileEffectAction,
+    requested_path: []const u8,
+    resolved_path: []const u8,
+    before: FileSnapshot,
+    after: FileSnapshot,
+    metric: FileEffectMetric,
+) ![]u8 {
+    var output = std.array_list.Managed(u8).init(allocator);
+    errdefer output.deinit();
+
+    const writer = output.writer();
+    try writer.print(
+        "EFFECT_SCHEMA {s}\nEFFECT_KEY effect\nEFFECT_ACTION {s}\nEFFECT_PATH {s}\nEFFECT_RESOLVED_PATH {s}\nEFFECT_BEFORE_EXISTS {s}\nEFFECT_BEFORE_BYTES {d}\nEFFECT_AFTER_BYTES {d}\n{s} {d}\n",
+        .{
+            file_effect_schema_version,
+            fileEffectActionLabel(action),
+            requested_path,
+            resolved_path,
+            if (before.exists) "true" else "false",
+            before.len,
+            after.len,
+            fileEffectMetricContentLabel(metric.name),
+            metric.value,
+        },
+    );
+    try writeEffectContentHash(writer, "EFFECT_BEFORE_SHA256", before.sha256_hex);
+    try writeEffectContentHash(writer, "EFFECT_AFTER_SHA256", after.sha256_hex);
+    try writer.writeAll("DISPLAY_OUTPUT\n");
+    try writer.writeAll(display_content);
+
+    return output.toOwnedSlice();
+}
+
+fn sha256HexAlloc(allocator: std.mem.Allocator, contents: []const u8) ![]u8 {
+    return sha256HexPartsAlloc(allocator, &.{contents});
+}
+
+fn sha256HexPartsAlloc(allocator: std.mem.Allocator, parts: []const []const u8) ![]u8 {
+    var digest: [32]u8 = undefined;
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    for (parts) |part| {
+        hasher.update(part);
+    }
+    hasher.final(&digest);
+
+    const hex_chars = "0123456789abcdef";
+    const hex = try allocator.alloc(u8, digest.len * 2);
+    for (digest, 0..) |byte, index| {
+        hex[index * 2] = hex_chars[@as(usize, byte >> 4)];
+        hex[index * 2 + 1] = hex_chars[@as(usize, byte & 0x0f)];
+    }
+    return hex;
+}
+
+fn fileEffectActionLabel(action: FileEffectAction) []const u8 {
+    return switch (action) {
+        .write_file => "write_file",
+        .append_file => "append_file",
+        .replace_in_file => "replace_in_file",
+    };
+}
+
+fn fileEffectMetricLabel(metric: FileEffectMetricName) []const u8 {
+    return switch (metric) {
+        .bytes_written => "bytes_written",
+        .bytes_appended => "bytes_appended",
+        .replacements => "replacements",
+    };
+}
+
+fn fileEffectMetricContentLabel(metric: FileEffectMetricName) []const u8 {
+    return switch (metric) {
+        .bytes_written => "EFFECT_BYTES_WRITTEN",
+        .bytes_appended => "EFFECT_BYTES_APPENDED",
+        .replacements => "EFFECT_REPLACEMENTS",
+    };
+}
+
+fn writeOptionalHash(writer: anytype, value: ?[]const u8) !void {
+    if (value) |hash| {
+        try writer.print("{f}", .{std.json.fmt(hash, .{})});
+    } else {
+        try writer.writeAll("null");
+    }
+}
+
+fn writeEffectContentHash(writer: anytype, label: []const u8, value: ?[]const u8) !void {
+    try writer.print("{s} ", .{label});
+    if (value) |hash| {
+        try writer.print("{s}\n", .{hash});
+    } else {
+        try writer.writeAll("null\n");
+    }
+}
+
+pub fn renderLineRange(
+    allocator: std.mem.Allocator,
+    content: []const u8,
+    start_line: ?usize,
+    end_line: ?usize,
+) ![]u8 {
+    var output = std.array_list.Managed(u8).init(allocator);
+    errdefer output.deinit();
+
+    const start = start_line orelse 1;
+    const finish = end_line orelse std.math.maxInt(usize);
+
+    var line_number: usize = 1;
+    var iter = std.mem.splitScalar(u8, content, '\n');
+    while (iter.next()) |line| : (line_number += 1) {
+        if (line_number < start or line_number > finish) continue;
+        try output.writer().print("{d}: {s}\n", .{ line_number, line });
+    }
+
+    return output.toOwnedSlice();
+}
+
+pub fn replaceText(
+    allocator: std.mem.Allocator,
+    input: []const u8,
+    old_text: []const u8,
+    new_text: []const u8,
+    replace_all: bool,
+) !struct { contents: []u8, replacements: usize } {
+    var output = std.array_list.Managed(u8).init(allocator);
+    errdefer output.deinit();
+
+    var cursor: usize = 0;
+    var replacements: usize = 0;
+
+    while (std.mem.indexOfPos(u8, input, cursor, old_text)) |match_index| {
+        try output.writer().writeAll(input[cursor..match_index]);
+        try output.writer().writeAll(new_text);
+        cursor = match_index + old_text.len;
+        replacements += 1;
+
+        if (!replace_all) break;
+    }
+
+    try output.writer().writeAll(input[cursor..]);
+
+    return .{
+        .contents = try output.toOwnedSlice(),
+        .replacements = replacements,
+    };
+}
+
+pub fn collectFiles(
+    allocator: std.mem.Allocator,
+    search_path: []const u8,
+    search_prefix: []const u8,
+    max_results: usize,
+) ![]u8 {
+    var output = std.array_list.Managed(u8).init(allocator);
+    errdefer output.deinit();
+
+    var dir = std.fs.openDirAbsolute(search_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.NotDir => {
+            const single_path = try normalizeToolPath(
+                allocator,
+                if (std.mem.eql(u8, search_prefix, ".")) std.fs.path.basename(search_path) else search_prefix,
+            );
+            defer allocator.free(single_path);
+
+            try output.writer().print("{s}\n", .{single_path});
+            return output.toOwnedSlice();
+        },
+        else => return err,
+    };
+    defer dir.close();
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    var line_count: usize = 0;
+    while (try walker.next()) |entry| {
+        if (entry.kind == .directory) continue;
+        if (line_count >= max_results) break;
+
+        const display_path = if (std.mem.eql(u8, search_prefix, "."))
+            try allocator.dupe(u8, entry.path)
+        else
+            try fsutil.join(allocator, &.{ search_prefix, entry.path });
+        defer allocator.free(display_path);
+
+        const normalized_path = try normalizeToolPath(allocator, display_path);
+        defer allocator.free(normalized_path);
+
+        try output.writer().print("{s}\n", .{normalized_path});
+        line_count += 1;
+    }
+
+    return output.toOwnedSlice();
+}
+
+fn normalizeToolPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const normalized = try allocator.dupe(u8, path);
+    if (std.fs.path.sep == '/') return normalized;
+
+    for (normalized) |*byte| {
+        if (byte.* == std.fs.path.sep) byte.* = '/';
+    }
+
+    return normalized;
+}
+
+test "file effect envelope exposes effect-first content and structured metadata" {
+    const allocator = std.testing.allocator;
+
+    const envelope = try fileEffectEnvelope(
+        allocator,
+        "write_file",
+        "PATH resolved.txt\nBYTES 5",
+        .write_file,
+        "requested.txt",
+        "resolved.txt",
+        .{ .exists = false, .len = 0 },
+        .{ .exists = true, .len = 5 },
+        .{ .name = .bytes_written, .value = 5 },
+    );
+    defer allocator.free(envelope);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, envelope, .{});
+    defer parsed.deinit();
+
+    const root = parsed.value.object;
+    const content_value = root.get("content") orelse return error.MissingContent;
+    try std.testing.expect(content_value == .string);
+    const content = content_value.string;
+
+    try std.testing.expect(std.mem.startsWith(u8, content, "EFFECT_SCHEMA var1.tool_effect.v1\n"));
+    try std.testing.expect(std.mem.indexOf(u8, content, "EFFECT_KEY effect\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "EFFECT_ACTION write_file\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "EFFECT_BYTES_WRITTEN 5\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "DISPLAY_OUTPUT\nPATH resolved.txt\nBYTES 5") != null);
+
+    const effect_value = root.get("effect") orelse return error.MissingEffect;
+    try std.testing.expect(effect_value == .object);
+    const effect = effect_value.object;
+    try std.testing.expectEqualStrings(file_effect_schema_version, effect.get("schema_version").?.string);
+    try std.testing.expectEqualStrings("write_file", effect.get("action").?.string);
+    try std.testing.expectEqual(@as(i64, 5), effect.get("bytes_written").?.integer);
+}
