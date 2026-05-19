@@ -44,6 +44,20 @@ fn execCtxWithProbe(
     };
 }
 
+fn execCtxWithShapeProbe(
+    workspace_root: []const u8,
+    shape_context: *IxShapeProbeContext,
+) VAR1.core.tool_runtime.ExecutionContext {
+    return .{
+        .workspace_root = workspace_root,
+        .command_probe = .{
+            .context = shape_context,
+            .commandExistsFn = mockCommandAvailable,
+            .commandMatchesFn = mockIxSearchShape,
+        },
+    };
+}
+
 fn mockCommandAvailable(
     _: ?*anyopaque,
     _: std.mem.Allocator,
@@ -58,6 +72,35 @@ fn mockCommandUnavailable(
     _: []const u8,
 ) anyerror!bool {
     return false;
+}
+
+const IxShapeProbeContext = struct {
+    available: bool,
+    calls: usize = 0,
+};
+
+fn mockIxSearchShape(
+    ctx_ptr: ?*anyopaque,
+    _: std.mem.Allocator,
+    command_name: []const u8,
+    argv: []const []const u8,
+    stdout_needles: []const []const u8,
+) anyerror!bool {
+    var ctx: *IxShapeProbeContext = @ptrCast(@alignCast(ctx_ptr.?));
+    ctx.calls += 1;
+
+    try std.testing.expectEqualStrings("iex", command_name);
+    try std.testing.expectEqual(@as(usize, 3), argv.len);
+    try std.testing.expectEqualStrings("iex", argv[0]);
+    try std.testing.expectEqualStrings("search", argv[1]);
+    try std.testing.expectEqualStrings("--help", argv[2]);
+    var found_json_flag = false;
+    for (stdout_needles) |needle| {
+        if (std.mem.eql(u8, needle, "--json")) found_json_flag = true;
+    }
+    try std.testing.expect(found_json_flag);
+
+    return ctx.available;
 }
 
 const MockCommandContext = struct {
@@ -1377,6 +1420,29 @@ test "catalog json reports available command-backed tools when dependency resolv
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"search_files\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"availability\":{\"status\":\"available\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"iex\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"available\":true") != null);
+}
+
+test "catalog json rejects an iex binary that does not expose the IX search contract" {
+    var shape_context = IxShapeProbeContext{ .available = false };
+    const catalog = try VAR1.core.tool_runtime.renderCatalogJson(std.testing.allocator, execCtxWithShapeProbe(".", &shape_context));
+    defer std.testing.allocator.free(catalog);
+
+    try std.testing.expectEqual(@as(usize, 1), shape_context.calls);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"search_files\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"availability\":{\"status\":\"unavailable\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"iex\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"available\":false") != null);
+}
+
+test "catalog json advertises search only after the iex search shape probe passes" {
+    var shape_context = IxShapeProbeContext{ .available = true };
+    const catalog = try VAR1.core.tool_runtime.renderCatalogJson(std.testing.allocator, execCtxWithShapeProbe(".", &shape_context));
+    defer std.testing.allocator.free(catalog);
+
+    try std.testing.expectEqual(@as(usize, 1), shape_context.calls);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"search_files\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"availability\":{\"status\":\"available\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"available\":true") != null);
 }
 

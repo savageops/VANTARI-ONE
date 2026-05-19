@@ -74,7 +74,7 @@ pub fn resolveAvailability(
 
     const dependency_available = switch (dependency.kind) {
         .none => true,
-        .external_command => try commandExists(allocator, probe, dependency.name),
+        .external_command => try commandDependencyAvailable(allocator, probe, tool_name, dependency),
     };
 
     return .{
@@ -124,13 +124,40 @@ pub fn renderAvailabilityJson(
     try writer.writeAll("]}");
 }
 
-fn commandExists(
+fn commandDependencyAvailable(
+    allocator: std.mem.Allocator,
+    probe: ?module.CommandProbe,
+    tool_name: []const u8,
+    dependency: module.Dependency,
+) !bool {
+    if (isIxSearchDependency(tool_name, dependency)) {
+        return ixSearchCommandAvailable(allocator, probe, dependency.name);
+    }
+
+    if (probe) |value| return value.commandExists(allocator, dependency.name);
+    return defaultCommandExists(allocator, dependency.name);
+}
+
+fn isIxSearchDependency(tool_name: []const u8, dependency: module.Dependency) bool {
+    return dependency.kind == .external_command and
+        std.mem.eql(u8, tool_name, search_files.definition.name) and
+        std.mem.eql(u8, dependency.name, "iex");
+}
+
+fn ixSearchCommandAvailable(
     allocator: std.mem.Allocator,
     probe: ?module.CommandProbe,
     command_name: []const u8,
 ) !bool {
-    if (probe) |value| return value.commandExists(allocator, command_name);
-    return defaultCommandExists(allocator, command_name);
+    const argv = &[_][]const u8{ command_name, "search", "--help" };
+    const stdout_needles = &[_][]const u8{
+        "Usage:",
+        "search [OPTIONS] <EXPR>",
+        "--json",
+    };
+
+    if (probe) |value| return value.commandMatches(allocator, command_name, argv, stdout_needles);
+    return defaultCommandMatches(allocator, argv, stdout_needles);
 }
 
 fn defaultCommandExists(allocator: std.mem.Allocator, command_name: []const u8) !bool {
@@ -150,6 +177,32 @@ fn defaultCommandExists(allocator: std.mem.Allocator, command_name: []const u8) 
         .Exited => |code| code == 0,
         else => false,
     };
+}
+
+fn defaultCommandMatches(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    stdout_needles: []const []const u8,
+) !bool {
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv,
+    }) catch return false;
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    const exited_zero = switch (result.term) {
+        .Exited => |code| code == 0,
+        else => false,
+    };
+    if (!exited_zero) return false;
+
+    for (stdout_needles) |needle| {
+        if (std.mem.indexOf(u8, result.stdout, needle) == null and
+            std.mem.indexOf(u8, result.stderr, needle) == null) return false;
+    }
+
+    return true;
 }
 
 pub fn statusLabel(status: AvailabilityStatus) []const u8 {

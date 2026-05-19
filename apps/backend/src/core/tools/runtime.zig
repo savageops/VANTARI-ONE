@@ -402,26 +402,109 @@ fn runCommandWithLimits(
         return runCommandWithLimitsWindows(allocator, cwd, argv, limits);
     }
 
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv,
-        .cwd = cwd,
-        .max_output_bytes = limits.max_output_bytes,
-    });
+    return runCommandWithLimitsPortable(allocator, cwd, argv, limits);
+}
 
-    const exit_code = switch (result.term) {
-        .Exited => |code| code,
-        else => return Error.CommandTerminated,
+fn runCommandWithLimitsPortable(
+    allocator: std.mem.Allocator,
+    cwd: []const u8,
+    argv: []const []const u8,
+    limits: module.CommandLimits,
+) anyerror!CommandOutput {
+    var child = std.process.Child.init(argv, allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    child.cwd = cwd;
+
+    var stdout: std.ArrayList(u8) = .empty;
+    defer stdout.deinit(allocator);
+    var stderr: std.ArrayList(u8) = .empty;
+    defer stderr.deinit(allocator);
+
+    try child.spawn();
+    var spawned = true;
+    errdefer if (spawned) {
+        _ = child.kill() catch {};
     };
+    try child.waitForSpawn();
 
-    try limits.output_callback.onOutput(.stdout, result.stdout, result.stdout.len >= limits.max_output_bytes);
-    try limits.output_callback.onOutput(.stderr, result.stderr, result.stderr.len >= limits.max_output_bytes);
+    const stdout_file = child.stdout.?;
+    child.stdout = null;
+    const stderr_file = child.stderr.?;
+    child.stderr = null;
+
+    var stdout_collector = PipeCollector{
+        .allocator = allocator,
+        .file = stdout_file,
+        .stream = .stdout,
+        .output = &stdout,
+        .max_output_bytes = limits.max_output_bytes,
+        .callback = limits.output_callback,
+    };
+    var stderr_collector = PipeCollector{
+        .allocator = allocator,
+        .file = stderr_file,
+        .stream = .stderr,
+        .output = &stderr,
+        .max_output_bytes = limits.max_output_bytes,
+        .callback = limits.output_callback,
+    };
+    const stdout_thread = try std.Thread.spawn(.{}, PipeCollector.run, .{&stdout_collector});
+    const stderr_thread = try std.Thread.spawn(.{}, PipeCollector.run, .{&stderr_collector});
+
+    const timeout_ns = @as(u64, @intCast(limits.timeout_ms)) * std.time.ns_per_ms;
+    const start_ns = std.time.nanoTimestamp();
+    var timed_out = false;
+    var term: std.process.Child.Term = undefined;
+    while (true) {
+        const wait_result = std.posix.waitpid(child.id, std.posix.W.NOHANG);
+        if (wait_result.pid == child.id) {
+            term = posixStatusToTerm(wait_result.status);
+            child.id = undefined;
+            spawned = false;
+            break;
+        }
+
+        const elapsed_ns = @as(u64, @intCast(std.time.nanoTimestamp() - start_ns));
+        if (elapsed_ns >= timeout_ns) {
+            timed_out = true;
+            term = try child.kill();
+            spawned = false;
+            break;
+        }
+
+        std.Thread.sleep(@min(timeout_ns - elapsed_ns, 10 * std.time.ns_per_ms));
+    }
+
+    stdout_thread.join();
+    stderr_thread.join();
+
+    if (stdout_collector.err) |err| return err;
+    if (stderr_collector.err) |err| return err;
+
+    const exit_code: i32 = switch (term) {
+        .Exited => |code| code,
+        else => if (timed_out) 1 else return Error.CommandTerminated,
+    };
 
     return .{
         .exit_code = exit_code,
-        .stdout = result.stdout,
-        .stderr = result.stderr,
+        .stdout = try stdout.toOwnedSlice(allocator),
+        .stderr = try stderr.toOwnedSlice(allocator),
+        .timed_out = timed_out,
     };
+}
+
+fn posixStatusToTerm(status: u32) std.process.Child.Term {
+    return if (std.posix.W.IFEXITED(status))
+        .{ .Exited = std.posix.W.EXITSTATUS(status) }
+    else if (std.posix.W.IFSIGNALED(status))
+        .{ .Signal = std.posix.W.TERMSIG(status) }
+    else if (std.posix.W.IFSTOPPED(status))
+        .{ .Stopped = std.posix.W.STOPSIG(status) }
+    else
+        .{ .Unknown = status };
 }
 
 const PipeCollector = struct {

@@ -25,6 +25,13 @@ pub const CommandProbe = struct {
         allocator: std.mem.Allocator,
         command_name: []const u8,
     ) anyerror!bool,
+    commandMatchesFn: ?*const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        command_name: []const u8,
+        argv: []const []const u8,
+        stdout_needles: []const []const u8,
+    ) anyerror!bool = null,
 
     pub fn commandExists(
         self: CommandProbe,
@@ -32,6 +39,19 @@ pub const CommandProbe = struct {
         command_name: []const u8,
     ) anyerror!bool {
         return self.commandExistsFn(self.context, allocator, command_name);
+    }
+
+    pub fn commandMatches(
+        self: CommandProbe,
+        allocator: std.mem.Allocator,
+        command_name: []const u8,
+        argv: []const []const u8,
+        stdout_needles: []const []const u8,
+    ) anyerror!bool {
+        if (self.commandMatchesFn) |matches| {
+            return matches(self.context, allocator, command_name, argv, stdout_needles);
+        }
+        return self.commandExists(allocator, command_name);
     }
 };
 
