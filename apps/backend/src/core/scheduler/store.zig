@@ -9,6 +9,7 @@ pub const Error = error{
     InvalidMisfirePolicy,
     InvalidTargetKind,
     ScheduleNotFound,
+    LeaseUnavailable,
 };
 
 const ParsedJob = struct {
@@ -26,6 +27,12 @@ const ParsedJob = struct {
     created_at_ms: i64,
     updated_at_ms: i64,
     revision: u64 = 1,
+};
+
+const ParsedLease = struct {
+    owner_id: []const u8,
+    acquired_at_ms: i64,
+    expires_at_ms: i64,
 };
 
 pub const CreateOptions = struct {
@@ -190,10 +197,97 @@ pub fn setStatus(allocator: std.mem.Allocator, workspace_root: []const u8, job_i
     const event_type = switch (status) {
         .active => "schedule_resumed",
         .paused => "schedule_paused",
+        .completed => "schedule_completed",
         .deleted => "schedule_deleted",
     };
     try appendEvent(allocator, workspace_root, .{ .event_type = event_type, .job_id = job.id, .timestamp_ms = job.updated_at_ms, .revision = job.revision });
     return job;
+}
+
+pub fn dueJobs(allocator: std.mem.Allocator, workspace_root: []const u8, now_ms: i64, limit: usize) ![]types.ScheduleJob {
+    const jobs = try listJobs(allocator, workspace_root, false);
+    defer {
+        for (jobs) |job| job.deinit(allocator);
+        allocator.free(jobs);
+    }
+
+    var due: std.ArrayList(types.ScheduleJob) = .empty;
+    errdefer {
+        for (due.items) |job| job.deinit(allocator);
+        due.deinit(allocator);
+    }
+
+    for (jobs) |job| {
+        if (due.items.len >= limit) break;
+        if (job.status != .active or job.next_due_at_ms > now_ms) continue;
+        try due.append(allocator, try cloneJob(allocator, job));
+    }
+
+    return due.toOwnedSlice(allocator);
+}
+
+pub fn reserveDueAttempt(allocator: std.mem.Allocator, workspace_root: []const u8, job_id: []const u8, now_ms: i64) !types.ScheduleAttempt {
+    var job = try readJob(allocator, workspace_root, job_id);
+    defer job.deinit(allocator);
+    if (job.status != .active or job.next_due_at_ms > now_ms) return Error.ScheduleNotFound;
+
+    const attempt = try reserveAttemptForJob(allocator, workspace_root, job, now_ms);
+    try advanceAfterReservation(allocator, workspace_root, &job, now_ms);
+    try appendEvent(allocator, workspace_root, .{ .event_type = "schedule_due_reserved", .job_id = job.id, .timestamp_ms = now_ms, .revision = job.revision });
+    return attempt;
+}
+
+pub fn completeAttempt(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    attempt: types.ScheduleAttempt,
+    status: types.AttemptStatus,
+    finished_at_ms: i64,
+) !void {
+    var completed = types.ScheduleAttempt{
+        .attempt_id = try allocator.dupe(u8, attempt.attempt_id),
+        .job_id = try allocator.dupe(u8, attempt.job_id),
+        .idempotency_key = try allocator.dupe(u8, attempt.idempotency_key),
+        .due_at_ms = attempt.due_at_ms,
+        .started_at_ms = attempt.started_at_ms,
+        .finished_at_ms = finished_at_ms,
+        .status = status,
+    };
+    defer completed.deinit(allocator);
+    try appendAttempt(allocator, workspace_root, completed);
+    try appendEvent(allocator, workspace_root, .{
+        .event_type = if (status == .completed) "schedule_attempt_completed" else "schedule_attempt_failed",
+        .job_id = attempt.job_id,
+        .timestamp_ms = finished_at_ms,
+        .revision = 0,
+    });
+}
+
+pub fn tryAcquireLease(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    owner_id: []const u8,
+    now_ms: i64,
+    ttl_ms: i64,
+) !types.SchedulerLease {
+    if (ttl_ms <= 0) return Error.InvalidSchedule;
+    const existing = readLease(allocator, workspace_root) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    defer if (existing) |lease| lease.deinit(allocator);
+
+    if (existing) |lease| {
+        if (lease.expires_at_ms > now_ms and !std.mem.eql(u8, lease.owner_id, owner_id)) return Error.LeaseUnavailable;
+    }
+
+    const lease = types.SchedulerLease{
+        .owner_id = try allocator.dupe(u8, owner_id),
+        .acquired_at_ms = now_ms,
+        .expires_at_ms = now_ms + ttl_ms,
+    };
+    try writeLease(allocator, workspace_root, lease);
+    return lease;
 }
 
 pub fn reserveRunNow(allocator: std.mem.Allocator, workspace_root: []const u8, job_id: []const u8) !types.ScheduleAttempt {
@@ -201,7 +295,10 @@ pub fn reserveRunNow(allocator: std.mem.Allocator, workspace_root: []const u8, j
     defer job.deinit(allocator);
     if (job.status == .deleted) return Error.ScheduleNotFound;
 
-    const now = std.time.milliTimestamp();
+    return reserveAttemptForJob(allocator, workspace_root, job, std.time.milliTimestamp());
+}
+
+fn reserveAttemptForJob(allocator: std.mem.Allocator, workspace_root: []const u8, job: types.ScheduleJob, now: i64) !types.ScheduleAttempt {
     const attempt_id = try std.fmt.allocPrint(allocator, "attempt-{d}-{x}", .{ now, std.crypto.random.int(u64) });
     errdefer allocator.free(attempt_id);
     const owned_job_id = try allocator.dupe(u8, job.id);
@@ -269,6 +366,66 @@ fn appendAttempt(allocator: std.mem.Allocator, workspace_root: []const u8, attem
     const json = try std.fmt.allocPrint(allocator, "{f}\n", .{std.json.fmt(payload, .{})});
     defer allocator.free(json);
     try fsutil.appendText(path, json);
+}
+
+fn advanceAfterReservation(allocator: std.mem.Allocator, workspace_root: []const u8, job: *types.ScheduleJob, now_ms: i64) !void {
+    switch (job.schedule_kind) {
+        .once => job.status = .completed,
+        .interval => {
+            const interval_ms = job.interval_ms orelse return Error.InvalidSchedule;
+            var next_due = job.next_due_at_ms + interval_ms;
+            if (job.misfire_policy == .skip) {
+                while (next_due <= now_ms) next_due += interval_ms;
+            } else if (job.max_catch_up <= 1 and next_due <= now_ms) {
+                next_due = now_ms + interval_ms;
+            }
+            job.next_due_at_ms = next_due;
+        },
+    }
+    job.revision += 1;
+    job.updated_at_ms = now_ms;
+    try writeJob(allocator, workspace_root, job.*);
+}
+
+fn readLease(allocator: std.mem.Allocator, workspace_root: []const u8) !types.SchedulerLease {
+    const path = try schedulesPath(allocator, workspace_root, "lease.json");
+    defer allocator.free(path);
+    const content = try fsutil.readTextAlloc(allocator, path);
+    defer allocator.free(content);
+    var parsed = try std.json.parseFromSlice(ParsedLease, allocator, content, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    return .{
+        .owner_id = try allocator.dupe(u8, parsed.value.owner_id),
+        .acquired_at_ms = parsed.value.acquired_at_ms,
+        .expires_at_ms = parsed.value.expires_at_ms,
+    };
+}
+
+fn writeLease(allocator: std.mem.Allocator, workspace_root: []const u8, lease: types.SchedulerLease) !void {
+    const path = try schedulesPath(allocator, workspace_root, "lease.json");
+    defer allocator.free(path);
+    const json = try std.fmt.allocPrint(allocator, "{f}\n", .{std.json.fmt(lease, .{ .whitespace = .indent_2 })});
+    defer allocator.free(json);
+    try fsutil.writeText(path, json);
+}
+
+fn cloneJob(allocator: std.mem.Allocator, job: types.ScheduleJob) !types.ScheduleJob {
+    return .{
+        .id = try allocator.dupe(u8, job.id),
+        .title = try allocator.dupe(u8, job.title),
+        .target_kind = job.target_kind,
+        .target = try allocator.dupe(u8, job.target),
+        .schedule_kind = job.schedule_kind,
+        .due_at_ms = job.due_at_ms,
+        .interval_ms = job.interval_ms,
+        .next_due_at_ms = job.next_due_at_ms,
+        .status = job.status,
+        .misfire_policy = job.misfire_policy,
+        .max_catch_up = job.max_catch_up,
+        .created_at_ms = job.created_at_ms,
+        .updated_at_ms = job.updated_at_ms,
+        .revision = job.revision,
+    };
 }
 
 fn validateOptions(kind: types.ScheduleKind, due_at_ms: i64, interval_ms: ?i64, title: []const u8, target: []const u8) !void {

@@ -25,6 +25,12 @@ const ToolsCliOptions = struct {
     json_output: bool = false,
 };
 
+const ScheduleCliOptions = struct {
+    json_output: bool = false,
+    include_deleted: bool = false,
+    job_id: ?[]const u8 = null,
+};
+
 const WorkspaceCliAction = union(enum) {
     show,
     set: []const u8,
@@ -57,6 +63,11 @@ const ParsedServeArguments = struct {
 
 const ParsedToolsArguments = struct {
     options: ToolsCliOptions = .{},
+    help_requested: bool = false,
+};
+
+const ParsedScheduleArguments = struct {
+    options: ScheduleCliOptions = .{},
     help_requested: bool = false,
 };
 
@@ -118,11 +129,20 @@ const ParsedHealthResult = struct {
     auth_provider: ?[]const u8 = null,
     subscription_plan_label: ?[]const u8 = null,
     subscription_status: ?[]const u8 = null,
+    scheduler_supervisor: bool = false,
 };
 
 const ParsedToolsListResult = struct {
     format: []const u8,
     output: []const u8,
+};
+
+const ParsedScheduleListResult = struct {
+    schedules: []protocol_types.ScheduleSummary = &.{},
+};
+
+const ParsedScheduleGetResult = struct {
+    schedule: protocol_types.ScheduleSummary,
 };
 
 pub const root_help_text =
@@ -140,6 +160,7 @@ pub const root_help_text =
     \\  c        Show recent canonical sessions for this workspace.
     \\  continue Alias for c.
     \\  health   Report local runtime readiness through the kernel protocol.
+    \\  schedule List or inspect durable scheduler jobs through the kernel protocol.
     \\  workspace Show or set an explicit installed-client workspace override.
     \\  serve    Start the HTTP bridge for /rpc, /events, and /api/health.
     \\  tools    Print the built-in tool catalog and schemas through the kernel protocol.
@@ -157,6 +178,7 @@ pub const root_help_text =
     \\  VAR1 run --prompt-file .\prompt.txt --json
     \\  VAR1 run --session-id session-1776778021956-42e781c4c8b4efb8
     \\  VAR1 health
+    \\  VAR1 schedule list
     \\  VAR1 serve --host 127.0.0.1 --port 4310
     \\  VAR1 tools --json
     \\
@@ -167,6 +189,21 @@ pub const root_help_text =
     \\  Workspace resolution checks VANTARI_WORKSPACE, current directory ancestors, then explicit installed override.
     \\  vantari -c opens the TUI on the most recently updated session in the current workspace.
     \\  Use VAR1 help <command> or VAR1 <command> --help for command-specific details.
+    \\
+;
+
+pub const schedule_help_text =
+    \\Usage:
+    \\  VAR1 schedule list [--json] [--include-deleted]
+    \\  VAR1 schedule get <job-id> [--json]
+    \\
+    \\Flags:
+    \\  --json                    Emit the canonical schedule/get or schedule/list result.
+    \\  --include-deleted         Include soft-deleted jobs in list output.
+    \\  -h, --help                Print help for the schedule command.
+    \\
+    \\Behavior:
+    \\  schedule is a protocol-backed read model over .var/schedules. Mutations remain agent/tool-owned through schedule_job.
     \\
 ;
 
@@ -391,6 +428,22 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
         const workspace_root = try resolveWorkspaceRoot(allocator);
         defer allocator.free(workspace_root);
         try executeHealthViaKernel(allocator, workspace_root, parsed.options);
+        return;
+    }
+
+    if (std.mem.eql(u8, command, "schedule")) {
+        const parsed = parseScheduleArguments(iter) catch |err| {
+            try printInvalidArguments("schedule", schedule_help_text);
+            return err;
+        };
+        if (parsed.help_requested) {
+            try writeStdout(schedule_help_text);
+            return;
+        }
+        const workspace_root = try resolveWorkspaceRoot(allocator);
+        defer allocator.free(workspace_root);
+        try ensureKernelConfigAvailable(allocator, workspace_root);
+        try executeScheduleViaKernel(allocator, workspace_root, parsed.options);
         return;
     }
 
@@ -682,7 +735,7 @@ fn executeHealthViaKernel(allocator: std.mem.Allocator, workspace_root: []const 
 
     const text_payload = try std.fmt.allocPrint(
         allocator,
-        "VAR1 health\nstatus: ready\nmodel: {s}\nworkspace_root: {s}\nbase_url: {s}\nauth_provider: {s}\nsubscription_plan: {s}\nsubscription_status: {s}\n",
+        "VAR1 health\nstatus: ready\nmodel: {s}\nworkspace_root: {s}\nbase_url: {s}\nauth_provider: {s}\nsubscription_plan: {s}\nsubscription_status: {s}\nscheduler_supervisor: {s}\n",
         .{
             parsed.value.model,
             parsed.value.workspace_root,
@@ -690,6 +743,7 @@ fn executeHealthViaKernel(allocator: std.mem.Allocator, workspace_root: []const 
             parsed.value.auth_provider orelse "unknown",
             parsed.value.subscription_plan_label orelse "unknown",
             parsed.value.subscription_status orelse "unknown",
+            if (parsed.value.scheduler_supervisor) "running" else "unavailable",
         },
     );
     defer allocator.free(text_payload);
@@ -717,6 +771,62 @@ fn executeToolsViaKernel(allocator: std.mem.Allocator, workspace_root: []const u
 
     try writeStdout(parsed.value.output);
     if (options.json_output) try writeStdout("\n");
+}
+
+fn executeScheduleViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8, options: ScheduleCliOptions) !void {
+    var client = try stdio_rpc.LocalClient.initInWorkspace(allocator, workspace_root);
+    defer client.deinit();
+
+    if (options.job_id) |job_id| {
+        const params_json = try renderJsonAlloc(allocator, .{ .job_id = job_id });
+        defer allocator.free(params_json);
+        const call = try callKernelOrExit(allocator, &client, protocol_types.methods.schedule_get, params_json);
+        defer call.deinit(allocator);
+        const result_json = try expectKernelResult(allocator, call);
+        defer allocator.free(result_json);
+        if (options.json_output) {
+            try writeStdout(result_json);
+            try writeStdout("\n");
+            return;
+        }
+        var parsed = try std.json.parseFromSlice(ParsedScheduleGetResult, allocator, result_json, .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        try writeScheduleSummary(parsed.value.schedule);
+        return;
+    }
+
+    const params_json = try renderJsonAlloc(allocator, .{ .include_deleted = options.include_deleted });
+    defer allocator.free(params_json);
+    const call = try callKernelOrExit(allocator, &client, protocol_types.methods.schedule_list, params_json);
+    defer call.deinit(allocator);
+    const result_json = try expectKernelResult(allocator, call);
+    defer allocator.free(result_json);
+    if (options.json_output) {
+        try writeStdout(result_json);
+        try writeStdout("\n");
+        return;
+    }
+    var parsed = try std.json.parseFromSlice(ParsedScheduleListResult, allocator, result_json, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    try writeStdout("VAR1 schedules\n");
+    for (parsed.value.schedules) |schedule| try writeScheduleSummary(schedule);
+}
+
+fn writeScheduleSummary(schedule: protocol_types.ScheduleSummary) !void {
+    var stdout_buffer: [512]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const writer = &stdout_writer.interface;
+    try writer.print("{s}  {s}  {s}  next_due_ms={d}  rev={d}\n", .{
+        schedule.id,
+        schedule.status,
+        schedule.schedule_kind,
+        schedule.next_due_at_ms,
+        schedule.revision,
+    });
+    try writer.writeAll("   ");
+    try writeTruncated(writer, schedule.title, 96);
+    try writer.writeAll("\n");
+    try writer.flush();
 }
 
 fn ensureKernelConfigAvailable(allocator: std.mem.Allocator, workspace_root: []const u8) !void {
@@ -1081,6 +1191,7 @@ pub fn helpText(command: ?[]const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "sessions")) return sessions_help_text;
     if (std.mem.eql(u8, name, "workspace")) return workspace_help_text;
     if (std.mem.eql(u8, name, "health")) return health_help_text;
+    if (std.mem.eql(u8, name, "schedule")) return schedule_help_text;
     if (std.mem.eql(u8, name, "serve")) return serve_help_text;
     if (std.mem.eql(u8, name, "tools")) return tools_help_text;
     if (std.mem.eql(u8, name, "help")) return root_help_text;
@@ -1221,6 +1332,41 @@ fn parseServeArguments(iter: *std.process.ArgIterator) !ParsedServeArguments {
     }
 
     return parsed;
+}
+
+fn parseScheduleArguments(iter: *std.process.ArgIterator) !ParsedScheduleArguments {
+    var parsed = ParsedScheduleArguments{};
+    const action = iter.next() orelse return error.InvalidArgs;
+    if (isHelpFlag(action)) {
+        parsed.help_requested = true;
+        return parsed;
+    }
+    if (std.mem.eql(u8, action, "list")) {
+        while (iter.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--json")) {
+                parsed.options.json_output = true;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--include-deleted")) {
+                parsed.options.include_deleted = true;
+                continue;
+            }
+            return error.InvalidArgs;
+        }
+        return parsed;
+    }
+    if (std.mem.eql(u8, action, "get")) {
+        parsed.options.job_id = iter.next() orelse return error.InvalidArgs;
+        while (iter.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--json")) {
+                parsed.options.json_output = true;
+                continue;
+            }
+            return error.InvalidArgs;
+        }
+        return parsed;
+    }
+    return error.InvalidArgs;
 }
 
 fn parseToolsArguments(iter: *std.process.ArgIterator) !ParsedToolsArguments {

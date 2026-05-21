@@ -136,6 +136,7 @@ pub const HealthGetResult = struct {
     auth_provider: ?[]const u8 = null,
     subscription_plan_label: ?[]const u8 = null,
     subscription_status: ?[]const u8 = null,
+    scheduler_supervisor: bool = false,
 };
 
 pub const ToolsListResult = struct {

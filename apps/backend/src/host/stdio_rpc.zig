@@ -120,8 +120,15 @@ const Server = struct {
     stdout_file: std.fs.File,
     write_mutex: std.Thread.Mutex = .{},
     runtime: Runtime = .{},
+    scheduler_service: ?scheduler.Service = null,
+    scheduler_thread: ?std.Thread = null,
 
     fn deinit(self: *Server) void {
+        if (self.scheduler_service) |*service| {
+            service.requestStop();
+            if (self.scheduler_thread) |thread| thread.join();
+            service.deinit();
+        }
         self.runtime.deinit(self.allocator);
     }
 
@@ -303,6 +310,8 @@ pub fn serveKernel(
         .stdout_file = std.fs.File.stdout(),
     };
     defer server.deinit();
+    server.scheduler_service = try scheduler.Service.init(allocator, config, transport);
+    server.scheduler_thread = try std.Thread.spawn(.{}, runSchedulerService, .{&server.scheduler_service.?});
 
     const stdin_file = std.fs.File.stdin();
     while (true) {
@@ -317,6 +326,10 @@ pub fn serveKernel(
         const thread = try std.Thread.spawn(.{}, processRequestWorker, .{job});
         thread.detach();
     }
+}
+
+fn runSchedulerService(service: *scheduler.Service) void {
+    service.run();
 }
 
 pub const LocalClient = struct {
@@ -561,7 +574,7 @@ fn dispatch(
         return handleEventsSubscribe(server.allocator);
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.health_get)) {
-        return handleHealthGet(server.allocator, server.config);
+        return handleHealthGet(server);
     }
 
     return Error.MethodNotFound;
@@ -1009,15 +1022,16 @@ fn handleEventsSubscribe(allocator: std.mem.Allocator) ![]u8 {
     });
 }
 
-fn handleHealthGet(allocator: std.mem.Allocator, config: *const types.Config) ![]u8 {
-    return renderJsonAlloc(allocator, protocol_types.HealthGetResult{
+fn handleHealthGet(server: *Server) ![]u8 {
+    return renderJsonAlloc(server.allocator, protocol_types.HealthGetResult{
         .ok = true,
-        .model = config.openai_model,
-        .workspace_root = config.workspace_root,
-        .base_url = config.openai_base_url,
-        .auth_provider = config.auth_provider,
-        .subscription_plan_label = config.subscription_plan_label,
-        .subscription_status = config.subscription_status,
+        .model = server.config.openai_model,
+        .workspace_root = server.config.workspace_root,
+        .base_url = server.config.openai_base_url,
+        .auth_provider = server.config.auth_provider,
+        .subscription_plan_label = server.config.subscription_plan_label,
+        .subscription_status = server.config.subscription_status,
+        .scheduler_supervisor = server.scheduler_thread != null,
     });
 }
 

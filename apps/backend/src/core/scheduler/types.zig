@@ -3,12 +3,14 @@ const std = @import("std");
 pub const JobStatus = enum {
     active,
     paused,
+    completed,
     deleted,
 
     pub fn label(self: JobStatus) []const u8 {
         return switch (self) {
             .active => "active",
             .paused => "paused",
+            .completed => "completed",
             .deleted => "deleted",
         };
     }
@@ -110,9 +112,20 @@ pub const ScheduleAttempt = struct {
     }
 };
 
+pub const SchedulerLease = struct {
+    owner_id: []u8,
+    acquired_at_ms: i64,
+    expires_at_ms: i64,
+
+    pub fn deinit(self: SchedulerLease, allocator: std.mem.Allocator) void {
+        allocator.free(self.owner_id);
+    }
+};
+
 pub fn parseJobStatus(value: []const u8) !JobStatus {
     if (std.mem.eql(u8, value, "active")) return .active;
     if (std.mem.eql(u8, value, "paused")) return .paused;
+    if (std.mem.eql(u8, value, "completed")) return .completed;
     if (std.mem.eql(u8, value, "deleted")) return .deleted;
     return error.InvalidScheduleStatus;
 }
