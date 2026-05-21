@@ -5,6 +5,7 @@
 
 # Runtime, research, and operator-local state
 **/.docs/
+**/.ix/
 **/.refs/
 **/.var/
 **/.untrack/
