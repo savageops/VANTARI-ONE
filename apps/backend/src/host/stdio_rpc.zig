@@ -3,6 +3,7 @@ const context_compactor = @import("../core/context/compactor.zig");
 const loop = @import("../core/executor/loop.zig");
 const protocol_types = @import("../shared/protocol/types.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
+const scheduler = @import("../core/scheduler/index.zig");
 const store = @import("../core/sessions/store.zig");
 const tools = @import("../core/tools/runtime.zig");
 const types = @import("../shared/types.zig");
@@ -13,6 +14,7 @@ pub const Error = error{
     MethodNotFound,
     ManualCompactionDisabled,
     SessionNotFound,
+    ScheduleNotFound,
     SessionRunning,
     ExecutionFailed,
     InvalidFrame,
@@ -505,6 +507,7 @@ fn processRequest(server: *Server, request_payload: []const u8) !?[]u8 {
         Error.InvalidParams => return errorResponseOrNull(server.allocator, id, -32602, "Invalid params"),
         Error.ManualCompactionDisabled => return errorResponseOrNull(server.allocator, id, -32003, "Manual compaction disabled"),
         Error.SessionNotFound => return errorResponseOrNull(server.allocator, id, -32001, "Session not found"),
+        Error.ScheduleNotFound => return errorResponseOrNull(server.allocator, id, -32004, "Schedule not found"),
         Error.SessionRunning => return errorResponseOrNull(server.allocator, id, -32002, "Session already running"),
         Error.ExecutionFailed => return errorResponseOrNull(server.allocator, id, -32000, "Execution failed"),
         else => return errorResponseOrNull(server.allocator, id, -32603, "Internal error"),
@@ -544,6 +547,12 @@ fn dispatch(
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.session_list)) {
         return handleSessionList(server);
+    }
+    if (std.mem.eql(u8, method_name, protocol_types.methods.schedule_get)) {
+        return handleScheduleGet(server, params);
+    }
+    if (std.mem.eql(u8, method_name, protocol_types.methods.schedule_list)) {
+        return handleScheduleList(server, params);
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.tools_list)) {
         return handleToolsList(server, params);
@@ -898,6 +907,72 @@ fn handleSessionList(server: *Server) ![]u8 {
     return renderJsonAlloc(server.allocator, protocol_types.SessionListResult{
         .sessions = summaries,
     });
+}
+
+fn handleScheduleGet(server: *Server, params: ?std.json.Value) ![]u8 {
+    const Args = struct {
+        job_id: []const u8,
+    };
+
+    var parsed = try parseParams(Args, server.allocator, params);
+    defer parsed.deinit();
+
+    var job = scheduler.readJob(server.allocator, server.config.workspace_root, parsed.value.job_id) catch |err| switch (err) {
+        scheduler.store.Error.ScheduleNotFound => return Error.ScheduleNotFound,
+        else => return err,
+    };
+    defer job.deinit(server.allocator);
+
+    return renderJsonAlloc(server.allocator, protocol_types.ScheduleGetResult{
+        .schedule = makeScheduleSummary(job),
+    });
+}
+
+fn handleScheduleList(server: *Server, params: ?std.json.Value) ![]u8 {
+    const Args = struct {
+        include_deleted: ?bool = null,
+    };
+
+    var include_deleted = false;
+    if (params) |_| {
+        var parsed = try parseParams(Args, server.allocator, params);
+        defer parsed.deinit();
+        include_deleted = parsed.value.include_deleted orelse false;
+    }
+
+    const jobs = try scheduler.listJobs(server.allocator, server.config.workspace_root, include_deleted);
+    defer {
+        for (jobs) |job| job.deinit(server.allocator);
+        server.allocator.free(jobs);
+    }
+
+    var summaries = try server.allocator.alloc(protocol_types.ScheduleSummary, jobs.len);
+    defer server.allocator.free(summaries);
+    for (jobs, 0..) |job, index| {
+        summaries[index] = makeScheduleSummary(job);
+    }
+
+    return renderJsonAlloc(server.allocator, protocol_types.ScheduleListResult{
+        .schedules = summaries,
+    });
+}
+
+fn makeScheduleSummary(job: scheduler.types.ScheduleJob) protocol_types.ScheduleSummary {
+    return .{
+        .id = job.id,
+        .title = job.title,
+        .target_kind = job.target_kind.label(),
+        .schedule_kind = job.schedule_kind.label(),
+        .due_at_ms = job.due_at_ms,
+        .interval_ms = job.interval_ms,
+        .next_due_at_ms = job.next_due_at_ms,
+        .status = job.status.label(),
+        .misfire_policy = job.misfire_policy.label(),
+        .max_catch_up = job.max_catch_up,
+        .revision = job.revision,
+        .created_at_ms = job.created_at_ms,
+        .updated_at_ms = job.updated_at_ms,
+    };
 }
 
 fn handleToolsList(server: *Server, params: ?std.json.Value) ![]u8 {

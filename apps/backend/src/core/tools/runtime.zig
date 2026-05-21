@@ -12,6 +12,7 @@ const write_file = @import("builtin/write_file.zig");
 const append_file = @import("builtin/append_file.zig");
 const replace_in_file = @import("builtin/replace_in_file.zig");
 const shell_exec = @import("builtin/shell_exec.zig");
+const schedule_job = @import("builtin/schedule_job.zig");
 pub const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
 
@@ -228,6 +229,10 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
         return "shell_exec reached timeout_ms and terminated the process. Retry only with a smaller command scope or an explicitly larger timeout_ms within the declared maximum.";
     }
 
+    if (std.mem.eql(u8, tool_name, "schedule_job") and std.mem.eql(u8, error_name, "ScheduleNotFound")) {
+        return "schedule_job could not find an active schedule for job_id. Use action=list or include_deleted=true to inspect durable scheduler state before retrying.";
+    }
+
     if (std.mem.eql(u8, error_name, "CommandFailed") and std.mem.eql(u8, tool_name, "search_files")) {
         return "search_files failed. Confirm the search path with list_files and retry with a smaller, valid workspace-relative target, or switch to read_file if you already know the file.";
     }
@@ -368,6 +373,9 @@ pub fn executeWithRunner(
     }
     if (std.mem.eql(u8, tool_call.name, "shell_exec")) {
         return shell_exec.executeToolCall(allocator, execution_context, tool_call.arguments_json, runner, tool_call.id);
+    }
+    if (std.mem.eql(u8, tool_call.name, "schedule_job")) {
+        return schedule_job.execute(allocator, execution_context, tool_call.arguments_json);
     }
     if (std.mem.eql(u8, tool_call.name, "skill_info")) {
         return skills.execute(allocator, tool_call.arguments_json);

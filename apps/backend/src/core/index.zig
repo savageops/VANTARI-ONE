@@ -17,6 +17,7 @@ pub const plugins = @import("plugins/index.zig");
 pub const prompts = @import("prompts/index.zig");
 pub const protocol_types = @import("../shared/protocol/types.zig");
 pub const provider_runtime = @import("providers/openai_compatible.zig");
+pub const scheduler = @import("scheduler/index.zig");
 pub const session_store = @import("sessions/store.zig");
 pub const tools = @import("tools/index.zig");
 pub const tool_runtime = tools.runtime;
@@ -35,6 +36,7 @@ test "core namespace exposes executor and store" {
     try std.testing.expect(@hasDecl(@This(), "context"));
     try std.testing.expect(@hasDecl(@This(), "evaluation"));
     try std.testing.expect(@hasDecl(@This(), "memory"));
+    try std.testing.expect(@hasDecl(@This(), "scheduler"));
     try std.testing.expect(@hasDecl(@This(), "tools"));
     try std.testing.expect(@hasDecl(@This(), "plugins"));
     try std.testing.expect(@hasDecl(@This(), "prompts"));

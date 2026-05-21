@@ -10,6 +10,7 @@ const write_file = @import("builtin/write_file.zig");
 const append_file = @import("builtin/append_file.zig");
 const replace_in_file = @import("builtin/replace_in_file.zig");
 const shell_exec = @import("builtin/shell_exec.zig");
+const schedule_job = @import("builtin/schedule_job.zig");
 const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
 
@@ -38,6 +39,7 @@ pub const file_tool_definitions = [_]types.ToolDefinition{
     append_file.definition,
     replace_in_file.definition,
     shell_exec.definition,
+    schedule_job.definition,
     skills.definition,
 };
 
@@ -53,6 +55,7 @@ const availability_entries = [_]AvailabilityEntry{
     .{ .name = append_file.definition.name, .spec = append_file.availability },
     .{ .name = replace_in_file.definition.name, .spec = replace_in_file.availability },
     .{ .name = shell_exec.definition.name, .spec = shell_exec.availability },
+    .{ .name = schedule_job.definition.name, .spec = schedule_job.availability },
     .{ .name = skills.definition.name, .spec = skills.availability },
 };
 

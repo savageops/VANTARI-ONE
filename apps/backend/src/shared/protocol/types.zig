@@ -14,6 +14,8 @@ pub const methods = struct {
     pub const session_cancel = "session/cancel";
     pub const session_get = "session/get";
     pub const session_list = "session/list";
+    pub const schedule_get = "schedule/get";
+    pub const schedule_list = "schedule/list";
     pub const tools_list = "tools/list";
     pub const events_subscribe = "events/subscribe";
     pub const health_get = "health/get";
@@ -27,6 +29,8 @@ pub const Capabilities = struct {
     session_cancel: bool = true,
     session_get: bool = true,
     session_list: bool = true,
+    schedule_get: bool = true,
+    schedule_list: bool = true,
     tools_list: bool = true,
     events_subscribe: bool = true,
     health_get: bool = true,
@@ -95,6 +99,30 @@ pub const SessionCancelResult = struct {
     cancellation_requested: bool,
 };
 
+pub const ScheduleSummary = struct {
+    id: []const u8,
+    title: []const u8,
+    target_kind: []const u8,
+    schedule_kind: []const u8,
+    due_at_ms: i64,
+    interval_ms: ?i64 = null,
+    next_due_at_ms: i64,
+    status: []const u8,
+    misfire_policy: []const u8,
+    max_catch_up: u16,
+    revision: u64,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+};
+
+pub const ScheduleGetResult = struct {
+    schedule: ScheduleSummary,
+};
+
+pub const ScheduleListResult = struct {
+    schedules: []const ScheduleSummary,
+};
+
 pub const EventsSubscribeResult = struct {
     subscribed: bool,
     notification_method: []const u8,
@@ -129,6 +157,8 @@ test "protocol capabilities advertise the full session surface" {
     try std.testing.expect(capabilities.session_cancel);
     try std.testing.expect(capabilities.session_get);
     try std.testing.expect(capabilities.session_list);
+    try std.testing.expect(capabilities.schedule_get);
+    try std.testing.expect(capabilities.schedule_list);
     try std.testing.expect(capabilities.tools_list);
     try std.testing.expect(capabilities.events_subscribe);
     try std.testing.expect(capabilities.health_get);
