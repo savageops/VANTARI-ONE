@@ -37,6 +37,7 @@ Each durable run lives under `.var/sessions/<id>/`:
 
 - `session.json`
 - `messages.jsonl`
+- `memories.jsonl`
 - `context.jsonl`
 - `events.jsonl`
 - `output.txt`
@@ -209,28 +210,19 @@ Before the first prompt run, the smoke scripts verify that the configured provid
 - `MAX_TOOL_CALLS_PER_SESSION` is optional and defaults to `96`
 - `WORKSPACE` is optional and defaults to `.`
 
-Use `.env.example` as the public template. Keep live `.env` values local. `.env` seeds auth on first run; after `.var/auth/auth.json` exists, the active provider record is the effective model/auth source reported by `VAR1 health`. Non-secret context and prompt policy lives in `.var/config/settings.toml` when an override is needed:
+Use `.env.example` only as a bootstrap template. Installed runtime state uses two sibling files under `$VANTARI_HOME` (normally `~/.vantari`): `auth.json` owns credentials/providers and `config.json` owns non-secret runtime policy. Legacy `.var/auth/auth.json`, nested `auth/auth.json`, and AppData auth files are migration inputs, not live owners.
 
-```toml
-[context]
-auto_compaction = true
-manual_compaction = true
-context_window_tokens = 128000
-compact_at_ratio = 0.85
-reserve_output_tokens = 8192
-keep_recent_messages = 8
-max_entries_per_checkpoint = 0
-aggressiveness_milli = 350
-retry_on_provider_overflow = true
-
-[prompts]
-system_prompt_file = ".var/prompts/system.md"
-developer_prompt_file = ".var/prompts/developer.md"
+```text
+~/.vantari/
+  config.json
+  auth.json
 ```
+
+`vantari config path|show|init|validate` exposes the non-secret configuration owner. The standards-valid JSON template documents every value through adjacent `_help` maps and records ownership/precedence in `_about`; these keys are validated metadata and never runtime policy. Process environment values override the matching `config.json.environment` entries. API keys remain in `auth.json` and are never rendered by config commands.
 
 The step policy and tool-call policy are separate controls. `MAX_STEPS` limits provider turns; `MAX_TOOL_CALLS_PER_TURN` and `MAX_TOOL_CALLS_PER_SESSION` limit the number of tool effects the model may request before dispatch. The context policy controls only model-window behavior. `messages.jsonl` stays append-only, `context.jsonl` stays the checkpoint ledger, manual `session/compact` remains available when `manual_compaction = true`, and executor auto-compaction calls the same compactor when estimates or provider overflow require a smaller model-visible window.
 
-Prompt policy controls only user-editable model instructions. `src/core/prompts/` always wraps those optional files with a hidden kernel guardrail layer and the current tool-use contract. Prompt paths must be quoted TOML strings; missing or empty prompt files fall back to built-in defaults, while unknown `[prompts]` keys, unquoted values, or absolute prompt paths fail closed.
+Prompt policy controls only user-editable model instructions. `src/core/prompts/` always wraps those optional files with a hidden kernel guardrail layer and the current tool-use contract. Prompt paths are workspace-relative JSON strings; null uses the built-in layer, while missing, empty, absolute, or mistyped configured values fail closed.
 
 ## Files worth reading first
 

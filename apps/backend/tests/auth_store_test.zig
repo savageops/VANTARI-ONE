@@ -21,6 +21,10 @@ test "auth resolution falls back to installed auth when workspace auth is missin
     try std.testing.expectEqualStrings("zai", resolved.provider_id);
     try std.testing.expectEqualStrings("global-key", resolved.api_key);
     try std.testing.expectEqualStrings("glm-5.1", resolved.model);
+    const canonical_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/workspace/.var/auth.json", .{tmp.sub_path});
+    defer std.testing.allocator.free(canonical_path);
+    try std.testing.expect(VAR1.shared.fsutil.fileExists(canonical_path));
+    try std.testing.expect(!VAR1.shared.fsutil.fileExists(installed_path));
 }
 
 test "auth resolution keeps explicit workspace auth ahead of installed auth" {
@@ -28,7 +32,7 @@ test "auth resolution keeps explicit workspace auth ahead of installed auth" {
     defer tmp.cleanup();
 
     try writeAuthFile(tmp.dir, "installed/Vantari/auth/auth.json", "zai", "https://api.z.ai/api/coding/paas/v4", "global-key", "glm-5.1");
-    try writeAuthFile(tmp.dir, "workspace/.var/auth/auth.json", "local", "https://local.example/v1", "local-key", "local-model");
+    try writeAuthFile(tmp.dir, "workspace/.var/auth.json", "local", "https://local.example/v1", "local-key", "local-model");
 
     const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/workspace", .{tmp.sub_path});
     defer std.testing.allocator.free(workspace_root);

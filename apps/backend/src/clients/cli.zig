@@ -1,10 +1,12 @@
 const std = @import("std");
 const agents = @import("../core/agents/service.zig");
 const config = @import("../core/config/resolver.zig");
+const config_file = @import("../core/config/file.zig");
 const session_store = @import("../core/sessions/store.zig");
 const protocol_types = @import("../shared/protocol/types.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
 const stdio_rpc = @import("../host/stdio_rpc.zig");
+const fsutil = @import("../shared/fsutil.zig");
 const shared_types = @import("../shared/types.zig");
 const web = @import("../host/http_bridge.zig");
 
@@ -14,6 +16,14 @@ const RunCliOptions = struct {
     session_id: ?[]const u8 = null,
     json_output: bool = false,
     enable_agent_tools: bool = true,
+    /// Per-invocation model override (not persisted). Swaps the active
+    /// provider model for this run only.
+    model_override: ?[]const u8 = null,
+    /// Per-invocation context window override (token count). Adjusts the
+    /// compaction threshold for models with smaller windows.
+    context_window_override: ?u64 = null,
+    /// Per-invocation max output token budget override.
+    max_output_tokens: ?u64 = null,
 };
 
 const ServeCliOptions = struct {
@@ -23,6 +33,11 @@ const ServeCliOptions = struct {
 
 const ToolsCliOptions = struct {
     json_output: bool = false,
+};
+
+const ModelsCliOptions = struct {
+    json_output: bool = false,
+    provider: ?[]const u8 = null,
 };
 
 const ScheduleCliOptions = struct {
@@ -51,6 +66,14 @@ const TurnStatusMode = enum {
     stderr,
 };
 
+/// Per-invocation provider overrides forwarded through the kernel run
+/// protocol. All optional; when null the server config value is used.
+const TurnOverrides = struct {
+    model_override: ?[]const u8 = null,
+    context_window_override: ?u64 = null,
+    max_output_tokens: ?u64 = null,
+};
+
 const ParsedRunArguments = struct {
     options: RunCliOptions = .{},
     help_requested: bool = false,
@@ -63,6 +86,11 @@ const ParsedServeArguments = struct {
 
 const ParsedToolsArguments = struct {
     options: ToolsCliOptions = .{},
+    help_requested: bool = false,
+};
+
+const ParsedModelsArguments = struct {
+    options: ModelsCliOptions = .{},
     help_requested: bool = false,
 };
 
@@ -137,6 +165,22 @@ const ParsedToolsListResult = struct {
     output: []const u8,
 };
 
+const ParsedModelEntry = struct {
+    id: []const u8,
+    owned_by: ?[]const u8 = null,
+    context_length: ?u64 = null,
+};
+
+const ParsedModelsListResult = struct {
+    schema: []const u8 = "var1.models.v1",
+    provider: []const u8,
+    base_url: []const u8,
+    models: []ParsedModelEntry = &.{},
+    context_from_native_surface: bool = false,
+    status: []const u8 = "ok",
+    error_message: ?[]const u8 = null,
+};
+
 const ParsedScheduleListResult = struct {
     schedules: []protocol_types.ScheduleSummary = &.{},
 };
@@ -161,9 +205,11 @@ pub const root_help_text =
     \\  continue Alias for c.
     \\  health   Report local runtime readiness through the kernel protocol.
     \\  schedule List or inspect durable scheduler jobs through the kernel protocol.
+    \\  config   Locate, materialize, inspect, or validate ~/.vantari/config.json.
     \\  workspace Show or set an explicit installed-client workspace override.
     \\  serve    Start the HTTP bridge for /rpc, /events, and /api/health.
     \\  tools    Print the built-in tool catalog and schemas through the kernel protocol.
+    \\  models   Discover available models from the active OpenAI-compatible provider.
     \\  help     Print help for a command.
     \\
     \\Examples:
@@ -172,6 +218,7 @@ pub const root_help_text =
     \\  vantari "List the files under src."
     \\  vantari c
     \\  vantari workspace show
+    \\  vantari config validate
     \\  vantari workspace set E:\Workspaces\01_Projects\01_Github\VANTARI-ONE\apps\backend
     \\  var c
     \\  VAR1 run --prompt "Summarize src/cli.zig."
@@ -189,6 +236,21 @@ pub const root_help_text =
     \\  Workspace resolution checks VANTARI_WORKSPACE, current directory ancestors, then explicit installed override.
     \\  vantari -c opens the TUI on the most recently updated session in the current workspace.
     \\  Use VAR1 help <command> or VAR1 <command> --help for command-specific details.
+    \\
+;
+
+pub const config_help_text =
+    \\Usage:
+    \\  vantari config path
+    \\  vantari config show
+    \\  vantari config init
+    \\  vantari config validate
+    \\
+    \\Behavior:
+    \\  config.json owns non-secret runtime, provider-wire, context, prompt, and
+    \\  environment-style overrides. auth.json remains the credential owner.
+    \\  init creates the default file only when it is absent. Existing files are
+    \\  never rewritten implicitly.
     \\
 ;
 
@@ -253,6 +315,9 @@ pub const run_help_text =
     \\  --prompt <text>           Execute an inline prompt as a new session.
     \\  --prompt-file <path>      Read the prompt from a file and trim trailing newlines.
     \\  --session-id <session-id> Resume an existing canonical session and reuse its stored prompt.
+    \\  --model <id>              Override the active provider model for this run only (not persisted).
+    \\  --context-window <tokens> Override the context-window size for compaction thresholds this run only.
+    \\  --max-output-tokens <n>   Override the reserved output token budget this run only.
     \\  --json                    Emit {"session_id","output"} instead of plain text.
     \\  --no-agent-tools          Hide launch_agent, agent_status, wait_agent, and list_agents from the model.
     \\  -h, --help                Print help for the run command.
@@ -340,6 +405,46 @@ pub const tools_help_text =
     \\
 ;
 
+pub const models_help_text =
+    \\Usage:
+    \\  VAR1 models [--json] [--provider <id>]
+    \\
+    \\Description:
+    \\  Discover available models from the active OpenAI-compatible provider
+    \\  (LM Studio, llama.cpp, vLLM, Ollama, OpenRouter, z.ai, ...).
+    \\
+    \\Flags:
+    \\  --json              Emit the var1.models.v1 schema payload.
+    \\  --provider <id>     Resolve a non-active provider.
+    \\  -h, --help          Print help for the models command.
+    \\
+    \\Examples:
+    \\  VAR1 models
+    \\  VAR1 models --json
+    \\
+;
+
+pub const stats_help_text =
+    \\Usage:
+    \\  VAR1 stats
+    \\
+    \\Description:
+    \\  Read the local performance counter register. Each counter maps to a
+    \\  cost center from the VANTARI mechanical cost model (AGENTS.md §X).
+    \\  Counters include: context_compile, provider_turn, tool_dispatch,
+    \\  command_run, tui_frame, session_recovery, jsonl_scan, event_replay.
+    \\
+    \\  This command sends no model request and writes no file. It reads
+    \\  the fixed-memory counter register (~300 bytes) and emits JSON.
+    \\
+    \\Flags:
+    \\  -h, --help          Print help for the stats command.
+    \\
+    \\Examples:
+    \\  VAR1 stats
+    \\
+;
+
 pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
     _ = iter.next();
     const command = iter.next() orelse {
@@ -413,6 +518,23 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
             return;
         }
         try executeWorkspaceCommand(allocator, parsed.action);
+        return;
+    }
+
+    if (std.mem.eql(u8, command, "config")) {
+        const action = iter.next() orelse "show";
+        if (isHelpFlag(action)) {
+            if (iter.next() != null) return error.InvalidArgs;
+            try writeStdout(config_help_text);
+            return;
+        }
+        if (iter.next() != null) {
+            try printInvalidArguments("config", config_help_text);
+            return error.InvalidArgs;
+        }
+        const workspace_root = try resolveWorkspaceRoot(allocator);
+        defer allocator.free(workspace_root);
+        try executeConfigCommand(allocator, workspace_root, action);
         return;
     }
 
@@ -513,6 +635,35 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
         return;
     }
 
+    if (std.mem.eql(u8, command, "models")) {
+        const parsed = parseModelsArguments(iter) catch |err| {
+            try printInvalidArguments("models", models_help_text);
+            return err;
+        };
+        if (parsed.help_requested) {
+            try writeStdout(models_help_text);
+            return;
+        }
+        const workspace_root = try resolveWorkspaceRoot(allocator);
+        defer allocator.free(workspace_root);
+        try ensureKernelConfigAvailable(allocator, workspace_root);
+        try executeModelsViaKernel(allocator, workspace_root, parsed.options);
+        return;
+    }
+
+    if (std.mem.eql(u8, command, "stats")) {
+        // VAR1 stats — local performance counter read-out. Sends no model
+        // request, writes no file. Reads the fixed-memory counter register
+        // (AGENTS.md §XVIII item 15).
+        const telemetry = @import("../core/evaluation/telemetry.zig");
+        const register = telemetry.CounterRegister{};
+        const json = try register.renderJson(allocator);
+        defer allocator.free(json);
+        try writeStdout(json);
+        try writeStdout("\n");
+        return;
+    }
+
     if (!std.mem.startsWith(u8, command, "-")) {
         const prompt = try collectPromptArguments(allocator, command, iter);
         defer allocator.free(prompt);
@@ -566,7 +717,7 @@ fn executeInteractive(allocator: std.mem.Allocator) !void {
 
         const prompt = try allocator.dupe(u8, line);
         defer allocator.free(prompt);
-        const turn = try executePromptTurn(allocator, &client, active_session_id, prompt, true, .stderr);
+        const turn = try executePromptTurn(allocator, &client, active_session_id, prompt, true, .stderr, .{});
         defer if (turn.output) |output| allocator.free(output);
         defer if (turn.failure_reason) |reason| allocator.free(reason);
 
@@ -614,6 +765,11 @@ fn executeRunViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8,
         prompt,
         run_options.enable_agent_tools,
         if (run_options.json_output) .silent else .stderr,
+        .{
+            .model_override = run_options.model_override,
+            .context_window_override = run_options.context_window_override,
+            .max_output_tokens = run_options.max_output_tokens,
+        },
     );
     defer allocator.free(turn.session_id);
     defer if (turn.output) |output| allocator.free(output);
@@ -650,6 +806,7 @@ fn executePromptTurn(
     prompt: []const u8,
     enable_agent_tools: bool,
     status_mode: TurnStatusMode,
+    overrides: TurnOverrides,
 ) !PromptTurn {
     const session_id = if (existing_session_id) |value|
         try allocator.dupe(u8, value)
@@ -683,11 +840,17 @@ fn executePromptTurn(
             .session_id = session_id,
             .prompt = prompt,
             .enable_agent_tools = enable_agent_tools,
+            .model_override = overrides.model_override,
+            .context_window_override = overrides.context_window_override,
+            .max_output_tokens = overrides.max_output_tokens,
         })
     else
         try renderJsonAlloc(allocator, .{
             .session_id = session_id,
             .enable_agent_tools = enable_agent_tools,
+            .model_override = overrides.model_override,
+            .context_window_override = overrides.context_window_override,
+            .max_output_tokens = overrides.max_output_tokens,
         });
     defer allocator.free(send_params);
 
@@ -771,6 +934,81 @@ fn executeToolsViaKernel(allocator: std.mem.Allocator, workspace_root: []const u
 
     try writeStdout(parsed.value.output);
     if (options.json_output) try writeStdout("\n");
+}
+
+fn executeModelsViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8, options: ModelsCliOptions) !void {
+    var client = try stdio_rpc.LocalClient.initInWorkspace(allocator, workspace_root);
+    defer client.deinit();
+
+    const params = try renderJsonAlloc(allocator, .{
+        .provider_id = options.provider,
+    });
+    defer allocator.free(params);
+
+    const call = try callKernelOrExit(allocator, &client, protocol_types.methods.models_list, params);
+    defer call.deinit(allocator);
+    const result_json = try expectKernelResult(allocator, call);
+    defer allocator.free(result_json);
+
+    var parsed = try std.json.parseFromSlice(ParsedModelsListResult, allocator, result_json, .{
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+
+    if (options.json_output) {
+        const json_payload = try std.fmt.allocPrint(allocator, "{f}\n", .{
+            std.json.fmt(parsed.value, .{ .whitespace = .indent_2 }),
+        });
+        defer allocator.free(json_payload);
+        try writeStdout(json_payload);
+        return;
+    }
+
+    if (!std.mem.eql(u8, parsed.value.status, "ok")) {
+        const failure = try std.fmt.allocPrint(
+            allocator,
+            "model discovery failed\nprovider: {s}\nbase_url: {s}\nstatus: {s}\nerror: {s}\n",
+            .{
+                parsed.value.provider,
+                parsed.value.base_url,
+                parsed.value.status,
+                parsed.value.error_message orelse "no detail available",
+            },
+        );
+        defer allocator.free(failure);
+        try writeStdout(failure);
+        return;
+    }
+
+    const native_note = if (parsed.value.context_from_native_surface)
+        " (context length from provider native surface)"
+    else
+        "";
+    const header = try std.fmt.allocPrint(
+        allocator,
+        "Available models\nprovider: {s}\nbase_url: {s}{s}\n\n",
+        .{ parsed.value.provider, parsed.value.base_url, native_note },
+    );
+    defer allocator.free(header);
+    try writeStdout(header);
+
+    if (parsed.value.models.len == 0) {
+        try writeStdout("no models reported by provider\n");
+        return;
+    }
+
+    for (parsed.value.models) |model| {
+        var context_buf: [24]u8 = undefined;
+        const context_str: []const u8 = if (model.context_length) |length|
+            std.fmt.bufPrint(&context_buf, "{d}", .{length}) catch "unknown"
+        else
+            "unknown";
+        const owned = model.owned_by orelse "-";
+        const line = try std.fmt.allocPrint(allocator, "  {s}  (context: {s}, owned_by: {s})\n", .{ model.id, context_str, owned });
+        defer allocator.free(line);
+        try writeStdout(line);
+    }
+    try writeStdout("\n");
 }
 
 fn executeScheduleViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8, options: ScheduleCliOptions) !void {
@@ -863,6 +1101,12 @@ fn resolveWorkspaceRoot(allocator: std.mem.Allocator) ![]u8 {
     const cwd_abs = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_abs);
 
+    var runtime_policy = try config_file.loadRuntimePolicy(allocator, cwd_abs);
+    defer runtime_policy.deinit(allocator);
+    if (runtime_policy.workspace) |configured_workspace| {
+        return std.fs.cwd().realpathAlloc(allocator, configured_workspace);
+    }
+
     const installed_workspace_root = try readInstalledWorkspaceRoot(allocator);
     defer if (installed_workspace_root) |value| allocator.free(value);
 
@@ -933,9 +1177,9 @@ fn workspaceHasConfigMarker(allocator: std.mem.Allocator, workspace_root: []cons
     defer allocator.free(env_path);
     if (fileExistsAbsolute(env_path)) return true;
 
-    const auth_path = try std.fs.path.join(allocator, &.{ workspace_root, ".var", "auth", "auth.json" });
-    defer allocator.free(auth_path);
-    return fileExistsAbsolute(auth_path);
+    const config_path = try std.fs.path.join(allocator, &.{ workspace_root, ".var", "config.json" });
+    defer allocator.free(config_path);
+    return fileExistsAbsolute(config_path);
 }
 
 fn workspaceHasSessions(allocator: std.mem.Allocator, workspace_root: []const u8) !bool {
@@ -1125,6 +1369,47 @@ fn executeWorkspaceCommand(allocator: std.mem.Allocator, action: WorkspaceCliAct
     }
 }
 
+/// Operate the single non-secret config owner without mutating auth.json.
+fn executeConfigCommand(allocator: std.mem.Allocator, workspace_root: []const u8, action: []const u8) !void {
+    if (std.mem.eql(u8, action, "path")) {
+        const config_path = try config_file.path(allocator, workspace_root);
+        defer allocator.free(config_path);
+        try writeStdout(config_path);
+        try writeStdout("\n");
+        return;
+    }
+
+    const config_path = try config_file.ensure(allocator, workspace_root);
+    defer allocator.free(config_path);
+    if (std.mem.eql(u8, action, "init")) {
+        try writeStdout("config: ");
+        try writeStdout(config_path);
+        try writeStdout("\n");
+        return;
+    }
+    if (std.mem.eql(u8, action, "show")) {
+        const content = try fsutil.readTextAlloc(allocator, config_path);
+        defer allocator.free(content);
+        try writeStdout(content);
+        if (content.len == 0 or content[content.len - 1] != '\n') try writeStdout("\n");
+        return;
+    }
+    if (std.mem.eql(u8, action, "validate")) {
+        var runtime_policy = try config_file.loadRuntimePolicy(allocator, workspace_root);
+        defer runtime_policy.deinit(allocator);
+        _ = try config_file.loadContextPolicy(allocator, workspace_root, .{});
+        var prompt_policy = try config_file.loadPromptPolicy(allocator, workspace_root, .{});
+        defer prompt_policy.deinit(allocator);
+        _ = try config_file.loadWireApi(allocator, workspace_root);
+        try writeStdout("config valid: ");
+        try writeStdout(config_path);
+        try writeStdout("\n");
+        return;
+    }
+    try printInvalidArguments("config", config_help_text);
+    return error.InvalidArgs;
+}
+
 fn makeCliSessionSummary(session: shared_types.SessionRecord, output: ?[]const u8) protocol_types.SessionSummary {
     return .{
         .session_id = session.id,
@@ -1190,10 +1475,13 @@ pub fn helpText(command: ?[]const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "continue")) return sessions_help_text;
     if (std.mem.eql(u8, name, "sessions")) return sessions_help_text;
     if (std.mem.eql(u8, name, "workspace")) return workspace_help_text;
+    if (std.mem.eql(u8, name, "config")) return config_help_text;
     if (std.mem.eql(u8, name, "health")) return health_help_text;
     if (std.mem.eql(u8, name, "schedule")) return schedule_help_text;
     if (std.mem.eql(u8, name, "serve")) return serve_help_text;
     if (std.mem.eql(u8, name, "tools")) return tools_help_text;
+    if (std.mem.eql(u8, name, "models")) return models_help_text;
+    if (std.mem.eql(u8, name, "stats")) return stats_help_text;
     if (std.mem.eql(u8, name, "help")) return root_help_text;
     return null;
 }
@@ -1229,6 +1517,20 @@ fn parseRunArguments(iter: *std.process.ArgIterator) !ParsedRunArguments {
         }
         if (std.mem.eql(u8, arg, "--no-agent-tools")) {
             parsed.options.enable_agent_tools = false;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--model")) {
+            parsed.options.model_override = iter.next() orelse return error.InvalidArgs;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--context-window")) {
+            const value = iter.next() orelse return error.InvalidArgs;
+            parsed.options.context_window_override = std.fmt.parseUnsigned(u64, value, 10) catch return error.InvalidArgs;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--max-output-tokens")) {
+            const value = iter.next() orelse return error.InvalidArgs;
+            parsed.options.max_output_tokens = std.fmt.parseUnsigned(u64, value, 10) catch return error.InvalidArgs;
             continue;
         }
         return error.InvalidArgs;
@@ -1380,6 +1682,29 @@ fn parseToolsArguments(iter: *std.process.ArgIterator) !ParsedToolsArguments {
         }
         if (std.mem.eql(u8, arg, "--json")) {
             parsed.options.json_output = true;
+            continue;
+        }
+        return error.InvalidArgs;
+    }
+
+    return parsed;
+}
+
+fn parseModelsArguments(iter: *std.process.ArgIterator) !ParsedModelsArguments {
+    var parsed = ParsedModelsArguments{};
+
+    while (iter.next()) |arg| {
+        if (parsed.help_requested) continue;
+        if (isHelpFlag(arg)) {
+            parsed.help_requested = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--json")) {
+            parsed.options.json_output = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--provider")) {
+            parsed.options.provider = iter.next() orelse return error.InvalidArgs;
             continue;
         }
         return error.InvalidArgs;

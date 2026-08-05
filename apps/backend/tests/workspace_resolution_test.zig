@@ -14,15 +14,15 @@ test "workspace candidate predicates reject ancestor-only runtime ledgers" {
     try std.testing.expect(!cli.testing_hooks.acceptsSessionsCandidate(false, false));
 }
 
-test "workspace resolution keeps fresh child directory when parent only has auth" {
+test "workspace resolution keeps fresh child directory when parent only has config" {
     const tmp_root = try makeIsolatedTempRoot(std.testing.allocator, "auth-parent");
     defer std.testing.allocator.free(tmp_root);
     defer cleanupIsolatedTempRoot(tmp_root);
     var tmp_dir = try std.fs.openDirAbsolute(tmp_root, .{});
     defer tmp_dir.close();
 
-    try tmp_dir.makePath("home/.var/auth");
-    try tmp_dir.writeFile(.{ .sub_path = "home/.var/auth/auth.json", .data = "{}" });
+    try tmp_dir.makePath("home/.var");
+    try tmp_dir.writeFile(.{ .sub_path = "home/.var/config.json", .data = "{}" });
     try tmp_dir.makePath("home/new-project");
 
     const cwd_abs = try realpathUnder(std.testing.allocator, tmp_root, "home/new-project");
@@ -53,15 +53,15 @@ test "workspace resolution keeps fresh child directory when parent only has sess
     try std.testing.expectEqualStrings(cwd_abs, resolved);
 }
 
-test "workspace resolution accepts current directory auth as an explicit local marker" {
+test "workspace resolution accepts current directory config as an explicit local marker" {
     const tmp_root = try makeIsolatedTempRoot(std.testing.allocator, "local-auth");
     defer std.testing.allocator.free(tmp_root);
     defer cleanupIsolatedTempRoot(tmp_root);
     var tmp_dir = try std.fs.openDirAbsolute(tmp_root, .{});
     defer tmp_dir.close();
 
-    try tmp_dir.makePath("project/.var/auth");
-    try tmp_dir.writeFile(.{ .sub_path = "project/.var/auth/auth.json", .data = "{}" });
+    try tmp_dir.makePath("project/.var");
+    try tmp_dir.writeFile(.{ .sub_path = "project/.var/config.json", .data = "{}" });
 
     const cwd_abs = try realpathUnder(std.testing.allocator, tmp_root, "project");
     defer std.testing.allocator.free(cwd_abs);

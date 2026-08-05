@@ -19,6 +19,7 @@ pub const methods = struct {
     pub const tools_list = "tools/list";
     pub const events_subscribe = "events/subscribe";
     pub const health_get = "health/get";
+    pub const models_list = "models/list";
 };
 
 pub const Capabilities = struct {
@@ -34,6 +35,11 @@ pub const Capabilities = struct {
     tools_list: bool = true,
     events_subscribe: bool = true,
     health_get: bool = true,
+    models_list: bool = true,
+    /// Advertises that events.jsonl carries a monotonic `seq` field and the
+    /// event spine supports replay cursors. Clients can use seq for
+    /// deterministic same-millisecond ordering (AGENTS.md §IV).
+    event_seq_supported: bool = true,
 };
 
 pub const InitializeResult = struct {
@@ -144,6 +150,22 @@ pub const ToolsListResult = struct {
     output: []const u8,
 };
 
+pub const ModelSummary = struct {
+    id: []const u8,
+    owned_by: ?[]const u8 = null,
+    context_length: ?u64 = null,
+};
+
+pub const ModelsListResult = struct {
+    schema: []const u8 = "var1.models.v1",
+    provider: []const u8,
+    base_url: []const u8,
+    models: []const ModelSummary,
+    context_from_native_surface: bool = false,
+    status: []const u8 = "ok",
+    error_message: ?[]const u8 = null,
+};
+
 pub fn sessionStateLabel(state: types.SessionStatus) []const u8 {
     return types.statusLabel(state);
 }
@@ -163,6 +185,8 @@ test "protocol capabilities advertise the full session surface" {
     try std.testing.expect(capabilities.tools_list);
     try std.testing.expect(capabilities.events_subscribe);
     try std.testing.expect(capabilities.health_get);
+    try std.testing.expect(capabilities.models_list);
+    try std.testing.expect(capabilities.event_seq_supported);
 }
 
 test "session state labels stay stable" {

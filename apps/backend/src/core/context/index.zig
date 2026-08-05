@@ -4,6 +4,7 @@ pub const builder = @import("builder.zig");
 pub const budget = @import("budget.zig");
 pub const compactor = @import("compactor.zig");
 pub const overflow = @import("overflow.zig");
+pub const shard_graph = @import("shard_graph.zig");
 
 pub const appendProviderMessages = builder.appendProviderMessages;
 pub const compactSession = compactor.compactSession;

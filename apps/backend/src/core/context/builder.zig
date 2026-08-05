@@ -5,10 +5,22 @@ const types = @import("../../shared/types.zig");
 const summary_prefix =
     "The conversation history before this point was compacted into the following summary:\n\n";
 
+/// Legacy error type retained for backward compatibility. The builder now
+/// self-heals orphan/unresolved tool-call tails by synthesizing interrupted
+/// tool results rather than hard-failing. These errors are no longer returned
+/// but tests and callers may still reference the type.
 pub const Error = error{
     OrphanToolResultTranscript,
     UnresolvedToolCallTranscript,
 };
+
+/// Synthetic tool result text appended when a tool call was interrupted
+/// before producing a result (crash, cancellation, or cold-start recovery).
+/// This makes the transcript structurally valid so the provider turn can
+/// proceed instead of hard-failing with UnresolvedToolCallTranscript.
+/// Harvested from Codex's and pi-mono's orphan-tail repair: they synthesize
+/// placeholder results rather than rejecting the transcript.
+const interrupted_tool_result = "[Tool execution was interrupted before producing a result. The session was recovered automatically.]";
 
 pub fn appendProviderMessages(
     allocator: std.mem.Allocator,
@@ -57,11 +69,25 @@ fn appendRawMessages(
         if (first_kept_seq > 0 and turn.seq < first_kept_seq) continue;
         switch (turn.role) {
             .user => {
-                if (pending_tool_index < pending_tool_calls.len) return Error.UnresolvedToolCallTranscript;
+                // Self-healing: if tool calls are pending and a user message
+                // arrives, the previous tool-call batch was interrupted.
+                // Synthesize missing tool results so the transcript remains
+                // structurally valid and the provider turn can proceed.
+                if (pending_tool_index < pending_tool_calls.len) {
+                    try synthesizePendingToolResults(allocator, messages, pending_tool_calls, pending_tool_index);
+                    pending_tool_calls = &.{};
+                    pending_tool_index = 0;
+                }
                 try messages.append(try types.initTextMessage(allocator, .user, turn.content));
             },
             .assistant => {
-                if (pending_tool_index < pending_tool_calls.len) return Error.UnresolvedToolCallTranscript;
+                // Self-healing: same repair when a new assistant message
+                // arrives with unresolved tool calls from the previous one.
+                if (pending_tool_index < pending_tool_calls.len) {
+                    try synthesizePendingToolResults(allocator, messages, pending_tool_calls, pending_tool_index);
+                    pending_tool_calls = &.{};
+                    pending_tool_index = 0;
+                }
                 if (turn.tool_calls.len > 0) {
                     try messages.append(try types.initAssistantToolCallMessage(
                         allocator,
@@ -75,10 +101,15 @@ fn appendRawMessages(
                 }
             },
             .tool => {
-                if (pending_tool_index >= pending_tool_calls.len) return Error.OrphanToolResultTranscript;
-                const tool_call_id = turn.tool_call_id orelse return Error.OrphanToolResultTranscript;
+                if (pending_tool_index >= pending_tool_calls.len) {
+                    // Orphan tool result with no preceding tool call — skip it.
+                    // This is self-healing for torn writes or duplicate rows.
+                    continue;
+                }
+                const tool_call_id = turn.tool_call_id orelse continue;
                 if (!std.mem.eql(u8, tool_call_id, pending_tool_calls[pending_tool_index].id)) {
-                    return Error.OrphanToolResultTranscript;
+                    // ID mismatch — skip this orphan result and keep looking.
+                    continue;
                 }
                 try messages.append(try types.initToolMessage(allocator, tool_call_id, turn.content));
                 pending_tool_index += 1;
@@ -90,5 +121,29 @@ fn appendRawMessages(
         }
     }
 
-    if (pending_tool_index < pending_tool_calls.len) return Error.UnresolvedToolCallTranscript;
+    // Self-healing: if the transcript ends with unresolved tool calls (the
+    // most common orphan — crash/cancel after the assistant tool_call was
+    // persisted but before all tool results were appended), synthesize the
+    // missing results. This makes the transcript structurally valid for the
+    // provider dispatch. Previously this hard-failed with
+    // UnresolvedToolCallTranscript, permanently bricking the session.
+    if (pending_tool_index < pending_tool_calls.len) {
+        try synthesizePendingToolResults(allocator, messages, pending_tool_calls, pending_tool_index);
+    }
+}
+
+/// Append synthetic tool results for tool calls that were never resolved.
+/// Each missing result carries the `interrupted_tool_result` text so the
+/// provider understands the tool was interrupted, not that it failed with
+/// an application error.
+fn synthesizePendingToolResults(
+    allocator: std.mem.Allocator,
+    messages: *std.array_list.Managed(types.ChatMessage),
+    tool_calls: []const types.ToolCall,
+    start_index: usize,
+) !void {
+    var i = start_index;
+    while (i < tool_calls.len) : (i += 1) {
+        try messages.append(try types.initToolMessage(allocator, tool_calls[i].id, interrupted_tool_result));
+    }
 }

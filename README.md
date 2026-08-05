@@ -2,17 +2,17 @@
 
 # VANTARI-ONE
 
-### Local Agent Kernel · Zig Runtime · Zero Dependencies
+### Local Agent Kernel · Zig Runtime · No Runtime Dependencies
 
-A single static binary that runs LLM agent sessions with append-only transcript ledgers,<br/>
-deterministic context compaction, typed tool governance, cryptographic effect verification,<br/>
-and multi-client ingress over one coherent protocol.
+A native agent runtime built around replayable session state, bounded execution,<br/>
+provider-wire adaptation, typed tool governance, and recoverable evidence.<br/>
+One binary; one protocol; one owner for runtime truth.
 
 <br/>
 
 [![Release](https://img.shields.io/github/v/release/savageops/VANTARI-ONE?display_name=tag&sort=semver&label=Release&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/savageops/VANTARI-ONE/total?label=Downloads&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases)
-[![Tests](https://img.shields.io/badge/Tests-770%2B%20passed-0f766e)](#validation)
+[![Tests](https://img.shields.io/badge/Tests-1%2C470%2B%20cases-0f766e)](#validation)
 [![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-f7a41d?logo=zig)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-0f766e)](./LICENSE)
 
@@ -22,7 +22,7 @@ and multi-client ingress over one coherent protocol.
 
 <br/>
 
-[Why Ventari](#why-ventari) · [Architecture](#architecture) · [Quick Start](#quick-start) · [Tool Catalog](#tool-catalog) · [Protocol](#protocol) · [Session Model](#session-model) · [Security](#security) · [Configuration](#configuration) · [Built For](#built-for) · [Roadmap](#roadmap)
+[Why VANTARI](#why-vantari) · [Architecture](#architecture) · [Quick Start](#quick-start) · [Tool Catalog](#tool-catalog) · [Protocol](#protocol) · [Session Model](#session-model) · [Security](#security) · [Configuration](#configuration) · [Built For](#built-for) · [Roadmap](#roadmap) · [Validation](#validation)
 
 </div>
 
@@ -30,13 +30,15 @@ and multi-client ingress over one coherent protocol.
 
 <br/>
 
-## Why Ventari
+## Why VANTARI
 
 Most agent frameworks treat an LLM session as disposable chat text — messages accumulate in memory, tool calls fire without review, context silently truncates, and nothing survives a process restart. When something goes wrong, there is no ledger, no evidence trail, and no way to replay what happened.
 
-Ventari treats an agent session as a **replayable execution graph**. Every run produces a durable session directory with an append-only transcript, structured context checkpoints, typed tool lifecycle events, and cryptographic effect receipts for file mutations. The kernel owns the execution — clients observe and control it over a protocol surface.
+VANTARI treats an agent session as a **durable, replayable state machine**. Every run produces an append-only transcript, structured context checkpoints, typed lifecycle events, and effect receipts for file mutations. The kernel owns execution and recovery; clients observe and control it through one protocol.
 
 **The result:** agent sessions that are dependable, inspectable, resumable, and worth returning to.
+
+That means handling the failure paths as ordinary runtime work: reconstructing fragmented SSE text and tool calls, salvaging the valid prefix of a torn or poisoned JSONL ledger, rebuilding context after overflow without replaying a tool batch twice, reconciling sessions whose process owner disappeared, draining and terminating Windows child processes without losing bounded output, and preserving account identity across different provider wire protocols. These mechanics live in the execution path and its tests rather than in a separate "reliability layer."
 
 <br/>
 
@@ -50,18 +52,18 @@ Ventari treats an agent session as a **replayable execution graph**. Every run p
 - Every tool call reviewed before side effects execute
 - SHA-256 effect receipts for file mutations
 - Append-only audit trail for every session
-- Any OpenAI-compatible provider — cloud or local
+- Chat Completions, OpenAI Responses, and Anthropic Messages transports
 
 </td>
 <td width="50%">
 
 **What you don't need**
-- No Python, Node.js, or package manager
-- No Docker, no containers, no orchestrator
-- No cloud account or vendor lock-in
+- No Python or Node.js runtime after installation
+- No container or orchestrator requirement
+- No hosted control plane
 - No database server or external state store
-- No framework coupling or build pipeline
-- No trust-all tool execution model
+- No client-owned agent loop
+- No implicit trust-all tool execution
 
 </td>
 </tr>
@@ -88,12 +90,12 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 
 | Metric | Value |
 |---|---|
-| **Runtime** | Single static Zig binary — `VAR1` / `vantari` |
-| **Codebase** | ~45,000 lines of Zig across kernel, CLI, and TUI |
-| **Reliability** | Full state-transition coverage across kernel, protocol, and client surfaces |
-| **Dependencies** | Zero runtime. Zig standard library only. |
-| **Provider** | Any OpenAI-compatible endpoint — GPT, Claude, Gemini, LLaMA, Mistral, local models |
-| **Clients** | Native streaming TUI · CLI · Framework-free browser workbench |
+| **Runtime** | Single static Zig binary — `vantari` |
+| **Kernel surface** | 73 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
+| **Proof surface** | 1,470+ declared backend test cases across source and adversarial pipeline suites |
+| **Dependencies** | No language runtime after installation; build-time dependencies compile into the executable |
+| **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
+| **Clients** | Native streaming TUI · CLI · Local browser workbench |
 | **Protocol** | JSON-RPC 2.0 over stdio with Content-Length framing |
 | **Session storage** | Filesystem JSONL ledgers at `.var/sessions/<id>/` |
 | **Platform** | Windows-native first class; Linux/macOS via Zig cross-compilation |
@@ -107,7 +109,6 @@ flowchart TB
   tui["TUI client<br/><sub>streaming terminal interface</sub>"]
   cli["CLI client<br/><sub>single-shot commands</sub>"]
   browser["Browser workbench<br/><sub>framework-free static client</sub>"]
-
   tui --> stdio["JSON-RPC 2.0 over stdio<br/><sub>Content-Length framing</sub>"]
   cli --> stdio
   browser --> bridge["HTTP bridge<br/><sub>POST /rpc · GET /events · GET /api/health</sub>"]
@@ -122,11 +123,11 @@ flowchart TB
     kernel --> toolruntime["tool module registry<br/><sub>definition · availability · review · dispatch</sub>"]
     kernel --> governance["capability governance<br/><sub>profiles · delegation scope · review gate</sub>"]
     kernel --> prompts["prompt assembly<br/><sub>guardrails · system · developer · tool contract</sub>"]
-    kernel --> provider["provider transport<br/><sub>OpenAI-compatible · SSE streaming</sub>"]
+    kernel --> provider["provider transport<br/><sub>Chat Completions · Responses · Anthropic Messages</sub>"]
     kernel --> events["event engine<br/><sub>lifecycle · tool spans · audit · evaluation</sub>"]
   end
 
-  executor --> store[".var/sessions/<br/><sub>session.json · messages.jsonl · context.jsonl · events.jsonl · output.txt</sub>"]
+  executor --> store[".var/sessions/<br/><sub>session.json · messages.jsonl · memories.jsonl · context.jsonl · events.jsonl · output.txt</sub>"]
   context --> store
   events --> store
   governance --> events
@@ -134,7 +135,25 @@ flowchart TB
   provider --> events
 ```
 
-Three client surfaces — TUI, CLI, browser — send requests into the same kernel runtime. Session state, transcript assembly, provider interaction, tool dispatch, capability governance, and event emission stay inside the Zig binary. No client owns runtime state.
+Three shipped client surfaces — TUI, CLI, and the local browser workbench — enter the same kernel runtime. Session state, context assembly, provider interaction, tool dispatch, capability governance, and event emission stay inside the Zig binary. No client owns runtime state or assembles provider context.
+
+### Remote Deployment Boundary
+
+The kernel owns transcript, context, tools, events, and session storage. It supports outbound provider HTTP and a loopback browser bridge, but it does not own public TLS termination, WebSocket fan-out, or remote client identity.
+
+The planned relay remains a client of the kernel over the existing stdio JSON-RPC protocol. Its job is narrow: authenticate remote clients, terminate TLS, and fan out event frames. It must not assemble provider context, infer tool state, or become a second transcript owner.
+
+```text
+Local (current):
+  CLI/TUI ──stdio──► kernel ──► .var/sessions/
+
+Remote (planned):
+  CLI/TUI ──┐
+  Browser ──┼──► relay ──stdio──► kernel ──► .var/sessions/
+  Dashboard ┘    (TLS · WebSocket · auth.vantari.one)
+```
+
+The promotion test is mechanical: kill the relay, start a fresh relay, and recover every client-visible session from kernel-owned ledgers. Until that path exists and passes, the relay remains roadmap architecture rather than a shipped client.
 
 <br/>
 
@@ -142,7 +161,7 @@ Three client surfaces — TUI, CLI, browser — send requests into the same kern
 
 ```text
 ┌──────────────────────────────────────────────────────────────────┐
-│  CLIENT LAYER              TUI · CLI · Browser workbench        │
+│  CLIENT LAYER              TUI · CLI · Browser workbench         │
 ├──────────────────────────────────────────────────────────────────┤
 │  HOST LAYER                stdio RPC · HTTP bridge · audit      │
 ├──────────────────────────────────────────────────────────────────┤
@@ -154,7 +173,7 @@ Three client surfaces — TUI, CLI, browser — send requests into the same kern
 ├──────────────────────────────────────────────────────────────────┤
 │  GOVERNANCE                profiles · delegation scope · memory  │
 ├──────────────────────────────────────────────────────────────────┤
-│  PROVIDER TRANSPORT        OpenAI-compatible · SSE · overflow    │
+│  PROVIDER TRANSPORT        chat · responses · anthropic · SSE    │
 ├──────────────────────────────────────────────────────────────────┤
 │  SESSION STORE             .var/ filesystem ledgers (JSONL)      │
 └──────────────────────────────────────────────────────────────────┘
@@ -162,24 +181,26 @@ Three client surfaces — TUI, CLI, browser — send requests into the same kern
 
 Each layer has a single canonical owner. The context engine never writes to the provider. The tool runtime never writes to the transcript. The provider never reads from the session store. Dependencies flow downward. State flows through explicit function parameters, never globals.
 
+The host layer is the outermost kernel surface: framed stdio RPC plus the loopback HTTP bridge. TUI, CLI, and browser remain clients. Public networking and remote identity belong to the planned relay boundary, so local execution does not inherit deployment infrastructure.
+
 <br/>
 
 ## Quick Start
 
-### Build and run the kernel
+### Build and validate
 
 ```powershell
 cd apps/backend
 .\scripts\zigw.ps1 build test --summary all    # compile + validate
 .\scripts\health.ps1                            # verify provider readiness
-.\zig-out\bin\VAR1.exe run --prompt "Count the lowercase letter r in strawberry."
+.\zig-out\bin\vantari.exe run --prompt "Count the lowercase letter r in strawberry."
 ```
 
-### Install the CLI with streaming TUI
+### Install VANTARI
 
 ```powershell
-cd apps/cli
-.\scripts\install-var.ps1
+cd apps/backend
+.\scripts\install_windows.ps1
 vantari c                                       # launch interactive TUI session
 ```
 
@@ -194,7 +215,7 @@ vantari workspace clear                         # return to directory-based reso
 ### Launch the browser workbench
 
 ```powershell
-.\zig-out\bin\VAR1.exe serve --host 127.0.0.1 --port 4310
+.\zig-out\bin\vantari.exe serve --host 127.0.0.1 --port 4310
 ```
 
 Open [`apps/frontend/var1-client/index.html`](./apps/frontend/var1-client/index.html) from a local HTTP server and point it at `http://127.0.0.1:4310`.
@@ -231,6 +252,22 @@ stateDiagram-v2
 ```
 
 Compaction never splits an assistant tool-call batch from its results. If the proposed suffix boundary falls inside a tool-call sequence, the compactor retracts to keep the batch intact. Manual and automatic compaction share the same primitive — the executor triggers it on budget threshold or provider overflow; operators trigger it via `session/compact` with configurable aggressiveness.
+
+### Scoped Memory
+
+VANTARI keeps memory deliberately smaller than the transcript. `messages.jsonl` remains the complete session record; memory is a compact, source-linked projection of facts, decisions, preferences, invariants, and lessons that are useful later.
+
+```text
+~/.vantari/
+  memories/memories.md                 global, human-readable, cross-workspace
+  sessions/<session-id>/memories.jsonl session-only, typed, append-only
+```
+
+The agent can remember something when the operator asks or when a durable decision would otherwise be lost. Uncertain and task-local knowledge defaults to session scope; only genuinely reusable preferences or lessons belong globally. A stable topic key makes repeated writes supersede earlier values, while `forget` appends a tombstone instead of erasing history. Every mutation records its trigger, source session, and transcript sequence.
+
+Recall is rebuilt at cold start and bounded by the `memory` policy in `~/.vantari/config.json`. Session entries are considered first; global entries are either always active or selected by deterministic relevance to the current request. Stored memory never outranks the current operator, applicable instructions, live code, or runtime evidence. Secrets and transcript-shaped payloads are rejected.
+
+Agents use `memory_read` and `memory_write`; humans can simply ask VANTARI to “remember this for this session,” “remember this globally,” or “forget the memory about `<topic>`,” then inspect the corresponding file directly. Autonomous background consolidation and embeddings remain intentionally unsupported until their lifecycle and measurable benefit are proven.
 
 ### Tool Governance
 
@@ -304,11 +341,33 @@ The system prompt carries compact summaries of native skill protocols. The `skil
 | `playwright` | Real browser automation for UI flows and visual verification |
 | `task-audit` | Implementation correctness review for drift and violations |
 
+### Provider Wire Adapters
+
+Provider records select a wire contract rather than relying on brand-name heuristics. The executor submits one kernel request shape; the selected adapter owns endpoint construction, message conversion, tool schema, streamed reconstruction, error envelopes, and account headers.
+
+| Wire API | Endpoint | Distinct pressure handled |
+|---|---|---|
+| `chat_completions` | `/v1/chat/completions` | SSE deltas, sparse parallel tool indexes, compatible cloud/local servers |
+| `responses` | `/v1/responses` | Input items, `function_call`, `function_call_output` |
+| `anthropic_messages` | `/v1/messages` | Top-level system prompt, content blocks, `input_schema`, required output budget |
+
+Model discovery normalizes the common LM Studio, vLLM, and llama.cpp response shapes. For local endpoints, a discovered model context window may replace the default only when the operator has not configured one explicitly.
+
+### Recovery and Process Supervision
+
+Recovery is derived from persisted evidence. JSONL readers retain a valid prefix across BOMs, malformed trailing rows, and duplicate sequence IDs. Session reads reconcile stale `running` state when no execution owner remains. Provider overflow writes a checkpoint and rebuilds context from storage before one bounded retry. Command execution owns process spawn, pipe draining, output ceilings, timeout, cancellation, and termination as one state machine.
+
+The invariant is cold-start legibility: after an interrupted process, the next client should be able to explain what completed, what did not, and which transition made that conclusion durable.
+
+### Durable Scheduling
+
+Schedules are kernel records, not wrappers around OS cron. The scheduler persists job state, due-time and misfire policy, leases, execution attempts, and reconciliation evidence. A host supervisor advances due jobs through the same session primitive used by manual execution; `schedule_job` and the schedule RPCs are control surfaces over that owner.
+
 <br/>
 
 ## Tool Catalog
 
-Nine built-in tool modules, each exporting a typed `definition`, `availability` spec, and `execute` contract:
+The model-visible catalog is generated from module-owned definitions. Each entry owns its JSON schema, availability probe, review risk, execution contract, and operator-facing description; the prompt does not maintain a second list.
 
 | Tool | Risk | Description |
 |---|---|---|
@@ -321,6 +380,7 @@ Nine built-in tool modules, each exporting a typed `definition`, `availability` 
 | `shell_exec` | `command_execution` | Bounded command execution — `argv` · `shell` · `bash` · `powershell` modes with timeout, output caps, and streaming |
 | `skill_info` | `read_only` | Skill capsule retrieval for protocol routing without prompt pollution |
 | `launch_agent` | `delegating` | Scoped child-session creation with capability profile validation |
+| `schedule_job` | `write_capable` | Durable scheduler job lifecycle — create, list, get, update, delete, pause, resume, run_now |
 
 **Agent orchestration tools** for parent-supervised child lifecycle:
 
@@ -330,7 +390,7 @@ Nine built-in tool modules, each exporting a typed `definition`, `availability` 
 | `wait_agent` | Blocking wait with configurable `timeout_ms` |
 | `list_agents` | Enumerate parent's active children |
 
-All tool definitions are schema-first. The registry resolves availability from module-owned specs — `search_files` probes the `iex` executable at startup and reports unavailable if absent, rather than failing at invocation time. `tools/list` and `VAR1 tools --json` expose the same catalog with availability metadata, examples, and usage hints.
+All tool definitions are schema-first. The registry resolves availability from module-owned specs — `search_files` probes the `iex` executable at startup and reports unavailable if absent, rather than failing at invocation time. `tools/list` and `vantari tools --json` expose the same catalog with availability metadata, examples, and usage hints.
 
 **Bounded output:** File tools accept full content when the provider delivers it; long generated artifacts still prefer `write_file` seed plus `append_file` chunks for progress and recovery. Shell output capture is capped at 64KB per stream. Output-budget violations return `ToolPayloadExceeded` with repair hints instead of silent truncation.
 
@@ -338,7 +398,7 @@ All tool definitions are schema-first. The registry resolves availability from m
 
 ## Protocol
 
-The kernel exposes JSON-RPC 2.0 methods over stdio. Browser clients reach the same methods through the HTTP bridge.
+The kernel exposes JSON-RPC 2.0 methods over stdio. The browser workbench reaches the same methods through the loopback HTTP bridge. A future relay may project the protocol over authenticated WebSockets, but does not exist in the shipped runtime.
 
 | Method | Operation |
 |---|---|
@@ -351,6 +411,9 @@ The kernel exposes JSON-RPC 2.0 methods over stdio. Browser clients reach the sa
 | `session/cancel` | Mark cancellation intent for a running session |
 | `session/get` | Return session summary, messages, and events |
 | `session/list` | Return known session summaries |
+| `schedule/get` | Read a durable scheduler job by ID |
+| `schedule/list` | List scheduler jobs, optionally including deleted |
+| `models/list` | Discover available models from the active or a specified provider |
 | `tools/list` | Return the tool catalog in text or JSON format |
 | `events/subscribe` | Enable `session/event` notifications |
 
@@ -430,7 +493,7 @@ flowchart LR
   output --> terminal["output.txt"]
 ```
 
-**Transcript integrity:** The context builder validates OpenAI-compatible tool-call adjacency before provider dispatch. An assistant message with tool calls must be followed by matching tool-result rows in source order. Orphan tool results and unresolved tool-call tails fail closed as transcript integrity errors — preventing corrupt or crash-interrupted ledgers from becoming malformed model context.
+**Transcript recovery:** The context builder normalizes only known crash-interrupted tool topology when compiling provider context. It synthesizes interruption results for unresolved assistant tool-call tails and skips orphan result rows that cannot be paired with a pending call. The append-only transcript is not rewritten; recovery is a deterministic provider-window projection over durable source evidence.
 
 **Derivative memory:** Entries must cite a source session and sequence range (`source_seq_start` / `source_seq_end`). Transcript replay-shaped payloads are rejected. `messages.jsonl` remains the only full durable transcript.
 
@@ -444,7 +507,9 @@ flowchart LR
 
 ### Bridge Access Control
 
-`VAR1 serve` binds to `127.0.0.1` by default. The access layer enforces:
+`vantari serve` binds to `127.0.0.1` by default. The local bridge uses a per-process random token: possession authorizes access for that process lifetime. It is a loopback control boundary, not remote identity. Public authentication belongs to the planned relay and is not claimed by the kernel.
+
+The access layer enforces:
 
 | Control | Mechanism |
 |---|---|
@@ -452,7 +517,7 @@ flowchart LR
 | **Token gate** | Per-process `bridge_token` issued via `/api/health`; required as `X-VAR1-Bridge-Token` for `/rpc` and `/events` |
 | **Payload redaction** | Sensitive fields and secret-shaped string values redacted from all bridge-visible responses |
 | **Audit trail** | `var1.bridge_audit.v1` JSONL records appended before audited RPCs dispatch; write failure blocks the action |
-| **Connection isolation** | Each socket accepted into a detached per-connection worker; long RPC/event requests do not serialize the listener |
+| **Connection admission** | A constant-size gate bounds active HTTP workers; long RPC/event requests do not serialize the listener or permit unbounded spawning |
 
 ### Fail-Closed Design
 
@@ -462,7 +527,8 @@ flowchart LR
 | Missing configured prompt file | Error, not silent fallback |
 | Empty configured prompt file | Error, not silent fallback |
 | Unknown `[context]` config key | Rejected, not ignored |
-| Transcript integrity violation | `OrphanToolResultTranscript` / `UnresolvedToolCallTranscript` error |
+| Crash-interrupted tool topology | Deterministic provider-window repair; transcript remains append-only |
+| Malformed JSONL suffix | Valid prefix retained; corruption surfaced as typed evidence |
 | Command output payload exceeds limit | `ToolPayloadExceeded` with repair hints |
 | External search binary absent | Tool reported unavailable at startup, not at invocation |
 | Bridge audit write failure | Action aborted |
@@ -488,57 +554,69 @@ The model receives a four-layer prompt envelope assembled at compile time:
 └─────────────────────────────────────────────────┘
 ```
 
-System and developer prompts are user-editable workspace files. The internal guardrail layer and tool-use contract are kernel-owned — they enforce workspace boundaries, tool protocol, and streaming discipline regardless of what the user prompt says. Prompt file paths in `settings.toml` must reference existing, non-empty files when explicitly configured.
+System and developer prompts are user-editable workspace files. The internal guardrail layer and tool-use contract are kernel-owned — they enforce workspace boundaries, tool protocol, and streaming discipline regardless of what the user prompt says. Prompt paths in `config.json` must reference existing, non-empty files when explicitly configured.
 
 <br/>
 
 ## Configuration
 
-Provider credentials in `.env`; runtime policy in `.var/config/settings.toml`.
+Installed state has two sibling owners under `$VANTARI_HOME` (normally `~/.vantari`):
+
+```text
+~/.vantari/
+├── config.json    non-secret runtime policy and environment-style overrides
+└── auth.json      provider credentials, account identity, active provider
+```
+
+Use `vantari config path|show|init|validate` to locate and validate the configuration. Because JSON has no comment syntax, the canonical template carries non-operative `_about` notes and a typed `_help` map beside every configurable value; validation rejects malformed or drifting documentation metadata. The runtime never prints or merges `auth.json` into config output.
 
 ### Provider
 
 | Parameter | Required | Default | Description |
 |---|---|---|---|
-| `BASE_URL` | yes | — | OpenAI-compatible provider base URL |
+| `BASE_URL` | yes | — | Provider base URL |
 | `API_KEY` | yes | — | Provider credential |
 | `MODEL` | yes | — | Model identifier sent to the provider |
 | `WORKSPACE` | no | `.` | Workspace root for `.var/` resolution |
+
+Wire shape is explicit rather than inferred from branding: set `provider.wire_api` to `chat_completions`, `responses`, or `anthropic_messages` in `config.json`.
 
 ### Execution Limits
 
 | Parameter | Default | Description |
 |---|---|---|
-| `MAX_STEPS` | `32` | Provider turn ceiling per session |
+| `MAX_STEPS` | `4096` | Provider turn ceiling per session |
 | `MAX_TOOL_CALLS_PER_TURN` | `16` | Tool-call ceiling per assistant turn |
 | `MAX_TOOL_CALLS_PER_SESSION` | `96` | Tool-call ceiling per session |
 
 ### Context Policy
 
-```toml
-[context]
-auto_compaction = true           # executor-triggered compaction
-manual_compaction = true         # session/compact RPC enabled
-context_window_tokens = 128000   # model context window size
-compact_at_ratio = 0.85          # threshold: estimated / window
-reserve_output_tokens = 8192     # tokens reserved for model output
-keep_recent_messages = 8         # raw messages kept after checkpoint
-max_entries_per_checkpoint = 0   # 0 = auto; N = rows per checkpoint
-aggressiveness_milli = 350       # compaction strength (0-1000)
-retry_on_provider_overflow = true # retry once after overflow checkpoint
+```json
+"context": {
+  "auto_compaction": true,
+  "manual_compaction": true,
+  "context_window_tokens": null,
+  "compact_at_ratio_milli": 850,
+  "reserve_output_tokens": 8192,
+  "keep_recent_messages": 8,
+  "max_entries_per_checkpoint": 0,
+  "aggressiveness_milli": 350,
+  "retry_on_provider_overflow": true
+}
 ```
 
-Unknown keys are rejected — typoed compaction controls cannot silently fall back to defaults.
+`context_window_tokens: null` permits local model discovery; a positive value is an explicit operator override. Unknown or mistyped values fail validation.
 
 ### Prompt Policy
 
-```toml
-[prompts]
-system_prompt_file = ".var/prompts/system.md"
-developer_prompt_file = ".var/prompts/developer.md"
+```json
+"prompts": {
+  "system_prompt_file": null,
+  "developer_prompt_file": null
+}
 ```
 
-Paths are workspace-relative quoted TOML strings. Missing or empty files with explicit paths fail closed.
+Prompt paths are workspace-relative. Missing or empty explicitly configured files fail closed. The `environment` object accepts `VANTARI_WORKSPACE`, `MAX_STEPS`, `MAX_TOOL_CALLS_PER_TURN`, and `MAX_TOOL_CALLS_PER_SESSION`; real process environment values have highest precedence.
 
 <br/>
 
@@ -568,7 +646,7 @@ Run a local agent that reads your codebase, executes tools with review gates, an
 
 **Teams shipping agent products**
 
-Embed the kernel as the execution backbone behind your own interface. Three clients already demonstrate the pattern — TUI, CLI, and browser — each speaking the same protocol to the same runtime.
+Embed the kernel behind your own interface. The shipped TUI, CLI, and browser bridge demonstrate the pattern: different interaction surfaces, one protocol, no duplicated executor.
 
 </td>
 <td width="33%">
@@ -594,10 +672,16 @@ Every tool call, context window, and model interaction is recorded in structured
 | Scoped delegation with typed capability profiles | **Shipped** |
 | HTTP bridge with origin guard, token gate, and audit trail | **Shipped** |
 | Native skill routing with on-demand capsule retrieval | **Shipped** |
+| Wire-protocol routing — Chat Completions, Responses, Anthropic Messages | **Shipped** |
+| Provider model discovery and local context-window detection | **Shipped** |
+| Durable scheduler records, leases, attempts, and host supervision | **Shipped** |
 | Plugin runtime with typed socket execution | **In progress** |
-| Multi-provider routing with fallback chains | Planned |
-| Distributed session federation | Planned |
-| Visual session replay and debugging | Planned |
+| Provider fallback chains | Planned |
+| Identity auth against `auth.vantari.one` — PKCE OAuth mirroring the openai-codex pattern | Planned |
+| Remote relay — authenticated WebSocket fan-out with no session ownership | Planned |
+| Multi-client session binding — connected clients as capability peers, not parallel authority. Client-offered tools must route through the existing module-owned catalog, not a parallel tool system | Planned |
+| Cloud dashboard as event-spine read model — same socket, read-only | Planned |
+| Frontend workbench — salvaged component library, deferred until socket contract is stable | Deferred |
 
 <br/>
 
@@ -608,13 +692,13 @@ Every tool call, context window, and model interaction is recorded in structured
 
 Zig gives the kernel properties that matter for an agent runtime:
 
-- **Single static binary** — no interpreter, no runtime, no dependency tree. `VAR1.exe` is the entire system.
+- **Single native executable** — no interpreter or language runtime after installation. Build-time packages compile into `vantari.exe`.
 - **Deterministic memory management** — no GC pauses during SSE streaming or tool dispatch. Every allocation has an explicit owner and a known lifetime.
 - **Compile-time verification** — the tool registry, risk classification, and capability profiles are verified at build time. Invalid configurations are compile errors, not runtime surprises.
 - **Cross-platform process supervision** — `shell_exec` handles argv, shell, bash, and PowerShell modes with native process spawning, timeout enforcement, and bounded output capture on Windows and POSIX.
 - **AtomicFile writes** — session metadata commits through Zig's atomic file primitive, preventing truncate-before-write corruption windows in the session store.
 
-The result is a 14,000-line kernel that compiles in seconds, ships as one file, and runs without asking anything of the host system.
+The result is a native runtime with explicit allocation, process, and protocol ownership. The executable is the deployment unit; the filesystem ledgers are the durable state.
 
 </details>
 
@@ -627,33 +711,44 @@ The session store uses the same durability model as database write-ahead logs:
 - `context.jsonl` is the **checkpoint file** — structured summaries with sequence range coverage, used by the context builder to create model-visible windows without mutating the transcript.
 - `events.jsonl` is the **audit trail** — every state transition, tool lifecycle event, and bridge action is recorded with timestamps.
 
-This separation means you can always reconstruct what happened from the transcript. Context compaction is a performance optimization, not a data operation. And every session directory is self-contained — copy it, inspect it with `cat`, or version it with git.
+This separation keeps recovery mechanical. Context compaction changes the model-visible projection, never transcript truth. Each session directory can be copied, inspected with ordinary text tools, or retained as execution evidence without a database export.
 
 </details>
 
 <details>
-<summary><strong>Why provider-agnostic</strong></summary>
+<summary><strong>Why provider wires are explicit</strong></summary>
 
-The kernel talks to any OpenAI-compatible endpoint through `src/core/providers/openai_compatible.zig`. This means:
+Provider branding is not a wire contract. VANTARI selects one of three typed adapters:
 
-- Cloud providers: OpenAI, Anthropic (via proxy), Google AI, Azure OpenAI
-- Local inference: LM Studio, Ollama, vLLM, llama.cpp server, LocalAI
-- Custom endpoints: any service that implements the chat completions API
+- **Chat Completions** — `/v1/chat/completions`, including compatible cloud and local servers
+- **OpenAI Responses** — `/v1/responses` with input items and function-call output
+- **Anthropic Messages** — `/v1/messages` with content blocks and `input_schema` tools
 
-Provider configuration is three environment variables: `BASE_URL`, `API_KEY`, `MODEL`. Switching providers is changing those values — no code changes, no adapter plugins, no SDK updates.
+The socket owns request/response semantics; provider records select base URL, model, credential, account context, and wire API. Unsupported wire behavior fails at the adapter boundary rather than being guessed from a provider name.
 
 </details>
 
 <details>
-<summary><strong>Why three clients, one protocol</strong></summary>
+<summary><strong>Why multiple clients, one protocol</strong></summary>
 
-Every client — TUI, CLI, browser — speaks JSON-RPC 2.0 to the same kernel runtime. This means:
+The shipped TUI, CLI, and browser bridge speak to the same kernel protocol. This means:
 
-- **No execution path divergence** — the TUI does not have a "different" agent loop than the browser. Both send `session/send` and receive the same events.
-- **No state duplication** — clients render session state, they don't own it. Kill the TUI mid-session, resume from the browser, continue from the CLI.
-- **No framework dependency** — the browser client is 480 lines of vanilla JavaScript. No React, no Vue, no Svelte, no npm, no build step.
+- **No execution path divergence** — clients submit `session/send`; the kernel advances the session.
+- **No state duplication** — clients render session state but do not own it. A session started in one surface remains recoverable through another.
+- **No framework dependency** — the browser client is 473 lines of vanilla JavaScript. No React, no Vue, no Svelte, no npm, no build step.
 
-Runtime truth lives in `.var/sessions/`. Clients are observation and control surfaces.
+Runtime truth lives in `.var/sessions/`. Future clients, including a relay or dashboard, must remain observation and control surfaces over that owner.
+
+</details>
+
+<details>
+<summary><strong>Why remote transport stays outside the kernel</strong></summary>
+
+The kernel already performs outbound provider HTTP and can expose a loopback HTTP bridge. What it does not own is public deployment transport: TLS termination, WebSocket fan-out, remote identity, tenancy, or edge policy.
+
+A future relay can supervise the kernel as a subprocess, subscribe to the event spine, and mirror frames to authenticated clients. The relay remains replaceable because it owns no transcript, provider context, or tool state.
+
+The boundary is simple: remote capability may add a process, but it may not add a second runtime authority.
 
 </details>
 
@@ -662,22 +757,29 @@ Runtime truth lives in `.var/sessions/`. Clients are observation and control sur
 ## CLI Reference
 
 ```text
-VAR1 run    --prompt <text>                   single-shot execution
-            --prompt-file <path>              prompt from file
-            --session-id <id>                 resume existing session
-            --json                            JSON output
+vantari run    --prompt <text>                  single-shot execution
+               --prompt-file <path>             prompt from file
+               --session-id <id>                resume existing session
+               --json                           JSON output
 
-VAR1 serve  --host <addr>  --port <n>         start HTTP bridge
+vantari serve  --host <addr>  --port <n>        start HTTP bridge
 
-VAR1 health --json                            provider readiness
+vantari health --json                           provider readiness
 
-VAR1 tools  --json                            tool catalog with availability
+vantari tools  --json                           tool catalog with availability
 
-vantari                                       launch streaming TUI
-vantari -c                                    continue latest session
-vantari workspace show|set <path>|clear       workspace management
-vantari sessions --limit <n> --json           list sessions
-vantari health --json                         installed binary health
+vantari schedule list [--json] [--include-deleted]   list scheduler jobs
+vantari schedule get <job-id> [--json]               inspect a scheduler job
+
+vantari models [--json] [--provider <id>]            discover available models
+
+vantari config path|show|init|validate                manage non-secret runtime policy
+
+vantari                                        launch streaming TUI
+vantari -c                                     continue latest session
+vantari workspace show|set <path>|clear        workspace management
+vantari sessions --limit <n> --json            list sessions
+vantari auth status|login|logout <provider>    identity and provider auth
 ```
 
 <br/>
@@ -686,9 +788,31 @@ vantari health --json                         installed binary health
 
 | Document | Purpose |
 |---|---|
+| [`AGENTS.md`](./AGENTS.md) | Kernel governance contract — ownership rules, anti-patterns, proof-gated lifecycle |
 | [`apps/backend/README.md`](./apps/backend/README.md) | Kernel internals, module ownership, layered architecture |
 | [`apps/backend/architecture.md`](./apps/backend/architecture.md) | Canonical architecture map with sequence diagrams and state machines |
 | [`apps/frontend/var1-client/README.md`](./apps/frontend/var1-client/README.md) | Browser workbench operator guide |
+
+<br/>
+
+## Validation
+
+The backend currently declares 1,470+ test cases across `apps/backend/src/` and `apps/backend/tests/`. They target state transitions, protocol edges, and failure pressure rather than line coverage:
+
+- Corrupted JSONL suffixes, torn writes, BOMs, duplicated sequence IDs
+- Stale running sessions with no active kernel owner
+- Crash-interrupted tool batches and deterministic provider-window repair
+- Context overflow recovery without duplicate transcript entries
+- Command timeout, process locks, stdout/stderr cap markers
+- Bridge token verification, origin guard, payload redaction
+- Delegation scope zero-value rejection and profile expansion validation
+
+```powershell
+cd apps/backend
+.\scripts\zigw.ps1 build test --summary all
+```
+
+The count is test inventory, not a substitute for a green checkout. Release proof requires the complete build graph above, a freshly installed Windows binary, provider health, and an end-to-end session through the installed executable. A passing assertion is useful only when it proves an invariant a shallow implementation would violate.
 
 <br/>
 

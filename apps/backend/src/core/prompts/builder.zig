@@ -1,6 +1,7 @@
 const std = @import("std");
 const fsutil = @import("../../shared/fsutil.zig");
 const tools = @import("../tools/runtime.zig");
+const memory = @import("../memory/store.zig");
 const types = @import("../../shared/types.zig");
 
 const default_system_prompt_path = ".var/prompts/system.md";
@@ -39,6 +40,16 @@ pub fn buildAgentSystemPrompt(
     execution_context: tools.ExecutionContext,
     prompt_policy: types.PromptPolicy,
 ) ![]u8 {
+    return buildAgentSystemPromptWithMemory(allocator, execution_context, prompt_policy, .{ .enabled = false }, "");
+}
+
+pub fn buildAgentSystemPromptWithMemory(
+    allocator: std.mem.Allocator,
+    execution_context: tools.ExecutionContext,
+    prompt_policy: types.PromptPolicy,
+    memory_policy: types.MemoryPolicy,
+    query: []const u8,
+) ![]u8 {
     const system_prompt = try readPromptLayer(
         allocator,
         execution_context.workspace_root,
@@ -59,6 +70,19 @@ pub fn buildAgentSystemPrompt(
 
     const catalog = try tools.renderCatalog(allocator, execution_context);
     defer allocator.free(catalog);
+    const memory_context = if (memory_policy.enabled)
+        try memory.renderContext(
+            allocator,
+            execution_context.workspace_root,
+            execution_context.parent_session_id,
+            query,
+            memory_policy.max_session_context_bytes,
+            memory_policy.max_global_context_bytes,
+            memory_policy.max_context_entries,
+        )
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(memory_context);
 
     const workspace_state_note = if (execution_context.workspace_state_enabled)
         "Workspace-state tools are enabled because this request is explicitly .var-state-related. Use init_workspace only when the canonical structure is missing or incomplete. Do not call todo_slice just to track the current run. If you call session_record with action:\"upsert\", provide session_name, status, and objective. If you call todo_slice with action:\"upsert\", provide category, todo_name, status, and objective."
@@ -97,7 +121,7 @@ pub fn buildAgentSystemPrompt(
         \\Delegation protocol: if agent tools are available, launch bounded child work only for branchable tasks that can make independent progress from a self-contained prompt: parallel external research, independent directory/codebase reconnaissance, file-level audits, or validation probes. Keep the parent on integration, sequencing, and final operator response. Do not delegate the immediate critical-path edit or a task whose result you need before the next local action.
         \\Child prompt protocol: give each child a finite objective, path/scope bounds, expected evidence shape, and required SITREP. Every child returns a compact SITREP with findings, evidence paths/commands, blockers, and residual risk. The parent waits or checks status at bounded intervals, fuses child SITREPs into one response, and preserves one canonical parent-owned conclusion.
         \\Supervision protocol: use list_agents for inventory, agent_status for non-blocking snapshots, and wait_agent only when collecting a result or terminal state. wait_agent accepts timeout_ms; set an explicit longer timeout such as 60000ms for substantial child work instead of many tiny wait loops.
-        \\Memory protocol: messages.jsonl remains transcript truth. Context checkpoints and derivative memories are secondary evidence surfaces. Use memory-capable tools only when they are present in the current catalog, cite source session/sequence evidence where required, and never turn memory into a second transcript or a substitute for live verification.
+        \\Memory protocol: review the injected Memory Context at session start and after prompt rebuilds, keep relevant entries in mind, and verify any drift-prone claim against live code or runtime evidence. messages.jsonl remains transcript truth; memory is compact secondary context, never a second transcript. When the operator explicitly asks to remember or forget something, use memory_write. You may also retain a durable fact, decision, preference, invariant, or lesson when losing it would impair later work. Default uncertain, codebase-specific, project, task, and one-session knowledge to session scope. Use global scope only for genuinely cross-workspace operator preferences or reusable lessons. Reusing a topic supersedes it; forgetting appends a tombstone. Never store secrets, raw transcript text, guesses, generated summaries, or facts that are cheaper and safer to read from current source.
         \\When child runs remain in flight after an assistant response, continue supervising internally. If an operator-visible waiting update is required, use exactly: "I will continue once agents complete; if any fail, I will follow up."
         \\{s}
         \\
@@ -110,6 +134,7 @@ pub fn buildAgentSystemPrompt(
         workspace_state_note,
     });
     try tools.skills.renderPromptCapsules(writer);
+    if (memory_context.len > 0) try writer.print("\n{s}\n", .{memory_context});
     try writer.print(
         \\
         \\When the work is done, return a direct final answer. Never invent tool output, validation results, or file changes.

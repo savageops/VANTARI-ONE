@@ -11,6 +11,7 @@ const append_file = @import("builtin/append_file.zig");
 const replace_in_file = @import("builtin/replace_in_file.zig");
 const shell_exec = @import("builtin/shell_exec.zig");
 const schedule_job = @import("builtin/schedule_job.zig");
+const memory = @import("builtin/memory.zig");
 const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
 
@@ -41,6 +42,8 @@ pub const file_tool_definitions = [_]types.ToolDefinition{
     shell_exec.definition,
     schedule_job.definition,
     skills.definition,
+    memory.definitions[0],
+    memory.definitions[1],
 };
 
 pub fn fileDefinitions() []const types.ToolDefinition {
@@ -57,6 +60,8 @@ const availability_entries = [_]AvailabilityEntry{
     .{ .name = shell_exec.definition.name, .spec = shell_exec.availability },
     .{ .name = schedule_job.definition.name, .spec = schedule_job.availability },
     .{ .name = skills.definition.name, .spec = skills.availability },
+    .{ .name = memory.definitions[0].name, .spec = .{} },
+    .{ .name = memory.definitions[1].name, .spec = .{} },
 };
 
 pub fn availabilitySpec(tool_name: []const u8) ?module.AvailabilitySpec {

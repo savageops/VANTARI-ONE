@@ -3,8 +3,10 @@ const context_compactor = @import("../core/context/compactor.zig");
 const loop = @import("../core/executor/loop.zig");
 const protocol_types = @import("../shared/protocol/types.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
+const models = @import("../core/providers/models.zig");
 const scheduler = @import("../core/scheduler/index.zig");
 const store = @import("../core/sessions/store.zig");
+const auth_store = @import("../core/auth/store.zig");
 const tools = @import("../core/tools/runtime.zig");
 const types = @import("../shared/types.zig");
 
@@ -26,7 +28,13 @@ pub const Error = error{
 const max_header_line_bytes = 8 * 1024;
 const max_notification_backlog = 512;
 const notification_poll_ms: u64 = 50;
-const stale_running_session_ms: i64 = 120_000;
+/// Stale-running reconciliation window. A session is considered stale when
+/// its persisted status is `.running` but no in-process kernel owns it AND
+/// no event has touched it for this duration. The previous 120s window was
+/// too long — a crashed process left the session unresumable for 2 minutes.
+/// 5s is enough to cover normal turn latency between events while ensuring
+/// a crashed/restarted process can self-heal near-instantly.
+const stale_running_session_ms: i64 = 5_000;
 
 const SessionRuntimeState = struct {
     enable_agent_tools: bool = true,
@@ -576,6 +584,9 @@ fn dispatch(
     if (std.mem.eql(u8, method_name, protocol_types.methods.health_get)) {
         return handleHealthGet(server);
     }
+    if (std.mem.eql(u8, method_name, protocol_types.methods.models_list)) {
+        return handleModelsList(server, params);
+    }
 
     return Error.MethodNotFound;
 }
@@ -649,10 +660,22 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         session_id: []const u8,
         prompt: ?[]const u8 = null,
         enable_agent_tools: ?bool = null,
+        model_override: ?[]const u8 = null,
     };
 
     var parsed = try parseParams(Args, server.allocator, params);
     defer parsed.deinit();
+
+    // Extract optional u64 overrides manually — std.json's optional-u64
+    // static parser overflows at comptime (f64 cannot represent maxInt(u64)).
+    const context_window_override: ?u64 = if (params) |v| blk: {
+        if (v != .object) break :blk null;
+        break :blk optionalU64FromObject(&v.object, "context_window_override") catch return Error.InvalidParams;
+    } else null;
+    const max_output_tokens: ?u64 = if (params) |v| blk: {
+        if (v != .object) break :blk null;
+        break :blk optionalU64FromObject(&v.object, "max_output_tokens") catch return Error.InvalidParams;
+    } else null;
 
     var session = store.readSessionRecord(server.allocator, server.config.workspace_root, parsed.value.session_id) catch {
         return Error.SessionNotFound;
@@ -687,6 +710,24 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
     server.runtime.setRunning(session.id, true);
     defer server.runtime.setRunning(session.id, false);
 
+    // Apply per-invocation provider overrides to a local config copy. The
+    // server's canonical config is untouched — overrides live only for this
+    // run. This lets the operator test a lesser model or a smaller context
+    // window without editing auth.json or config.json.
+    var effective_config = server.config.*;
+    var model_override_owned: ?[]u8 = null;
+    defer if (model_override_owned) |m| server.allocator.free(m);
+    if (parsed.value.model_override) |model| {
+        model_override_owned = try server.allocator.dupe(u8, model);
+        effective_config.openai_model = model_override_owned.?;
+    }
+    if (context_window_override) |window| {
+        effective_config.context_policy.context_window_tokens = window;
+    }
+    if (max_output_tokens) |tokens| {
+        effective_config.context_policy.reserve_output_tokens = tokens;
+    }
+
     const hooks = loop.Hooks{
         .context = server,
         .onSessionInitializedFn = onLoopSessionInitialized,
@@ -694,10 +735,10 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         .shouldCancelFn = onLoopShouldCancel,
     };
 
-    const result = loop.runPromptWithOptions(server.allocator, server.config.*, "", .{
+    const result = loop.runPromptWithOptions(server.allocator, effective_config, "", .{
         .transport = server.transport,
         .execution_context = .{
-            .workspace_root = server.config.workspace_root,
+            .workspace_root = effective_config.workspace_root,
             .parent_session_id = session.parent_session_id,
             .agent_service = if (server.runtime.enableAgentTools(session.id)) server.agent_service else null,
         },
@@ -1035,6 +1076,111 @@ fn handleHealthGet(server: *Server) ![]u8 {
     });
 }
 
+fn handleModelsList(server: *Server, params: ?std.json.Value) ![]u8 {
+    // Optional provider switch: when provider_id is present and differs from
+    // the active provider, resolve that provider's credentials from the auth
+    // ledger's providers map. This is multi-provider routing — the operator
+    // can discover models on a non-active provider without changing the
+    // active config.
+    var requested_provider: ?[]const u8 = null;
+    if (params) |value| {
+        if (value == .object) {
+            requested_provider = try optionalStringFromObject(&value.object, "provider_id");
+        }
+    }
+
+    const active_provider = server.config.auth_provider orelse "openai-compatible";
+    const is_active = requested_provider == null or
+        (requested_provider != null and std.mem.eql(u8, requested_provider.?, active_provider));
+
+    var resolved_provider_id: []const u8 = active_provider;
+    var resolved_base_url: []const u8 = server.config.openai_base_url;
+    var resolved_api_key: []const u8 = server.config.openai_api_key;
+    var resolved_auth: ?auth_store.ResolvedAuth = null;
+    defer if (resolved_auth) |ra| ra.deinit(server.allocator);
+
+    if (!is_active) {
+        // Resolve the requested provider from the auth ledger.
+        resolved_auth = auth_store.readProviderById(
+            server.allocator,
+            server.config.workspace_root,
+            requested_provider.?,
+        ) catch |err| switch (err) {
+            auth_store.Error.MissingProvider, auth_store.Error.MissingAuth => {
+                return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
+                    .provider = requested_provider.?,
+                    .base_url = "",
+                    .models = &.{},
+                    .status = "provider_not_found",
+                    .error_message = "requested provider is not in the auth ledger",
+                });
+            },
+            else => {
+                return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
+                    .provider = requested_provider.?,
+                    .base_url = "",
+                    .models = &.{},
+                    .status = "unreachable",
+                    .error_message = "failed to read auth ledger",
+                });
+            },
+        };
+        resolved_provider_id = resolved_auth.?.provider_id;
+        resolved_base_url = resolved_auth.?.base_url;
+        resolved_api_key = resolved_auth.?.api_key;
+    }
+
+    var discovered = models.listModels(server.allocator, resolved_base_url, resolved_api_key, null, resolved_provider_id) catch |err| switch (err) {
+        models.Error.Unreachable => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
+            .provider = resolved_provider_id,
+            .base_url = resolved_base_url,
+            .models = &.{},
+            .status = "unreachable",
+            .error_message = "provider offline or connection refused",
+        }),
+        models.Error.BadStatus => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
+            .provider = resolved_provider_id,
+            .base_url = resolved_base_url,
+            .models = &.{},
+            .status = "bad_status",
+            .error_message = "provider returned a non-200 response",
+        }),
+        models.Error.MalformedResponse => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
+            .provider = resolved_provider_id,
+            .base_url = resolved_base_url,
+            .models = &.{},
+            .status = "malformed",
+            .error_message = "provider returned an unexpected model list shape",
+        }),
+        else => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
+            .provider = resolved_provider_id,
+            .base_url = resolved_base_url,
+            .models = &.{},
+            .status = "unreachable",
+            .error_message = "unexpected discovery failure",
+        }),
+    };
+    defer discovered.deinit(server.allocator);
+
+    var summaries = try server.allocator.alloc(protocol_types.ModelSummary, discovered.models.len);
+    defer server.allocator.free(summaries);
+    for (discovered.models, 0..) |model, i| {
+        summaries[i] = .{
+            .id = model.id,
+            .owned_by = model.owned_by,
+            .context_length = model.context_length,
+        };
+    }
+
+    return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
+        .provider = discovered.provider_id,
+        .base_url = discovered.base_url,
+        .models = summaries,
+        .context_from_native_surface = discovered.context_from_native_surface,
+        .status = "ok",
+    });
+}
+
 fn onLoopSessionInitialized(ctx: ?*anyopaque, session_id: []const u8) anyerror!void {
     _ = ctx;
     _ = session_id;
@@ -1083,8 +1229,24 @@ fn parseParams(comptime T: type, allocator: std.mem.Allocator, params: ?std.json
 
 fn optionalStringFromObject(object: *const std.json.ObjectMap, key: []const u8) !?[]const u8 {
     const value = object.get(key) orelse return null;
-    if (value != .string) return Error.InvalidParams;
-    return value.string;
+    switch (value) {
+        .string => |s| return s,
+        .null => return null,
+        else => return Error.InvalidParams,
+    }
+}
+
+/// Extract an optional u64 from a JSON object. Accepts integer or float JSON
+/// numbers (defensive — some clients emit floats). Returns null when the key
+/// is absent or JSON null; returns InvalidParams on a non-numeric value.
+fn optionalU64FromObject(object: *const std.json.ObjectMap, key: []const u8) !?u64 {
+    const value = object.get(key) orelse return null;
+    return switch (value) {
+        .integer => |n| if (n < 0) Error.InvalidParams else @as(u64, @intCast(n)),
+        .float => |n| if (n < 0) Error.InvalidParams else @as(u64, @intFromFloat(n)),
+        .null => null,
+        else => Error.InvalidParams,
+    };
 }
 
 fn extractRequestId(object: std.json.ObjectMap) !?[]const u8 {

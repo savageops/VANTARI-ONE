@@ -11,6 +11,7 @@ pub const Error = error{
     AgentNameTaken,
     SpawnFailed,
     UnknownAgent,
+    NoBranchesToConverge,
 };
 
 pub const Service = struct {
@@ -66,6 +67,70 @@ fn launchFromHandle(
 ) anyerror![]u8 {
     const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
     return launch(service, allocator, parent_session_id, prompt, requested_name, delegation_scope);
+}
+
+/// Launch a child session checkpoint-addressed to a parent checkpoint. The
+/// child's context window starts from the shard checkpoint (parent checkpoint
+/// + branch input), not the full parent transcript. This is the
+/// checkpoint-addressed child launch (roadmap P1-06).
+///
+/// Writes an `open` shard checkpoint to the parent's context.jsonl linking
+/// the child to the parent checkpoint. When the child completes, the
+/// convergeBranches function marks it `converged`.
+pub fn launchFromCheckpoint(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
+    parent_checkpoint_id: []const u8,
+    branch_seq: u64,
+    prompt: []const u8,
+    requested_name: ?[]const u8,
+) ![]u8 {
+    // Create the child session with the parent reference.
+    const child_profile = profile_contract.defaultSubagentProfile();
+    const agent_name = if (requested_name) |value|
+        try allocator.dupe(u8, value)
+    else
+        try newAgentName(allocator);
+    defer allocator.free(agent_name);
+
+    var child_session = try store.initSessionWithOptions(allocator, service.config.workspace_root, prompt, .{
+        .status = .initialized,
+        .parent_session_id = parent_session_id,
+        .display_name = agent_name,
+        .agent_profile = child_profile.id,
+    });
+    defer child_session.deinit(allocator);
+
+    // Write an open shard checkpoint to the PARENT's context.jsonl.
+    // This marks the branch as active — the child's context starts from
+    // parent_checkpoint_id + this branch's prompt.
+    const branch_summary = try std.fmt.allocPrint(allocator, "Branch {d} ({s}): {s}", .{ branch_seq, agent_name, prompt });
+    defer allocator.free(branch_summary);
+    try store.appendShardCheckpoint(
+        allocator,
+        service.config.workspace_root,
+        parent_session_id,
+        parent_checkpoint_id,
+        branch_seq,
+        .open,
+        branch_summary,
+    );
+
+    // Emit the delegation event on the child's event spine.
+    try store.appendEvent(allocator, service.config.workspace_root, child_session.id, .{
+        .event_type = "session_delegated",
+        .message = branch_summary,
+        .timestamp_ms = std.time.milliTimestamp(),
+    });
+
+    // Return the child session id for the caller to track.
+    return std.fmt.allocPrint(allocator, "{{\"ok\":true,\"session_id\":{f},\"agent_name\":{f},\"parent_checkpoint_id\":{f},\"branch_seq\":{d}}}", .{
+        std.json.fmt(child_session.id, .{}),
+        std.json.fmt(agent_name, .{}),
+        std.json.fmt(parent_checkpoint_id, .{}),
+        branch_seq,
+    });
 }
 
 fn statusFromHandle(
@@ -239,6 +304,151 @@ fn wait(
 
         std.Thread.sleep(10 * std.time.ns_per_ms);
     }
+}
+
+/// Converge N child branch results into the parent session. This is the
+/// branch-and-converge reprocessing loop (roadmap P0-2):
+///
+/// 1. Read the output from each completed child session.
+/// 2. Merge them into a convergence summary.
+/// 3. Append a `converged` shard checkpoint to the parent's context.jsonl.
+/// 4. Append the merged result as an assistant message to the parent's transcript.
+///
+/// The parent transcript is append-only — convergence adds evidence, never
+/// rewrites. The shard checkpoint marks the branch lifecycle as converged.
+pub fn convergeBranches(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
+    parent_checkpoint_id: []const u8,
+    child_sessions: []const ChildBranchResult,
+) !void {
+    if (child_sessions.len == 0) return Error.NoBranchesToConverge;
+
+    // 1. Merge child outputs into a convergence summary.
+    var summary = std.array_list.Managed(u8).init(allocator);
+    errdefer summary.deinit();
+    const writer = summary.writer();
+    try writer.print("Converged {d} branch(es):\n", .{child_sessions.len});
+    for (child_sessions, 0..) |branch, i| {
+        try writer.print("\n## Branch {d} ({s})\n", .{ i + 1, branch.agent_name });
+        if (branch.output.len > 0) {
+            try writer.print("{s}\n", .{branch.output});
+        } else {
+            try writer.writeAll("(no output)\n");
+        }
+    }
+    const summary_str = try summary.toOwnedSlice();
+    defer allocator.free(summary_str);
+
+    // 2. Append a converged shard checkpoint to the parent's context.jsonl.
+    try store.appendShardCheckpoint(
+        allocator,
+        service.config.workspace_root,
+        parent_session_id,
+        parent_checkpoint_id,
+        1, // branch_seq for the convergence
+        .converged,
+        summary_str,
+    );
+
+    // 3. Append the merged result as an assistant message to the parent.
+    try store.appendSessionMessage(
+        allocator,
+        service.config.workspace_root,
+        parent_session_id,
+        .assistant,
+        summary_str,
+        std.time.milliTimestamp(),
+    );
+
+    // 4. Emit a convergence event on the parent's event spine.
+    try store.appendEvent(allocator, service.config.workspace_root, parent_session_id, .{
+        .event_type = "branch_converged",
+        .message = summary_str,
+        .timestamp_ms = std.time.milliTimestamp(),
+    });
+}
+
+/// Result of a completed child branch — the agent name and its output.
+pub const ChildBranchResult = struct {
+    agent_name: []const u8,
+    output: []const u8,
+};
+
+/// Reconcile open shard branches at cold start. Scans the parent session's
+/// context.jsonl for shard_checkpoint entries with branch_status "open".
+/// Any open shard whose latest lifecycle state is still "open" (no subsequent
+/// converged/abandoned entry for the same parent+branch_seq) is marked
+/// abandoned — the owning child process is presumed dead.
+///
+/// This is the shard-graph cold-start recovery primitive (roadmap P0-4b).
+/// Returns the count of shards marked abandoned.
+pub fn reconcileOpenShards(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
+) !usize {
+    const checkpoints = try store.readAllContextCheckpoints(
+        allocator, service.config.workspace_root, parent_session_id,
+    );
+    defer types.deinitContextCheckpoints(allocator, checkpoints);
+
+    // Track which (parent_checkpoint_id, branch_seq) pairs are still open.
+    // A pair is "settled" if any subsequent entry for the same pair has
+    // status converged or abandoned.
+    var abandoned_count: usize = 0;
+
+    for (checkpoints, 0..) |cp, i| {
+        // Only shard checkpoints with parent_checkpoint_id are relevant.
+        if (cp.parent_checkpoint_id == null) continue;
+        if (!std.mem.eql(u8, cp.entry_type, "shard_checkpoint")) continue;
+
+        // Only "open" shards are candidates for abandonment. If the branch
+        // status is converged or abandoned, it's already settled.
+        if (cp.branch_status != .open) continue;
+
+        // Check if any later checkpoint settles this branch (same parent +
+        // branch_seq, with a non-open status). If so, the open entry was
+        // already superseded and should NOT be re-abandoned.
+        var settled = false;
+        for (checkpoints[i + 1 ..]) |later| {
+            if (later.parent_checkpoint_id == null) continue;
+            if (!std.mem.eql(u8, later.entry_type, "shard_checkpoint")) continue;
+            if (std.mem.eql(u8, later.parent_checkpoint_id.?, cp.parent_checkpoint_id.?) and
+                later.branch_seq == cp.branch_seq and
+                later.branch_status != .open)
+            {
+                settled = true;
+                break;
+            }
+        }
+
+        // If already settled by a later entry, skip.
+        if (settled) continue;
+
+        if (!settled) {
+            // This open shard was never converged or abandoned — mark it
+            // abandoned now (the child process is presumed dead at cold start).
+            try store.appendShardCheckpoint(
+                allocator,
+                service.config.workspace_root,
+                parent_session_id,
+                cp.parent_checkpoint_id.?,
+                cp.branch_seq,
+                .abandoned,
+                "Branch abandoned at cold start: owning process is no longer running.",
+            );
+            try store.appendEvent(allocator, service.config.workspace_root, parent_session_id, .{
+                .event_type = "branch_abandoned",
+                .message = "Open shard abandoned at cold-start reconciliation.",
+                .timestamp_ms = std.time.milliTimestamp(),
+            });
+            abandoned_count += 1;
+        }
+    }
+
+    return abandoned_count;
 }
 
 fn list(

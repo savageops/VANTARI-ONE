@@ -1,27 +1,17 @@
 const std = @import("std");
+const config_file = @import("file.zig");
 const types = @import("../../shared/types.zig");
 
 pub const Error = error{
     InvalidValue,
 };
 
-const settings_path_parts = [_][]const u8{ ".var", "config", "settings.toml" };
-
 pub fn loadContextPolicy(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
     defaults: types.ContextPolicy,
 ) !types.ContextPolicy {
-    const settings_path = try std.fs.path.join(allocator, &.{ workspace_root, settings_path_parts[0], settings_path_parts[1], settings_path_parts[2] });
-    defer allocator.free(settings_path);
-
-    const content = std.fs.cwd().readFileAlloc(allocator, settings_path, 1024 * 1024) catch |err| switch (err) {
-        error.FileNotFound => return defaults,
-        else => return err,
-    };
-    defer allocator.free(content);
-
-    return parseContextPolicy(content, defaults);
+    return config_file.loadContextPolicy(allocator, workspace_root, defaults);
 }
 
 pub fn loadPromptPolicy(
@@ -29,16 +19,7 @@ pub fn loadPromptPolicy(
     workspace_root: []const u8,
     defaults: types.PromptPolicy,
 ) !types.PromptPolicy {
-    const settings_path = try std.fs.path.join(allocator, &.{ workspace_root, settings_path_parts[0], settings_path_parts[1], settings_path_parts[2] });
-    defer allocator.free(settings_path);
-
-    const content = std.fs.cwd().readFileAlloc(allocator, settings_path, 1024 * 1024) catch |err| switch (err) {
-        error.FileNotFound => return clonePromptPolicy(allocator, defaults),
-        else => return err,
-    };
-    defer allocator.free(content);
-
-    return parsePromptPolicy(allocator, content, defaults);
+    return config_file.loadPromptPolicy(allocator, workspace_root, defaults);
 }
 
 pub fn parseContextPolicy(content: []const u8, defaults: types.ContextPolicy) !types.ContextPolicy {

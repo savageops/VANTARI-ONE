@@ -898,14 +898,19 @@ test "loop retries once after provider-declared context overflow" {
 
     const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, result.session_id);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
-    try std.testing.expect(events.len >= 4);
+    // Event spine: session_started, turn_started (step 0), context_compaction_started,
+    // context_compaction_completed, turn_finished, assistant_response.
+    try std.testing.expect(events.len >= 5);
     try std.testing.expectEqualStrings("session_started", events[0].event_type);
-    try std.testing.expectEqualStrings("context_compaction_started", events[1].event_type);
-    try std.testing.expectEqualStrings("context_compaction_completed", events[2].event_type);
-    try std.testing.expectEqualStrings("assistant_response", events[events.len - 1].event_type);
-    try std.testing.expect(std.mem.indexOf(u8, events[1].message, "provider_overflow") != null);
-    try std.testing.expect(std.mem.indexOf(u8, events[2].message, "source_seq=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, events[2].message, "first_kept_seq=") != null);
+    try std.testing.expectEqualStrings("turn_started", events[1].event_type);
+    try std.testing.expectEqualStrings("context_compaction_started", events[2].event_type);
+    try std.testing.expectEqualStrings("context_compaction_completed", events[3].event_type);
+    // The terminal event is turn_finished (emitted after assistant_response),
+    // closing the turn lifecycle with measured token telemetry.
+    try std.testing.expectEqualStrings("turn_finished", events[events.len - 1].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[2].message, "provider_overflow") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[3].message, "source_seq=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[3].message, "first_kept_seq=") != null);
 }
 
 test "loop records a failed session when provider transport fails" {
@@ -943,10 +948,13 @@ test "loop records a failed session when provider transport fails" {
 
     const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, sessions[0].id);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
-    try std.testing.expectEqual(@as(usize, 2), events.len);
+    // Event spine: session_started, turn_started (step 0 ingress before the
+    // provider call fails), session_failed.
+    try std.testing.expectEqual(@as(usize, 3), events.len);
     try std.testing.expectEqualStrings("session_started", events[0].event_type);
-    try std.testing.expectEqualStrings("session_failed", events[1].event_type);
-    try std.testing.expect(std.mem.indexOf(u8, events[1].message, "ConnectionRefused") != null);
+    try std.testing.expectEqualStrings("turn_started", events[1].event_type);
+    try std.testing.expectEqualStrings("session_failed", events[2].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[2].message, "ConnectionRefused") != null);
     try std.testing.expectEqualStrings("session_failed", capture.last_event_type.?);
     try std.testing.expectEqualStrings("failed", capture.last_status.?);
 }
@@ -1297,7 +1305,7 @@ test "loop rebuilds provider payload after tool overflow without duplicating dur
     try std.testing.expect(std.mem.indexOf(u8, context_jsonl, "provider_overflow") != null);
 }
 
-test "loop fails closed before provider dispatch on unresolved persisted tool calls" {
+test "loop self-heals unresolved persisted tool calls before provider dispatch" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -1322,26 +1330,26 @@ test "loop fails closed before provider dispatch on unresolved persisted tool ca
         200,
     );
 
+    // Self-healing: the builder synthesizes a missing tool result for the
+    // unresolved tool call. The loop should proceed to the provider and
+    // complete the session — NOT hard-fail with UnresolvedToolCallTranscript.
     var capture = ProviderCallCapture{};
-    try std.testing.expectError(
-        VAR1.core.context.builder.Error.UnresolvedToolCallTranscript,
-        VAR1.core.executor.runPromptWithOptions(std.testing.allocator, config, "", .{
-            .transport = .{
-                .context = &capture,
-                .sendFn = mockSendShouldNotRun,
-            },
-            .execution_context = .{
-                .workspace_root = config.workspace_root,
-            },
-            .session_id = session.id,
-        }),
-    );
-    try std.testing.expect(!capture.called);
+    const result = try VAR1.core.executor.runPromptWithOptions(std.testing.allocator, config, "", .{
+        .transport = .{
+            .context = &capture,
+            .sendFn = mockSendShouldNotRun,
+        },
+        .execution_context = .{
+            .workspace_root = config.workspace_root,
+        },
+        .session_id = session.id,
+    });
+    defer result.deinit(std.testing.allocator);
+    try std.testing.expect(capture.called);
 
-    var failed = try VAR1.core.session_store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
-    defer failed.deinit(std.testing.allocator);
-    try std.testing.expectEqual(VAR1.shared.types.SessionStatus.failed, failed.status);
-    try std.testing.expectEqualStrings("UnresolvedToolCallTranscript", failed.failure_reason.?);
+    var completed = try VAR1.core.session_store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
+    defer completed.deinit(std.testing.allocator);
+    try std.testing.expectEqual(VAR1.shared.types.SessionStatus.completed, completed.status);
 }
 
 test "loop blocks undeclared tool calls before execution and returns protocol-visible denial" {
@@ -1447,4 +1455,52 @@ test "loop enforces the per-turn tool budget before dispatch" {
     defer std.testing.allocator.free(events);
     try std.testing.expect(std.mem.indexOf(u8, events, "tool_budget_exceeded") != null);
     try std.testing.expect(std.mem.indexOf(u8, events, "tool_completed") == null);
+}
+
+fn mockSendEmptyResponse(
+    _: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const u8,
+    _: []const u8,
+) anyerror![]u8 {
+    // Provider returns a structurally valid response with no content and no
+    // tool calls. The loop must handle this gracefully without crashing.
+    return allocator.dupe(u8,
+        \\{"model":"test","choices":[{"message":{"content":""}}]}
+    );
+}
+
+test "loop completes gracefully when provider returns empty response" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    const config = try makeConfig(std.testing.allocator, workspace_root, 3);
+    defer config.deinit(std.testing.allocator);
+
+    var capture = EventCapture{ .allocator = std.testing.allocator };
+    defer capture.deinit();
+
+    const result = try VAR1.core.executor.runPromptWithOptions(std.testing.allocator, config, "empty response test", .{
+        .transport = .{
+            .context = null,
+            .sendFn = mockSendEmptyResponse,
+        },
+        .execution_context = .{
+            .workspace_root = config.workspace_root,
+        },
+        .hooks = .{
+            .context = &capture,
+            .onSessionEventFn = captureSessionEvent,
+        },
+    });
+    defer result.deinit(std.testing.allocator);
+
+    // Session must reach a terminal state without crashing.
+    try std.testing.expect(capture.last_status != null);
+    try std.testing.expect(std.mem.eql(u8, capture.last_status.?, "completed") or
+        std.mem.eql(u8, capture.last_status.?, "failed"));
 }

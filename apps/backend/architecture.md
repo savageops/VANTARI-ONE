@@ -52,8 +52,8 @@ flowchart TB
   overflow --> provider
   evaluation --> store
   compactor --> store
-  store --> sessionRoot[".var/sessions/<id>/session.json + messages.jsonl + context.jsonl + events.jsonl + output.txt"]
-  docs --> processRoot[".var/todos + .var/changelog + .var/memories"]
+  store --> sessionRoot[".var/sessions/<id>/session.json + messages.jsonl + memories.jsonl + context.jsonl + events.jsonl + output.txt"]
+  docs --> processRoot[".var/todos + .var/changelog + .var/research + .var/docs"]
 ```
 
 ## Session message flow
@@ -273,13 +273,14 @@ Every session directory contains:
 
 - `session.json`
 - `messages.jsonl`
+- `memories.jsonl`
 - `context.jsonl`
 - `events.jsonl`
 - `output.txt`
 
-`messages.jsonl` is the complete append-only transcript. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested.
+`messages.jsonl` is the complete append-only transcript. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested.
 
-`.var/config/settings.toml` is the optional non-secret policy file. The `[context]` table owns `auto_compaction`, `manual_compaction`, `context_window_tokens`, `compact_at_ratio`, `reserve_output_tokens`, `keep_recent_messages`, `max_entries_per_checkpoint`, `aggressiveness_milli`, and `retry_on_provider_overflow`. The `[prompts]` table owns only `system_prompt_file` and `developer_prompt_file`, both workspace-relative. Provider URL, model, API keys, hidden guardrails, and auth-plan state do not move into this file.
+`$VANTARI_HOME/config.json` is the canonical non-secret policy file. Its typed sections own runtime limits, wire API selection, context policy, prompt paths, and supported environment-style overrides. `$VANTARI_HOME/auth.json` is the sibling credential/provider ledger. API keys, OAuth tokens, account identity, and active-provider state never move into config output. Nested/AppData auth paths are one-time migration inputs; `settings.toml` is no longer a runtime reader.
 
 `src/core/prompts/` owns the model-presented prompt envelope. When no project prompt override is configured, it uses compiled system/developer layers. When an override path is configured, the file must exist and contain non-whitespace content; missing or empty configured prompt layers fail closed. The builder then injects the hidden runtime guardrail layer from compiled code and appends the live tool catalog plus tool-use contract. Provider transport remains OpenAI-compatible by sending the resulting envelope as a system-role message while preserving internal/system/developer/tool boundaries inside the prompt text.
 
@@ -303,8 +304,10 @@ Every session directory contains:
   approximate provider-window token estimator and compaction-threshold calculator
 - `src/core/context/overflow.zig`
   provider-error classifier for explicit context-window overflow, excluding rate-limit and availability failures
+- `src/core/config/file.zig`
+  canonical `$VANTARI_HOME/config.json` loader, default materialization, environment precedence, and validation
 - `src/core/config/settings.zig`
-  optional `.var/config/settings.toml` policy loader for non-secret runtime controls
+  retained TOML parser tests only; live policy reads route through `config/file.zig`
 - `src/core/prompts/builder.zig`
   sole owner for assembling internal guardrails, user-editable system/developer prompt layers, and the live tool-use contract
 - `src/core/tools/`
@@ -312,7 +315,7 @@ Every session directory contains:
 - `src/core/agents/`
   child-session launch service, scoped delegation validation, and typed capability profiles
 - `src/core/memory/`
-  derivative memory contracts that cite source transcript sequence ranges without duplicating `messages.jsonl`
+  canonical two-scope memory schema, append stores, bounded recall compiler, source evidence, and derivative-memory validation without duplicating `messages.jsonl`
 - `src/core/evaluation/`
   redacted heartbeat, evaluator, and unsupported-behavior event append helpers
 - `src/core/plugins/`

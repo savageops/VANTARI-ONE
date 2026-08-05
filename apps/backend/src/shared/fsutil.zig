@@ -7,6 +7,10 @@ pub const PathError = error{
     PathOutsideWorkspace,
 };
 
+pub const RuntimeError = error{
+    RuntimeRootNotFound,
+};
+
 pub fn join(allocator: std.mem.Allocator, parts: []const []const u8) ![]u8 {
     return std.fs.path.join(allocator, parts);
 }
@@ -103,4 +107,102 @@ fn isWithinPath(root: []const u8, target: []const u8) bool {
 fn pathPrefixEqual(left: []const u8, right: []const u8) bool {
     if (builtin.os.tag == .windows) return std.ascii.eqlIgnoreCase(left, right);
     return std.mem.eql(u8, left, right);
+}
+
+/// Resolve the runtime root for Vantari state (sessions, auth, config, loops,
+/// schedules, personas). This replaces the workspace-anchored `.var/`.
+///
+/// Resolution order:
+/// 1. `$VANTARI_HOME` (explicit override — production sets this to ~/.vantari)
+/// 2. `$HOME/.vantari` (Linux/macOS/Windows with HOME)
+/// 3. `%USERPROFILE%\.vantari` (Windows native)
+/// 4. Fallback: `$LOCALAPPDATA/Vantari` (Windows)
+///
+/// The directory is created if it does not exist. For test isolation, tests
+/// pass their tmp dir as workspace_root and the path functions use it directly
+/// (not runtimeRoot) — see runtimeRootForWorkspace below.
+pub fn runtimeRoot(allocator: std.mem.Allocator) ![]u8 {
+    // 1. Explicit override
+    if (std.process.getEnvVarOwned(allocator, "VANTARI_HOME")) |env_path| {
+        ensureDirExists(env_path) catch {};
+        return env_path;
+    } else |_| {}
+
+    // 2. HOME/.vantari (works on Linux, macOS, and Windows with HOME set)
+    if (std.process.getEnvVarOwned(allocator, "HOME")) |home| {
+        defer allocator.free(home);
+        const path = try std.fs.path.join(allocator, &.{ home, ".vantari" });
+        ensureDirExists(path) catch {};
+        return path;
+    } else |_| {}
+
+    // 3. USERPROFILE\.vantari (Windows native)
+    if (std.process.getEnvVarOwned(allocator, "USERPROFILE")) |profile| {
+        defer allocator.free(profile);
+        const path = try std.fs.path.join(allocator, &.{ profile, ".vantari" });
+        ensureDirExists(path) catch {};
+        return path;
+    } else |_| {}
+
+    // 4. LOCALAPPDATA/Vantari (Windows fallback)
+    if (std.process.getEnvVarOwned(allocator, "LOCALAPPDATA")) |local| {
+        defer allocator.free(local);
+        const path = try std.fs.path.join(allocator, &.{ local, "Vantari" });
+        ensureDirExists(path) catch {};
+        return path;
+    } else |_| {}
+
+    return error.RuntimeRootNotFound;
+}
+
+/// Resolve the runtime root for a given workspace context.
+///
+/// Resolution order:
+/// 1. `$VANTARI_HOME` (production sets this to `~/.vantari`)
+/// 2. `workspace_root + ".var"` (test isolation + backward compatibility)
+///
+/// Production sets `VANTARI_HOME=$HOME/.vantari` (or `%USERPROFILE%\.vantari`)
+/// via the install script. Tests pass their tmp dir as `workspace_root` and
+/// state lands in `<tmp>/.var/` — matching every existing test's inline path
+/// construction. No test changes needed.
+pub fn runtimeRootForWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
+    // 1. Explicit env override (production)
+    if (std.process.getEnvVarOwned(allocator, "VANTARI_HOME")) |env_path| {
+        ensureDirExists(env_path) catch {};
+        return env_path;
+    } else |_| {}
+
+    // 2. Workspace-local .var (backward compatible with existing tests)
+    const local = try std.fs.path.join(allocator, &.{ workspace_root, ".var" });
+    ensureDirExists(local) catch {};
+    return local;
+}
+
+/// Resolve a subdirectory under the runtime root (e.g. "sessions", "auth",
+/// "loops"). Creates the subdirectory if it does not exist.
+pub fn runtimePath(allocator: std.mem.Allocator, subsystem: []const u8) ![]u8 {
+    const root = try runtimeRoot(allocator);
+    defer allocator.free(root);
+    const path = try std.fs.path.join(allocator, &.{ root, subsystem });
+    ensureDirExists(path) catch {};
+    return path;
+}
+
+/// Resolve a file under a subsystem directory in the runtime root.
+/// Example: runtimeFilePath(allocator, "auth", "auth.json")
+pub fn runtimeFilePath(allocator: std.mem.Allocator, subsystem: []const u8, filename: []const u8) ![]u8 {
+    const root = try runtimeRoot(allocator);
+    defer allocator.free(root);
+    return std.fs.path.join(allocator, &.{ root, subsystem, filename });
+}
+
+fn ensureDirExists(path: []const u8) !void {
+    std.fs.cwd().makePath(path) catch {};
+}
+
+test "runtimeRoot returns a valid path" {
+    const root = try runtimeRoot(std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    try std.testing.expect(root.len > 0);
+    try std.testing.expect(std.fs.path.isAbsolute(root));
 }

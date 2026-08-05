@@ -238,6 +238,7 @@ fn mockStreamingShellRunner(
         .exit_code = 7,
         .stdout = try allocator.dupe(u8, "alpha"),
         .stderr = try allocator.dupe(u8, "warn"),
+        .truncated = true,
     };
 }
 
@@ -378,6 +379,7 @@ test "plugin manifest validates declared sockets without loading plugins" {
         .kind = .tool,
         .name = "lookup_ticket",
         .entry = "tools/lookup_ticket",
+        .review_risk = "read_only",
     }};
 
     try VAR1.core.plugins.validateManifest(.{
@@ -398,6 +400,7 @@ test "plugin manifest validates declared sockets without loading plugins" {
             .kind = .tool,
             .name = "lookup-ticket",
             .entry = "tools/lookup_ticket",
+            .review_risk = "read_only",
         }},
     }));
 }
@@ -953,19 +956,19 @@ test "workspace-state tools scaffold and manage canonical root artifacts" {
 
     var memories_append = try makeToolCall(
         std.testing.allocator,
-        "memory_ledger",
-        "{\"action\":\"append\",\"content\":\"- Learned that the root workspace-state tools must stay inside .var/.\"}",
+        "memory_write",
+        "{\"operation\":\"remember\",\"scope\":\"global\",\"kind\":\"lesson\",\"topic\":\"workspace-state-boundary\",\"content\":\"Root workspace-state tools stay inside .var/.\",\"trigger\":\"agent_decided\",\"activation\":\"relevant\"}",
     );
     defer memories_append.deinit(std.testing.allocator);
     const memories_append_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), memories_append);
     defer std.testing.allocator.free(memories_append_output);
-    try std.testing.expect(std.mem.indexOf(u8, memories_append_output, "APPENDED_BYTES") != null);
+    try std.testing.expect(std.mem.indexOf(u8, memories_append_output, "\"ok\":true") != null);
 
-    var memories_read = try makeToolCall(std.testing.allocator, "memory_ledger", "{\"action\":\"read\"}");
+    var memories_read = try makeToolCall(std.testing.allocator, "memory_read", "{\"scope\":\"global\",\"query\":\"workspace state boundary\"}");
     defer memories_read.deinit(std.testing.allocator);
     const memories_read_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), memories_read);
     defer std.testing.allocator.free(memories_read_output);
-    try std.testing.expect(std.mem.indexOf(u8, memories_read_output, "root workspace-state tools") != null);
+    try std.testing.expect(std.mem.indexOf(u8, memories_read_output, "Root workspace-state tools") != null);
     try std.testing.expect(std.mem.indexOf(u8, memories_read_output, ".var/") != null);
 
     var research_write = try makeToolCall(
@@ -1125,6 +1128,9 @@ test "shell_exec forwards stdout stderr and cap deltas through the tool event si
     try std.testing.expectEqual(VAR1.core.tool_runtime.CommandOutputStream.stdout, capture.records[2].stream);
     try std.testing.expectEqualStrings("", capture.records[2].chunk);
     try std.testing.expect(capture.records[2].cap_reached);
+
+    // The typed truncation marker must appear in the tool output JSON.
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"truncated\":true") != null);
 }
 
 test "shell_exec rejects contradictory command shapes before process launch" {
@@ -1506,4 +1512,163 @@ test "tool call summary masks child supervision tool names in logs" {
     try std.testing.expect(std.mem.indexOf(u8, summary, "child_run_wait") != null);
     try std.testing.expect(std.mem.indexOf(u8, summary, "read_file") != null);
     try std.testing.expect(std.mem.indexOf(u8, summary, "launch_agent") == null);
+}
+
+fn mockTimeoutRunner(
+    _: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const []const u8,
+    limits: VAR1.core.tool_runtime.CommandLimits,
+) anyerror!VAR1.core.tool_runtime.CommandOutput {
+    _ = limits;
+    // Simulate a command that produced partial output before timing out.
+    return .{
+        .exit_code = 1,
+        .stdout = try allocator.dupe(u8, "partial"),
+        .stderr = try allocator.dupe(u8, ""),
+        .timed_out = true,
+        .truncated = false,
+    };
+}
+
+test "shell_exec surfaces typed timeout evidence in the tool result" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var shell_call = try makeToolCall(
+        std.testing.allocator,
+        "shell_exec",
+        "{\"mode\":\"argv\",\"argv\":[\"slow-command\"],\"timeout_ms\":100}",
+    );
+    defer shell_call.deinit(std.testing.allocator);
+
+    const output = try VAR1.core.tool_runtime.executeWithRunner(std.testing.allocator, .{
+        .workspace_root = workspace_root,
+    }, shell_call, .{
+        .context = null,
+        .runFn = mockCommandRunner,
+        .runWithLimitsFn = mockTimeoutRunner,
+    });
+    defer std.testing.allocator.free(output);
+
+    // The timeout evidence must be typed in the JSON output.
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"timed_out\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"exit_code\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"stdout\":\"partial\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"truncated\":false") != null);
+}
+
+fn mockTruncatedAndTimedOutRunner(
+    _: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const []const u8,
+    limits: VAR1.core.tool_runtime.CommandLimits,
+) anyerror!VAR1.core.tool_runtime.CommandOutput {
+    _ = limits;
+    // Simulate a command that exceeded both the output budget and the timeout.
+    return .{
+        .exit_code = 1,
+        .stdout = try allocator.dupe(u8, "big"),
+        .stderr = try allocator.dupe(u8, "err"),
+        .timed_out = true,
+        .truncated = true,
+    };
+}
+
+test "shell_exec surfaces both truncation and timeout evidence simultaneously" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var shell_call = try makeToolCall(
+        std.testing.allocator,
+        "shell_exec",
+        "{\"mode\":\"argv\",\"argv\":[\"huge-slow\"],\"timeout_ms\":50,\"max_output_bytes\":3}",
+    );
+    defer shell_call.deinit(std.testing.allocator);
+
+    const output = try VAR1.core.tool_runtime.executeWithRunner(std.testing.allocator, .{
+        .workspace_root = workspace_root,
+    }, shell_call, .{
+        .context = null,
+        .runFn = mockCommandRunner,
+        .runWithLimitsFn = mockTruncatedAndTimedOutRunner,
+    });
+    defer std.testing.allocator.free(output);
+
+    // Both evidence markers must be present and typed.
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"timed_out\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"truncated\":true") != null);
+}
+
+test "shell_exec kills child process tree on timeout (Windows Job Object)" {
+    // This is a real process test, not a mock. It verifies that a command
+    // that exceeds the timeout is killed cleanly. On Windows, the Job Object
+    // with KILL_ON_JOB_CLOSE ensures the entire process tree dies.
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    // Use Start-Sleep to create a long-running process that exceeds the
+    // timeout. The Job Object with KILL_ON_JOB_CLOSE must kill it.
+    var shell_call = try makeToolCall(
+        std.testing.allocator,
+        "shell_exec",
+        "{\"mode\":\"shell\",\"command\":\"Start-Sleep -Seconds 10\",\"timeout_ms\":500}",
+    );
+    defer shell_call.deinit(std.testing.allocator);
+
+    const output = VAR1.core.tool_runtime.execute(std.testing.allocator, .{
+        .workspace_root = workspace_root,
+    }, shell_call) catch |err| {
+        // A CommandTimedOut error is also valid — the process was killed.
+        if (err == error.CommandTimedOut) return;
+        return err;
+    };
+    defer std.testing.allocator.free(output);
+
+    // The command must have been killed — either timed_out or an error.
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"timed_out\":true") != null);
+}
+
+test "shell_exec drains pipe after cap to prevent deadlock (bounded draining)" {
+    // This is a real process test: a command that writes more than
+    // max_output_bytes to stdout. Without continued draining after the cap,
+    // the process would block on a full pipe buffer and never exit.
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    // Generate 64KB of output (larger than typical pipe buffer of 4KB-8KB)
+    // with a very small max_output_bytes to force the cap.
+    var shell_call = try makeToolCall(
+        std.testing.allocator,
+        "shell_exec",
+        "{\"mode\":\"shell\",\"command\":\"1..10000 | ForEach-Object { Write-Host ('x' * 100) }\",\"timeout_ms\":10000,\"max_output_bytes\":100}",
+    );
+    defer shell_call.deinit(std.testing.allocator);
+
+    const output = try VAR1.core.tool_runtime.execute(std.testing.allocator, .{
+        .workspace_root = workspace_root,
+    }, shell_call);
+    defer std.testing.allocator.free(output);
+
+    // The command must complete (not hang/deadlock) and show truncation.
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"truncated\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"timed_out\":false") != null);
 }
