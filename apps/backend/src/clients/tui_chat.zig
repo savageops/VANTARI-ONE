@@ -277,7 +277,13 @@ const ChatState = struct {
             var changed = try self.drainProgress(session_id, 0);
             changed += try self.syncDurableProgressIfDue(session_id);
             if (try self.drainUiEventsDuringTurn(vx, tty, loop, session_id, input)) changed += 1;
-            if (changed > 0) try draw(vx, writer, self, input);
+            if (changed > 0) {
+                try draw(vx, writer, self, input);
+                // Events are flowing — poll again immediately, don't sleep.
+                // The unconditional sleep was throttling live streaming to
+                // 1 event per poll cycle.
+                continue;
+            }
             std.Thread.sleep(progress_poll_ms * std.time.ns_per_ms);
         }
         thread.join();
@@ -1545,8 +1551,8 @@ const max_progress_message_bytes: usize = 220;
 const max_tool_output_preview_bytes: usize = 180;
 const max_tool_output_payload_bytes: usize = 180;
 const max_seen_progress_events: usize = 512;
-const progress_poll_ms: u64 = 50;
-const durable_sync_interval_ms: i64 = 100;
+const progress_poll_ms: u64 = 30;
+const durable_sync_interval_ms: i64 = 30;
 
 fn formatProgress(allocator: std.mem.Allocator, event_type: []const u8, message: []const u8) !?[]u8 {
     if (std.mem.eql(u8, event_type, "tool_requested")) return formatToolRequested(allocator, message);
