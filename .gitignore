@@ -4,12 +4,23 @@
 **/.env.*.local
 
 # Runtime, research, and operator-local state
-**/.docs/
+# Note: .docs/roadmap and .docs/todo/changelog are tracked project docs
+# (AGENTS.md §XVII requires the changelog as a definition-of-done artifact).
+# Only local research analysis and scratch state stay ignored here.
+**/.docs/research/
+**/.docs/log.txt
+**/.docs/log.dedup.txt
+**/.docs/progress_log.md
+# Stale nested duplicate from a prior path-normalization migration
+.docs/.docs/
 **/.ix/
 **/.refs/
 **/.var/
 **/.untrack/
 /data/
+
+# Stray empty artifacts from shell redirects
+Created
 
 # Zig toolchains and build outputs
 **/.toolchain/
@@ -89,6 +100,9 @@ build/Release/
 # Local experiments
 /apps/backend/playground/
 /apps/backend/src/ui/
+
+# Agent session state (local-only plans, memories, exec logs)
+.zcode/
 
 # Frontend — local-only, never committed to the shared branches
 /apps/frontend/
