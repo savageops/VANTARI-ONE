@@ -30,6 +30,8 @@ pub const Service = struct {
             .statusFn = statusFromHandle,
             .waitFn = waitFromHandle,
             .listFn = listFromHandle,
+            .convergeFn = convergeFromHandle,
+            .reconcileFn = reconcileFromHandle,
         };
     }
 };
@@ -163,6 +165,132 @@ fn listFromHandle(
     return list(service, allocator, parent_session_id);
 }
 
+fn convergeFromHandle(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
+) anyerror!void {
+    const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
+    return convergeFromListing(service, allocator, parent_session_id);
+}
+
+fn reconcileFromHandle(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
+) anyerror!usize {
+    const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
+    return reconcileOpenShards(service, allocator, parent_session_id);
+}
+
+/// Extract a field value from a single-line list entry. The list format is
+/// space-separated `KEY VALUE` pairs on one line. Returns the value token
+/// after the key, or null if the key is not found.
+fn fieldValueFromListLine(line: []const u8, key: []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < line.len) {
+        // Skip whitespace to find the next token start.
+        while (i < line.len and line[i] == ' ') : (i += 1) {}
+        if (i >= line.len) break;
+
+        // Read the token.
+        const tok_start = i;
+        while (i < line.len and line[i] != ' ') : (i += 1) {}
+        const token = line[tok_start..i];
+
+        // The NEXT token (if any) is this key's value.
+        while (i < line.len and line[i] == ' ') : (i += 1) {}
+        if (i >= line.len) return null;
+        const val_start = i;
+        while (i < line.len and line[i] != ' ') : (i += 1) {}
+        const value = line[val_start..i];
+
+        if (std.mem.eql(u8, token, key)) return value;
+    }
+    return null;
+}
+
+/// Converge all terminal children of a parent session. Reads the child list,
+/// collects outputs from completed children, and calls convergeBranches to
+/// write the convergence evidence. This is called by the executor loop when
+/// all children are terminal — it's the live branch-and-converge path.
+fn convergeFromListing(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
+) !void {
+    const listing = try list(service, allocator, parent_session_id);
+    defer allocator.free(listing);
+
+    if (std.mem.eql(u8, std.mem.trim(u8, listing, " \r\n"), "No child agents.")) return;
+
+    // The list output is one line per child with space-separated KEY VALUE pairs:
+    // AGENT_NAME <name> STATUS <status> SESSION_ID <id> LIFECYCLE_STATE ... ...
+    var results = std.array_list.Managed(ChildBranchResult).init(allocator);
+    defer {
+        for (results.items) |r| {
+            allocator.free(r.agent_name);
+            allocator.free(r.output);
+        }
+        results.deinit();
+    }
+
+    var lines = std.mem.splitScalar(u8, listing, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \r");
+        if (line.len == 0) continue;
+
+        const child_status = fieldValueFromListLine(line, "STATUS") orelse continue;
+        if (!std.mem.eql(u8, child_status, "completed")) continue;
+
+        const session_id = fieldValueFromListLine(line, "SESSION_ID") orelse continue;
+        const agent_name = fieldValueFromListLine(line, "AGENT_NAME") orelse "unknown";
+
+        const output = store.readOutput(allocator, service.config.workspace_root, session_id) catch null;
+        const owned_output = output orelse try allocator.dupe(u8, "");
+        try results.append(.{
+            .agent_name = try allocator.dupe(u8, agent_name),
+            .output = owned_output,
+        });
+    }
+
+    if (results.items.len == 0) return;
+
+    // Determine the parent checkpoint ID for the convergence shard checkpoint.
+    const parent_cp_id = blk: {
+        const maybe_cp = store.readLatestContextCheckpoint(allocator, service.config.workspace_root, parent_session_id) catch null;
+        if (maybe_cp) |cp| {
+            defer cp.deinit(allocator);
+            break :blk try allocator.dupe(u8, cp.id);
+        }
+        break :blk try allocator.dupe(u8, "parent-root");
+    };
+    defer allocator.free(parent_cp_id);
+
+    try convergeBranches(service, allocator, parent_session_id, parent_cp_id, results.items);
+}
+
+/// Count existing shard_checkpoint entries for a parent session to derive
+/// the next branch_seq. Each new branch gets a monotonically increasing seq
+/// so multiple branches from the same parent are distinguishable (1, 2, 3...).
+fn nextBranchSeq(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    parent_session_id: []const u8,
+) !u64 {
+    const checkpoints = store.readAllContextCheckpoints(
+        allocator, workspace_root, parent_session_id,
+    ) catch return 1;
+    defer types.deinitContextCheckpoints(allocator, checkpoints);
+
+    var max_seq: u64 = 0;
+    for (checkpoints) |cp| {
+        if (!std.mem.eql(u8, cp.entry_type, "shard_checkpoint")) continue;
+        if (cp.branch_seq > max_seq) max_seq = cp.branch_seq;
+    }
+    return max_seq + 1;
+}
+
 fn launch(
     service: *Service,
     allocator: std.mem.Allocator,
@@ -215,6 +343,43 @@ fn launch(
     });
     defer allocator.free(delegation_log);
     try docs_sync.appendLog(allocator, service.config.workspace_root, delegation_log);
+
+    // Write an `open` shard checkpoint to the PARENT's context.jsonl. This
+    // marks the branch as active in the shard ledger — the child's work is
+    // tracked as a branch of the parent. When the child completes and the
+    // executor's convergence path runs, this entry is superseded by a
+    // `converged` (or cold-start `abandoned`) entry. (roadmap P0-1, P0-2)
+    {
+        const branch_seq = try nextBranchSeq(allocator, service.config.workspace_root, parent_session_id);
+        const parent_cp_id = blk: {
+            const maybe_cp = store.readLatestContextCheckpoint(allocator, service.config.workspace_root, parent_session_id) catch null;
+            if (maybe_cp) |cp| {
+                defer allocator.free(cp.id);
+                break :blk try allocator.dupe(u8, cp.id);
+            }
+            break :blk try allocator.dupe(u8, "parent-root");
+        };
+        defer allocator.free(parent_cp_id);
+
+        const branch_summary = try std.fmt.allocPrint(allocator, "Branch {d} ({s}): {s}", .{ branch_seq, agent_name, prompt });
+        defer allocator.free(branch_summary);
+        store.appendShardCheckpoint(
+            allocator,
+            service.config.workspace_root,
+            parent_session_id,
+            parent_cp_id,
+            branch_seq,
+            .open,
+            branch_summary,
+        ) catch |err| {
+            // A shard checkpoint write failure is not fatal to the delegation
+            // itself — the child can still run. But it means the branch won't
+            // be tracked in the shard ledger, so log the failure.
+            const warn = try std.fmt.allocPrint(allocator, "shard checkpoint write failed for branch {d}: {s}", .{ branch_seq, @errorName(err) });
+            defer allocator.free(warn);
+            docs_sync.appendLog(allocator, service.config.workspace_root, warn) catch {};
+        };
+    }
 
     const exe_path = try std.fs.selfExePathAlloc(allocator);
     defer allocator.free(exe_path);

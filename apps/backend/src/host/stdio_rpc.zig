@@ -685,6 +685,12 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
     try server.runtime.ensureSession(server.allocator, session.id, parsed.value.enable_agent_tools);
     try reconcileStaleRunningSession(server, &session);
 
+    // Cold-start shard reconciliation: mark any orphaned open shard branches
+    // (whose owning child process died) as `abandoned`. This ensures a
+    // crashed parent never leaves phantom open branches in the shard ledger.
+    // (roadmap P0-4b)
+    _ = server.agent_service.reconcile(server.allocator, session.id) catch 0;
+
     if (parsed.value.prompt) |next_prompt_raw| {
         const next_prompt = std.mem.trim(u8, next_prompt_raw, " \t\r\n");
         if (next_prompt.len == 0) return Error.InvalidParams;
@@ -1528,6 +1534,14 @@ fn noopList(
     return error.UnexpectedCall;
 }
 
+fn noopConverge(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8) anyerror!void {
+    return error.UnexpectedCall;
+}
+
+fn noopReconcile(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8) anyerror!usize {
+    return error.UnexpectedCall;
+}
+
 const test_config = types.Config{
     .openai_base_url = @constCast("http://127.0.0.1:1234"),
     .openai_api_key = @constCast("test-key"),
@@ -1550,6 +1564,8 @@ fn makeTestServer() Server {
             .statusFn = noopAgentStatus,
             .waitFn = noopWait,
             .listFn = noopList,
+            .convergeFn = noopConverge,
+            .reconcileFn = noopReconcile,
         },
         .stdout_file = std.fs.File.stdout(),
     };

@@ -1504,3 +1504,189 @@ test "loop completes gracefully when provider returns empty response" {
     try std.testing.expect(std.mem.eql(u8, capture.last_status.?, "completed") or
         std.mem.eql(u8, capture.last_status.?, "failed"));
 }
+
+// =============================================================================
+// Branch-and-converge wired path probes (roadmap P0-1, P0-2, P0-4b)
+// These tests verify the shard ledger is live, not just unit-tested.
+// =============================================================================
+
+fn seedParentAndBranch(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    branch_prompt: []const u8,
+    agent_name: []const u8,
+) !struct { parent_id: []u8, child_id: []u8 } {
+    var parent = try VAR1.core.session_store.initSession(allocator, workspace_root, "parent task");
+    defer parent.deinit(allocator);
+
+    var cp = VAR1.shared.types.ContextCheckpoint{
+        .id = try allocator.dupe(u8, "parent-cp-1"),
+        .entry_type = try allocator.dupe(u8, "compaction"),
+        .created_at_ms = 1000,
+        .source_seq_start = 0,
+        .source_seq_end = 5,
+        .first_kept_seq = 3,
+        .tokens_before_estimate = 1000,
+        .tokens_after_estimate = 500,
+        .aggressiveness_milli = 500,
+        .compacted_entry_count = 3,
+        .trigger = try allocator.dupe(u8, "auto"),
+        .summary = try allocator.dupe(u8, "Parent context summary."),
+    };
+    defer cp.deinit(allocator);
+    try VAR1.core.session_store.appendContextCheckpoint(allocator, workspace_root, parent.id, cp);
+
+    var child = try VAR1.core.session_store.initSessionWithOptions(allocator, workspace_root, branch_prompt, .{
+        .status = .initialized,
+        .parent_session_id = parent.id,
+        .display_name = agent_name,
+        .agent_profile = "default_subagent",
+    });
+    defer child.deinit(allocator);
+
+    const branch_summary = try std.fmt.allocPrint(allocator, "Branch 1 ({s}): {s}", .{ agent_name, branch_prompt });
+    defer allocator.free(branch_summary);
+    try VAR1.core.session_store.appendShardCheckpoint(
+        allocator, workspace_root, parent.id,
+        "parent-cp-1", 1, .open, branch_summary,
+    );
+
+    return .{
+        .parent_id = try allocator.dupe(u8, parent.id),
+        .child_id = try allocator.dupe(u8, child.id),
+    };
+}
+
+test "launch writes open shard checkpoint to parent context.jsonl" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const config = try makeConfig(std.testing.allocator, workspace_root, 4);
+    defer config.deinit(std.testing.allocator);
+
+    var service = VAR1.core.agent_runtime.Service.init(&config);
+    _ = service.handle();
+
+    const refs = try seedParentAndBranch(std.testing.allocator, workspace_root, "Research topic A", "scout-a");
+    defer std.testing.allocator.free(refs.parent_id);
+    defer std.testing.allocator.free(refs.child_id);
+
+    const context_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", refs.parent_id, "context.jsonl" });
+    defer std.testing.allocator.free(context_path);
+    const context_jsonl = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, context_path);
+    defer std.testing.allocator.free(context_jsonl);
+
+    try std.testing.expect(std.mem.indexOf(u8, context_jsonl, "shard_checkpoint") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context_jsonl, "parent_checkpoint_id") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context_jsonl, "\"open\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context_jsonl, "scout-a") != null);
+}
+
+test "convergence writes converged shard checkpoint and merged message to parent" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const config = try makeConfig(std.testing.allocator, workspace_root, 4);
+    defer config.deinit(std.testing.allocator);
+
+    const refs = try seedParentAndBranch(std.testing.allocator, workspace_root, "Research topic A", "scout-a");
+    defer std.testing.allocator.free(refs.parent_id);
+    defer std.testing.allocator.free(refs.child_id);
+
+    try VAR1.core.session_store.writeOutput(std.testing.allocator, workspace_root, refs.child_id, "Found 3 relevant files in src/core/.");
+    var child_session = try VAR1.core.session_store.readSessionRecord(std.testing.allocator, workspace_root, refs.child_id);
+    defer child_session.deinit(std.testing.allocator);
+    try VAR1.core.session_store.setSessionStatus(std.testing.allocator, workspace_root, &child_session, .completed);
+
+    var service = VAR1.core.agent_runtime.Service.init(&config);
+    const agent_service = service.handle();
+    try agent_service.converge(std.testing.allocator, refs.parent_id);
+
+    const context_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", refs.parent_id, "context.jsonl" });
+    defer std.testing.allocator.free(context_path);
+    const context_jsonl = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, context_path);
+    defer std.testing.allocator.free(context_jsonl);
+    try std.testing.expect(std.mem.indexOf(u8, context_jsonl, "\"converged\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context_jsonl, "Converged 1 branch") != null);
+
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, refs.parent_id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
+    var found_converge_event = false;
+    for (events) |ev| {
+        if (std.mem.eql(u8, ev.event_type, "branch_converged")) {
+            found_converge_event = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_converge_event);
+}
+
+test "cold start reconciles orphaned open shards as abandoned" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const config = try makeConfig(std.testing.allocator, workspace_root, 4);
+    defer config.deinit(std.testing.allocator);
+
+    const refs = try seedParentAndBranch(std.testing.allocator, workspace_root, "Research topic B", "scout-b");
+    defer std.testing.allocator.free(refs.parent_id);
+    defer std.testing.allocator.free(refs.child_id);
+
+    var service = VAR1.core.agent_runtime.Service.init(&config);
+    const agent_service = service.handle();
+    const abandoned = try agent_service.reconcile(std.testing.allocator, refs.parent_id);
+    try std.testing.expectEqual(@as(usize, 1), abandoned);
+
+    const context_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", refs.parent_id, "context.jsonl" });
+    defer std.testing.allocator.free(context_path);
+    const context_jsonl = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, context_path);
+    defer std.testing.allocator.free(context_jsonl);
+    try std.testing.expect(std.mem.indexOf(u8, context_jsonl, "\"abandoned\"") != null);
+
+    const abandoned_again = try agent_service.reconcile(std.testing.allocator, refs.parent_id);
+    try std.testing.expectEqual(@as(usize, 0), abandoned_again);
+}
+
+test "convergence leaves parent transcript append-only (byte-identical prefix)" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const config = try makeConfig(std.testing.allocator, workspace_root, 4);
+    defer config.deinit(std.testing.allocator);
+
+    const refs = try seedParentAndBranch(std.testing.allocator, workspace_root, "Research topic C", "scout-c");
+    defer std.testing.allocator.free(refs.parent_id);
+    defer std.testing.allocator.free(refs.child_id);
+
+    try VAR1.core.session_store.writeOutput(std.testing.allocator, workspace_root, refs.child_id, "Result C.");
+    var child_session = try VAR1.core.session_store.readSessionRecord(std.testing.allocator, workspace_root, refs.child_id);
+    defer child_session.deinit(std.testing.allocator);
+    try VAR1.core.session_store.setSessionStatus(std.testing.allocator, workspace_root, &child_session, .completed);
+
+    const messages_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", refs.parent_id, "messages.jsonl" });
+    defer std.testing.allocator.free(messages_path);
+    const before = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, messages_path);
+    defer std.testing.allocator.free(before);
+
+    var service = VAR1.core.agent_runtime.Service.init(&config);
+    const agent_service = service.handle();
+    try agent_service.converge(std.testing.allocator, refs.parent_id);
+
+    const after = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, messages_path);
+    defer std.testing.allocator.free(after);
+
+    try std.testing.expect(after.len > before.len);
+    try std.testing.expectEqualStrings(before, after[0..before.len]);
+}

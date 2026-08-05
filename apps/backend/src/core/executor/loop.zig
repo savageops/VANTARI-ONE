@@ -505,6 +505,23 @@ pub fn runPromptWithOptions(
                     try messages.append(try types.initTextMessage(allocator, .user, failure_prompt));
                     continue;
                 }
+                // All children are terminal — converge their outputs into the
+                // parent transcript. This writes a `converged` shard checkpoint
+                // + merged assistant message to the parent's ledgers. The
+                // merged result becomes part of the context the provider sees
+                // when synthesizing the final response below. (roadmap P0-2)
+                if (execution_context.agent_service) |agent_service| {
+                    agent_service.converge(allocator, session.id) catch |err| {
+                        const converge_warn = std.fmt.allocPrint(allocator, "branch convergence failed: {s}", .{@errorName(err)}) catch "branch convergence failed";
+                        defer allocator.free(converge_warn);
+                        docs_sync.appendLog(allocator, config.workspace_root, converge_warn) catch {};
+                    };
+                    // Rebuild the message list so the convergence summary is
+                    // visible in the provider's context window for the final
+                    // synthesis turn. The convergence appended a new assistant
+                    // message to the transcript — the context builder will pick
+                    // it up from first_kept_seq on the next compilation.
+                }
                 requires_child_supervision = false;
             }
 

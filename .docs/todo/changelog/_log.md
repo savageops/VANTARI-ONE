@@ -1,5 +1,36 @@
 # Execution Log
 
+## 2026-08-07T07:00:00Z - wire branch-and-converge into the live executor path (north star)
+
+**Roadmap item:** P0-1, P0-2, P0-4b — the shard primitives existed and passed 30+ unit tests, but were dead code outside tests. The live `launch_agent` path never wrote shard checkpoints, never converged, and had no cold-start reconciliation.
+
+**The gap:** `service.launch` spawned a child process but wrote no `shard_checkpoint` entry. `convergeBranches` and `reconcileOpenShards` had no executor/host callers. The north-star branch-and-converge loop had never run against a live provider.
+
+**Three changes, one path (no parallel system):**
+
+1. **`service.launch` writes an `open` shard checkpoint** (`agents/service.zig`). After creating the child session, the launch path now reads the parent's latest checkpoint ID, derives the next `branch_seq`, and writes an `open` shard checkpoint to the parent's `context.jsonl`. Every live delegation is now a tracked shard branch.
+
+2. **Executor loop converges when all children are terminal** (`executor/loop.zig:508`). When the child supervision block detects `child_summary.pending == 0`, it calls `agent_service.converge()` before producing the final output. The convergence reads completed child outputs, merges them into a summary, writes a `converged` shard checkpoint + merged assistant message to the parent, and emits a `branch_converged` event.
+
+3. **Cold-start reconciliation on session resume** (`host/stdio_rpc.zig:handleSessionSend`). After loading a session for continuation, the host calls `agent_service.reconcile()` to mark any orphaned open shard branches as `abandoned`.
+
+**Vtable extension:** Added `convergeFn` and `reconcileFn` to `AgentService` vtable (`tools/module.zig`) with corresponding noop stubs in test harnesses.
+
+**4 adversarial probes** (`runtime_loop_test.zig`):
+- `launch writes open shard checkpoint to parent context.jsonl` — verifies shard_checkpoint entry with `branch_status: "open"`
+- `convergence writes converged shard checkpoint and merged message to parent` — verifies `converged` checkpoint + `branch_converged` event
+- `cold start reconciles orphaned open shards as abandoned` — verifies `abandoned` marking + idempotent re-reconciliation
+- `convergence leaves parent transcript append-only (byte-identical prefix)` — verifies messages.jsonl only grew, prefix preserved
+
+**Live proof against z.ai (glm-5.1):**
+Launched a delegation task: "Use launch_agent to create 'probe-1', wait for it, synthesize." The parent session's `context.jsonl` shows the complete shard lifecycle:
+- `open` shard checkpoint at child launch (`branch_seq:1`, `parent_checkpoint_id:"parent-root"`)
+- `converged` shard checkpoint at child completion (`summary:"Converged 1 branch(es):...BRANCH_OK"`)
+- `branch_converged` event on the parent event spine (seq 219)
+- Parent synthesized the merged result (seq 220)
+
+All 462 tests pass (30 runtime_loop + 84 core_store + 48 tools + 300 pipeline_matrix). Zero leaks.
+
 ## 2026-08-07T06:00:00Z - test reconciliation: typed event grammar + plugin contract regressions
 
 **Context:** A completion audit against the actual current state found that the typed turn-event grammar (P0-3) and plugin manifest typed contract (P1-21) introduced regressions in three test files that were not reconciled with the new event-ordering and validation contracts. The summary's "all tests pass" claim was false; this entry documents the proof-gated fixes.
