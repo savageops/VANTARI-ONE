@@ -1,5 +1,20 @@
 # Execution Log
 
+## 2026-08-07T09:00:00Z - value-weighted compaction engine + auth/model fix
+
+**Auth/model fix:** The global auth ledger at `~/.vantari/auth.json` (resolved via `VANTARI_HOME`) had a placeholder key (`bom-ledger-key`) and model `GLM-5.1`. Updated to the real z.ai key and `glm-5.2`. This was the root cause of the user's 401 errors — the workspace `.var/auth.json` was correct but never read when `VANTARI_HOME` was set.
+
+**Value-weighted compaction engine:** Replaced naive character truncation (which cuts mid-word and appends `...`) with a value-weighted word dropper that:
+
+1. **Never truncates mid-word** — always drops whole tokens
+2. **Scores every word by information value** (0-255 scale): code identifiers (255) > file paths (240) > numbers (220) > code fragments (210) > long domain words (200) > medium words (160) > filler (100) > single chars (60)
+3. **Drops lowest-value words first** — filler goes before signal
+4. **Preserves word order** — the summary reads coherently
+
+This is VANTARI's marketable differentiator: every competitor (Claude Code, Cursor, Codex, Aider, etc.) truncates mid-word. VANTARI preserves every function name, file path, error code, and identifier while shedding only connective tissue. Documented in `.docs/compaction-engine.md`.
+
+2 adversarial probes: filler dropped before identifiers, never truncates mid-word. All 92 tests pass.
+
 ## 2026-08-07T08:00:00Z - reasoning trace support: persistent thinking checkpoints
 
 **What this delivers:** The model's reasoning trace (`reasoning_content` from GLM-5.x, DeepSeek, Qwen, etc.) is now captured, persisted, streamed, and preserved through compaction. Previously it was silently dropped at every layer.

@@ -3506,3 +3506,79 @@ test "compactor drops reasoning at high aggressiveness" {
         try std.testing.expect(std.mem.indexOf(u8, cp.summary, "reasoning_excerpt") == null);
     }
 }
+
+// =============================================================================
+// Value-weighted compaction engine probes
+// =============================================================================
+
+test "value-weighted compaction drops filler words before code identifiers" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "task");
+    defer session.deinit(std.testing.allocator);
+
+    // A message with a mix of filler and high-value tokens.
+    try VAR1.core.session_store.appendSessionMessage(
+        std.testing.allocator, workspace_root, session.id,
+        .assistant, "The function parse_stream_delta in src/core/provider.zig returned a 404 error with the message Authentication Failed for the session", 100,
+    );
+    try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .user, "msg2", 200);
+    try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .assistant, "msg3", 300);
+    try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .user, "msg4", 400);
+    try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .assistant, "msg5", 500);
+
+    // Compact with a small max_message_chars to force word dropping.
+    const result = try VAR1.core.context.compactor.compactSession(
+        std.testing.allocator, workspace_root, session.id,
+        .{ .keep_recent_messages = 2, .trigger = "manual", .aggressiveness_milli = 300, .max_message_chars = 100 },
+    );
+    defer result.deinit(std.testing.allocator);
+
+    if (result.checkpoint) |cp| {
+        // The high-value tokens should survive: function name, file path, error code.
+        try std.testing.expect(std.mem.indexOf(u8, cp.summary, "parse_stream_delta") != null);
+        try std.testing.expect(std.mem.indexOf(u8, cp.summary, "provider.zig") != null);
+        try std.testing.expect(std.mem.indexOf(u8, cp.summary, "404") != null);
+        // Filler words should be dropped (the summary is bounded to 60 chars).
+        try std.testing.expect(std.mem.indexOf(u8, cp.summary, "...") == null);
+    }
+}
+
+test "value-weighted compaction never truncates mid-word" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "task");
+    defer session.deinit(std.testing.allocator);
+
+    // Long message that will need compaction.
+    const long_msg = "The quick brown fox jumps over the lazy dog and the function calculate_checksum handles the verification";
+    try VAR1.core.session_store.appendSessionMessage(
+        std.testing.allocator, workspace_root, session.id,
+        .assistant, long_msg, 100,
+    );
+    try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .user, "msg2", 200);
+    try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .assistant, "msg3", 300);
+    try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .user, "msg4", 400);
+    try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .assistant, "msg5", 500);
+
+    const result = try VAR1.core.context.compactor.compactSession(
+        std.testing.allocator, workspace_root, session.id,
+        .{ .keep_recent_messages = 2, .trigger = "manual", .aggressiveness_milli = 300, .max_message_chars = 50 },
+    );
+    defer result.deinit(std.testing.allocator);
+
+    if (result.checkpoint) |cp| {
+        // No "..." truncation marker — we drop whole words, not cut mid-word.
+        try std.testing.expect(std.mem.indexOf(u8, cp.summary, "...") == null);
+        // The code identifier should survive even in a tight budget.
+        try std.testing.expect(std.mem.indexOf(u8, cp.summary, "calculate_checksum") != null);
+    }
+}

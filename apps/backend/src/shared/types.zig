@@ -62,6 +62,8 @@ pub const Config = struct {
         if (self.subscription_status) |value| allocator.free(value);
         allocator.free(self.workspace_root);
         self.prompt_policy.deinit(allocator);
+        var cp = self.context_policy;
+        cp.deinit(allocator);
     }
 };
 
@@ -75,6 +77,21 @@ pub const ContextPolicy = struct {
     max_entries_per_checkpoint: usize = 0,
     aggressiveness_milli: u16 = 350,
     retry_on_provider_overflow: bool = true,
+    /// Enable semantic compaction: score messages by embedding/TF-IDF
+    /// similarity to the session purpose before dropping. When false, the
+    /// compactor uses syntactic value-weighting only.
+    semantic_compaction: bool = false,
+    /// Enable agent summarization: after value-weighted selection, make a
+    /// provider call to produce a dense summary preserving completed work,
+    /// in-progress state, learnings, workspace context, and TODOs.
+    compaction_summary_provider_call: bool = false,
+    /// Provider id in auth.json for embeddings (e.g. "embeddings"). When
+    /// null, falls back to the active provider, then to TF-IDF.
+    embedding_provider: ?[]u8 = null,
+
+    pub fn deinit(self: *ContextPolicy, allocator: std.mem.Allocator) void {
+        if (self.embedding_provider) |value| allocator.free(value);
+    }
 };
 
 pub const PromptPolicy = struct {
