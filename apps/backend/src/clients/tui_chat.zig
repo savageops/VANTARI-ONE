@@ -1115,18 +1115,19 @@ fn buildTranscriptRows(allocator: std.mem.Allocator, win: Window, state: *const 
     // When reasoning trace is accumulating, render it as a single dimmed
     // block before the assistant output. This is one contiguous text block,
     // not one row per token.
+    //
+    // IMPORTANT: the rows BORROW from state.reasoning_buffer — never allocate
+    // a labeled copy here. A previous version allocated a labeled string with
+    // `defer free` and handed it to the transcript row, causing a use-after-
+    // free on every reasoning draw (the TUI rendered "thinking" then crashed).
     if (state.reasoning_buffer.items.len > 0) {
+        try appendTranscriptRow(allocator, &rows, .progress, "∞ reasoning", false, false);
         const reasoning_text = state.reasoning_buffer.items;
         // Truncate display to last ~500 chars to avoid flooding the TUI
         // when reasoning is very long. The full trace is in the event spine.
         const display = if (reasoning_text.len > 500) reasoning_text[reasoning_text.len - 500 ..] else reasoning_text;
-        const prefix = "∞ ";
-        const labeled = try std.fmt.allocPrint(allocator, "{s}{s}", .{ prefix, display });
-        defer allocator.free(labeled);
-        try appendMessageRows(allocator, &rows, .{
-            .role = .progress,
-            .text = labeled,
-        }, body_width);
+        try appendWrappedTranscriptRows(allocator, &rows, .progress, display, body_width);
+        try appendTranscriptRow(allocator, &rows, .progress, "", false, true);
     }
 
     for (state.messages.items) |message| {
@@ -2808,4 +2809,59 @@ test "tui transcript gives dense single-line treatment to runtime rows" {
 
     try std.testing.expectEqual(@as(usize, 1), messageRowCount(progress_message.role, progress_message.text, false, 80));
     try std.testing.expectEqual(@as(usize, 2), messageRowCount(assistant_message.role, assistant_message.text, false, 80));
+}
+
+test "tui reasoning block borrows persistent buffer (no use-after-free)" {
+    // Regression: a previous version allocated a labeled reasoning string with
+    // `defer free` and handed it to the transcript row, causing a use-after-
+    // free on every reasoning draw — the TUI rendered "thinking" then crashed.
+    // The reasoning rows must borrow from state.reasoning_buffer, which lives
+    // as long as the ChatState.
+    const allocator = std.testing.allocator;
+    var unicode = try tui.Unicode.init(allocator);
+    defer unicode.deinit(allocator);
+    var screen = try tui.Screen.init(allocator, .{ .rows = 12, .cols = 60, .x_pixel = 0, .y_pixel = 0 });
+    defer screen.deinit(allocator);
+
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "glm-5.2",
+        .base_url = "https://api.z.ai/api/coding/paas/v4",
+        .auth_provider = "zai",
+        .plan = "coding",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    try state.addReasoningDelta("Step one: analyze the request");
+    try state.addReasoningDelta(" carefully before answering.");
+
+    const win = Window{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = screen.width,
+        .height = screen.height,
+        .screen = &screen,
+        .unicode = &unicode,
+    };
+
+    var rows = try buildTranscriptRows(allocator, win, &state);
+    defer rows.deinit(allocator);
+
+    // Every non-empty reasoning row must borrow from the persistent buffer.
+    const buffer = state.reasoning_buffer.items;
+    var found_reasoning_content = false;
+    for (rows.items) |row| {
+        if (row.text.len == 0 or row.intro) continue;
+        if (std.mem.indexOf(u8, buffer, row.text) != null) {
+            found_reasoning_content = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_reasoning_content);
+    try std.testing.expect(std.mem.indexOf(u8, buffer, "analyze the request") != null);
 }
