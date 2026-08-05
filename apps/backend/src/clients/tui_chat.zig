@@ -331,9 +331,10 @@ const ChatState = struct {
 
     fn syncDurableProgress(self: *ChatState, session_id: []const u8) !usize {
         // Build params manually — the std.json static formatter can't
-        // serialize u64 values (f64 overflow). We pass after_seq so the
-        // kernel only returns events the TUI hasn't seen yet.
-        const params = try std.fmt.allocPrint(self.allocator, "{{\"session_id\":\"{s}\",\"after_seq\":{d}}}", .{ session_id, self.last_durable_event_seq });
+        // serialize u64 values (f64 overflow). We pass after_seq + events_only
+        // so the kernel only returns events the TUI hasn't seen yet, and skips
+        // re-serializing the full message array (the dominant poll cost).
+        const params = try std.fmt.allocPrint(self.allocator, "{{\"session_id\":\"{s}\",\"after_seq\":{d},\"events_only\":true}}", .{ session_id, self.last_durable_event_seq });
         defer self.allocator.free(params);
 
         const call = self.client.call(protocol.methods.session_get, params) catch return 0;
@@ -1544,8 +1545,8 @@ const max_progress_message_bytes: usize = 220;
 const max_tool_output_preview_bytes: usize = 180;
 const max_tool_output_payload_bytes: usize = 180;
 const max_seen_progress_events: usize = 512;
-const progress_poll_ms: u64 = 60;
-const durable_sync_interval_ms: i64 = 350;
+const progress_poll_ms: u64 = 50;
+const durable_sync_interval_ms: i64 = 100;
 
 fn formatProgress(allocator: std.mem.Allocator, event_type: []const u8, message: []const u8) !?[]u8 {
     if (std.mem.eql(u8, event_type, "tool_requested")) return formatToolRequested(allocator, message);
