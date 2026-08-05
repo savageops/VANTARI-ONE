@@ -210,6 +210,19 @@ fn renderSummary(
         );
         try appendOneLinePrefix(&output, message.content, max_message_chars);
         try writer.writeByte('\n');
+
+        // Reasoning-aware compaction: at low aggressiveness (< 500 milli, i.e.
+        // < 50%), include a one-line reasoning excerpt so the model's thinking
+        // trace survives as a checkpoint anchor. At high aggressiveness, omit
+        // reasoning to minimize token cost. (roadmap: reasoning checkpoints)
+        if (message.reasoning) |reasoning| {
+            if (reasoning.len > 0 and aggressiveness_milli < 500) {
+                const max_reasoning_chars: usize = 200;
+                try writer.print("  reasoning_excerpt: ", .{});
+                try appendOneLinePrefix(&output, reasoning, max_reasoning_chars);
+                try writer.writeByte('\n');
+            }
+        }
     }
 
     return output.toOwnedSlice();

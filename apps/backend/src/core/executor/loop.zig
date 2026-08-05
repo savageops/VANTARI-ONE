@@ -346,6 +346,7 @@ pub fn runPromptWithOptions(
                 session.id,
                 completion.content,
                 completion.tool_calls,
+                completion.reasoning,
                 tool_request_timestamp,
             );
 
@@ -529,7 +530,7 @@ pub fn runPromptWithOptions(
             defer allocator.free(final_output);
 
             const final_timestamp = std.time.milliTimestamp();
-            try store.upsertAssistantSessionMessage(allocator, config.workspace_root, session.id, final_output, final_timestamp);
+            try store.upsertAssistantSessionMessageWithReasoning(allocator, config.workspace_root, session.id, final_output, completion.reasoning, final_timestamp);
             try store.writeOutput(allocator, config.workspace_root, session.id, final_output);
             try store.setSessionStatus(allocator, config.workspace_root, &session, .completed);
             try store.appendEvent(allocator, config.workspace_root, session.id, .{
@@ -671,6 +672,7 @@ fn cloneChatMessage(allocator: std.mem.Allocator, message: types.ChatMessage) !t
     cloned.content = if (message.content) |content| try allocator.dupe(u8, content) else null;
     cloned.tool_call_id = if (message.tool_call_id) |tool_call_id| try allocator.dupe(u8, tool_call_id) else null;
     cloned.tool_calls = try types.cloneToolCalls(allocator, message.tool_calls);
+    cloned.reasoning = if (message.reasoning) |reasoning| try allocator.dupe(u8, reasoning) else null;
     return cloned;
 }
 
@@ -726,6 +728,7 @@ fn completeWithContextRecovery(
     const stream_hooks = provider.StreamHooks{
         .context = &stream_context,
         .onAssistantDeltaFn = onProviderAssistantDelta,
+        .onReasoningDeltaFn = onProviderReasoningDelta,
     };
 
     return dispatch.completeWithTransportAndHooks(allocator, config, .{
@@ -777,6 +780,23 @@ fn onProviderAssistantDelta(ctx: ?*anyopaque, delta: []const u8) !void {
         delta_context.hooks,
         delta_context.session_id,
         "assistant_delta",
+        delta,
+        delta_context.status,
+    );
+}
+
+/// Reasoning delta handler — emits a typed `reasoning_delta` event so the
+/// event spine distinguishes the model's thinking trace from visible output.
+/// The reasoning text is carried in the message field, tagged with a kind
+/// discriminator for TUI/event-reader consumption. (roadmap: reasoning checkpoints)
+fn onProviderReasoningDelta(ctx: ?*anyopaque, delta: []const u8) !void {
+    const delta_context: *ProviderDeltaContext = @ptrCast(@alignCast(ctx.?));
+    try recordSessionEvent(
+        delta_context.allocator,
+        delta_context.workspace_root,
+        delta_context.hooks,
+        delta_context.session_id,
+        "reasoning_delta",
         delta,
         delta_context.status,
     );

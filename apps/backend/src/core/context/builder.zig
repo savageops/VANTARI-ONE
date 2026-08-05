@@ -89,13 +89,23 @@ fn appendRawMessages(
                     pending_tool_index = 0;
                 }
                 if (turn.tool_calls.len > 0) {
-                    try messages.append(try types.initAssistantToolCallMessage(
+                    var msg = try types.initAssistantToolCallMessage(
                         allocator,
                         if (turn.content.len > 0) turn.content else null,
                         turn.tool_calls,
-                    ));
+                    );
+                    if (turn.reasoning) |reasoning| {
+                        msg.reasoning = try allocator.dupe(u8, reasoning);
+                    }
+                    try messages.append(msg);
                     pending_tool_calls = turn.tool_calls;
                     pending_tool_index = 0;
+                } else if (turn.reasoning != null) {
+                    try messages.append(try types.initAssistantMessageWithReasoning(
+                        allocator,
+                        turn.content,
+                        turn.reasoning,
+                    ));
                 } else {
                     try messages.append(try types.initTextMessage(allocator, .assistant, turn.content));
                 }

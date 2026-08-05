@@ -1327,6 +1327,7 @@ test "loop self-heals unresolved persisted tool calls before provider dispatch" 
         session.id,
         null,
         tool_calls[0..],
+        null,
         200,
     );
 

@@ -78,6 +78,7 @@ const ParsedSessionMessage = struct {
     tool_call_id: ?[]const u8 = null,
     tool_calls: []types.ToolCall = &.{},
     timestamp_ms: i64,
+    reasoning: ?[]const u8 = null,
 };
 
 const ParsedContextCheckpoint = struct {
@@ -438,6 +439,18 @@ pub fn appendSessionMessage(
     content: []const u8,
     timestamp_ms: i64,
 ) !void {
+    return appendSessionMessageWithReasoning(allocator, workspace_root, session_id, role, content, null, timestamp_ms);
+}
+
+pub fn appendSessionMessageWithReasoning(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    role: types.SessionMessageRole,
+    content: []const u8,
+    reasoning: ?[]const u8,
+    timestamp_ms: i64,
+) !void {
     const messages_path = try messagesFilePath(allocator, workspace_root, session_id);
     defer allocator.free(messages_path);
 
@@ -455,6 +468,7 @@ pub fn appendSessionMessage(
             .seq = next_seq,
             .role = types.sessionMessageRoleLabel(role),
             .content = content,
+            .reasoning = reasoning,
             .timestamp_ms = timestamp_ms,
         }, .{}),
     });
@@ -470,7 +484,18 @@ pub fn upsertAssistantSessionMessage(
     content: []const u8,
     timestamp_ms: i64,
 ) !void {
-    return appendSessionMessage(allocator, workspace_root, session_id, .assistant, content, timestamp_ms);
+    return appendSessionMessageWithReasoning(allocator, workspace_root, session_id, .assistant, content, null, timestamp_ms);
+}
+
+pub fn upsertAssistantSessionMessageWithReasoning(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    content: []const u8,
+    reasoning: ?[]const u8,
+    timestamp_ms: i64,
+) !void {
+    return appendSessionMessageWithReasoning(allocator, workspace_root, session_id, .assistant, content, reasoning, timestamp_ms);
 }
 
 pub fn appendAssistantToolCallSessionMessage(
@@ -479,6 +504,7 @@ pub fn appendAssistantToolCallSessionMessage(
     session_id: []const u8,
     content: ?[]const u8,
     tool_calls: []const types.ToolCall,
+    reasoning: ?[]const u8,
     timestamp_ms: i64,
 ) !void {
     const messages_path = try messagesFilePath(allocator, workspace_root, session_id);
@@ -499,6 +525,7 @@ pub fn appendAssistantToolCallSessionMessage(
             .role = types.sessionMessageRoleLabel(.assistant),
             .content = content orelse "",
             .tool_calls = tool_calls,
+            .reasoning = reasoning,
             .timestamp_ms = timestamp_ms,
         }, .{}),
     });
@@ -877,6 +904,9 @@ fn cloneParsedSessionMessage(
         if (tool_calls.len > 0) allocator.free(tool_calls);
     }
 
+    const reasoning = if (parsed.reasoning) |value| try allocator.dupe(u8, value) else null;
+    errdefer if (reasoning) |value| allocator.free(value);
+
     return .{
         .id = id,
         .seq = parsed.seq,
@@ -885,6 +915,7 @@ fn cloneParsedSessionMessage(
         .tool_call_id = tool_call_id,
         .tool_calls = tool_calls,
         .timestamp_ms = parsed.timestamp_ms,
+        .reasoning = reasoning,
     };
 }
 

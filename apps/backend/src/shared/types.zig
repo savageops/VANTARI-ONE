@@ -199,6 +199,11 @@ pub const SessionMessage = struct {
     tool_call_id: ?[]u8 = null,
     tool_calls: []ToolCall = &.{},
     timestamp_ms: i64,
+    /// Model reasoning trace (reasoning_content from GLM-5.x / DeepSeek / etc.).
+    /// Null for messages from providers that don't emit reasoning, or for
+    /// user/tool messages. When present, this is the model's thinking trace
+    /// that anchors context across compaction boundaries.
+    reasoning: ?[]u8 = null,
 
     pub fn deinit(self: SessionMessage, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
@@ -206,6 +211,7 @@ pub const SessionMessage = struct {
         if (self.tool_call_id) |value| allocator.free(value);
         for (self.tool_calls) |tool_call| tool_call.deinit(allocator);
         if (self.tool_calls.len > 0) allocator.free(self.tool_calls);
+        if (self.reasoning) |value| allocator.free(value);
     }
 };
 
@@ -317,12 +323,16 @@ pub const ChatMessage = struct {
     content: ?[]u8 = null,
     tool_call_id: ?[]u8 = null,
     tool_calls: []ToolCall = &.{},
+    /// Model reasoning trace forwarded to the provider so the model sees
+    /// its prior thinking in the context window.
+    reasoning: ?[]u8 = null,
 
     pub fn deinit(self: ChatMessage, allocator: std.mem.Allocator) void {
         if (self.content) |value| allocator.free(value);
         if (self.tool_call_id) |value| allocator.free(value);
         for (self.tool_calls) |tool_call| tool_call.deinit(allocator);
         if (self.tool_calls.len > 0) allocator.free(self.tool_calls);
+        if (self.reasoning) |value| allocator.free(value);
     }
 };
 
@@ -335,12 +345,15 @@ pub const CompletionResponse = struct {
     model: []u8,
     content: ?[]u8 = null,
     tool_calls: []ToolCall = &.{},
+    /// Model reasoning trace captured from the provider response.
+    reasoning: ?[]u8 = null,
 
     pub fn deinit(self: CompletionResponse, allocator: std.mem.Allocator) void {
         allocator.free(self.model);
         if (self.content) |value| allocator.free(value);
         for (self.tool_calls) |tool_call| tool_call.deinit(allocator);
         if (self.tool_calls.len > 0) allocator.free(self.tool_calls);
+        if (self.reasoning) |value| allocator.free(value);
     }
 
     pub fn hasToolCalls(self: CompletionResponse) bool {
@@ -434,6 +447,21 @@ pub fn initAssistantToolCallMessage(
         .role = .assistant,
         .content = if (content) |value| try allocator.dupe(u8, value) else null,
         .tool_calls = try cloneToolCalls(allocator, tool_calls),
+    };
+}
+
+/// Initialize an assistant text message with an optional reasoning trace.
+/// The reasoning is forwarded to the provider so the model sees its prior
+/// thinking in the context window.
+pub fn initAssistantMessageWithReasoning(
+    allocator: std.mem.Allocator,
+    content: []const u8,
+    reasoning: ?[]const u8,
+) !ChatMessage {
+    return .{
+        .role = .assistant,
+        .content = try allocator.dupe(u8, content),
+        .reasoning = if (reasoning) |value| try allocator.dupe(u8, value) else null,
     };
 }
 

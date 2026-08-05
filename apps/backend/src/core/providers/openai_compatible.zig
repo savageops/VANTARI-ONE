@@ -42,6 +42,7 @@ const ParsedResponse = struct {
 
     const Message = struct {
         content: ?[]const u8 = null,
+        reasoning_content: ?[]const u8 = null,
         tool_calls: ?[]const ParsedToolCall = null,
     };
 
@@ -65,6 +66,7 @@ const ParsedStreamChunk = struct {
 
     const Delta = struct {
         content: ?[]const u8 = null,
+        reasoning_content: ?[]const u8 = null,
         tool_calls: ?[]const ToolCallDelta = null,
     };
 
@@ -83,14 +85,22 @@ const ParsedStreamChunk = struct {
 pub const StreamHooks = struct {
     context: ?*anyopaque = null,
     onAssistantDeltaFn: ?*const fn (ctx: ?*anyopaque, delta: []const u8) anyerror!void = null,
+    onReasoningDeltaFn: ?*const fn (ctx: ?*anyopaque, delta: []const u8) anyerror!void = null,
 
     pub fn hasHandlers(self: StreamHooks) bool {
-        return self.onAssistantDeltaFn != null;
+        return self.onAssistantDeltaFn != null or self.onReasoningDeltaFn != null;
     }
 
     pub fn onAssistantDelta(self: StreamHooks, delta: []const u8) !void {
         if (delta.len == 0) return;
         if (self.onAssistantDeltaFn) |callback| {
+            try callback(self.context, delta);
+        }
+    }
+
+    pub fn onReasoningDelta(self: StreamHooks, delta: []const u8) !void {
+        if (delta.len == 0) return;
+        if (self.onReasoningDeltaFn) |callback| {
             try callback(self.context, delta);
         }
     }
@@ -262,6 +272,7 @@ fn parseCompletionResponse(
     return .{
         .model = try allocator.dupe(u8, parsed.value.model orelse configured_model),
         .content = if (parsed_message.content) |value| try allocator.dupe(u8, value) else null,
+        .reasoning = if (parsed_message.reasoning_content) |value| try allocator.dupe(u8, value) else null,
         .tool_calls = tool_calls,
     };
 }
@@ -294,6 +305,9 @@ fn parseStreamCompletionResponse(
     var content = std.array_list.Managed(u8).init(allocator);
     errdefer content.deinit();
 
+    var reasoning = std.array_list.Managed(u8).init(allocator);
+    errdefer reasoning.deinit();
+
     var tool_accumulators = std.array_list.Managed(ToolCallAccumulator).init(allocator);
     defer {
         for (tool_accumulators.items) |*accumulator| accumulator.deinit();
@@ -304,11 +318,11 @@ fn parseStreamCompletionResponse(
     while (cursor < response_body.len) {
         const remaining = response_body[cursor..];
         if (findSseEventBoundary(remaining)) |boundary| {
-            try parseStreamEventInto(allocator, remaining[0..boundary.event_end], &content, &tool_accumulators);
+            try parseStreamEventInto(allocator, remaining[0..boundary.event_end], &content, &reasoning, &tool_accumulators);
             cursor += boundary.remove_len;
             continue;
         }
-        try parseStreamEventInto(allocator, remaining, &content, &tool_accumulators);
+        try parseStreamEventInto(allocator, remaining, &content, &reasoning, &tool_accumulators);
         break;
     }
 
@@ -321,6 +335,7 @@ fn parseStreamCompletionResponse(
     return .{
         .model = try allocator.dupe(u8, configured_model),
         .content = if (content.items.len > 0) try content.toOwnedSlice() else null,
+        .reasoning = if (reasoning.items.len > 0) try reasoning.toOwnedSlice() else null,
         .tool_calls = tool_calls,
     };
 }
@@ -329,6 +344,7 @@ fn parseStreamEventInto(
     allocator: std.mem.Allocator,
     event: []const u8,
     content: *std.array_list.Managed(u8),
+    reasoning: *std.array_list.Managed(u8),
     tool_accumulators: *std.array_list.Managed(ToolCallAccumulator),
 ) !void {
     var event_data = std.array_list.Managed(u8).init(allocator);
@@ -354,6 +370,7 @@ fn parseStreamEventInto(
     if (parsed.value.choices.len == 0) return;
     const delta = parsed.value.choices[0].delta;
     if (delta.content) |value| try content.appendSlice(value);
+    if (delta.reasoning_content) |value| try reasoning.appendSlice(value);
     if (delta.tool_calls) |tool_deltas| {
         for (tool_deltas) |tool_delta| {
             try applyToolCallDelta(allocator, tool_accumulators, tool_delta);
@@ -934,8 +951,12 @@ const SseDeltaEmitter = struct {
             }) catch continue;
             defer parsed.deinit();
             if (parsed.value.choices.len == 0) continue;
-            if (parsed.value.choices[0].delta.content) |content| {
+            const delta = parsed.value.choices[0].delta;
+            if (delta.content) |content| {
                 try self.hooks.onAssistantDelta(content);
+            }
+            if (delta.reasoning_content) |reasoning| {
+                try self.hooks.onReasoningDelta(reasoning);
             }
         }
     }

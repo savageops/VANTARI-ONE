@@ -1,5 +1,36 @@
 # Execution Log
 
+## 2026-08-07T08:00:00Z - reasoning trace support: persistent thinking checkpoints
+
+**What this delivers:** The model's reasoning trace (`reasoning_content` from GLM-5.x, DeepSeek, Qwen, etc.) is now captured, persisted, streamed, and preserved through compaction. Previously it was silently dropped at every layer.
+
+**Why this matters:** Modern frontier models use reasoning traces as implicit checkpoints — the thinking anchors context so the session survives compaction without losing the logical thread. This is what makes "go on for days without losing context" possible. The reasoning trace is the memory structure that survives compaction.
+
+**7 changes through the existing pipeline (no parallel system):**
+
+1. **Type definitions** (`shared/types.zig`): `reasoning: ?[]u8` on `SessionMessage`, `ChatMessage`, `CompletionResponse` + `deinit`. New `initAssistantMessageWithReasoning` helper.
+2. **Provider parse** (`providers/openai_compatible.zig`): `ParsedResponse.Message` and `ParsedStreamChunk.Delta` now declare `reasoning_content`. Non-streaming, streaming, and live SSE paths all capture it.
+3. **Stream hooks**: `onReasoningDeltaFn` on `StreamHooks` — distinct from `onAssistantDeltaFn` so reasoning and visible output are separable.
+4. **Session store** (`sessions/store.zig`): `ParsedSessionMessage` reads `reasoning` from disk. New `appendSessionMessageWithReasoning`, `upsertAssistantSessionMessageWithReasoning` functions. `appendAssistantToolCallSessionMessage` accepts reasoning. Backward compatible — old messages parse with `reasoning: null`.
+5. **Context builder** (`context/builder.zig`): assistant messages with reasoning use `initAssistantMessageWithReasoning` — the provider sees the prior thinking in the context window, maintaining the logical thread.
+6. **Compactor** (`context/compactor.zig`): reasoning-aware checkpoint summaries. At `aggressiveness_milli < 500`, includes a 200-char reasoning excerpt. At high aggressiveness, drops reasoning for token-minimalism.
+7. **Executor** (`executor/loop.zig`): `onProviderReasoningDelta` emits typed `reasoning_delta` events on the spine. Final output persists `completion.reasoning` via `upsertAssistantSessionMessageWithReasoning`.
+
+**7 adversarial probes:**
+- `parseCompletionResponse captures reasoning_content from GLM-5.x` — non-streaming
+- `streaming deltas capture reasoning_content alongside content` — SSE streaming
+- `response without reasoning_content leaves reasoning null` — backward compat
+- `session message persists and round-trips reasoning trace` — durable ledger
+- `session message without reasoning parses with null reasoning` — old messages
+- `compactor preserves reasoning excerpt at low aggressiveness` — checkpoint anchor
+- `compactor drops reasoning at high aggressiveness` — token-minimalism
+
+**Live proof against z.ai (glm-5.1):** "What is 15 * 17? Think step by step." produced:
+- `messages.jsonl`: assistant message with `"reasoning":"The user is asking a simple math question..."` — the complete thinking trace persisted
+- `events.jsonl`: 120 `reasoning_delta` events streamed live (seq 3-122), distinct from visible `assistant_delta` events
+
+All 469 tests pass (88 core_store + 30 runtime_loop + 48 tools + 5 provider + 112 deep_matrix + 300 pipeline_matrix - overlaps). Zero leaks.
+
 ## 2026-08-07T07:00:00Z - wire branch-and-converge into the live executor path (north star)
 
 **Roadmap item:** P0-1, P0-2, P0-4b — the shard primitives existed and passed 30+ unit tests, but were dead code outside tests. The live `launch_agent` path never wrote shard checkpoints, never converged, and had no cold-start reconciliation.

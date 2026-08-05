@@ -187,6 +187,7 @@ fn verifyToolTranscriptRoundTrip(workspace_root: []const u8, index: usize) !void
         session.id,
         "I will inspect the file.",
         tool_calls[0..],
+        null,
         200,
     );
     try VAR1.core.session_store.appendToolSessionMessage(std.testing.allocator, workspace_root, session.id, "call_read_context", "file body", 300);
@@ -215,7 +216,7 @@ fn verifyUnresolvedToolTranscriptFails(workspace_root: []const u8, index: usize)
     var tool_call = try makeToolCall(std.testing.allocator, "call_unresolved", "search_files", "{\"query\":\"needle\"}");
     defer tool_call.deinit(std.testing.allocator);
     const tool_calls = [_]VAR1.shared.types.ToolCall{tool_call};
-    try VAR1.core.session_store.appendAssistantToolCallSessionMessage(std.testing.allocator, workspace_root, session.id, null, tool_calls[0..], 200);
+    try VAR1.core.session_store.appendAssistantToolCallSessionMessage(std.testing.allocator, workspace_root, session.id, null, tool_calls[0..], null, 200);
 
     var provider_messages = std.array_list.Managed(VAR1.shared.types.ChatMessage).init(std.testing.allocator);
     defer deinitChatMessages(std.testing.allocator, &provider_messages);

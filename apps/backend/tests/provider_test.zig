@@ -50,3 +50,42 @@ test "provider reconstructs split SSE data fields instead of dropping first visi
 
     try std.testing.expectEqualStrings("first-token", response.content.?);
 }
+
+test "parseCompletionResponse captures reasoning_content from GLM-5.x" {
+    const body =
+        \\{"model":"glm-5.1","choices":[{"message":{"content":"255","reasoning_content":"1. 15 * 17 = 255","role":"assistant"}}]}
+    ;
+
+    const response = try provider.testing.completionResponse(std.testing.allocator, "glm-5.1", body);
+    defer response.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("255", response.content.?);
+    try std.testing.expect(response.reasoning != null);
+    try std.testing.expectEqualStrings("1. 15 * 17 = 255", response.reasoning.?);
+}
+
+test "streaming deltas capture reasoning_content alongside content" {
+    const body =
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Step 1:\"}}]}\r\n\r\n" ++
+        "data: {\"choices\":[{\"delta\":{\"content\":\"255\"}}]}\r\n\r\n" ++
+        "data: [DONE]\r\n\r\n";
+
+    const response = try provider.testing.completionResponse(std.testing.allocator, "glm-5.1", body);
+    defer response.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("255", response.content.?);
+    try std.testing.expect(response.reasoning != null);
+    try std.testing.expectEqualStrings("Step 1:", response.reasoning.?);
+}
+
+test "response without reasoning_content leaves reasoning null" {
+    const body =
+        \\{"model":"gpt-4","choices":[{"message":{"content":"hello","role":"assistant"}}]}
+    ;
+
+    const response = try provider.testing.completionResponse(std.testing.allocator, "gpt-4", body);
+    defer response.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("hello", response.content.?);
+    try std.testing.expect(response.reasoning == null);
+}
