@@ -1849,9 +1849,21 @@ fn normalizeTerminalChunk(allocator: std.mem.Allocator, value: []const u8) ![]u8
 }
 
 fn skipProgressEvent(event_type: []const u8) bool {
+    // Internal lifecycle events that carry typed schema payloads must never
+    // render in the operator chat — only agent responses, compact tool rows,
+    // and the batched reasoning block belong in the transcript. Everything
+    // else is kernel mechanics (AGENTS.md §X: diagnostics thinner than the
+    // capability they serve; §XVI: no prompt scaffolding leaking into UI).
     return std.mem.eql(u8, event_type, "session_started") or
         std.mem.eql(u8, event_type, "assistant_response") or
-        std.mem.eql(u8, event_type, "reasoning_delta");
+        std.mem.eql(u8, event_type, "reasoning_delta") or
+        std.mem.eql(u8, event_type, "turn_started") or
+        std.mem.eql(u8, event_type, "turn_finished") or
+        std.mem.eql(u8, event_type, "provider_turn_recovered") or
+        std.mem.eql(u8, event_type, "branch_converged") or
+        std.mem.eql(u8, event_type, "session_delegated") or
+        std.mem.eql(u8, event_type, "session_waiting") or
+        std.mem.startsWith(u8, event_type, "context_compaction_");
 }
 
 fn progressLabel(event_type: []const u8) []const u8 {
