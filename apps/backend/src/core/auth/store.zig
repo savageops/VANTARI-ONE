@@ -62,10 +62,18 @@ pub fn resolveOrSeedWithInstalledAuthPath(
         return readActiveProvider(allocator, path);
     }
 
+    const legacy_nested_path = try legacyNestedAuthFilePath(allocator, workspace_root);
+    defer allocator.free(legacy_nested_path);
+    if (fsutil.fileExists(legacy_nested_path)) {
+        try migrateAuthFile(allocator, legacy_nested_path, path);
+        return readActiveProvider(allocator, path);
+    }
+
     if (bootstrap == null) {
         if (installed_path) |fallback_path| {
             if (fsutil.fileExists(fallback_path)) {
-                return readActiveProvider(allocator, fallback_path);
+                try migrateAuthFile(allocator, fallback_path, path);
+                return readActiveProvider(allocator, path);
             }
         }
     }
@@ -76,7 +84,17 @@ pub fn resolveOrSeedWithInstalledAuthPath(
 }
 
 pub fn authFilePath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
-    return fsutil.join(allocator, &.{ workspace_root, ".var", "auth", "auth.json" });
+    const root = try fsutil.runtimeRootForWorkspace(allocator, workspace_root);
+    defer allocator.free(root);
+    return fsutil.join(allocator, &.{ root, "auth.json" });
+}
+
+/// Previous releases nested credentials under auth/auth.json. It remains a
+/// one-time migration input, never a second live owner.
+fn legacyNestedAuthFilePath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
+    const root = try fsutil.runtimeRootForWorkspace(allocator, workspace_root);
+    defer allocator.free(root);
+    return fsutil.join(allocator, &.{ root, "auth", "auth.json" });
 }
 
 pub fn installedAuthFilePath(allocator: std.mem.Allocator) !?[]u8 {
@@ -89,6 +107,17 @@ pub fn installedAuthFilePath(allocator: std.mem.Allocator) !?[]u8 {
 
 pub fn installedAuthFilePathFromRoot(allocator: std.mem.Allocator, root: []const u8) ![]u8 {
     return fsutil.join(allocator, &.{ root, "Vantari", "auth", "auth.json" });
+}
+
+fn migrateAuthFile(allocator: std.mem.Allocator, source_path: []const u8, destination_path: []const u8) !void {
+    var validated = try readActiveProvider(allocator, source_path);
+    defer validated.deinit(allocator);
+    const content = try fsutil.readTextAlloc(allocator, source_path);
+    defer allocator.free(content);
+    try fsutil.writeText(destination_path, content);
+    var canonical = try readActiveProvider(allocator, destination_path);
+    defer canonical.deinit(allocator);
+    try std.fs.cwd().deleteFile(source_path);
 }
 
 fn installedConfigRoot(allocator: std.mem.Allocator) !?[]u8 {
@@ -130,10 +159,35 @@ fn readActiveProvider(allocator: std.mem.Allocator, path: []const u8) !ResolvedA
     if (active_provider_value != .string) return Error.InvalidAuthState;
     const active_provider = active_provider_value.string;
 
+    return readProviderFromRoot(allocator, root, active_provider);
+}
+
+/// Read a specific provider by id from the auth ledger's providers map.
+/// Used for multi-provider routing: the operator requests a non-active
+/// provider (e.g. `--provider lmstudio`) and this resolves its credentials
+/// without changing the active provider. Returns MissingProvider when the
+/// requested id is not in the map.
+pub fn readProviderById(allocator: std.mem.Allocator, workspace_root: []const u8, provider_id: []const u8) !ResolvedAuth {
+    const path = try authFilePath(allocator, workspace_root);
+    defer allocator.free(path);
+
+    if (!fsutil.fileExists(path)) return Error.MissingAuth;
+
+    const content = try fsutil.readTextAlloc(allocator, path);
+    defer allocator.free(content);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, stripUtf8Bom(content), .{});
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return Error.InvalidAuthState;
+    return readProviderFromRoot(allocator, parsed.value.object, provider_id);
+}
+
+fn readProviderFromRoot(allocator: std.mem.Allocator, root: std.json.ObjectMap, provider_id: []const u8) !ResolvedAuth {
     const providers_value = root.get("providers") orelse return Error.MissingProvider;
     if (providers_value != .object) return Error.InvalidAuthState;
 
-    const provider_value = providers_value.object.get(active_provider) orelse return Error.MissingProvider;
+    const provider_value = providers_value.object.get(provider_id) orelse return Error.MissingProvider;
     if (provider_value != .object) return Error.InvalidAuthState;
     const provider_object = provider_value.object;
 
@@ -160,7 +214,7 @@ fn readActiveProvider(allocator: std.mem.Allocator, path: []const u8) !ResolvedA
     }
 
     return .{
-        .provider_id = try allocator.dupe(u8, active_provider),
+        .provider_id = try allocator.dupe(u8, provider_id),
         .base_url = base_url,
         .api_key = api_key,
         .model = model,

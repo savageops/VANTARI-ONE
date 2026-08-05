@@ -422,6 +422,54 @@ pub fn completionUrl(allocator: std.mem.Allocator, base_url: []const u8) ![]u8 {
     return std.fmt.allocPrint(allocator, "{s}{s}", .{ trimmed, suffix });
 }
 
+pub fn modelsUrl(allocator: std.mem.Allocator, base_url: []const u8) ![]u8 {
+    var trimmed = std.mem.trimRight(u8, base_url, "/");
+    if (std.mem.endsWith(u8, trimmed, "/chat/completions")) {
+        trimmed = trimmed[0 .. trimmed.len - "/chat/completions".len];
+    }
+    const suffix = if (hasExplicitVersionSegment(trimmed)) "/models" else "/v1/models";
+    return std.fmt.allocPrint(allocator, "{s}{s}", .{ trimmed, suffix });
+}
+
+pub fn lmStudioLoadedModelsUrl(allocator: std.mem.Allocator, base_url: []const u8) !?[]u8 {
+    const trimmed = std.mem.trimRight(u8, base_url, "/");
+    if (!isLocalHostUrl(trimmed)) return null;
+    const origin = stripPathAndVersion(trimmed);
+    return try std.fmt.allocPrint(allocator, "{s}/api/v1/models/loaded", .{origin});
+}
+
+fn stripPathAndVersion(base_url: []const u8) []const u8 {
+    const scheme_end = std.mem.indexOf(u8, base_url, "://") orelse return base_url;
+    const path_start = std.mem.indexOfPos(u8, base_url, scheme_end + 3, "/") orelse return base_url;
+    return base_url[0..path_start];
+}
+
+pub fn isLocalHostUrl(url: []const u8) bool {
+    if (std.mem.indexOf(u8, url, "://") == null) return false;
+    return std.mem.indexOf(u8, url, "localhost") != null or
+        std.mem.indexOf(u8, url, "127.0.0.1") != null or
+        std.mem.indexOf(u8, url, "[::1]") != null;
+}
+
+pub fn httpGet(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    api_key: []const u8,
+    account_id: ?[]const u8,
+) anyerror![]u8 {
+    const uri = try std.Uri.parse(url);
+    const scheme = try schemeFromUri(uri.scheme);
+    var host_buffer: [std.Uri.host_name_max]u8 = undefined;
+    const host = try uri.getHost(&host_buffer);
+    const port = uri.port orelse defaultPort(scheme);
+    const stream = try std.net.tcpConnectToHost(allocator, host, port);
+    defer stream.close();
+    return switch (scheme) {
+        .http => plainHttpGet(allocator, stream, &uri, api_key, account_id),
+        .https => tlsHttpGet(allocator, stream, host, &uri, api_key, account_id),
+    };
+}
+
 fn hasExplicitVersionSegment(base_url: []const u8) bool {
     const slash_index = std.mem.lastIndexOfScalar(u8, base_url, '/') orelse return false;
     const segment = base_url[slash_index + 1 ..];
@@ -501,6 +549,22 @@ fn plainHttpSend(
     return readResponse(allocator, stream_reader.interface());
 }
 
+fn plainHttpGet(
+    allocator: std.mem.Allocator,
+    stream: std.net.Stream,
+    uri: *const std.Uri,
+    api_key: []const u8,
+    account_id: ?[]const u8,
+) ![]u8 {
+    var read_buffer: [plain_read_buffer_size]u8 = undefined;
+    var write_buffer: [plain_write_buffer_size]u8 = undefined;
+    var stream_reader = stream.reader(&read_buffer);
+    var stream_writer = stream.writer(&write_buffer);
+    try writeGetHead(&stream_writer.interface, uri, api_key, account_id);
+    try stream_writer.interface.flush();
+    return readResponse(allocator, stream_reader.interface());
+}
+
 fn plainHttpSendStreaming(
     allocator: std.mem.Allocator,
     stream: std.net.Stream,
@@ -559,6 +623,40 @@ fn tlsHttpSend(
     try tls_client.writer.flush();
     try stream_writer.interface.flush();
 
+    return readResponse(allocator, &tls_client.reader);
+}
+
+fn tlsHttpGet(
+    allocator: std.mem.Allocator,
+    stream: std.net.Stream,
+    host: []const u8,
+    uri: *const std.Uri,
+    api_key: []const u8,
+    account_id: ?[]const u8,
+) ![]u8 {
+    var encrypted_write_buffer: [tls_record_buffer_size]u8 = undefined;
+    var encrypted_read_buffer: [tls_record_buffer_size]u8 = undefined;
+    var tls_read_buffer: [tls_read_buffer_size]u8 = undefined;
+    var plaintext_write_buffer: [tls_plaintext_write_buffer_size]u8 = undefined;
+    var stream_writer = stream.writer(&encrypted_write_buffer);
+    var stream_reader = stream.reader(&encrypted_read_buffer);
+    var ca_bundle: std.crypto.Certificate.Bundle = .{};
+    defer ca_bundle.deinit(allocator);
+    try ca_bundle.rescan(allocator);
+    var tls_client = try std.crypto.tls.Client.init(
+        stream_reader.interface(),
+        &stream_writer.interface,
+        .{
+            .host = .{ .explicit = host },
+            .ca = .{ .bundle = ca_bundle },
+            .read_buffer = tls_read_buffer[0..],
+            .write_buffer = plaintext_write_buffer[0..],
+            .allow_truncation_attacks = true,
+        },
+    );
+    try writeGetHead(&tls_client.writer, uri, api_key, account_id);
+    try tls_client.writer.flush();
+    try stream_writer.interface.flush();
     return readResponse(allocator, &tls_client.reader);
 }
 
@@ -626,6 +724,32 @@ fn writeRequestHead(
     try writer.writeAll("accept-encoding: identity\r\n");
     try writer.writeAll("connection: close\r\n");
     try writer.print("content-length: {d}\r\n\r\n", .{payload_len});
+}
+
+fn writeGetHead(
+    writer: *std.Io.Writer,
+    uri: *const std.Uri,
+    api_key: []const u8,
+    account_id: ?[]const u8,
+) !void {
+    try writer.writeAll("GET ");
+    try uri.writeToStream(writer, .{ .path = true, .query = true });
+    try writer.writeAll(" HTTP/1.1\r\n");
+    try writer.writeAll("host: ");
+    try uri.writeToStream(writer, .{ .authority = true });
+    try writer.writeAll("\r\n");
+    try writer.writeAll("authorization: Bearer ");
+    try writer.writeAll(api_key);
+    try writer.writeAll("\r\n");
+    if (account_id) |value| {
+        try writer.writeAll("chatgpt-account-id: ");
+        try writer.writeAll(value);
+        try writer.writeAll("\r\n");
+    }
+    try writer.writeAll("accept: application/json\r\n");
+    try writer.writeAll("accept-encoding: identity\r\n");
+    try writer.writeAll("connection: close\r\n");
+    try writer.writeAll("content-length: 0\r\n\r\n");
 }
 
 const StreamingHttpState = struct {

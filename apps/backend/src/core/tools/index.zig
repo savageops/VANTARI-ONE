@@ -14,7 +14,6 @@ pub const ToolSource = sockets.ToolSource;
 
 pub const builtinDefinitions = runtime.builtinDefinitions;
 pub const builtinDefinitionsForContext = runtime.builtinDefinitionsForContext;
-pub const buildAgentSystemPrompt = runtime.buildAgentSystemPrompt;
 pub const renderCatalog = runtime.renderCatalog;
 pub const renderCatalogJson = runtime.renderCatalogJson;
 pub const validateDefinition = sockets.validateDefinition;

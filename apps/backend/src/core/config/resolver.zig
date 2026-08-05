@@ -1,6 +1,9 @@
 const std = @import("std");
 const auth_resolver = @import("../auth/resolver.zig");
+const config_file = @import("file.zig");
 const fsutil = @import("../../shared/fsutil.zig");
+const models = @import("../providers/models.zig");
+const provider = @import("../providers/openai_compatible.zig");
 const settings = @import("settings.zig");
 const types = @import("../../shared/types.zig");
 
@@ -88,6 +91,10 @@ pub fn loadDefault(allocator: std.mem.Allocator, workspace_root: []const u8) !ty
     };
     errdefer config.deinit(allocator);
 
+    var runtime_policy = try config_file.loadRuntimePolicy(allocator, workspace_root);
+    defer runtime_policy.deinit(allocator);
+    try applyRuntimePolicy(allocator, &config, runtime_policy);
+
     const canonical_workspace_root = try canonicalizeWorkspaceRoot(
         allocator,
         workspace_root,
@@ -111,6 +118,9 @@ pub fn loadDefault(allocator: std.mem.Allocator, workspace_root: []const u8) !ty
     try applyResolvedAuth(allocator, &config, resolved_auth);
     config.context_policy = try settings.loadContextPolicy(allocator, config.workspace_root, config.context_policy);
     config.prompt_policy = try settings.loadPromptPolicy(allocator, config.workspace_root, config.prompt_policy);
+    config.memory_policy = try config_file.loadMemoryPolicy(allocator, config.workspace_root, config.memory_policy);
+    config.wire_api = (try config_file.loadWireApi(allocator, config.workspace_root)) orelse config.wire_api;
+    try applyLocalContextDetection(allocator, &config);
     return config;
 }
 
@@ -135,9 +145,70 @@ fn loadDefaultFromAuthOnly(allocator: std.mem.Allocator, workspace_root: []const
     root_owned = false;
     errdefer config.deinit(allocator);
 
+    var runtime_policy = try config_file.loadRuntimePolicy(allocator, workspace_root);
+    defer runtime_policy.deinit(allocator);
+    try applyRuntimePolicy(allocator, &config, runtime_policy);
+
+    if (runtime_policy.workspace) |configured_workspace| {
+        const canonical_workspace = try canonicalizeWorkspaceRoot(allocator, workspace_root, configured_workspace);
+        allocator.free(config.workspace_root);
+        config.workspace_root = canonical_workspace;
+    }
+
     config.context_policy = try settings.loadContextPolicy(allocator, config.workspace_root, config.context_policy);
     config.prompt_policy = try settings.loadPromptPolicy(allocator, config.workspace_root, config.prompt_policy);
+    config.memory_policy = try config_file.loadMemoryPolicy(allocator, config.workspace_root, config.memory_policy);
+    config.wire_api = (try config_file.loadWireApi(allocator, config.workspace_root)) orelse config.wire_api;
+    try applyLocalContextDetection(allocator, &config);
     return config;
+}
+
+/// Apply non-secret runtime limits from config.json. Workspace is canonicalized
+/// by the caller because it depends on the invocation root.
+fn applyRuntimePolicy(allocator: std.mem.Allocator, config: *types.Config, policy: config_file.RuntimePolicy) !void {
+    config.max_steps = policy.max_steps;
+    config.max_tool_calls_per_turn = policy.max_tool_calls_per_turn;
+    config.max_tool_calls_per_session = policy.max_tool_calls_per_session;
+    if (policy.workspace) |workspace| {
+        const replacement = try allocator.dupe(u8, workspace);
+        allocator.free(config.workspace_root);
+        config.workspace_root = replacement;
+    }
+}
+
+/// Proactively detect the context window for local OpenAI-compatible servers
+/// (LM Studio, llama.cpp, vLLM, Ollama). Remote providers keep their
+/// configured/default window — probing them adds latency and is unreliable.
+///
+/// Precedence: explicit config.json `context.context_window_tokens` always wins.
+/// When config.json leaves the field null, and the provider is
+/// local, we probe GET /v1/models to recover the runtime context length for
+/// the configured model. This prevents late compaction on small local models
+/// whose default 128K assumption is wrong.
+fn applyLocalContextDetection(allocator: std.mem.Allocator, config: *types.Config) !void {
+    if (!provider.isLocalHostUrl(config.openai_base_url)) return;
+    if (settingsHasExplicitContextWindow(allocator, config.workspace_root)) return;
+
+    var discovered = models.listModels(
+        allocator,
+        config.openai_base_url,
+        config.openai_api_key,
+        null,
+        config.auth_provider orelse "local",
+    ) catch return;
+    defer discovered.deinit(allocator);
+
+    const detected = models.detectContextWindowForModel(discovered, config.openai_model) orelse return;
+    if (detected > 0) {
+        config.context_policy.context_window_tokens = detected;
+        std.log.info("config: auto-detected context window {d} for local model {s}", .{ detected, config.openai_model });
+    }
+}
+
+/// Returns true when canonical config.json contains an explicit positive
+/// context-window value.
+fn settingsHasExplicitContextWindow(allocator: std.mem.Allocator, workspace_root: []const u8) bool {
+    return config_file.hasExplicitContextWindow(allocator, workspace_root);
 }
 
 fn applyResolvedAuth(allocator: std.mem.Allocator, config: *types.Config, resolved_auth: auth_resolver.ResolvedAuth) !void {

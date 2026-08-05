@@ -73,7 +73,8 @@ const valid_tool_names = [_][]const u8{
     "init_workspace",
     "todo_slice",
     "changelog_ledger",
-    "memory_ledger",
+    "memory_read",
+    "memory_write",
     "research_artifact",
     "docs_artifact",
     "workspace_backup",
@@ -226,6 +227,8 @@ fn verifySocketCase(index: usize) !void {
 fn verifyPluginManifestCase(index: usize) !void {
     switch (index % 5) {
         0 => {
+            // The typed plugin contract (P1-21) only mounts .tool sockets;
+            // .context is rejected as UnsupportedSocketKind before any side effect.
             const id = try std.fmt.allocPrint(std.testing.allocator, "plugin-{d}", .{index});
             defer std.testing.allocator.free(id);
             const version = try std.fmt.allocPrint(std.testing.allocator, "0.1.{d}", .{index});
@@ -237,7 +240,7 @@ fn verifyPluginManifestCase(index: usize) !void {
                 .name = socket_name,
                 .entry = "context/entry",
             }};
-            try VAR1.core.plugins.validateManifest(.{ .id = id, .version = version, .sockets = sockets[0..] });
+            try std.testing.expectError(VAR1.core.plugins.manifest.Error.UnsupportedSocketKind, VAR1.core.plugins.validateManifest(.{ .id = id, .version = version, .sockets = sockets[0..] }));
         },
         1 => {
             const id = try std.fmt.allocPrint(std.testing.allocator, "plugin_{d}", .{index});
@@ -248,6 +251,7 @@ fn verifyPluginManifestCase(index: usize) !void {
                 .kind = .tool,
                 .name = socket_name,
                 .entry = "tools/lookup_ticket",
+                .review_risk = "read_only",
             }};
             try VAR1.core.plugins.validateManifest(.{ .id = id, .version = "1.0.0", .sockets = sockets[0..] });
         },

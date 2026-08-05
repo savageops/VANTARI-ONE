@@ -134,7 +134,9 @@ fn verifySuccessfulProviderRun(workspace_root: []const u8, index: usize) !void {
     const latest = try VAR1.core.session_store.readLatestEvent(std.testing.allocator, workspace_root, result.session_id);
     defer if (latest) |event| event.deinit(std.testing.allocator);
     try std.testing.expect(latest != null);
-    try std.testing.expectEqualStrings("assistant_response", latest.?.event_type);
+    // turn_finished is the terminal event (emitted after assistant_response),
+    // closing the turn lifecycle with measured token telemetry (P0-3a).
+    try std.testing.expectEqualStrings("turn_finished", latest.?.event_type);
 }
 
 fn verifyProviderFailureRun(workspace_root: []const u8, index: usize) !void {
@@ -218,10 +220,15 @@ fn verifyUnresolvedToolTranscriptFails(workspace_root: []const u8, index: usize)
     var provider_messages = std.array_list.Managed(VAR1.shared.types.ChatMessage).init(std.testing.allocator);
     defer deinitChatMessages(std.testing.allocator, &provider_messages);
 
-    try std.testing.expectError(
-        VAR1.core.context.builder.Error.UnresolvedToolCallTranscript,
-        VAR1.core.context.appendProviderMessages(std.testing.allocator, workspace_root, &provider_messages, session),
-    );
+    // Self-healing: the builder now synthesizes missing tool results instead
+    // of hard-failing. The transcript with an unresolved tool-call tail
+    // should succeed and contain a synthetic tool result.
+    try VAR1.core.context.appendProviderMessages(std.testing.allocator, workspace_root, &provider_messages, session);
+    // Self-healing: builder should produce the assistant tool-call message
+    // plus a synthetic tool result for the interrupted call.
+    try std.testing.expect(provider_messages.items.len >= 2);
+    // The last message should be a tool result (has tool_call_id).
+    try std.testing.expect(provider_messages.items[provider_messages.items.len - 1].tool_call_id != null);
 }
 
 fn verifyOrphanToolTranscriptFails(workspace_root: []const u8, index: usize) !void {
@@ -236,10 +243,8 @@ fn verifyOrphanToolTranscriptFails(workspace_root: []const u8, index: usize) !vo
     var provider_messages = std.array_list.Managed(VAR1.shared.types.ChatMessage).init(std.testing.allocator);
     defer deinitChatMessages(std.testing.allocator, &provider_messages);
 
-    try std.testing.expectError(
-        VAR1.core.context.builder.Error.OrphanToolResultTranscript,
-        VAR1.core.context.appendProviderMessages(std.testing.allocator, workspace_root, &provider_messages, session),
-    );
+    // Self-healing: orphan tool results are skipped, not hard-failed.
+    try VAR1.core.context.appendProviderMessages(std.testing.allocator, workspace_root, &provider_messages, session);
 }
 
 fn verifyCompactedContextSuffix(workspace_root: []const u8, index: usize) !void {

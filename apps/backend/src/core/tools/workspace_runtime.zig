@@ -21,24 +21,6 @@ pub const definitions = [_]types.ToolDefinition{
         .usage_hint = "Call only when canonical .var scaffolding is missing or explicitly requested. Omit force_overwrite unless replacement is intentional.",
     },
     .{
-        .name = "memory_ledger",
-        .description = "Read or append the canonical .var memories ledger.",
-        .review_risk = .write_capable,
-        .parameters_json =
-        \\{
-        \\  "type": "object",
-        \\  "properties": {
-        \\    "action": { "type": "string", "enum": ["read", "append"] },
-        \\    "content": { "type": "string", "description": "Markdown to append when action is append." }
-        \\  },
-        \\  "required": ["action"],
-        \\  "additionalProperties": false
-        \\}
-        ,
-        .example_json = "{\"action\":\"read\"}",
-        .usage_hint = "Use action:\"read\" to inspect memories. Use action:\"append\" only for durable project memory content supplied in content.",
-    },
-    .{
         .name = "changelog_ledger",
         .description = "Read or append the canonical .var changelog log, or archive a completed todo slice into .var/changelog/<todo-name>/.",
         .review_risk = .write_capable,
@@ -221,9 +203,6 @@ pub fn execute(
     if (std.mem.eql(u8, tool_name, "init_workspace")) {
         return executeInitWorkspace(allocator, workspace_root, arguments_json);
     }
-    if (std.mem.eql(u8, tool_name, "memory_ledger")) {
-        return executeMemoryLedger(allocator, workspace_root, arguments_json);
-    }
     if (std.mem.eql(u8, tool_name, "changelog_ledger")) {
         return executeChangelogLedger(allocator, workspace_root, arguments_json);
     }
@@ -254,10 +233,6 @@ pub fn execute(
 
 fn workspaceStateRootPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
     return fsutil.join(allocator, &.{ workspace_root, ".var" });
-}
-
-fn memoriesPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
-    return fsutil.join(allocator, &.{ workspace_root, ".var", "memories", "memories.md" });
 }
 
 fn changelogLogPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
@@ -384,20 +359,9 @@ fn defaultWorkspaceReadme() []const u8 {
         \\
         \\## Ownership
         \\
-        \\- `.var/` owns live session, todo, changelog, memory, research, docs, backup, and worktree state for VAR1.
+        \\- `.var/` owns workspace-local todo, changelog, research, docs, backup, and worktree state for VAR1. Agent memory is owned by the runtime memory store, not this scaffold.
         \\- `.docs/` remains readable repo documentation or preserved historical material when present.
         \\- `init_workspace` owns the default scaffold. Other workspace-state tools operate inside that canonical tree and do not create a parallel system.
-    ;
-    return content;
-}
-
-fn defaultMemoriesFile() []const u8 {
-    const content =
-        \\# Project Memories
-        \\
-        \\## Durable Context
-        \\
-        \\- Record stable learnings here after reading `.var/changelog/_log.md`.
     ;
     return content;
 }
@@ -439,8 +403,6 @@ fn defaultDocsArchitecture() []const u8 {
         \\```text
         \\<project-root>/
         \\  .var/
-        \\    memories/
-        \\      memories.md
         \\    changelog/
         \\      _log.md
         \\      <todo-name>/
@@ -452,8 +414,6 @@ fn defaultDocsArchitecture() []const u8 {
         \\    sessions/
         \\      <session-name>/
         \\        session.md
-        \\    auth/
-        \\      auth.json
         \\    research/
         \\    docs/
         \\      _index.md
@@ -484,7 +444,6 @@ fn defaultToolContracts() []const u8 {
         \\
         \\## Required Domain Tools
         \\
-        \\- `memory_ledger`
         \\- `changelog_ledger`
         \\- `todo_slice`
         \\- `session_record`
@@ -538,7 +497,6 @@ fn scaffoldWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8, f
         try fsutil.join(allocator, &.{ workspace_root, ".var", "changelog" }),
         try fsutil.join(allocator, &.{ workspace_root, ".var", "docs" }),
         try fsutil.join(allocator, &.{ workspace_root, ".var", "sessions" }),
-        try fsutil.join(allocator, &.{ workspace_root, ".var", "auth" }),
         try fsutil.join(allocator, &.{ workspace_root, ".var", "research" }),
         try fsutil.join(allocator, &.{ workspace_root, ".var", "worktrees" }),
         try fsutil.join(allocator, &.{ workspace_root, ".var", "backup" }),
@@ -562,8 +520,6 @@ fn scaffoldWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8, f
 
     const readme = try readmePath(allocator, workspace_root);
     defer allocator.free(readme);
-    const memories = try memoriesPath(allocator, workspace_root);
-    defer allocator.free(memories);
     const changelog = try changelogLogPath(allocator, workspace_root);
     defer allocator.free(changelog);
     const docs_index = try docsIndexPath(allocator, workspace_root);
@@ -574,7 +530,6 @@ fn scaffoldWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8, f
     defer allocator.free(docs_contracts);
 
     try writeTemplateFile(readme, defaultWorkspaceReadme(), force_overwrite, &stats);
-    try writeTemplateFile(memories, defaultMemoriesFile(), force_overwrite, &stats);
     try writeTemplateFile(changelog, defaultChangelogFile(), force_overwrite, &stats);
     try writeTemplateFile(docs_index, defaultDocsIndex(), force_overwrite, &stats);
     try writeTemplateFile(docs_architecture, defaultDocsArchitecture(), force_overwrite, &stats);
@@ -714,45 +669,6 @@ fn executeInitWorkspace(
     defer allocator.free(content);
 
     return okEnvelope(allocator, "init_workspace", content);
-}
-
-fn executeMemoryLedger(
-    allocator: std.mem.Allocator,
-    workspace_root: []const u8,
-    arguments_json: []const u8,
-) ![]u8 {
-    const Args = struct {
-        action: []const u8,
-        content: ?[]const u8 = null,
-    };
-
-    var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
-        .ignore_unknown_fields = false,
-    });
-    defer parsed.deinit();
-
-    const file_path = try memoriesPath(allocator, workspace_root);
-    defer allocator.free(file_path);
-    try fsutil.ensureParent(file_path);
-    if (!fsutil.fileExists(file_path)) try fsutil.writeText(file_path, defaultMemoriesFile());
-
-    if (std.mem.eql(u8, parsed.value.action, "read")) {
-        const content = try fsutil.readTextAlloc(allocator, file_path);
-        defer allocator.free(content);
-        const payload = try std.fmt.allocPrint(allocator, "PATH {s}\n{s}", .{ file_path, content });
-        defer allocator.free(payload);
-        return okEnvelope(allocator, "memory_ledger", payload);
-    }
-
-    if (std.mem.eql(u8, parsed.value.action, "append")) {
-        const content = parsed.value.content orelse return error.InvalidArguments;
-        try appendMarkdownBlock(allocator, file_path, content);
-        const payload = try std.fmt.allocPrint(allocator, "PATH {s}\nAPPENDED_BYTES {d}", .{ file_path, content.len });
-        defer allocator.free(payload);
-        return okEnvelope(allocator, "memory_ledger", payload);
-    }
-
-    return error.InvalidArguments;
 }
 
 fn executeChangelogLedger(

@@ -46,6 +46,17 @@ const root_tool_classes = [_]ToolClass{
     .workspace_state,
 };
 
+// Branch-scoped profiles (roadmap P0-5c). Each restricts the tool set to
+// the minimum the branch type needs — least-privilege per branch.
+const recon_tool_classes = [_]ToolClass{
+    .file_read,
+};
+
+const write_branch_tool_classes = [_]ToolClass{
+    .file_read,
+    .file_write,
+};
+
 pub fn defaultSubagentProfile() CapabilityProfile {
     return .{
         .id = "subagent",
@@ -69,9 +80,42 @@ pub fn rootProfile() CapabilityProfile {
     };
 }
 
+/// Recon branch profile: read-only, no delegation, tight budget.
+/// For research, codebase reconnaissance, and audit branches that
+/// should never mutate files or launch sub-branches.
+pub fn reconBranchProfile() CapabilityProfile {
+    return .{
+        .id = "recon",
+        .allowed_tool_classes = recon_tool_classes[0..],
+        .provider_policy = .inherit_parent,
+        .budget_policy = .{
+            .max_scope_depth_without_reason = 0,
+            .max_contact_budget_without_reason = 0,
+        },
+        .delegation_policy = .{ .allow_child_launch = false },
+    };
+}
+
+/// Write branch profile: read + write, no delegation.
+/// For branches that mutate files but should not fan out further.
+pub fn writeBranchProfile() CapabilityProfile {
+    return .{
+        .id = "write",
+        .allowed_tool_classes = write_branch_tool_classes[0..],
+        .provider_policy = .inherit_parent,
+        .budget_policy = .{
+            .max_scope_depth_without_reason = 0,
+            .max_contact_budget_without_reason = 0,
+        },
+        .delegation_policy = .{ .allow_child_launch = false },
+    };
+}
+
 pub fn resolveProfile(profile_id: []const u8) Error!CapabilityProfile {
     if (std.mem.eql(u8, profile_id, "subagent")) return defaultSubagentProfile();
     if (std.mem.eql(u8, profile_id, "root")) return rootProfile();
+    if (std.mem.eql(u8, profile_id, "recon")) return reconBranchProfile();
+    if (std.mem.eql(u8, profile_id, "write")) return writeBranchProfile();
     return Error.UnsupportedCapabilityProfile;
 }
 
@@ -105,4 +149,33 @@ test "capability profiles resolve canonical ids and reject unknown ids" {
     try std.testing.expect(allowsToolClass(root, .workspace_state));
 
     try std.testing.expectError(Error.UnsupportedCapabilityProfile, resolveProfile("org_agent"));
+}
+
+test "recon branch profile is read-only with no delegation" {
+    const recon = try resolveProfile("recon");
+    try std.testing.expect(std.mem.eql(u8, recon.id, "recon"));
+    try std.testing.expect(allowsToolClass(recon, .file_read));
+    try std.testing.expect(!allowsToolClass(recon, .file_write));
+    try std.testing.expect(!allowsToolClass(recon, .delegation));
+    try std.testing.expect(!allowsToolClass(recon, .workspace_state));
+    try std.testing.expect(!recon.delegation_policy.allow_child_launch);
+}
+
+test "write branch profile allows read+write but not delegation" {
+    const write_branch = try resolveProfile("write");
+    try std.testing.expect(std.mem.eql(u8, write_branch.id, "write"));
+    try std.testing.expect(allowsToolClass(write_branch, .file_read));
+    try std.testing.expect(allowsToolClass(write_branch, .file_write));
+    try std.testing.expect(!allowsToolClass(write_branch, .delegation));
+    try std.testing.expect(!write_branch.delegation_policy.allow_child_launch);
+}
+
+test "branch profiles enforce least privilege via ensureToolClass" {
+    const recon = try resolveProfile("recon");
+    try ensureToolClass(recon, .file_read);
+    try std.testing.expectError(Error.UnsupportedCapability, ensureToolClass(recon, .file_write));
+
+    const write_branch = try resolveProfile("write");
+    try ensureToolClass(write_branch, .file_write);
+    try std.testing.expectError(Error.UnsupportedCapability, ensureToolClass(write_branch, .delegation));
 }

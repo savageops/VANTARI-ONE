@@ -1,0 +1,89 @@
+{
+  "_about": [
+    "This is the complete persistent, non-secret VANTARI configuration surface. Keys beginning with an underscore are documentation metadata and do not change runtime behavior.",
+    "VANTARI_HOME is intentionally not configurable here because it locates this file. Set it in the launching process when the default ~/.vantari directory must change.",
+    "Provider credentials, provider identity, base URL, model, account metadata, and the active provider belong in the sibling auth.json file and are never accepted here.",
+    "Host and port, per-turn context/output overrides, tool timeouts, and output caps are invocation-scoped controls; they remain CLI, RPC, or tool arguments rather than persistent global policy.",
+    "Precedence is invocation argument, process environment, config.json environment entry, typed config section, then the compiled default where that layer applies."
+  ],
+  "_help": {
+    "version": "Configuration schema version. Version 1 is the only supported value; change it only when migrating to a schema explicitly supported by the installed binary."
+  },
+  "version": 1,
+  "runtime": {
+    "_help": {
+      "workspace": "Optional persistent workspace path used when no VANTARI_WORKSPACE process or environment entry is set and no workspace is discovered from the current directory. Null keeps automatic discovery.",
+      "max_steps": "Maximum agent execution steps allowed in one run. Raise deliberately for long autonomous work; lower it to bound cost and runaway loops.",
+      "max_tool_calls_per_turn": "Maximum tool calls accepted from a single provider turn. This limits oversized or cyclic tool batches before effects execute.",
+      "max_tool_calls_per_session": "Maximum cumulative tool calls across one session. It is the session-wide safety budget and must be at least as large as the per-turn limit."
+    },
+    "workspace": null,
+    "max_steps": 4096,
+    "max_tool_calls_per_turn": 16,
+    "max_tool_calls_per_session": 96
+  },
+  "provider": {
+    "_help": {
+      "wire_api": "Provider HTTP protocol shape: chat_completions for OpenAI-compatible /v1/chat/completions, responses for /v1/responses, or anthropic_messages for /v1/messages. This does not select credentials or a model."
+    },
+    "wire_api": "chat_completions"
+  },
+  "context": {
+    "_help": {
+      "auto_compaction": "Allows the context compiler to create checkpoints automatically near the configured token threshold. The append-only transcript remains intact.",
+      "manual_compaction": "Allows explicit operator-triggered session compaction. Disable only when checkpoint writes must be prohibited entirely.",
+      "context_window_tokens": "Provider context capacity in tokens. Null enables provider/model detection with the compiled default as fallback; a positive integer pins the capacity.",
+      "compact_at_ratio_milli": "Automatic compaction threshold in thousandths of usable context capacity. 850 means 85 percent; valid values are 1 through 1000.",
+      "reserve_output_tokens": "Tokens held back from input context for the next model output. It also becomes the default maximum output budget unless a turn supplies an explicit override.",
+      "keep_recent_messages": "Minimum number of newest transcript messages retained verbatim after a compacted checkpoint so current conversational state remains precise.",
+      "max_entries_per_checkpoint": "Maximum transcript entries summarized into one checkpoint. Zero means no entry-count cap; token and lifecycle boundaries still apply.",
+      "aggressiveness_milli": "Compaction strength in thousandths. Higher values produce denser summaries; valid values are 0 through 1000.",
+      "retry_on_provider_overflow": "When true, a provider context-overflow response may trigger one compiler rebuild and retry through the canonical checkpoint path."
+    },
+    "auto_compaction": true,
+    "manual_compaction": true,
+    "context_window_tokens": null,
+    "compact_at_ratio_milli": 850,
+    "reserve_output_tokens": 8192,
+    "keep_recent_messages": 8,
+    "max_entries_per_checkpoint": 0,
+    "aggressiveness_milli": 350,
+    "retry_on_provider_overflow": true
+  },
+  "prompts": {
+    "_help": {
+      "system_prompt_file": "Optional workspace-relative path to an additional non-empty system prompt file. Null uses only the kernel-owned system prompt.",
+      "developer_prompt_file": "Optional workspace-relative path to an additional non-empty developer prompt file. Null supplies no operator-managed developer prompt."
+    },
+    "system_prompt_file": null,
+    "developer_prompt_file": null
+  },
+  "memory": {
+    "_help": {
+      "enabled": "Loads bounded active session and global memories into the agent prompt. False preserves the files and tools but disables automatic recall.",
+      "agent_writes_enabled": "Allows memory_write calls initiated by the agent or an explicit user request. False makes memory read-only to agent runs.",
+      "max_entry_bytes": "Maximum UTF-8 bytes in one topic plus content payload. This prevents memory from becoming a transcript or document store.",
+      "max_session_context_bytes": "Maximum bytes of active session-only memory compiled into one provider prompt rebuild.",
+      "max_global_context_bytes": "Maximum bytes of active cross-workspace memory compiled into one provider prompt rebuild.",
+      "max_context_entries": "Maximum combined active memory entries compiled into one provider prompt rebuild. Session entries are considered before global entries."
+    },
+    "enabled": true,
+    "agent_writes_enabled": true,
+    "max_entry_bytes": 2048,
+    "max_session_context_bytes": 8192,
+    "max_global_context_bytes": 4096,
+    "max_context_entries": 32
+  },
+  "environment": {
+    "_help": {
+      "VANTARI_WORKSPACE": "File-backed equivalent of the VANTARI_WORKSPACE process variable. A real process variable with the same name wins; null leaves this layer unset.",
+      "MAX_STEPS": "File-backed environment-style override for runtime.max_steps. Accepts a positive integer or decimal string; the real MAX_STEPS process variable wins.",
+      "MAX_TOOL_CALLS_PER_TURN": "File-backed environment-style override for runtime.max_tool_calls_per_turn. Accepts a positive integer or decimal string; the real process variable wins.",
+      "MAX_TOOL_CALLS_PER_SESSION": "File-backed environment-style override for runtime.max_tool_calls_per_session. Accepts an integer or decimal string at least as large as the effective per-turn limit; the real process variable wins."
+    },
+    "VANTARI_WORKSPACE": null,
+    "MAX_STEPS": null,
+    "MAX_TOOL_CALLS_PER_TURN": null,
+    "MAX_TOOL_CALLS_PER_SESSION": null
+  }
+}

@@ -216,6 +216,8 @@ fn renderResult(
     try output.writer().print("{d}", .{result.exit_code});
     try output.writer().writeAll(",\"timed_out\":");
     try output.writer().writeAll(if (result.timed_out) "true" else "false");
+    try output.writer().writeAll(",\"truncated\":");
+    try output.writer().writeAll(if (result.truncated) "true" else "false");
     try output.writer().writeAll(",\"stdout\":");
     try output.writer().print("{f}", .{std.json.fmt(result.stdout, .{})});
     try output.writer().writeAll(",\"stderr\":");

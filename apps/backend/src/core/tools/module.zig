@@ -63,6 +63,7 @@ pub const Error = error{
     FileNotInspected,
     InvalidArguments,
     MissingParentSession,
+    MemoryWritesDisabled,
     PatternNotFound,
     ToolPayloadExceeded,
     ToolUnavailable,
@@ -74,6 +75,10 @@ pub const CommandOutput = struct {
     stdout: []u8,
     stderr: []u8,
     timed_out: bool = false,
+    /// True when stdout or stderr exceeded `max_output_bytes` and was
+    /// truncated. The caller must surface this as typed evidence — silent
+    /// truncation is a contract violation (AGENTS.md §IV).
+    truncated: bool = false,
 
     pub fn deinit(self: CommandOutput, allocator: std.mem.Allocator) void {
         allocator.free(self.stdout);
@@ -255,6 +260,7 @@ pub const ExecutionContext = struct {
     tool_events: ?ToolEventSink = null,
     file_inspection_ledger: ?*FileInspectionLedger = null,
     workspace_state_enabled: bool = false,
+    memory_policy: @import("../../shared/types.zig").MemoryPolicy = .{},
 };
 
 pub const FileInspectionState = enum {

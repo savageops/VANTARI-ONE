@@ -437,17 +437,31 @@ fn validateOptions(kind: types.ScheduleKind, due_at_ms: i64, interval_ms: ?i64, 
 }
 
 fn schedulesPath(allocator: std.mem.Allocator, workspace_root: []const u8, leaf: []const u8) ![]u8 {
-    return fsutil.join(allocator, &.{ workspace_root, ".var", "schedules", leaf });
+    const root = try fsutil.runtimeRootForWorkspace(allocator, workspace_root);
+    defer allocator.free(root);
+    const sched_dir = try fsutil.join(allocator, &.{ root, "schedules" });
+    defer allocator.free(sched_dir);
+    std.fs.cwd().makePath(sched_dir) catch {};
+    return fsutil.join(allocator, &.{ root, "schedules", leaf });
 }
 
 fn jobsRoot(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
-    return fsutil.join(allocator, &.{ workspace_root, ".var", "schedules", "jobs" });
+    const root = try fsutil.runtimeRootForWorkspace(allocator, workspace_root);
+    defer allocator.free(root);
+    const jobs_dir = try fsutil.join(allocator, &.{ root, "schedules", "jobs" });
+    std.fs.cwd().makePath(jobs_dir) catch {};
+    return jobs_dir;
 }
 
 fn jobPath(allocator: std.mem.Allocator, workspace_root: []const u8, job_id: []const u8) ![]u8 {
     const leaf = try std.fmt.allocPrint(allocator, "{s}.json", .{job_id});
     defer allocator.free(leaf);
-    return fsutil.join(allocator, &.{ workspace_root, ".var", "schedules", "jobs", leaf });
+    const root = try fsutil.runtimeRootForWorkspace(allocator, workspace_root);
+    defer allocator.free(root);
+    const jobs_dir = try fsutil.join(allocator, &.{ root, "schedules", "jobs" });
+    defer allocator.free(jobs_dir);
+    std.fs.cwd().makePath(jobs_dir) catch {};
+    return fsutil.join(allocator, &.{ root, "schedules", "jobs", leaf });
 }
 
 test "scheduler store creates durable job and run-now attempt" {

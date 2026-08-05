@@ -1,5 +1,39 @@
 const std = @import("std");
 
+/// Wire-protocol selector for the provider endpoint. Harvested from Codex's
+/// `model_providers.wire_api` config shape and pi-mono's `Api` enum. Determines
+/// which HTTP endpoint and request/response shape the provider adapter uses.
+///
+/// - `chat_completions` — POST /v1/chat/completions (default; LM Studio, z.ai,
+///   OpenAI-compat). The existing openai_compatible.zig adapter.
+/// - `responses` — POST /v1/responses (OpenAI Responses API; LM Studio 0.3.29+).
+///   Stateful input items, reasoning support.
+/// - `anthropic_messages` — POST /v1/messages (Anthropic Messages API; LM Studio
+///   0.4.1+). Different tool schema (input_schema vs parameters), max_tokens
+///   required, system as top-level field.
+pub const WireApi = enum {
+    chat_completions,
+    responses,
+    anthropic_messages,
+
+    pub fn fromString(value: []const u8) ?WireApi {
+        if (std.mem.eql(u8, value, "chat_completions")) return .chat_completions;
+        if (std.mem.eql(u8, value, "chat")) return .chat_completions;
+        if (std.mem.eql(u8, value, "responses")) return .responses;
+        if (std.mem.eql(u8, value, "anthropic_messages")) return .anthropic_messages;
+        if (std.mem.eql(u8, value, "anthropic")) return .anthropic_messages;
+        return null;
+    }
+
+    pub fn label(self: WireApi) []const u8 {
+        return switch (self) {
+            .chat_completions => "chat_completions",
+            .responses => "responses",
+            .anthropic_messages => "anthropic_messages",
+        };
+    }
+};
+
 pub const Config = struct {
     openai_base_url: []u8,
     openai_api_key: []u8,
@@ -13,6 +47,11 @@ pub const Config = struct {
     workspace_root: []u8,
     context_policy: ContextPolicy = .{},
     prompt_policy: PromptPolicy = .{},
+    memory_policy: MemoryPolicy = .{},
+    /// Wire-protocol selector for the provider endpoint. Defaults to
+    /// chat_completions (the existing /v1/chat/completions adapter). Set via
+    /// config.json provider.wire_api = "responses" | "anthropic_messages".
+    wire_api: WireApi = .chat_completions,
 
     pub fn deinit(self: Config, allocator: std.mem.Allocator) void {
         allocator.free(self.openai_base_url);
@@ -46,6 +85,15 @@ pub const PromptPolicy = struct {
         if (self.system_prompt_file) |value| allocator.free(value);
         if (self.developer_prompt_file) |value| allocator.free(value);
     }
+};
+
+pub const MemoryPolicy = struct {
+    enabled: bool = true,
+    agent_writes_enabled: bool = true,
+    max_entry_bytes: usize = 2048,
+    max_session_context_bytes: usize = 8192,
+    max_global_context_bytes: usize = 4096,
+    max_context_entries: usize = 32,
 };
 
 pub const AuthType = enum {
@@ -102,10 +150,21 @@ pub const SessionEvent = struct {
     event_type: []const u8,
     message: []const u8,
     timestamp_ms: i64,
+    /// Monotonic ledger position in events.jsonl. Assigned by `appendEvent`;
+    /// 0 for legacy rows written before seq existed or for in-memory events
+    /// that have not yet been persisted.
+    seq: u64 = 0,
+    /// Optional base64-encoded binary payload for binary-safe event entries
+    /// (AGENTS.md §XVIII item 2). When the event carries raw bytes (e.g.
+    /// command output with invalid UTF-8), the bytes are stored here as
+    /// base64 so the canonical JSON text remains valid. Null for text-only
+    /// events.
+    bytes_b64: ?[]const u8 = null,
 
     pub fn deinit(self: SessionEvent, allocator: std.mem.Allocator) void {
         allocator.free(self.event_type);
         allocator.free(self.message);
+        if (self.bytes_b64) |b| allocator.free(b);
     }
 };
 
@@ -168,12 +227,44 @@ pub const ContextCheckpoint = struct {
     compacted_entry_count: u32 = 0,
     trigger: []u8,
     summary: []u8,
+    /// Parent checkpoint id for shard entries (null for summary checkpoints).
+    /// When present, this checkpoint represents a branch shard whose context
+    /// window is derived from the parent checkpoint + this branch's transcript.
+    parent_checkpoint_id: ?[]u8 = null,
+    /// Branch sequence number within the parent's branch space.
+    branch_seq: u64 = 0,
+    /// Branch lifecycle status for shard entries: "open", "converged", or
+    /// "abandoned". Null for summary checkpoints.
+    branch_status: ?ShardStatus = null,
 
     pub fn deinit(self: ContextCheckpoint, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
         allocator.free(self.entry_type);
         allocator.free(self.trigger);
         allocator.free(self.summary);
+        if (self.parent_checkpoint_id) |value| allocator.free(value);
+    }
+};
+
+/// Branch lifecycle status for shard checkpoints (roadmap P0-1).
+pub const ShardStatus = enum {
+    open,
+    converged,
+    abandoned,
+
+    pub fn label(self: ShardStatus) []const u8 {
+        return switch (self) {
+            .open => "open",
+            .converged => "converged",
+            .abandoned => "abandoned",
+        };
+    }
+
+    pub fn parse(text: []const u8) ?ShardStatus {
+        if (std.mem.eql(u8, text, "open")) return .open;
+        if (std.mem.eql(u8, text, "converged")) return .converged;
+        if (std.mem.eql(u8, text, "abandoned")) return .abandoned;
+        return null;
     }
 };
 
@@ -189,6 +280,16 @@ pub const ToolRiskClass = enum {
     delegating,
     unknown_high_impact,
 };
+
+/// Parse a risk class label string into the enum, or null if invalid.
+pub fn parseReviewRiskLabel(text: []const u8) ?ToolRiskClass {
+    if (std.mem.eql(u8, text, "read_only")) return .read_only;
+    if (std.mem.eql(u8, text, "write_capable")) return .write_capable;
+    if (std.mem.eql(u8, text, "command_execution")) return .command_execution;
+    if (std.mem.eql(u8, text, "delegating")) return .delegating;
+    if (std.mem.eql(u8, text, "unknown_high_impact")) return .unknown_high_impact;
+    return null;
+}
 
 pub const ToolDefinition = struct {
     name: []const u8,

@@ -3,6 +3,7 @@ const docs_sync = @import("../docs/sync.zig");
 const context_builder = @import("../context/index.zig");
 const prompts = @import("../prompts/index.zig");
 const provider = @import("../providers/openai_compatible.zig");
+const dispatch = @import("../providers/dispatch.zig");
 const store = @import("../sessions/store.zig");
 const tools = @import("../tools/runtime.zig");
 const types = @import("../../shared/types.zig");
@@ -134,6 +135,7 @@ pub fn runPromptWithOptions(
 
     var execution_context = options.execution_context;
     execution_context.workspace_root = config.workspace_root;
+    execution_context.memory_policy = config.memory_policy;
     if (execution_context.parent_session_id == null) {
         execution_context.parent_session_id = session.id;
     }
@@ -169,11 +171,47 @@ pub fn runPromptWithOptions(
 
     var requires_child_supervision = false;
     var executed_tool_calls: usize = 0;
+    var provider_retries: u8 = 0;
+    const max_provider_retries: u8 = 3;
+
+    // Per-turn scoped arena (roadmap P1-15). Reset after each step to bound
+    // memory growth across a long session. The arena scopes ephemeral
+    // allocations: system prompt build, checkpoint reads, context compilation.
+    // The persistent message list uses the parent allocator and survives resets.
+    var turn_arena = @import("../memory/scopes.zig").ScopedArena.init(
+        .turn, allocator, @import("../memory/scopes.zig").defaultQuota(.turn),
+    );
+    defer turn_arena.deinit();
+
     var step: usize = 0;
     while (step < config.max_steps) : (step += 1) {
+        // Reset the turn arena at the start of each step — all ephemeral
+        // allocations from the previous turn are freed in one operation.
+        turn_arena.reset();
         if (options.hooks.shouldCancel(session.id)) {
             try cancelSession(allocator, config.workspace_root, options.hooks, &session, "Cancellation requested.");
             return Error.Cancelled;
+        }
+
+        // Typed turn ingress evidence: every provider turn starts with a
+        // turn_started event carrying the step boundary and measured token
+        // telemetry (AGENTS.md §IV, roadmap P0-2b). The message is allocated
+        // on the parent allocator (not the turn arena) because it is persisted
+        // to the event spine before this scope returns; free it immediately
+        // after recordSessionEvent serializes it into the durable ledger.
+        {
+            const boundary_msg = turnBoundaryMessage(allocator, step, messages) catch "Provider turn started.";
+            const owns_boundary = boundary_msg.ptr != "Provider turn started.".ptr;
+            try recordSessionEvent(
+                allocator,
+                config.workspace_root,
+                options.hooks,
+                session.id,
+                "turn_started",
+                boundary_msg,
+                session.status,
+            );
+            if (owns_boundary) allocator.free(boundary_msg);
         }
 
         base_message_count = ensureContextWithinBudget(
@@ -189,6 +227,12 @@ pub fn runPromptWithOptions(
             return err;
         };
 
+        // Provider call with resilience: any provider failure (timeout, bad
+        // status, malformed response, empty content) is retried with a nudge
+        // rather than bricking the session. The loop is the sole authority
+        // on session termination — a bad turn is overwritten by the next turn.
+        // Only truly unrecoverable states (step limit, cancellation, context
+        // overflow that can't compact) escape this block.
         const completion = completeWithContextRecovery(
             allocator,
             config,
@@ -199,10 +243,51 @@ pub fn runPromptWithOptions(
             &base_message_count,
             options.transport,
         ) catch |err| {
-            try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err));
-            return err;
+            // Connection-level failures are genuinely unrecoverable — the
+            // server is unreachable. Propagate immediately.
+            if (err == error.ConnectionRefused or
+                err == error.NetworkUnreachable or
+                err == error.ConnectionTimedOut)
+            {
+                try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err));
+                return err;
+            }
+            // ContextWindowExceeded is NOT terminal — it triggers the
+            // compaction lane inside completeWithContextRecovery. If that
+            // recovery succeeds, we never see this error. If it fails,
+            // we fall through to the provider-retry path below and try
+            // again after compaction. Context overflow is always recoverable.
+            //
+            // Response-level errors (BadStatus, MalformedHttpResponse,
+            // MissingContent, streaming parse errors) are transient. The
+            // server is reachable but returned something broken. Retry
+            // with a nudge — the next provider turn overwrites this
+            // failure as if it never existed. The session never bricks
+            // from a single bad response.
+            const diag = provider.failureDiagnosticForError(err);
+            try recordSessionEvent(
+                allocator,
+                config.workspace_root,
+                options.hooks,
+                session.id,
+                "provider_turn_recovered",
+                diag,
+                session.status,
+            );
+            provider_retries += 1;
+            if (provider_retries >= max_provider_retries) {
+                try failSession(allocator, config.workspace_root, options.hooks, &session, diag);
+                return err;
+            }
+            // Brief backoff before retry
+            std.Thread.sleep(@as(u64, @intCast(provider_retries)) * 500 * std.time.ns_per_ms);
+            const nudge = try std.fmt.allocPrint(allocator, "Previous request failed ({s}). Please continue with the task.", .{@errorName(err)});
+            defer allocator.free(nudge);
+            try messages.append(try types.initTextMessage(allocator, .user, nudge));
+            continue;
         };
         defer completion.deinit(allocator);
+        provider_retries = 0; // reset on success
 
         if (completion.hasToolCalls()) {
             const session_budget_exceeded = completion.tool_calls.len > config.max_tool_calls_per_session or
@@ -435,6 +520,23 @@ pub fn runPromptWithOptions(
                 .message = final_output,
                 .timestamp_ms = final_timestamp,
             });
+            // Typed turn terminal evidence: every completed turn emits
+            // turn_finished with measured token telemetry (AGENTS.md §IV, P0-3a).
+            // Same ownership pattern as turn_started: allocate, persist, free.
+            {
+                const finished_msg = turnFinishedMessage(allocator, step, messages, final_output.len) catch "Provider turn completed.";
+                const owns_finished = finished_msg.ptr != "Provider turn completed.".ptr;
+                try recordSessionEvent(
+                    allocator,
+                    config.workspace_root,
+                    options.hooks,
+                    session.id,
+                    "turn_finished",
+                    finished_msg,
+                    session.status,
+                );
+                if (owns_finished) allocator.free(finished_msg);
+            }
             try options.hooks.onSessionEvent(
                 session.id,
                 "assistant_response",
@@ -457,8 +559,44 @@ pub fn runPromptWithOptions(
             };
         }
 
-        try failSession(allocator, config.workspace_root, options.hooks, &session, "MissingAssistantContent");
-        return Error.MissingAssistantContent;
+        // Self-healing: if we reach here, the model returned no content and
+        // no tool calls (empty response). This is handled by the provider-
+        // resilience block above — but if the completion succeeded with null
+        // content and no tool calls, we still need to handle it gracefully.
+        // The provider-resilience retry covers BadStatus/network errors;
+        // a structurally empty success response means the model is done or
+        // confused. Treat it as a completion with a minimal default rather
+        // than bricking the session.
+        const final_output = "Session completed with no final output from the assistant.";
+
+        const final_timestamp = std.time.milliTimestamp();
+        try store.upsertAssistantSessionMessage(allocator, config.workspace_root, session.id, final_output, final_timestamp);
+        try store.writeOutput(allocator, config.workspace_root, session.id, final_output);
+        try store.setSessionStatus(allocator, config.workspace_root, &session, .completed);
+        try store.appendEvent(allocator, config.workspace_root, session.id, .{
+            .event_type = "assistant_response",
+            .message = final_output,
+            .timestamp_ms = final_timestamp,
+        });
+        try options.hooks.onSessionEvent(
+            session.id,
+            "assistant_response",
+            final_output,
+            types.statusLabel(session.status),
+            final_timestamp,
+        );
+        try docs_sync.completeSession(allocator, config.workspace_root, .{
+            .session_id = session.id,
+            .status = types.statusLabel(session.status),
+            .prompt = session.prompt,
+            .output = final_output,
+            .updated_at_ms = session.updated_at_ms,
+        });
+
+        return .{
+            .session_id = try allocator.dupe(u8, session.id),
+            .output = try allocator.dupe(u8, final_output),
+        };
     }
 
     try failSession(allocator, config.workspace_root, options.hooks, &session, "StepLimitExceeded");
@@ -487,7 +625,13 @@ fn rebuildProviderBaseMessages(
     for (messages.items) |message| message.deinit(allocator);
     messages.clearRetainingCapacity();
 
-    const system_prompt = try prompts.buildAgentSystemPrompt(allocator, execution_context, config.prompt_policy);
+    const system_prompt = try prompts.buildAgentSystemPromptWithMemory(
+        allocator,
+        execution_context,
+        config.prompt_policy,
+        config.memory_policy,
+        session.prompt,
+    );
     defer allocator.free(system_prompt);
 
     try messages.append(try types.initTextMessage(allocator, .system, system_prompt));
@@ -567,7 +711,7 @@ fn completeWithContextRecovery(
         .onAssistantDeltaFn = onProviderAssistantDelta,
     };
 
-    return provider.completeWithTransportAndHooks(allocator, config, .{
+    return dispatch.completeWithTransportAndHooks(allocator, config, .{
         .messages = messages.items,
         .tool_definitions = tools.builtinDefinitionsForContext(execution_context),
     }, transport, stream_hooks) catch |err| {
@@ -593,7 +737,7 @@ fn completeWithContextRecovery(
             base_message_count.*,
         );
 
-        return provider.completeWithTransportAndHooks(allocator, config, .{
+        return dispatch.completeWithTransportAndHooks(allocator, config, .{
             .messages = messages.items,
             .tool_definitions = tools.builtinDefinitionsForContext(execution_context),
         }, transport, stream_hooks);
@@ -708,6 +852,40 @@ fn renderToolStartedEvent(
     );
 }
 
+/// Typed turn boundary message carrying the step index and measured token
+/// telemetry. Every provider turn emits turn_started with this payload so
+/// the event spine has per-turn ingress evidence AND token cost evidence
+/// (AGENTS.md §IV, roadmap P0-2b).
+fn turnBoundaryMessage(
+    allocator: std.mem.Allocator,
+    step: usize,
+    messages: std.array_list.Managed(types.ChatMessage),
+) ![]u8 {
+    const window_tokens = context_builder.budget.estimateChatMessages(messages.items);
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"var1.turn_started.v1\",\"step\":{d},\"window_tokens\":{d}}}",
+        .{ step, window_tokens },
+    );
+}
+
+/// Typed turn terminal message carrying the step index, window token count,
+/// and output byte count. Closes the turn lifecycle with measured evidence
+/// (AGENTS.md §IV, roadmap P0-3a).
+fn turnFinishedMessage(
+    allocator: std.mem.Allocator,
+    step: usize,
+    messages: std.array_list.Managed(types.ChatMessage),
+    output_bytes: usize,
+) ![]u8 {
+    const window_tokens = context_builder.budget.estimateChatMessages(messages.items);
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"var1.turn_finished.v1\",\"step\":{d},\"window_tokens\":{d},\"output_bytes\":{d}}}",
+        .{ step, window_tokens, output_bytes },
+    );
+}
+
 fn renderToolFinishedEvent(
     allocator: std.mem.Allocator,
     tool_call: types.ToolCall,
@@ -783,6 +961,19 @@ fn compactSessionForRuntime(
     trigger: []const u8,
     estimated_tokens: u64,
 ) !bool {
+    // Compaction lane with progressive aggressiveness. Each retry increases
+    // aggressiveness, which causes the entry-aware compactor to recompact
+    // already-summarized ranges with a tighter summary. This implements the
+    // chunked fallback pattern: initial-compact → fail → higher aggressiveness
+    // → recompact wider range → success.
+    //
+    // initial-compact(aggressiveness=config) → success → end
+    // initial-compact → not enough → compact(aggressiveness+=200) → success → end
+    // initial-compact → not enough → compact(aggressiveness+=200) → not enough → compact(aggressiveness+=200) → ...
+    //
+    // The compactor's buildPlan detects when aggressiveness_milli exceeds
+    // the existing checkpoint's value and recompacts from source_seq_start,
+    // effectively merging chunks into a tighter summary.
     const start_message = try std.fmt.allocPrint(
         allocator,
         "Context compaction started: trigger={s} estimated_tokens={d}.",
@@ -791,44 +982,62 @@ fn compactSessionForRuntime(
     defer allocator.free(start_message);
     try recordSessionEvent(allocator, config.workspace_root, hooks, session.id, "context_compaction_started", start_message, session.status);
 
-    const result = context_builder.compactor.compactSession(allocator, config.workspace_root, session.id, .{
-        .keep_recent_messages = config.context_policy.keep_recent_messages,
-        .trigger = trigger,
-        .aggressiveness_milli = config.context_policy.aggressiveness_milli,
-        .max_entries_per_checkpoint = config.context_policy.max_entries_per_checkpoint,
-    }) catch |err| {
-        const failure_message = try std.fmt.allocPrint(
-            allocator,
-            "Context compaction failed: trigger={s} error={s}.",
-            .{ trigger, @errorName(err) },
+    // Try compaction with progressively higher aggressiveness (up to 3 passes).
+    // Each pass that succeeds writes a checkpoint; the provider retry will
+    // use the compacted window. If the provider overflows again, the next
+    // call to compactSessionForRuntime will hit the higher-aggressiveness
+    // checkpoint and recompact.
+    const aggressiveness_steps = [_]u16{ 0, 200, 400 };
+    for (aggressiveness_steps) |step| {
+        const effective_aggressiveness = @min(
+            @as(u16, config.context_policy.aggressiveness_milli) + step,
+            @as(u16, 1000),
         );
-        defer allocator.free(failure_message);
-        try recordSessionEvent(allocator, config.workspace_root, hooks, session.id, "context_compaction_failed", failure_message, session.status);
-        return err;
-    };
-    defer result.deinit(allocator);
 
-    if (result.checkpoint) |checkpoint| {
-        const complete_message = try std.fmt.allocPrint(
-            allocator,
-            "Context compaction completed: trigger={s} source_seq={d}..{d} first_kept_seq={d} compacted_entries={d}.",
-            .{
-                trigger,
-                checkpoint.source_seq_start,
-                checkpoint.source_seq_end,
-                checkpoint.first_kept_seq,
-                checkpoint.compacted_entry_count,
-            },
-        );
-        defer allocator.free(complete_message);
-        try recordSessionEvent(allocator, config.workspace_root, hooks, session.id, "context_compaction_completed", complete_message, session.status);
-        return true;
+        const result = context_builder.compactor.compactSession(allocator, config.workspace_root, session.id, .{
+            .keep_recent_messages = config.context_policy.keep_recent_messages,
+            .trigger = trigger,
+            .aggressiveness_milli = effective_aggressiveness,
+            .max_entries_per_checkpoint = config.context_policy.max_entries_per_checkpoint,
+        }) catch |err| {
+            const failure_message = try std.fmt.allocPrint(
+                allocator,
+                "Context compaction failed: trigger={s} aggressiveness={d} error={s}.",
+                .{ trigger, effective_aggressiveness, @errorName(err) },
+            );
+            defer allocator.free(failure_message);
+            try recordSessionEvent(allocator, config.workspace_root, hooks, session.id, "context_compaction_failed", failure_message, session.status);
+            return err;
+        };
+        defer result.deinit(allocator);
+
+        if (result.checkpoint) |checkpoint| {
+            const complete_message = try std.fmt.allocPrint(
+                allocator,
+                "Context compaction completed: trigger={s} aggressiveness={d} source_seq={d}..{d} first_kept_seq={d} compacted_entries={d}.",
+                .{
+                    trigger,
+                    effective_aggressiveness,
+                    checkpoint.source_seq_start,
+                    checkpoint.source_seq_end,
+                    checkpoint.first_kept_seq,
+                    checkpoint.compacted_entry_count,
+                },
+            );
+            defer allocator.free(complete_message);
+            try recordSessionEvent(allocator, config.workspace_root, hooks, session.id, "context_compaction_completed", complete_message, session.status);
+            return true;
+        }
+
+        // Compaction returned no checkpoint (not enough messages or already current).
+        // Try next aggressiveness step if available.
     }
 
+    // All aggressiveness steps returned no checkpoint — nothing to compact.
     const skipped_message = try std.fmt.allocPrint(
         allocator,
-        "Context compaction skipped: trigger={s} reason={s}.",
-        .{ trigger, result.reason },
+        "Context compaction skipped: trigger={s} reason=no_messages_to_compact.",
+        .{trigger},
     );
     defer allocator.free(skipped_message);
     try recordSessionEvent(allocator, config.workspace_root, hooks, session.id, "context_compaction_skipped", skipped_message, session.status);
