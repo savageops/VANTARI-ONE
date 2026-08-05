@@ -60,6 +60,10 @@ const ChatState = struct {
     cancel_requested: bool = false,
     received_assistant_delta: bool = false,
     pending_assistant_placeholder: bool = false,
+    /// Accumulated reasoning trace buffer — all reasoning_delta tokens
+    /// are appended here and rendered as a single dimmed block, not
+    /// one row per token.
+    reasoning_buffer: std.ArrayList(u8) = .{},
     last_notification_sequence: u64 = 0,
     last_durable_event_count: usize = 0,
     /// Monotonic event seq cursor for durable re-sync (roadmap P1-16).
@@ -75,6 +79,7 @@ const ChatState = struct {
         self.messages.deinit(self.allocator);
         for (self.seen_progress_events.items) |event_key| self.allocator.free(event_key);
         self.seen_progress_events.deinit(self.allocator);
+        self.reasoning_buffer.deinit(self.allocator);
     }
 
     fn add(self: *ChatState, role: Role, text: []const u8) !void {
@@ -133,6 +138,7 @@ const ChatState = struct {
         self.cancel_requested = false;
         self.received_assistant_delta = false;
         self.pending_assistant_placeholder = false;
+        self.clearReasoningBuffer();
 
         try self.hydrateTranscript(parsed_get.value.messages);
         for (parsed_get.value.events) |event| {
@@ -324,7 +330,10 @@ const ChatState = struct {
     }
 
     fn syncDurableProgress(self: *ChatState, session_id: []const u8) !usize {
-        const params = try renderJsonAlloc(self.allocator, .{ .session_id = session_id });
+        // Build params manually — the std.json static formatter can't
+        // serialize u64 values (f64 overflow). We pass after_seq so the
+        // kernel only returns events the TUI hasn't seen yet.
+        const params = try std.fmt.allocPrint(self.allocator, "{{\"session_id\":\"{s}\",\"after_seq\":{d}}}", .{ session_id, self.last_durable_event_seq });
         defer self.allocator.free(params);
 
         const call = self.client.call(protocol.methods.session_get, params) catch return 0;
@@ -356,6 +365,10 @@ const ChatState = struct {
 
         if (std.mem.eql(u8, event_type, "assistant_delta")) {
             try self.addAssistantDelta(message);
+            return true;
+        }
+        if (std.mem.eql(u8, event_type, "reasoning_delta")) {
+            try self.addReasoningDelta(message);
             return true;
         }
         if (skipProgressEvent(event_type)) return false;
@@ -556,6 +569,18 @@ const ChatState = struct {
         }
 
         try self.add(.assistant, delta);
+    }
+
+    /// Accumulate reasoning trace tokens into a single buffer, rendered as
+    /// one dimmed block. This avoids one-row-per-token flooding the TUI.
+    fn addReasoningDelta(self: *ChatState, delta: []const u8) !void {
+        if (delta.len == 0) return;
+        try self.reasoning_buffer.appendSlice(self.allocator, delta);
+    }
+
+    /// Clear the reasoning buffer (called when a new turn starts).
+    fn clearReasoningBuffer(self: *ChatState) void {
+        self.reasoning_buffer.clearRetainingCapacity();
     }
 
     fn startAssistantPlaceholder(self: *ChatState) !void {
@@ -1086,6 +1111,24 @@ fn buildTranscriptRows(allocator: std.mem.Allocator, win: Window, state: *const 
 
     const body_width = @max(@as(usize, 1), @as(usize, win.width -| 4));
     try appendStartupIntroRows(allocator, &rows);
+
+    // When reasoning trace is accumulating, render it as a single dimmed
+    // block before the assistant output. This is one contiguous text block,
+    // not one row per token.
+    if (state.reasoning_buffer.items.len > 0) {
+        const reasoning_text = state.reasoning_buffer.items;
+        // Truncate display to last ~500 chars to avoid flooding the TUI
+        // when reasoning is very long. The full trace is in the event spine.
+        const display = if (reasoning_text.len > 500) reasoning_text[reasoning_text.len - 500 ..] else reasoning_text;
+        const prefix = "∞ ";
+        const labeled = try std.fmt.allocPrint(allocator, "{s}{s}", .{ prefix, display });
+        defer allocator.free(labeled);
+        try appendMessageRows(allocator, &rows, .{
+            .role = .progress,
+            .text = labeled,
+        }, body_width);
+    }
+
     for (state.messages.items) |message| {
         try appendMessageRows(allocator, &rows, message, body_width);
     }
@@ -1807,7 +1850,8 @@ fn normalizeTerminalChunk(allocator: std.mem.Allocator, value: []const u8) ![]u8
 
 fn skipProgressEvent(event_type: []const u8) bool {
     return std.mem.eql(u8, event_type, "session_started") or
-        std.mem.eql(u8, event_type, "assistant_response");
+        std.mem.eql(u8, event_type, "assistant_response") or
+        std.mem.eql(u8, event_type, "reasoning_delta");
 }
 
 fn progressLabel(event_type: []const u8) []const u8 {

@@ -34,7 +34,7 @@ const notification_poll_ms: u64 = 50;
 /// too long — a crashed process left the session unresumable for 2 minutes.
 /// 5s is enough to cover normal turn latency between events while ensuring
 /// a crashed/restarted process can self-heal near-instantly.
-const stale_running_session_ms: i64 = 5_000;
+const stale_running_session_ms: i64 = 30_000;
 
 const SessionRuntimeState = struct {
     enable_agent_tools: bool = true,
@@ -893,6 +893,13 @@ fn handleSessionGet(server: *Server, params: ?std.json.Value) ![]u8 {
     var parsed = try parseParams(Args, server.allocator, params);
     defer parsed.deinit();
 
+    // Extract after_seq manually — std.json's optional u64 parser overflows
+    // at comptime (f64 cannot represent maxInt(u64)).
+    const after_seq: ?u64 = if (params) |v| blk: {
+        if (v != .object) break :blk null;
+        break :blk optionalU64FromObject(&v.object, "after_seq") catch return Error.InvalidParams;
+    } else null;
+
     var session = store.readSessionRecord(server.allocator, server.config.workspace_root, parsed.value.session_id) catch {
         return Error.SessionNotFound;
     };
@@ -905,8 +912,32 @@ fn handleSessionGet(server: *Server, params: ?std.json.Value) ![]u8 {
     const latest_event = try store.readLatestEvent(server.allocator, server.config.workspace_root, session.id);
     defer if (latest_event) |value| value.deinit(server.allocator);
 
-    const events = try store.readEvents(server.allocator, server.config.workspace_root, session.id);
-    defer types.deinitSessionEvents(server.allocator, events);
+    const all_events = try store.readEvents(server.allocator, server.config.workspace_root, session.id);
+    defer types.deinitSessionEvents(server.allocator, all_events);
+
+    // Filter events by after_seq if provided — avoids re-transferring the
+    // full event spine on every TUI poll. With 120+ reasoning deltas,
+    // this is the difference between a responsive and frozen TUI.
+    const events = blk: {
+        if (after_seq) |min_seq| {
+            var filtered = std.array_list.Managed(types.SessionEvent).init(server.allocator);
+            defer filtered.deinit();
+            for (all_events) |event| {
+                if (event.seq > min_seq) {
+                    try filtered.append(.{
+                        .event_type = try server.allocator.dupe(u8, event.event_type),
+                        .message = try server.allocator.dupe(u8, event.message),
+                        .timestamp_ms = event.timestamp_ms,
+                        .seq = event.seq,
+                        .bytes_b64 = if (event.bytes_b64) |b| try server.allocator.dupe(u8, b) else null,
+                    });
+                }
+            }
+            break :blk try filtered.toOwnedSlice();
+        }
+        break :blk all_events;
+    };
+    defer if (after_seq != null) types.deinitSessionEvents(server.allocator, events);
 
     const messages = try store.readSessionMessages(server.allocator, server.config.workspace_root, session.id);
     defer types.deinitSessionMessages(server.allocator, messages);
