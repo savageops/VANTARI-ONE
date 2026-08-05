@@ -1112,28 +1112,52 @@ fn buildTranscriptRows(allocator: std.mem.Allocator, win: Window, state: *const 
     const body_width = @max(@as(usize, 1), @as(usize, win.width -| 4));
     try appendStartupIntroRows(allocator, &rows);
 
-    // When reasoning trace is accumulating, render it as a single dimmed
-    // block before the assistant output. This is one contiguous text block,
-    // not one row per token.
+    // Reasoning block placement: the reasoning trace occupies the assistant
+    // slot — it REPLACES the "thinking" placeholder while streaming, and
+    // sits above the response once it arrives. The user never sees a
+    // floating reasoning block above the whole transcript; it lives where
+    // the assistant's turn is.
     //
     // IMPORTANT: the rows BORROW from state.reasoning_buffer — never allocate
     // a labeled copy here. A previous version allocated a labeled string with
     // `defer free` and handed it to the transcript row, causing a use-after-
     // free on every reasoning draw (the TUI rendered "thinking" then crashed).
-    if (state.reasoning_buffer.items.len > 0) {
-        try appendTranscriptRow(allocator, &rows, .progress, "∞ reasoning", false, false);
-        const reasoning_text = state.reasoning_buffer.items;
-        // Truncate display to last ~500 chars to avoid flooding the TUI
-        // when reasoning is very long. The full trace is in the event spine.
-        const display = if (reasoning_text.len > 500) reasoning_text[reasoning_text.len - 500 ..] else reasoning_text;
-        try appendWrappedTranscriptRows(allocator, &rows, .progress, display, body_width);
-        try appendTranscriptRow(allocator, &rows, .progress, "", false, true);
-    }
-
+    var reasoning_emitted = false;
     for (state.messages.items) |message| {
+        if (state.reasoning_buffer.items.len > 0 and message.role == .assistant and !message.pending and !reasoning_emitted) {
+            try appendReasoningBlock(allocator, &rows, state, body_width);
+            reasoning_emitted = true;
+        }
+        if (message.pending and state.reasoning_buffer.items.len > 0 and !reasoning_emitted) {
+            // Reasoning replaces the thinking placeholder in the same slot.
+            try appendReasoningBlock(allocator, &rows, state, body_width);
+            reasoning_emitted = true;
+            continue;
+        }
         try appendMessageRows(allocator, &rows, message, body_width);
     }
+    if (!reasoning_emitted and state.reasoning_buffer.items.len > 0) {
+        try appendReasoningBlock(allocator, &rows, state, body_width);
+    }
     return rows;
+}
+
+/// Append the reasoning trace as a single dimmed block (one contiguous text
+/// block, not one row per token). Borrows from state.reasoning_buffer —
+/// never allocates a labeled copy that would dangle.
+fn appendReasoningBlock(
+    allocator: std.mem.Allocator,
+    rows: *std.ArrayList(TranscriptRow),
+    state: *const ChatState,
+    body_width: usize,
+) !void {
+    try appendTranscriptRow(allocator, rows, .progress, "∞ reasoning", false, false);
+    const reasoning_text = state.reasoning_buffer.items;
+    // Truncate display to last ~500 chars to avoid flooding the TUI
+    // when reasoning is very long. The full trace is in the event spine.
+    const display = if (reasoning_text.len > 500) reasoning_text[reasoning_text.len - 500 ..] else reasoning_text;
+    try appendWrappedTranscriptRows(allocator, rows, .progress, display, body_width);
+    try appendTranscriptRow(allocator, rows, .progress, "", false, true);
 }
 
 fn appendStartupIntroRows(

@@ -2,6 +2,48 @@ const std = @import("std");
 const fsutil = @import("../../shared/fsutil.zig");
 const types = @import("../../shared/types.zig");
 
+/// Batched durability gate. Per-append `file.sync()` on Windows is
+/// FlushFileBuffers — tens of milliseconds per call. During streaming, a
+/// provider turn emits 100+ reasoning/assistant deltas; syncing each one
+/// throttles the stream to ~1 token/second. Instead, sync at most once per
+/// batch window, and force a final flush at turn boundaries via
+/// `syncSessionLedgers`. A crash mid-turn loses at most the last window of
+/// deltas — the valid-prefix reader recovers the intact prefix and the turn
+/// is retried, so the durability tradeoff is bounded and recoverable.
+const ledger_sync_batch_window_ms: i64 = 100;
+var last_ledger_sync_ms: i64 = 0;
+var last_session_touch_ms: i64 = 0;
+
+/// Force a durable flush for a session's ledgers. Called by the executor at
+/// turn boundaries (after the final assistant response / failure / cancel)
+/// so committed terminal state cannot be lost. This is the true durability
+/// point — the batched gate only delays, never drops, the final sync.
+pub fn syncSessionLedgers(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+) !void {
+    const events_path = try eventsFilePath(allocator, workspace_root, session_id);
+    defer allocator.free(events_path);
+    const messages_path = try messagesFilePath(allocator, workspace_root, session_id);
+    defer allocator.free(messages_path);
+    const context_path = try contextFilePath(allocator, workspace_root, session_id);
+    defer allocator.free(context_path);
+
+    syncLedgerPath(events_path);
+    syncLedgerPath(messages_path);
+    syncLedgerPath(context_path);
+}
+
+/// Open and sync a ledger path if it exists.
+fn syncLedgerPath(path: []const u8) void {
+    if (!fsutil.fileExists(path)) return;
+    var file = std.fs.cwd().openFile(path, .{ .mode = .read_write }) catch return;
+    defer file.close();
+    file.sync() catch {};
+    last_ledger_sync_ms = std.time.milliTimestamp();
+}
+
 /// Strip a leading UTF-8 BOM (\xEF\xBB\xBF) from a byte slice.  Some editors
 /// and Windows tools prepend a BOM to JSONL files; without stripping, the first
 /// line's JSON parse silently fails and the first record is lost.
@@ -251,6 +293,16 @@ pub fn touchSessionUpdatedAt(
     session_id: []const u8,
     timestamp_ms: i64,
 ) !void {
+    // Batched heartbeat: session.json is rewritten at most once per batch
+    // window. Per-event rewrites (read + parse + atomic temp-rename) on
+    // Windows throttle streaming to ~1 token/sec — the same cost center as
+    // the ledger sync gate. The stale-owner check reads the latest EVENT
+    // timestamp, so the heartbeat rewrite is a display nicety, not a
+    // correctness requirement; batching it is safe.
+    const now_ms = std.time.milliTimestamp();
+    if (now_ms - last_session_touch_ms < ledger_sync_batch_window_ms) return;
+    last_session_touch_ms = now_ms;
+
     var session = try readSessionRecord(allocator, workspace_root, session_id);
     defer session.deinit(allocator);
 
@@ -972,9 +1024,16 @@ fn appendJsonlRecord(
 
     try file.pwriteAll(jsonl, end_position);
 
-    // Durability gate: flush the written bytes from the OS page cache to disk
-    // so a crash after this return cannot lose a committed ledger entry.
-    file.sync() catch {};
+    // Batched durability gate: flush the OS page cache at most once per
+    // batch window. Per-append FlushFileBuffers on Windows throttles
+    // provider streaming to ~1 token/sec; batching keeps the stream fast
+    // while bounding crash loss to the last window of deltas. Terminal
+    // turn boundaries force a full flush via `syncSessionLedgers`.
+    const now_ms = std.time.milliTimestamp();
+    if (now_ms - last_ledger_sync_ms >= ledger_sync_batch_window_ms) {
+        file.sync() catch {};
+        last_ledger_sync_ms = now_ms;
+    }
 }
 
 pub fn sessionsRootPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {

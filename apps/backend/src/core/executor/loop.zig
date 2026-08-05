@@ -555,6 +555,11 @@ pub fn runPromptWithOptions(
                 );
                 if (owns_finished) allocator.free(finished_msg);
             }
+            // Force the final durability flush — the batched sync gate in
+            // appendJsonlRecord skips most per-event flushes for streaming
+            // speed; the terminal assistant response must be durable before
+            // the RPC returns (AGENTS.md §II durability gate at boundaries).
+            store.syncSessionLedgers(allocator, config.workspace_root, session.id) catch {};
             try options.hooks.onSessionEvent(
                 session.id,
                 "assistant_response",
@@ -1297,6 +1302,7 @@ fn cancelSession(
 ) !void {
     try store.setSessionStatus(allocator, workspace_root, session, .cancelled);
     try recordSessionEvent(allocator, workspace_root, hooks, session.id, "session_cancelled", reason, session.status);
+    store.syncSessionLedgers(allocator, workspace_root, session.id) catch {};
     try docs_sync.writePending(allocator, workspace_root, .{
         .session_id = session.id,
         .status = types.statusLabel(session.status),
@@ -1316,6 +1322,7 @@ fn failSession(
 ) !void {
     try store.setSessionFailure(allocator, workspace_root, session, failure_reason);
     try recordSessionEvent(allocator, workspace_root, hooks, session.id, "session_failed", failure_reason, session.status);
+    store.syncSessionLedgers(allocator, workspace_root, session.id) catch {};
     try docs_sync.writePending(allocator, workspace_root, .{
         .session_id = session.id,
         .status = types.statusLabel(session.status),
