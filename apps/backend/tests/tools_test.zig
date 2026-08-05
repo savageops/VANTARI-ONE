@@ -357,6 +357,11 @@ fn mockListAgents(
     return allocator.dupe(u8, "AGENT_NAME berry-child STATUS completed SESSION_ID session-child\n");
 }
 
+fn mockConvergeBranches(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8) anyerror!void {}
+fn mockReconcileShards(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8) anyerror!usize {
+    return 0;
+}
+
 test "tool socket validates tool definitions through core namespace" {
     try VAR1.core.tools.validateDefinition(std.testing.allocator, .{
         .name = "lookup_ticket",
@@ -849,6 +854,8 @@ test "agent tools use the agent service contract and surface agent tool catalog"
             .statusFn = mockAgentStatus,
             .waitFn = mockWaitAgent,
             .listFn = mockListAgents,
+            .convergeFn = mockConvergeBranches,
+            .reconcileFn = mockReconcileShards,
         },
     };
 

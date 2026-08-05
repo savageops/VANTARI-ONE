@@ -186,6 +186,16 @@ pub const AgentService = struct {
         allocator: std.mem.Allocator,
         parent_session_id: []const u8,
     ) anyerror![]u8,
+    convergeFn: *const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+    ) anyerror!void,
+    reconcileFn: *const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+    ) anyerror!usize,
 
     pub fn launch(
         self: AgentService,
@@ -223,6 +233,29 @@ pub const AgentService = struct {
         parent_session_id: []const u8,
     ) anyerror![]u8 {
         return self.listFn(self.context, allocator, parent_session_id);
+    }
+
+    /// Converge all completed child sessions into the parent. Reads each
+    /// child's output, merges them into a convergence summary, writes a
+    /// `converged` shard checkpoint + merged assistant message to the parent.
+    /// This is the branch-and-converge reprocessing step (roadmap P0-2).
+    pub fn converge(
+        self: AgentService,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+    ) anyerror!void {
+        return self.convergeFn(self.context, allocator, parent_session_id);
+    }
+
+    /// Reconcile orphaned open shard branches at cold start. Marks any open
+    /// shard whose owning child process is dead as `abandoned`. Returns the
+    /// count of shards marked abandoned. (roadmap P0-4b)
+    pub fn reconcile(
+        self: AgentService,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+    ) anyerror!usize {
+        return self.reconcileFn(self.context, allocator, parent_session_id);
     }
 };
 
