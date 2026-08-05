@@ -130,26 +130,8 @@ const Server = struct {
     runtime: Runtime = .{},
     scheduler_service: ?scheduler.Service = null,
     scheduler_thread: ?std.Thread = null,
-    /// Delta coalescer: consecutive assistant_delta / reasoning_delta tokens
-    /// are buffered here and flushed as a single batched notification. This
-    /// turns 91 single-token frames into ~10 batched frames during a
-    /// streaming turn, eliminating the per-frame pipe round-trip that
-    /// throttled the TUI to 1 word/sec.
-    delta_coalesce_buf: std.array_list.Managed(u8) = undefined,
-    delta_coalesce_init: bool = false,
-    delta_coalesce_session: ?[]u8 = null,
-    delta_coalesce_status: ?[]u8 = null,
-    delta_coalesce_kind: ?[]u8 = null, // "assistant_delta" or "reasoning_delta"
-    delta_coalesce_count: usize = 0,
-    delta_coalesce_first_ms: i64 = 0,
 
     fn deinit(self: *Server) void {
-        if (self.delta_coalesce_init) {
-            self.delta_coalesce_buf.deinit();
-            if (self.delta_coalesce_session) |s| self.allocator.free(s);
-            if (self.delta_coalesce_status) |s| self.allocator.free(s);
-            if (self.delta_coalesce_kind) |s| self.allocator.free(s);
-        }
         if (self.scheduler_service) |*service| {
             service.requestStop();
             if (self.scheduler_thread) |thread| thread.join();
@@ -206,24 +188,6 @@ const Server = struct {
         self.write_mutex.lock();
         defer self.write_mutex.unlock();
         try writeFrame(self.stdout_file, payload);
-    }
-
-    /// Flush the delta coalesce buffer as a single batched notification.
-    /// The batched message is the concatenated text of all buffered deltas.
-    fn flushDeltaCoalesce(self: *Server) !void {
-        if (!self.delta_coalesce_init or self.delta_coalesce_count == 0) return;
-
-        const message = self.delta_coalesce_buf.items;
-        const session_id = self.delta_coalesce_session orelse return;
-        const status = self.delta_coalesce_status orelse "running";
-        const event_type = self.delta_coalesce_kind orelse "assistant_delta";
-        const timestamp_ms = self.delta_coalesce_first_ms;
-
-        try self.emitSessionEvent(session_id, event_type, message, status, timestamp_ms);
-
-        // Reset for the next batch.
-        self.delta_coalesce_buf.clearRetainingCapacity();
-        self.delta_coalesce_count = 0;
     }
 };
 
@@ -788,7 +752,6 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         .hooks = hooks,
     }) catch |err| switch (err) {
         loop.Error.Cancelled => {
-            server.flushDeltaCoalesce() catch {};
             var cancelled = try store.readSessionRecord(server.allocator, server.config.workspace_root, session.id);
             defer cancelled.deinit(server.allocator);
             const cancelled_output = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
@@ -798,7 +761,6 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
             });
         },
         else => {
-            server.flushDeltaCoalesce() catch {};
             var failed = store.readSessionRecord(server.allocator, server.config.workspace_root, session.id) catch return Error.ExecutionFailed;
             defer failed.deinit(server.allocator);
             if (failed.status != .failed) return Error.ExecutionFailed;
@@ -811,7 +773,6 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         },
     };
     defer result.deinit(server.allocator);
-    server.flushDeltaCoalesce() catch {};
     var completed = try store.readSessionRecord(server.allocator, server.config.workspace_root, result.session_id);
     defer completed.deinit(server.allocator);
     const output = try store.readOutput(server.allocator, server.config.workspace_root, result.session_id);
@@ -1295,58 +1256,8 @@ fn onLoopSessionEvent(
     timestamp_ms: i64,
 ) anyerror!void {
     const server: *Server = @ptrCast(@alignCast(ctx.?));
-
-    // Delta coalescing: consecutive assistant_delta / reasoning_delta events
-    // are buffered into a single notification frame. A streaming turn emits
-    // 50-200 token-sized deltas; without coalescing each one is a separate
-    // Content-Length frame through the mutex-locked stdout pipe. Coalescing
-    // turns ~100 frames into ~10, eliminating the per-frame round-trip.
-    const is_delta = std.mem.eql(u8, event_type, "assistant_delta") or
-        std.mem.eql(u8, event_type, "reasoning_delta");
-
-    if (!is_delta) {
-        // Flush any pending delta buffer before emitting a non-delta event.
-        try server.flushDeltaCoalesce();
-        try server.emitSessionEvent(session_id, event_type, message, status, timestamp_ms);
-        return;
-    }
-
-    // Check if we need to flush the existing buffer first (different session,
-    // different delta kind, or buffer is getting large / old).
-    if (server.delta_coalesce_init and server.delta_coalesce_count > 0) {
-        const kind_match = if (server.delta_coalesce_kind) |k| std.mem.eql(u8, k, event_type) else false;
-        const session_match = if (server.delta_coalesce_session) |s| std.mem.eql(u8, s, session_id) else false;
-        const buf_age = std.time.milliTimestamp() - server.delta_coalesce_first_ms;
-        const buf_full = server.delta_coalesce_buf.items.len > 4096;
-        const buf_old = buf_age > 80;
-        if (!kind_match or !session_match or buf_full or buf_old) {
-            try server.flushDeltaCoalesce();
-        }
-    }
-
-    // Initialize buffer on first use.
-    if (!server.delta_coalesce_init) {
-        server.delta_coalesce_buf = std.array_list.Managed(u8).init(server.allocator);
-        server.delta_coalesce_init = true;
-    }
-
-    // Start a new coalesce batch.
-    if (server.delta_coalesce_count == 0) {
-        if (server.delta_coalesce_session) |s| server.allocator.free(s);
-        server.delta_coalesce_session = try server.allocator.dupe(u8, session_id);
-        if (server.delta_coalesce_status) |s| server.allocator.free(s);
-        server.delta_coalesce_status = try server.allocator.dupe(u8, status);
-        if (server.delta_coalesce_kind) |k| server.allocator.free(k);
-        server.delta_coalesce_kind = try server.allocator.dupe(u8, event_type);
-        server.delta_coalesce_first_ms = timestamp_ms;
-    }
-
-    try server.delta_coalesce_buf.appendSlice(message);
-    server.delta_coalesce_count += 1;
+    try server.emitSessionEvent(session_id, event_type, message, status, timestamp_ms);
 }
-
-const delta_coalesce_max_batch: usize = 64;
-const delta_coalesce_flush_ms: i64 = 80;
 
 fn onLoopShouldCancel(ctx: ?*anyopaque, session_id: []const u8) bool {
     const server: *Server = @ptrCast(@alignCast(ctx.?));
