@@ -52,6 +52,11 @@ pub const Config = struct {
     /// chat_completions (the existing /v1/chat/completions adapter). Set via
     /// config.json provider.wire_api = "responses" | "anthropic_messages".
     wire_api: WireApi = .chat_completions,
+    /// Controls the model's thinking/reasoning mode for GLM-5.x models.
+    /// "disabled" = fast responses, no reasoning tokens (default for speed).
+    /// "enabled" = reasoning tokens streamed (slower but more thorough).
+    /// Sent as the "thinking" parameter in the OpenAI-compatible request body.
+    thinking_mode: []const u8 = "",
 
     pub fn deinit(self: Config, allocator: std.mem.Allocator) void {
         allocator.free(self.openai_base_url);

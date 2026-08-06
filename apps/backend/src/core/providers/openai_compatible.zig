@@ -170,7 +170,7 @@ pub const testing = struct {
         request: types.CompletionRequest,
         stream: bool,
     ) ![]u8 {
-        return buildRequestJson(allocator, model, request, stream);
+        return buildRequestJson(allocator, model, request, stream, "disabled");
     }
 
     pub fn completionResponse(
@@ -201,7 +201,7 @@ pub fn completeWithTransportAndHooks(
     const url = try completionUrl(allocator, config.openai_base_url);
     defer allocator.free(url);
 
-    const payload = try buildRequestJson(allocator, config.openai_model, request, stream_hooks.hasHandlers());
+    const payload = try buildRequestJson(allocator, config.openai_model, request, stream_hooks.hasHandlers(), config.thinking_mode);
     defer allocator.free(payload);
 
     clearFailureDiagnostic();
@@ -216,6 +216,7 @@ fn buildRequestJson(
     model: []const u8,
     request: types.CompletionRequest,
     stream: bool,
+    thinking_mode: []const u8,
 ) ![]u8 {
     var payload = std.array_list.Managed(u8).init(allocator);
     errdefer payload.deinit();
@@ -232,6 +233,17 @@ fn buildRequestJson(
 
     try writer.writeAll("],\"temperature\":0");
     if (stream) try writer.writeAll(",\"stream\":true");
+
+    // Thinking mode control for GLM-5.x models. "disabled" = fast responses
+    // with no reasoning_content tokens (default). "enabled" = model streams
+    // reasoning_content before the visible answer (slower but more thorough).
+    // This is the permanent fix for the "abnormally slow reasoning" issue:
+    // z.ai's OpenAI endpoint generates reasoning tokens at ~2/sec server-side.
+    // Disabling thinking gives the fast streaming speed the operator expects.
+    // Sent as: "thinking":{"type":"disabled"} per Z.AI docs.
+    if (thinking_mode.len > 0) {
+        try writer.print(",\"thinking\":{{\"type\":\"{s}\"}}", .{thinking_mode});
+    }
 
     if (request.tool_definitions.len > 0) {
         try writer.writeAll(",\"tools\":[");
@@ -776,6 +788,7 @@ const StreamingHttpState = struct {
     status_code: u16 = 0,
     body_cursor: usize = 0,
     body_start: usize = 0,
+    stream_complete: bool = false,
     decoded_body: std.array_list.Managed(u8),
     sse: SseDeltaEmitter,
 
@@ -811,6 +824,7 @@ fn readStreamingResponse(allocator: std.mem.Allocator, source_reader: *std.Io.Re
         try raw_response.appendSlice(buffer[0..read_len]);
         if (raw_response.items.len > max_transport_bytes) return error.StreamTooLong;
         try processStreamingHttpBytes(allocator, raw_response.items, &state);
+        if (state.stream_complete) break;
     }
     try state.sse.flushRemainder();
 
@@ -905,9 +919,20 @@ fn processStreamingChunkedBody(
         if (!std.mem.eql(u8, body[chunk_end .. chunk_end + 2], "\r\n")) return Error.MalformedChunkedResponse;
 
         state.body_cursor = chunk_end + 2;
-        if (chunk_size == 0) return;
+        if (chunk_size == 0) {
+            state.stream_complete = true;
+            return;
+        }
 
         const chunk = body[chunk_start..chunk_end];
+        // Check for [DONE] sentinel in the chunk — marks stream end for
+        // providers that keep the connection open after sending data.
+        if (std.mem.indexOf(u8, chunk, "[DONE]") != null) {
+            try state.decoded_body.appendSlice(chunk);
+            try state.sse.feed(chunk);
+            state.stream_complete = true;
+            return;
+        }
         try state.decoded_body.appendSlice(chunk);
         try state.sse.feed(chunk);
     }
@@ -1342,7 +1367,7 @@ test "provider request payload opts into streaming and parallel tool calls when 
     const payload = try buildRequestJson(std.testing.allocator, "test-model", .{
         .messages = messages[0..],
         .tool_definitions = tool_definitions[0..],
-    }, true);
+    }, true, "disabled");
     defer std.testing.allocator.free(payload);
 
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"stream\":true") != null);
