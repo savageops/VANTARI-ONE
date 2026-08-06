@@ -467,21 +467,36 @@ pub const LocalClient = struct {
         after_sequence: u64,
         timeout_ms: usize,
     ) !?Notification {
-        // Use the condition variable for instant wake — the reader thread
+        // Use the condition variable for instant wake. The reader thread
         // calls cond.broadcast() when a notification arrives. This replaces
-        // the previous 50ms Thread.sleep poll which added up to 50ms latency
-        // to every single token.
+        // the previous 50ms Thread.sleep poll.
         const deadline_ns = @as(u64, timeout_ms) * std.time.ns_per_ms;
         while (true) {
             self.state.mutex.lock();
-            defer self.state.mutex.unlock();
+            // Inline the notification check (can't call takeNotificationAfter
+            // which locks the same mutex — would deadlock).
+            var found: ?Notification = null;
+            for (self.state.notifications.items, 0..) |notification, i| {
+                if (notification.sequence <= after_sequence) continue;
+                // Found one — remove it from the queue and return it.
+                found = .{
+                    .sequence = notification.sequence,
+                    .method = try self.allocator.dupe(u8, notification.method),
+                    .params_json = try self.allocator.dupe(u8, notification.params_json),
+                };
+                _ = self.state.notifications.orderedRemove(i);
+                self.allocator.free(notification.method);
+                self.allocator.free(notification.params_json);
+                break;
+            }
+            self.state.mutex.unlock();
 
-            if (try takeNotificationAfter(self, after_sequence)) |notification| return notification;
-
+            if (found) |notification| return notification;
             if (timeout_ms == 0) return null;
 
-            // Wait on the condition variable with a timeout. The reader thread's
-            // cond.broadcast() wakes us the instant a notification arrives.
+            // Wait on the condition variable with a timeout.
+            self.state.mutex.lock();
+            defer self.state.mutex.unlock();
             self.state.cond.timedWait(&self.state.mutex, deadline_ns) catch return null;
         }
     }
