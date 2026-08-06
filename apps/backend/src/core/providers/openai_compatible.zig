@@ -218,6 +218,7 @@ fn buildRequestJson(
     stream: bool,
     thinking_mode: []const u8,
 ) ![]u8 {
+    _ = thinking_mode;
     var payload = std.array_list.Managed(u8).init(allocator);
     errdefer payload.deinit();
 
@@ -233,17 +234,6 @@ fn buildRequestJson(
 
     try writer.writeAll("],\"temperature\":0");
     if (stream) try writer.writeAll(",\"stream\":true");
-
-    // Thinking mode control for GLM-5.x models. "disabled" = fast responses
-    // with no reasoning_content tokens (default). "enabled" = model streams
-    // reasoning_content before the visible answer (slower but more thorough).
-    // This is the permanent fix for the "abnormally slow reasoning" issue:
-    // z.ai's OpenAI endpoint generates reasoning tokens at ~2/sec server-side.
-    // Disabling thinking gives the fast streaming speed the operator expects.
-    // Sent as: "thinking":{"type":"disabled"} per Z.AI docs.
-    if (thinking_mode.len > 0) {
-        try writer.print(",\"thinking\":{{\"type\":\"{s}\"}}", .{thinking_mode});
-    }
 
     if (request.tool_definitions.len > 0) {
         try writer.writeAll(",\"tools\":[");

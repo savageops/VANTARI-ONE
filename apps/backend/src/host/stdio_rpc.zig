@@ -1488,6 +1488,8 @@ fn readFrame(allocator: std.mem.Allocator, file: std.fs.File) !?[]u8 {
 
     // Read until we find the header terminator \r\n\r\n.
     while (header_len < header_buf.len) {
+        // readSliceShort blocks until at least 1 byte is available on pipes,
+        // and returns as soon as any data arrives (not filling the buffer).
         const read_len = file.read(header_buf[header_len..]) catch return null;
         if (read_len == 0) {
             if (header_len == 0) return null;
