@@ -64,6 +64,15 @@ const ChatState = struct {
     /// are appended here and rendered as a single dimmed block, not
     /// one row per token.
     reasoning_buffer: std.ArrayList(u8) = .{},
+    /// Typewriter animation: instead of showing all buffered text instantly,
+    /// reveal characters progressively with an ease-in/ease-out cadence.
+    /// `anim_reveal_count` tracks how many chars of the combined reasoning +
+    /// assistant text are currently visible. Each draw tick advances the
+    /// reveal by a variable amount — fast when far behind (ease-in), slower
+    /// as it catches up (ease-out), creating the natural Disney/Apple motion
+    /// curve that makes streaming feel smooth even when tokens arrive in bursts.
+    anim_reveal_count: usize = 0,
+    anim_last_draw_ms: i64 = 0,
     last_notification_sequence: u64 = 0,
     last_durable_event_count: usize = 0,
     /// Monotonic event seq cursor for durable re-sync (roadmap P1-16).
@@ -277,11 +286,22 @@ const ChatState = struct {
             var changed = try self.drainProgress(session_id, 0);
             changed += try self.syncDurableProgressIfDue(session_id);
             if (try self.drainUiEventsDuringTurn(vx, tty, loop, session_id, input)) changed += 1;
+
+            // Advance typewriter animation and check if more drawing is needed.
+            const before_reveal = self.anim_reveal_count;
+            advanceAnimation(self);
+            if (self.anim_reveal_count != before_reveal) changed += 1;
+
             if (changed > 0) {
                 try draw(vx, writer, self, input);
-                // Events are flowing — poll again immediately, don't sleep.
-                // The unconditional sleep was throttling live streaming to
-                // 1 event per poll cycle.
+                // While animation is catching up, redraw at ~60fps (16ms).
+                // This produces the smooth ease-in/ease-out typewriter effect.
+                const total_buffered = self.reasoning_buffer.items.len;
+                if (self.anim_reveal_count < total_buffered) {
+                    std.Thread.sleep(16 * std.time.ns_per_ms);
+                    continue;
+                }
+                // Events are flowing — poll again immediately.
                 continue;
             }
             std.Thread.sleep(progress_poll_ms * std.time.ns_per_ms);
@@ -1112,6 +1132,32 @@ const TranscriptRow = struct {
     intro_version: bool = false,
 };
 
+/// Advance the typewriter reveal count. Called on every draw tick.
+/// The advance rate uses an ease-in/ease-out curve based on how far behind
+/// the reveal is: when many chars are pending (just received a burst), reveal
+/// fast (ease-in); as the reveal catches up to the buffer, slow down (ease-out).
+/// This creates the natural Apple/Disney motion feel.
+fn advanceAnimation(state: *ChatState) void {
+    const total_buffered = state.reasoning_buffer.items.len +
+        if (state.messages.items.len > 0 and state.messages.items[state.messages.items.len - 1].role == .assistant)
+            state.messages.items[state.messages.items.len - 1].text.len
+        else
+            @as(usize, 0);
+
+    if (total_buffered <= state.anim_reveal_count) {
+        state.anim_reveal_count = total_buffered;
+        return;
+    }
+
+    const pending = total_buffered - state.anim_reveal_count;
+    // Ease-in/ease-out: advance rate proportional to sqrt(pending).
+    // When far behind (pending=400): advance ~20 chars/tick (fast catch-up).
+    // When nearly caught up (pending=4): advance ~2 chars/tick (slow finish).
+    // This produces the natural deceleration curve.
+    const advance: usize = @max(@as(usize, 2), @as(usize, @intFromFloat(@floor(@sqrt(@as(f64, @floatFromInt(pending)))))));
+    state.anim_reveal_count = @min(total_buffered, state.anim_reveal_count + advance);
+}
+
 fn buildTranscriptRows(allocator: std.mem.Allocator, win: Window, state: *const ChatState) !std.ArrayList(TranscriptRow) {
     var rows: std.ArrayList(TranscriptRow) = .{};
     errdefer rows.deinit(allocator);
@@ -1130,21 +1176,22 @@ fn buildTranscriptRows(allocator: std.mem.Allocator, win: Window, state: *const 
     // `defer free` and handed it to the transcript row, causing a use-after-
     // free on every reasoning draw (the TUI rendered "thinking" then crashed).
     var reasoning_emitted = false;
+    // Compute how many chars of reasoning to reveal (typewriter animation).
+    const reasoning_reveal = if (state.anim_reveal_count > 0) state.anim_reveal_count else state.reasoning_buffer.items.len;
     for (state.messages.items) |message| {
         if (state.reasoning_buffer.items.len > 0 and message.role == .assistant and !message.pending and !reasoning_emitted) {
-            try appendReasoningBlock(allocator, &rows, state, body_width);
+            try appendReasoningBlock(allocator, &rows, state, body_width, reasoning_reveal);
             reasoning_emitted = true;
         }
         if (message.pending and state.reasoning_buffer.items.len > 0 and !reasoning_emitted) {
-            // Reasoning replaces the thinking placeholder in the same slot.
-            try appendReasoningBlock(allocator, &rows, state, body_width);
+            try appendReasoningBlock(allocator, &rows, state, body_width, reasoning_reveal);
             reasoning_emitted = true;
             continue;
         }
         try appendMessageRows(allocator, &rows, message, body_width);
     }
     if (!reasoning_emitted and state.reasoning_buffer.items.len > 0) {
-        try appendReasoningBlock(allocator, &rows, state, body_width);
+        try appendReasoningBlock(allocator, &rows, state, body_width, reasoning_reveal);
     }
     return rows;
 }
@@ -1157,13 +1204,19 @@ fn appendReasoningBlock(
     rows: *std.ArrayList(TranscriptRow),
     state: *const ChatState,
     body_width: usize,
+    reveal_limit: usize,
 ) !void {
     try appendTranscriptRow(allocator, rows, .progress, "∞ reasoning", false, false);
     const reasoning_text = state.reasoning_buffer.items;
     // Truncate display to last ~500 chars to avoid flooding the TUI
     // when reasoning is very long. The full trace is in the event spine.
-    const display = if (reasoning_text.len > 500) reasoning_text[reasoning_text.len - 500 ..] else reasoning_text;
-    try appendWrappedTranscriptRows(allocator, rows, .progress, display, body_width);
+    const display_full = if (reasoning_text.len > 500) reasoning_text[reasoning_text.len - 500 ..] else reasoning_text;
+    // Apply typewriter reveal: only show up to `reveal_limit` chars of the
+    // reasoning text. This creates the smooth ease-in/ease-out animation.
+    const display = if (display_full.len > reveal_limit) display_full[0..reveal_limit] else display_full;
+    if (display.len > 0) {
+        try appendWrappedTranscriptRows(allocator, rows, .progress, display, body_width);
+    }
     try appendTranscriptRow(allocator, rows, .progress, "", false, true);
 }
 
