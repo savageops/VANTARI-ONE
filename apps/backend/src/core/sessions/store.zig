@@ -497,6 +497,82 @@ pub fn readEvents(
     return events.toOwnedSlice();
 }
 
+/// Read only events with seq > after_seq. This is the incremental poll path
+/// used by the TUI during streaming. Instead of reading + parsing the ENTIRE
+/// events.jsonl on every poll (O(n) per poll), this reads backward from the
+/// end of the file, collecting events until it finds one with seq <= after_seq.
+/// This is O(k) where k is the number of NEW events since the last poll.
+pub fn readEventsAfterSeq(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    after_seq: u64,
+) ![]types.SessionEvent {
+    const events_path = try eventsFilePath(allocator, workspace_root, session_id);
+    defer allocator.free(events_path);
+
+    if (!fsutil.fileExists(events_path)) return allocator.alloc(types.SessionEvent, 0);
+
+    const raw_content = try fsutil.readTextAlloc(allocator, events_path);
+    defer allocator.free(raw_content);
+    const content = stripUtf8Bom(raw_content);
+
+    // Scan backward from the end, collecting events with seq > after_seq.
+    // Stop when we hit an event with seq <= after_seq (we've reached the
+    // already-seen prefix). The collected events are in reverse order,
+    // so we reverse them before returning.
+    var collected = std.array_list.Managed(types.SessionEvent).init(allocator);
+    errdefer {
+        for (collected.items) |event| event.deinit(allocator);
+        collected.deinit();
+    }
+
+    var end = content.len;
+    while (end > 0) {
+        // Skip trailing newlines.
+        while (end > 0 and (content[end - 1] == '\n' or content[end - 1] == '\r')) : (end -= 1) {}
+        if (end == 0) break;
+
+        // Find the start of this line.
+        var start = end;
+        while (start > 0 and content[start - 1] != '\n') : (start -= 1) {}
+
+        const line = std.mem.trim(u8, content[start..end], " \r");
+        if (line.len == 0) {
+            end = if (start == 0) 0 else start - 1;
+            continue;
+        }
+        if (!std.unicode.utf8ValidateSlice(line)) break;
+
+        var parsed = std.json.parseFromSlice(ParsedSessionEvent, allocator, line, .{
+            .ignore_unknown_fields = true,
+        }) catch {
+            end = if (start == 0) 0 else start - 1;
+            continue;
+        };
+        defer parsed.deinit();
+
+        // If this event is at or before after_seq, we've reached the
+        // already-seen prefix — stop scanning.
+        if (parsed.value.seq <= after_seq) break;
+
+        try collected.append(.{
+            .event_type = try allocator.dupe(u8, parsed.value.event_type),
+            .message = try allocator.dupe(u8, parsed.value.message),
+            .timestamp_ms = parsed.value.timestamp_ms,
+            .seq = parsed.value.seq,
+            .bytes_b64 = if (parsed.value.bytes_b64) |b| try allocator.dupe(u8, b) else null,
+        });
+
+        end = if (start == 0) 0 else start - 1;
+    }
+
+    // Reverse the collected events into chronological order.
+    std.mem.reverse(types.SessionEvent, collected.items);
+
+    return collected.toOwnedSlice();
+}
+
 pub fn readSessionMessages(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,

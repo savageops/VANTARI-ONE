@@ -925,32 +925,17 @@ fn handleSessionGet(server: *Server, params: ?std.json.Value) ![]u8 {
     const latest_event = try store.readLatestEvent(server.allocator, server.config.workspace_root, session.id);
     defer if (latest_event) |value| value.deinit(server.allocator);
 
-    const all_events = try store.readEvents(server.allocator, server.config.workspace_root, session.id);
-    defer types.deinitSessionEvents(server.allocator, all_events);
-
-    // Filter events by after_seq if provided — avoids re-transferring the
-    // full event spine on every TUI poll. With 120+ reasoning deltas,
-    // this is the difference between a responsive and frozen TUI.
-    const events = blk: {
-        if (after_seq) |min_seq| {
-            var filtered = std.array_list.Managed(types.SessionEvent).init(server.allocator);
-            defer filtered.deinit();
-            for (all_events) |event| {
-                if (event.seq > min_seq) {
-                    try filtered.append(.{
-                        .event_type = try server.allocator.dupe(u8, event.event_type),
-                        .message = try server.allocator.dupe(u8, event.message),
-                        .timestamp_ms = event.timestamp_ms,
-                        .seq = event.seq,
-                        .bytes_b64 = if (event.bytes_b64) |b| try server.allocator.dupe(u8, b) else null,
-                    });
-                }
-            }
-            break :blk try filtered.toOwnedSlice();
-        }
-        break :blk all_events;
+    // When after_seq is provided, use the incremental tail-read path.
+    // This reads ONLY new events from disk (backward scan from EOF) instead
+    // of reading + parsing the entire events.jsonl on every TUI poll.
+    // This is the critical streaming-performance fix: O(k) where k is the
+    // number of NEW events, not O(n) where n is the total event count.
+    const events = if (after_seq) |min_seq| blk: {
+        break :blk try store.readEventsAfterSeq(server.allocator, server.config.workspace_root, session.id, min_seq);
+    } else blk: {
+        break :blk try store.readEvents(server.allocator, server.config.workspace_root, session.id);
     };
-    defer if (after_seq != null) types.deinitSessionEvents(server.allocator, events);
+    defer types.deinitSessionEvents(server.allocator, events);
 
     if (events_only) {
         // Lightweight poll: skip messages serialization entirely.
