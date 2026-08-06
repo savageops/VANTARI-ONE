@@ -282,26 +282,43 @@ const ChatState = struct {
         defer send_job.deinit();
 
         const thread = try std.Thread.spawn(.{}, runSessionSend, .{&send_job});
+        var last_reasoning_len: usize = 0;
+        var last_draw_ms: i64 = 0;
+
         while (!send_job.isDone()) {
             var changed = try self.drainProgress(session_id, 0);
             changed += try self.syncDurableProgressIfDue(session_id);
             if (try self.drainUiEventsDuringTurn(vx, tty, loop, session_id, input)) changed += 1;
 
-            // Advance typewriter animation and check if more drawing is needed.
-            const before_reveal = self.anim_reveal_count;
-            advanceAnimation(self);
-            if (self.anim_reveal_count != before_reveal) changed += 1;
+            // Determine if we're in reasoning phase (buffer growing, no content yet).
+            const in_reasoning = self.reasoning_buffer.items.len > 0 and !self.received_assistant_delta;
+            const new_reasoning = self.reasoning_buffer.items.len > last_reasoning_len;
+
+            if (in_reasoning and new_reasoning) {
+                // Reasoning phase: throttle redraws to paragraph chunks (500ms).
+                // Only redraw when enough new reasoning has accumulated or enough
+                // time has passed. This prevents the TUI from drowning in per-token
+                // redraws during the slow reasoning phase.
+                const now_ms = std.time.milliTimestamp();
+                const time_since_draw = now_ms - last_draw_ms;
+                const reasoning_growth = self.reasoning_buffer.items.len - last_reasoning_len;
+
+                if (time_since_draw >= 500 or reasoning_growth > 200) {
+                    last_reasoning_len = self.reasoning_buffer.items.len;
+                    last_draw_ms = now_ms;
+                    try draw(vx, writer, self, input);
+                }
+
+                // During reasoning, poll less frequently — the model generates
+                // tokens slowly and frequent polling wastes CPU on RPC round-trips.
+                std.Thread.sleep(reasoning_sync_interval_ms * std.time.ns_per_ms);
+                continue;
+            }
 
             if (changed > 0) {
+                last_draw_ms = std.time.milliTimestamp();
                 try draw(vx, writer, self, input);
-                // While animation is catching up, redraw at ~60fps (16ms).
-                // This produces the smooth ease-in/ease-out typewriter effect.
-                const total_buffered = self.reasoning_buffer.items.len;
-                if (self.anim_reveal_count < total_buffered) {
-                    std.Thread.sleep(16 * std.time.ns_per_ms);
-                    continue;
-                }
-                // Events are flowing — poll again immediately.
+                // Content streaming — poll again immediately for responsiveness.
                 continue;
             }
             std.Thread.sleep(progress_poll_ms * std.time.ns_per_ms);
@@ -1604,8 +1621,12 @@ const max_progress_message_bytes: usize = 220;
 const max_tool_output_preview_bytes: usize = 180;
 const max_tool_output_payload_bytes: usize = 180;
 const max_seen_progress_events: usize = 512;
-const progress_poll_ms: u64 = 30;
-const durable_sync_interval_ms: i64 = 30;
+const progress_poll_ms: u64 = 50;
+/// Reasoning tokens are not urgent — display them in paragraph chunks
+/// every 500ms instead of polling every 30ms. This reduces RPC overhead
+/// during the slow reasoning phase while keeping content streaming responsive.
+const reasoning_sync_interval_ms: i64 = 500;
+const durable_sync_interval_ms: i64 = 50;
 
 fn formatProgress(allocator: std.mem.Allocator, event_type: []const u8, message: []const u8) !?[]u8 {
     if (std.mem.eql(u8, event_type, "tool_requested")) return formatToolRequested(allocator, message);
