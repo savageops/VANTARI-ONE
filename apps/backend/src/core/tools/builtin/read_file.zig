@@ -2,6 +2,7 @@ const std = @import("std");
 const fsutil = @import("../../../shared/fsutil.zig");
 const types = @import("../../../shared/types.zig");
 const module = @import("../module.zig");
+const hashline = @import("hashline.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "read_file",
@@ -62,10 +63,16 @@ pub fn execute(
     const selected = try module.renderLineRange(allocator, contents, parsed.value.start_line, parsed.value.end_line);
     defer allocator.free(selected);
 
+    // Include content hash tag so the model can anchor subsequent edits.
+    // Format: [path#TAG] followed by line-numbered content. When the model
+    // calls replace_in_file with this tag, stale anchors are rejected.
+    const tag = try hashline.contentHash(allocator, contents);
+    defer allocator.free(tag);
+
     const content = try std.fmt.allocPrint(
         allocator,
-        "PATH {s}\n{s}",
-        .{ file_path, selected },
+        "[{s}#{s}]\nPATH {s}\n{s}",
+        .{ parsed.value.path, tag, file_path, selected },
     );
     defer allocator.free(content);
 
