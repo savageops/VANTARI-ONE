@@ -775,6 +775,7 @@ const StreamingHttpState = struct {
     content_length: ?usize = null,
     status_code: u16 = 0,
     body_cursor: usize = 0,
+    body_start: usize = 0,
     decoded_body: std.array_list.Managed(u8),
     sse: SseDeltaEmitter,
 
@@ -798,7 +799,12 @@ fn readStreamingResponse(allocator: std.mem.Allocator, source_reader: *std.Io.Re
     var state = StreamingHttpState.init(allocator, hooks);
     defer state.deinit();
 
-    var buffer: [4096]u8 = undefined;
+    // 64KB read buffer — the previous 4KB buffer caused excessive read
+    // syscalls during streaming, each triggering a full reprocess. A larger
+    // buffer lets the TLS layer return more decrypted data per read, reducing
+    // per-token overhead. oh-my-pi uses Bun's native fetch which handles
+    // buffering internally; we need to be explicit about it.
+    var buffer: [64 * 1024]u8 = undefined;
     while (true) {
         const read_len = try source_reader.readSliceShort(&buffer);
         if (read_len == 0) break;
@@ -819,8 +825,7 @@ fn readStreamingResponse(allocator: std.mem.Allocator, source_reader: *std.Io.Re
         return state.decoded_body.toOwnedSlice();
     }
 
-    const header_end = std.mem.indexOf(u8, raw_response.items, "\r\n\r\n") orelse return Error.MalformedHttpResponse;
-    const body = raw_response.items[header_end + 4 ..];
+    const body = raw_response.items[state.body_start..];
     if (state.content_length) |expected_len| {
         if (body.len < expected_len) return Error.ShortHttpResponseBody;
         return allocator.dupe(u8, body[0..expected_len]);
@@ -833,17 +838,19 @@ fn processStreamingHttpBytes(
     raw_response: []const u8,
     state: *StreamingHttpState,
 ) !void {
-    const header_end = std.mem.indexOf(u8, raw_response, "\r\n\r\n") orelse return;
-    const body_start = header_end + 4;
-
+    // Cache the header boundary so we don't re-scan the full buffer every
+    // call. After the first parse, headers_parsed is true and body_start is
+    // stored — subsequent calls skip straight to body processing.
     if (!state.headers_parsed) {
+        const header_end = std.mem.indexOf(u8, raw_response, "\r\n\r\n") orelse return;
+        state.body_start = header_end + 4;
         try parseStreamingHeaders(raw_response[0..header_end], state);
         state.headers_parsed = true;
     }
 
     if (state.status_code != 200) return;
 
-    const body = raw_response[body_start..];
+    const body = raw_response[state.body_start..];
     if (state.chunked) {
         try processStreamingChunkedBody(allocator, body, state);
         return;

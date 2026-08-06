@@ -357,6 +357,15 @@ pub fn setSessionFailure(
     try writeSessionRecord(allocator, workspace_root, session.*);
 }
 
+/// In-memory event seq cache. The previous implementation called
+/// `nextEventSeq` on EVERY event append, which reads the full events.jsonl
+/// and scans backward — O(n²) during streaming. This cache stores the last
+/// seq for the active session so only the first append reads from disk.
+/// The cache uses a fixed buffer (no allocation) so it's safe across tests.
+var cached_seq_buf: [256]u8 = undefined;
+var cached_seq_len: usize = 0;
+var cached_next_seq: u64 = 0;
+
 pub fn appendEvent(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
@@ -366,7 +375,25 @@ pub fn appendEvent(
     const events_path = try eventsFilePath(allocator, workspace_root, session_id);
     defer allocator.free(events_path);
 
-    const next_seq = try nextEventSeq(allocator, events_path);
+    // Use cached seq if this is the same session as last append. This avoids
+    // the O(n) disk read + backward scan on every streaming delta.
+    const use_cache = cached_seq_len > 0 and
+        cached_seq_len == session_id.len and
+        std.mem.eql(u8, cached_seq_buf[0..cached_seq_len], session_id);
+
+    const next_seq: u64 = if (use_cache) blk: {
+        const s = cached_next_seq;
+        cached_next_seq += 1;
+        break :blk s;
+    } else blk: {
+        // Cold start or session change: read from disk.
+        const from_disk = try nextEventSeq(allocator, events_path);
+        const copy_len = @min(session_id.len, cached_seq_buf.len);
+        @memcpy(cached_seq_buf[0..copy_len], session_id[0..copy_len]);
+        cached_seq_len = copy_len;
+        cached_next_seq = from_disk + 1;
+        break :blk from_disk;
+    };
 
     var event_with_seq = event;
     event_with_seq.seq = next_seq;
