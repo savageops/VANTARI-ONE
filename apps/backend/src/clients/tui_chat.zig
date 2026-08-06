@@ -283,14 +283,15 @@ const ChatState = struct {
 
         const thread = try std.Thread.spawn(.{}, runSessionSend, .{&send_job});
 
-        // Simple loop: drain notifications from the main client's reader thread,
-        // handle UI events, redraw when anything changed. No disk polling.
-        // The send runs on the main kernel — notifications arrive directly.
+        // Block on notifications with a short timeout. This avoids busy-polling
+        // while still being responsive to UI events. The blocking wait sleeps
+        // the thread until a notification arrives or the timeout fires.
         while (!send_job.isDone()) {
-            var changed = try self.drainProgress(session_id, 0);
+            // Wait up to 100ms for a notification — this is the only sleep.
+            // If notifications arrive, drainProgress returns immediately with them.
+            var changed = try self.drainProgress(session_id, 100);
             if (try self.drainUiEventsDuringTurn(vx, tty, loop, session_id, input)) changed += 1;
             if (changed > 0) try draw(vx, writer, self, input);
-            std.Thread.sleep(progress_poll_ms * std.time.ns_per_ms);
         }
         thread.join();
         _ = try self.drainProgress(session_id, 0);
