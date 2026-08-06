@@ -1,6 +1,7 @@
 const std = @import("std");
 const docs_sync = @import("../docs/sync.zig");
 const context_builder = @import("../context/index.zig");
+const context_stream_rules = @import("../context/stream_rules.zig");
 const prompts = @import("../prompts/index.zig");
 const provider = @import("../providers/openai_compatible.zig");
 const dispatch = @import("../providers/dispatch.zig");
@@ -736,7 +737,9 @@ fn completeWithContextRecovery(
         .onReasoningDeltaFn = onProviderReasoningDelta,
     };
 
-    return dispatch.completeWithTransportAndHooks(allocator, config, .{
+    defer stream_context.deinitAccumulators();
+
+    const completion = dispatch.completeWithTransportAndHooks(allocator, config, .{
         .messages = messages.items,
         .tool_definitions = tools.builtinDefinitionsForContext(execution_context),
     }, transport, stream_hooks) catch |err| {
@@ -767,6 +770,33 @@ fn completeWithContextRecovery(
             .tool_definitions = tools.builtinDefinitionsForContext(execution_context),
         }, transport, stream_hooks);
     };
+
+    // Stream-rule (TTSR) post-completion check: if a rule fired during
+    // streaming, emit the rule_injected event and add the correction message
+    // to the context for the next turn. The model sees its mistake was caught
+    // and the rule's guidance, then retries on the next loop iteration.
+    if (stream_context.rule_abort_requested) {
+        if (stream_context.rule_match) |match| {
+            const injection_msg = context_stream_rules.formatInjectionMessage(allocator, match) catch {
+                return completion;
+            };
+            defer allocator.free(injection_msg);
+
+            try recordSessionEvent(
+                allocator,
+                config.workspace_root,
+                hooks,
+                session.id,
+                "rule_injected",
+                injection_msg,
+                session.status,
+            );
+
+            try messages.append(try types.initTextMessage(allocator, .user, injection_msg));
+        }
+    }
+
+    return completion;
 }
 
 const ProviderDeltaContext = struct {
@@ -775,6 +805,29 @@ const ProviderDeltaContext = struct {
     hooks: Hooks,
     session_id: []const u8,
     status: types.SessionStatus,
+    /// Accumulated visible text for stream-rule checking.
+    text_accumulator: std.array_list.Managed(u8) = undefined,
+    /// Accumulated reasoning text for stream-rule checking.
+    reasoning_accumulator: std.array_list.Managed(u8) = undefined,
+    /// Set to true when a stream rule fires — the provider call should abort.
+    rule_abort_requested: bool = false,
+    /// The rule match that triggered the abort (if any).
+    rule_match: ?context_stream_rules.RuleMatch = null,
+    /// Whether the accumulators are initialized.
+    accumulators_init: bool = false,
+
+    fn initAccumulators(self: *ProviderDeltaContext) void {
+        if (self.accumulators_init) return;
+        self.text_accumulator = std.array_list.Managed(u8).init(self.allocator);
+        self.reasoning_accumulator = std.array_list.Managed(u8).init(self.allocator);
+        self.accumulators_init = true;
+    }
+
+    fn deinitAccumulators(self: *ProviderDeltaContext) void {
+        if (!self.accumulators_init) return;
+        self.text_accumulator.deinit();
+        self.reasoning_accumulator.deinit();
+    }
 };
 
 fn onProviderAssistantDelta(ctx: ?*anyopaque, delta: []const u8) !void {
@@ -788,12 +841,27 @@ fn onProviderAssistantDelta(ctx: ?*anyopaque, delta: []const u8) !void {
         delta,
         delta_context.status,
     );
+
+    // Stream-rule checking: accumulate visible text and check against rules.
+    // If a rule fires, set the abort flag so the provider call terminates
+    // and the executor retries with the injected correction.
+    delta_context.initAccumulators();
+    delta_context.text_accumulator.appendSlice(delta) catch return;
+
+    if (!delta_context.rule_abort_requested) {
+        const match = context_stream_rules.checkRules(
+            delta_context.allocator,
+            &context_stream_rules.builtin_rules,
+            delta_context.text_accumulator.items,
+            delta_context.reasoning_accumulator.items,
+        ) catch null;
+        if (match) |m| {
+            delta_context.rule_abort_requested = true;
+            delta_context.rule_match = m;
+        }
+    }
 }
 
-/// Reasoning delta handler — emits a typed `reasoning_delta` event so the
-/// event spine distinguishes the model's thinking trace from visible output.
-/// The reasoning text is carried in the message field, tagged with a kind
-/// discriminator for TUI/event-reader consumption. (roadmap: reasoning checkpoints)
 fn onProviderReasoningDelta(ctx: ?*anyopaque, delta: []const u8) !void {
     const delta_context: *ProviderDeltaContext = @ptrCast(@alignCast(ctx.?));
     try recordSessionEvent(
@@ -805,6 +873,23 @@ fn onProviderReasoningDelta(ctx: ?*anyopaque, delta: []const u8) !void {
         delta,
         delta_context.status,
     );
+
+    // Stream-rule checking on reasoning trace (same as visible text).
+    delta_context.initAccumulators();
+    delta_context.reasoning_accumulator.appendSlice(delta) catch return;
+
+    if (!delta_context.rule_abort_requested) {
+        const match = context_stream_rules.checkRules(
+            delta_context.allocator,
+            &context_stream_rules.builtin_rules,
+            delta_context.text_accumulator.items,
+            delta_context.reasoning_accumulator.items,
+        ) catch null;
+        if (match) |m| {
+            delta_context.rule_abort_requested = true;
+            delta_context.rule_match = m;
+        }
+    }
 }
 
 const ToolDeltaContext = struct {

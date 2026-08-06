@@ -7,6 +7,7 @@ pub const overflow = @import("overflow.zig");
 pub const shard_graph = @import("shard_graph.zig");
 pub const embeddings = @import("embeddings.zig");
 pub const semantic = @import("semantic.zig");
+pub const stream_rules = @import("stream_rules.zig");
 
 pub const appendProviderMessages = builder.appendProviderMessages;
 pub const compactSession = compactor.compactSession;
