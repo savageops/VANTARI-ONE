@@ -467,11 +467,22 @@ pub const LocalClient = struct {
         after_sequence: u64,
         timeout_ms: usize,
     ) !?Notification {
-        const deadline_ms = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms));
+        // Use the condition variable for instant wake — the reader thread
+        // calls cond.broadcast() when a notification arrives. This replaces
+        // the previous 50ms Thread.sleep poll which added up to 50ms latency
+        // to every single token.
+        const deadline_ns = @as(u64, timeout_ms) * std.time.ns_per_ms;
         while (true) {
+            self.state.mutex.lock();
+            defer self.state.mutex.unlock();
+
             if (try takeNotificationAfter(self, after_sequence)) |notification| return notification;
-            if (std.time.milliTimestamp() >= deadline_ms) return null;
-            std.Thread.sleep(notification_poll_ms * std.time.ns_per_ms);
+
+            if (timeout_ms == 0) return null;
+
+            // Wait on the condition variable with a timeout. The reader thread's
+            // cond.broadcast() wakes us the instant a notification arrives.
+            self.state.cond.timedWait(&self.state.mutex, deadline_ns) catch return null;
         }
     }
 };
@@ -1453,50 +1464,59 @@ fn writeFrame(file: std.fs.File, payload: []const u8) !void {
 }
 
 fn readFrame(allocator: std.mem.Allocator, file: std.fs.File) !?[]u8 {
-    var content_length: ?usize = null;
-    while (true) {
-        const line = try readHeaderLine(allocator, file);
-        if (line == null) {
-            if (content_length == null) return null;
-            return Error.InvalidFrame;
-        }
-        defer allocator.free(line.?);
+    // Read the entire frame using a chunk-based approach instead of
+    // byte-at-a-time. Reads into a 4KB buffer, scans for \r\n\r\n to find
+    // the header/body boundary, parses Content-Length, then reads the body.
+    // This replaces the previous ~40 syscalls/frame with ~1-2.
+    var header_buf: [4096]u8 = undefined;
+    var header_len: usize = 0;
 
-        const trimmed = std.mem.trimRight(u8, line.?, "\r\n");
-        if (trimmed.len == 0) break;
-
-        if (std.mem.startsWith(u8, trimmed, "Content-Length:")) {
-            const value_text = std.mem.trim(u8, trimmed["Content-Length:".len..], " \t");
-            content_length = std.fmt.parseInt(usize, value_text, 10) catch return Error.InvalidFrame;
-        }
-    }
-
-    const expected_len = content_length orelse return Error.InvalidFrame;
-    const payload = try allocator.alloc(u8, expected_len);
-    errdefer allocator.free(payload);
-    try readExactly(file, payload);
-    return payload;
-}
-
-fn readHeaderLine(allocator: std.mem.Allocator, file: std.fs.File) !?[]u8 {
-    var line = std.array_list.Managed(u8).init(allocator);
-    errdefer line.deinit();
-
-    while (true) {
-        var byte: [1]u8 = undefined;
-        const read_len = try file.read(&byte);
+    // Read until we find the header terminator \r\n\r\n.
+    while (header_len < header_buf.len) {
+        const read_len = file.read(header_buf[header_len..]) catch return null;
         if (read_len == 0) {
-            if (line.items.len == 0) {
-                line.deinit();
-                return null;
-            }
+            if (header_len == 0) return null;
             return Error.InvalidFrame;
         }
+        header_len += read_len;
 
-        try line.append(byte[0]);
-        if (byte[0] == '\n') return try line.toOwnedSlice();
-        if (line.items.len > max_header_line_bytes) return Error.InvalidFrame;
+        // Check for header terminator.
+        if (std.mem.indexOf(u8, header_buf[0..header_len], "\r\n\r\n")) |header_end| {
+            const header_section = header_buf[0..header_end];
+
+            // Parse Content-Length from the header.
+            var content_length: usize = 0;
+            var line_iter = std.mem.splitSequence(u8, header_section, "\r\n");
+            while (line_iter.next()) |line| {
+                if (std.mem.startsWith(u8, line, "Content-Length:")) {
+                    const value = std.mem.trim(u8, line["Content-Length:".len..], " \t");
+                    content_length = std.fmt.parseInt(usize, value, 10) catch return Error.InvalidFrame;
+                }
+            }
+
+            if (content_length == 0) return Error.InvalidFrame;
+
+            // The body may have partially arrived in the header read.
+            const body_start = header_end + 4;
+            const body_available = header_len - body_start;
+
+            const payload = try allocator.alloc(u8, content_length);
+            errdefer allocator.free(payload);
+
+            // Copy any body bytes that arrived with the header read.
+            const to_copy = @min(body_available, content_length);
+            @memcpy(payload[0..to_copy], header_buf[body_start .. body_start + to_copy]);
+
+            // Read the remaining body bytes if any.
+            if (to_copy < content_length) {
+                try readExactly(file, payload[to_copy..]);
+            }
+
+            return payload;
+        }
     }
+
+    return Error.InvalidFrame;
 }
 
 fn readExactly(file: std.fs.File, buffer: []u8) !void {
