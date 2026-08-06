@@ -276,56 +276,24 @@ const ChatState = struct {
             });
         var send_job = SendJob{
             .allocator = self.allocator,
-            .workspace_root = self.workspace_root,
+            .client = self.client,
             .params_json = send_params,
         };
         defer send_job.deinit();
 
         const thread = try std.Thread.spawn(.{}, runSessionSend, .{&send_job});
-        var last_reasoning_len: usize = 0;
-        var last_draw_ms: i64 = 0;
 
+        // Simple loop: drain notifications from the main client's reader thread,
+        // handle UI events, redraw when anything changed. No disk polling.
+        // The send runs on the main kernel — notifications arrive directly.
         while (!send_job.isDone()) {
             var changed = try self.drainProgress(session_id, 0);
-            changed += try self.syncDurableProgressIfDue(session_id);
             if (try self.drainUiEventsDuringTurn(vx, tty, loop, session_id, input)) changed += 1;
-
-            // Determine if we're in reasoning phase (buffer growing, no content yet).
-            const in_reasoning = self.reasoning_buffer.items.len > 0 and !self.received_assistant_delta;
-            const new_reasoning = self.reasoning_buffer.items.len > last_reasoning_len;
-
-            if (in_reasoning and new_reasoning) {
-                // Reasoning phase: throttle redraws to paragraph chunks (500ms).
-                // Only redraw when enough new reasoning has accumulated or enough
-                // time has passed. This prevents the TUI from drowning in per-token
-                // redraws during the slow reasoning phase.
-                const now_ms = std.time.milliTimestamp();
-                const time_since_draw = now_ms - last_draw_ms;
-                const reasoning_growth = self.reasoning_buffer.items.len - last_reasoning_len;
-
-                if (time_since_draw >= 500 or reasoning_growth > 200) {
-                    last_reasoning_len = self.reasoning_buffer.items.len;
-                    last_draw_ms = now_ms;
-                    try draw(vx, writer, self, input);
-                }
-
-                // During reasoning, poll less frequently — the model generates
-                // tokens slowly and frequent polling wastes CPU on RPC round-trips.
-                std.Thread.sleep(reasoning_sync_interval_ms * std.time.ns_per_ms);
-                continue;
-            }
-
-            if (changed > 0) {
-                last_draw_ms = std.time.milliTimestamp();
-                try draw(vx, writer, self, input);
-                // Content streaming — poll again immediately for responsiveness.
-                continue;
-            }
+            if (changed > 0) try draw(vx, writer, self, input);
             std.Thread.sleep(progress_poll_ms * std.time.ns_per_ms);
         }
         thread.join();
         _ = try self.drainProgress(session_id, 0);
-        _ = try self.syncDurableProgress(session_id);
 
         if (send_job.err) |err| return err;
         const send_call = send_job.result orelse return error.InvalidRpcResponse;
@@ -773,7 +741,7 @@ const ChatState = struct {
 
 const SendJob = struct {
     allocator: std.mem.Allocator,
-    workspace_root: []const u8,
+    client: *stdio_rpc.LocalClient,
     params_json: []u8,
     result: ?stdio_rpc.RpcCallResult = null,
     err: ?anyerror = null,
@@ -801,19 +769,11 @@ const SendJob = struct {
 };
 
 fn runSessionSend(job: *SendJob) void {
-    var send_client = stdio_rpc.LocalClient.initInWorkspace(job.allocator, job.workspace_root) catch |err| {
-        job.finish(null, err);
-        return;
-    };
-    defer send_client.deinit();
-
-    const initialize_call = send_client.call(protocol.methods.initialize, "{}") catch |err| {
-        job.finish(null, err);
-        return;
-    };
-    initialize_call.deinit(job.allocator);
-
-    const result = send_client.call(protocol.methods.session_send, job.params_json) catch |err| {
+    // Use the MAIN client (shared with the TUI's notification reader).
+    // This means notifications from the provider streaming arrive directly
+    // through the main client's reader thread — no second kernel process,
+    // no disk polling, no RPC round-trips for every token.
+    const result = job.client.call(protocol.methods.session_send, job.params_json) catch |err| {
         job.finish(null, err);
         return;
     };
