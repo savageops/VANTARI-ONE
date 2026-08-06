@@ -1431,11 +1431,19 @@ fn recordSessionEvent(
     status: types.SessionStatus,
 ) !void {
     const timestamp_ms = std.time.milliTimestamp();
-    try store.appendEvent(allocator, workspace_root, session_id, .{
+
+    // Notify the TUI FIRST — this is the hot path. The screen update should
+    // not wait for disk I/O. The notification goes directly through the
+    // kernel's stdout to the TUI reader thread.
+    try hooks.onSessionEvent(session_id, event_type, message, types.statusLabel(status), timestamp_ms);
+
+    // Then persist to disk. These happen synchronously but AFTER the
+    // notification, so the TUI sees the delta before the disk write completes.
+    // The batched sync gate in appendJsonlRecord further reduces flush cost.
+    store.appendEvent(allocator, workspace_root, session_id, .{
         .event_type = event_type,
         .message = message,
         .timestamp_ms = timestamp_ms,
-    });
-    try store.touchSessionUpdatedAt(allocator, workspace_root, session_id, timestamp_ms);
-    try hooks.onSessionEvent(session_id, event_type, message, types.statusLabel(status), timestamp_ms);
+    }) catch {};
+    store.touchSessionUpdatedAt(allocator, workspace_root, session_id, timestamp_ms) catch {};
 }

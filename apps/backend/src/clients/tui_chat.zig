@@ -333,45 +333,6 @@ const ChatState = struct {
         return try self.recordProgressEvent(parsed.value.event_type, parsed.value.message, parsed.value.timestamp_ms);
     }
 
-    fn syncDurableProgressIfDue(self: *ChatState, session_id: []const u8) !usize {
-        const now_ms = std.time.milliTimestamp();
-        if (self.last_durable_sync_ms != 0 and now_ms - self.last_durable_sync_ms < durable_sync_interval_ms) return 0;
-        self.last_durable_sync_ms = now_ms;
-        return try self.syncDurableProgress(session_id);
-    }
-
-    fn syncDurableProgress(self: *ChatState, session_id: []const u8) !usize {
-        // Build params manually — the std.json static formatter can't
-        // serialize u64 values (f64 overflow). We pass after_seq + events_only
-        // so the kernel only returns events the TUI hasn't seen yet, and skips
-        // re-serializing the full message array (the dominant poll cost).
-        const params = try std.fmt.allocPrint(self.allocator, "{{\"session_id\":\"{s}\",\"after_seq\":{d},\"events_only\":true}}", .{ session_id, self.last_durable_event_seq });
-        defer self.allocator.free(params);
-
-        const call = self.client.call(protocol.methods.session_get, params) catch return 0;
-        defer call.deinit(self.allocator);
-        const result_json = expectKernelResult(self.allocator, call) catch return 0;
-        defer self.allocator.free(result_json);
-
-        var parsed = std.json.parseFromSlice(protocol.SessionGetResult, self.allocator, result_json, .{
-            .ignore_unknown_fields = true,
-        }) catch return 0;
-        defer parsed.deinit();
-
-        var changed: usize = 0;
-        // Event-cursor-driven durable sync (roadmap P1-16): use the monotonic
-        // seq field instead of positional index. This is robust against torn
-        // writes that drop events from the prefix — the cursor tracks the last
-        // seq seen, not the array position.
-        for (parsed.value.events) |event| {
-            if (event.seq <= self.last_durable_event_seq) continue;
-            self.last_durable_event_seq = event.seq;
-            if (try self.recordProgressEvent(event.event_type, event.message, event.timestamp_ms)) changed += 1;
-        }
-        self.last_durable_event_count = parsed.value.events.len;
-        return changed;
-    }
-
     fn recordProgressEvent(self: *ChatState, event_type: []const u8, message: []const u8, timestamp_ms: i64) !bool {
         if (!try self.markProgressEventSeen(event_type, message, timestamp_ms)) return false;
 
@@ -1581,12 +1542,7 @@ const max_progress_message_bytes: usize = 220;
 const max_tool_output_preview_bytes: usize = 180;
 const max_tool_output_payload_bytes: usize = 180;
 const max_seen_progress_events: usize = 512;
-const progress_poll_ms: u64 = 50;
-/// Reasoning tokens are not urgent — display them in paragraph chunks
-/// every 500ms instead of polling every 30ms. This reduces RPC overhead
-/// during the slow reasoning phase while keeping content streaming responsive.
-const reasoning_sync_interval_ms: i64 = 500;
-const durable_sync_interval_ms: i64 = 50;
+const progress_poll_ms: u64 = 16;
 
 fn formatProgress(allocator: std.mem.Allocator, event_type: []const u8, message: []const u8) !?[]u8 {
     if (std.mem.eql(u8, event_type, "tool_requested")) return formatToolRequested(allocator, message);
