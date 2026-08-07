@@ -276,6 +276,7 @@ test "config loader ignores commented backup provider entries" {
 }
 
 test "loadDefault canonicalizes relative workspace root to an absolute current directory" {
+    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -310,6 +311,7 @@ test "loadDefault canonicalizes relative workspace root to an absolute current d
 }
 
 test "loadDefault seeds canonical auth state from env and then prefers auth ledger" {
+    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -378,6 +380,7 @@ test "loadDefault seeds canonical auth state from env and then prefers auth ledg
 }
 
 test "loadDefault accepts UTF-8 BOM auth ledger" {
+    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -441,6 +444,7 @@ test "loadDefault accepts UTF-8 BOM auth ledger" {
 }
 
 test "auth store migrates installed provider auth into the canonical workspace ledger" {
+    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
