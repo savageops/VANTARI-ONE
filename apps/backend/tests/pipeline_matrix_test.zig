@@ -75,7 +75,7 @@ const valid_tool_names = [_][]const u8{
     "changelog_ledger",
     "memory_read",
     "memory_write",
-    "research_artifact",
+    "knowledge_artifact",
     "docs_artifact",
     "workspace_backup",
     "git_worktree",

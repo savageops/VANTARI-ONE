@@ -91,26 +91,6 @@ pub const definitions = [_]types.ToolDefinition{
         .usage_hint = "Use read for a named session record. Upsert requires session_name, status, and objective and should describe durable session state.",
     },
     .{
-        .name = "research_artifact",
-        .description = "Read or write research artifacts under .var/research/.",
-        .review_risk = .write_capable,
-        .parameters_json =
-        \\{
-        \\  "type": "object",
-        \\  "properties": {
-        \\    "action": { "type": "string", "enum": ["read", "write"] },
-        \\    "path": { "type": "string", "description": "Path relative to .var/research/." },
-        \\    "title": { "type": "string", "description": "Optional title used when action is write and content has no markdown heading." },
-        \\    "content": { "type": "string", "description": "Markdown body to write when action is write." }
-        \\  },
-        \\  "required": ["action", "path"],
-        \\  "additionalProperties": false
-        \\}
-        ,
-        .example_json = "{\"action\":\"write\",\"path\":\"prompt-layers.md\",\"title\":\"Prompt Layers\",\"content\":\"# Prompt Layers\\n\"}",
-        .usage_hint = "Path is relative to .var/research. Use write for durable research artifacts, not transient scratch notes.",
-    },
-    .{
         .name = "docs_artifact",
         .description = "Read or write canonical runtime contract docs under .var/docs/.",
         .review_risk = .write_capable,
@@ -233,9 +213,6 @@ pub fn execute(
     if (std.mem.eql(u8, tool_name, "session_record")) {
         return executeSessionRecord(allocator, workspace_root, arguments_json);
     }
-    if (std.mem.eql(u8, tool_name, "research_artifact")) {
-        return executeResearchArtifact(allocator, workspace_root, arguments_json);
-    }
     if (std.mem.eql(u8, tool_name, "docs_artifact")) {
         return executeDocsArtifact(allocator, workspace_root, arguments_json);
     }
@@ -300,12 +277,6 @@ fn changelogSlicePath(
 
 fn sessionDocPath(allocator: std.mem.Allocator, workspace_root: []const u8, session_name: []const u8) ![]u8 {
     return fsutil.join(allocator, &.{ workspace_root, ".var", "sessions", session_name, "session.md" });
-}
-
-fn researchPath(allocator: std.mem.Allocator, workspace_root: []const u8, relative_path: []const u8) ![]u8 {
-    const relative = try fsutil.join(allocator, &.{ ".var", "research", relative_path });
-    defer allocator.free(relative);
-    return fsutil.resolveInWorkspace(allocator, workspace_root, relative);
 }
 
 fn docsPath(allocator: std.mem.Allocator, workspace_root: []const u8, relative_path: []const u8) ![]u8 {
@@ -494,7 +465,6 @@ fn defaultToolContracts() []const u8 {
         \\- `changelog_ledger`
         \\- `todo_slice`
         \\- `session_record`
-        \\- `research_artifact`
         \\- `docs_artifact`
         \\- `knowledge_artifact`
         \\- `git_worktree`
@@ -938,14 +908,6 @@ fn executeSessionRecord(
     }
 
     return error.InvalidArguments;
-}
-
-fn executeResearchArtifact(
-    allocator: std.mem.Allocator,
-    workspace_root: []const u8,
-    arguments_json: []const u8,
-) ![]u8 {
-    return executeBodyFileTool(allocator, workspace_root, arguments_json, "research_artifact", researchPath);
 }
 
 fn executeDocsArtifact(

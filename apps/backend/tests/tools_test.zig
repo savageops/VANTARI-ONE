@@ -980,8 +980,8 @@ test "workspace-state tools scaffold and manage canonical root artifacts" {
 
     var research_write = try makeToolCall(
         std.testing.allocator,
-        "research_artifact",
-        "{\"action\":\"write\",\"path\":\"snapshot.md\",\"title\":\"Snapshot\",\"content\":\"U1 runtime snapshot\"}",
+        "knowledge_artifact",
+        "{\"action\":\"write\",\"surface\":\"research\",\"path\":\"snapshot.md\",\"title\":\"Snapshot\",\"content\":\"U1 runtime snapshot\"}",
     );
     defer research_write.deinit(std.testing.allocator);
     const research_write_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), research_write);
