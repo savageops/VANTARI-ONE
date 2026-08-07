@@ -140,6 +140,9 @@ const ChatState = struct {
     reasoning_buffer: std.ArrayList(u8) = .{},
     last_notification_sequence: u64 = 0,
     last_transcript_body_width: usize = 80,
+    history_entries: std.ArrayList([]u8) = .{},
+    history_cursor: usize = 0,
+    history_draft: ?[]u8 = null,
 
     fn deinit(self: *ChatState) void {
         if (self.session_id) |value| self.allocator.free(value);
@@ -148,6 +151,55 @@ const ChatState = struct {
         for (self.seen_progress_events.items) |event_key| self.allocator.free(event_key);
         self.seen_progress_events.deinit(self.allocator);
         self.reasoning_buffer.deinit(self.allocator);
+        for (self.history_entries.items) |entry| self.allocator.free(entry);
+        self.history_entries.deinit(self.allocator);
+        if (self.history_draft) |draft| self.allocator.free(draft);
+    }
+
+    fn appendHistory(self: *ChatState, prompt: []const u8) !void {
+        if (prompt.len == 0) return;
+        const max_history = 1000;
+        if (self.history_entries.items.len >= max_history) {
+            const oldest = self.history_entries.orderedRemove(0);
+            self.allocator.free(oldest);
+        }
+        try self.history_entries.append(try self.allocator.dupe(u8, prompt));
+        self.history_cursor = 0;
+        if (self.history_draft) |draft| {
+            self.allocator.free(draft);
+            self.history_draft = null;
+        }
+    }
+
+    fn historyNavigateUp(self: *ChatState, input: *TextInput) !void {
+        if (self.history_entries.items.len == 0) return;
+        if (self.history_cursor >= self.history_entries.items.len) return;
+        if (self.history_cursor == 0) {
+            const current = try input.toOwnedSlice();
+            if (current.len > 0) {
+                self.history_draft = current;
+            } else {
+                self.allocator.free(current);
+            }
+        }
+        self.history_cursor += 1;
+        const idx = self.history_entries.items.len - self.history_cursor;
+        input.clearAndFree();
+        try input.update(.{ .text = self.history_entries.items[idx] });
+    }
+
+    fn historyNavigateDown(self: *ChatState, input: *TextInput) !void {
+        if (self.history_cursor == 0) return;
+        self.history_cursor -= 1;
+        input.clearAndFree();
+        if (self.history_cursor == 0) {
+            if (self.history_draft) |draft| {
+                try input.update(.{ .text = draft });
+            }
+        } else {
+            const idx = self.history_entries.items.len - self.history_cursor;
+            try input.update(.{ .text = self.history_entries.items[idx] });
+        }
     }
 
     fn add(self: *ChatState, role: Role, text: []const u8) !void {
@@ -241,6 +293,7 @@ const ChatState = struct {
         self.jumpToBottom();
         self.clearReasoningBuffer();
         try self.add(.user, prompt);
+        try self.appendHistory(prompt);
         self.status = "RUNNING";
         self.waiting = true;
         self.cancel_requested = false;
@@ -885,6 +938,14 @@ const ChatState = struct {
                         self.jumpToBottom();
                         continue;
                     }
+                    if (self.scroll_offset == 0 and key.matches(tui.Key.up, .{})) {
+                        try self.historyNavigateUp(input);
+                        continue;
+                    }
+                    if (self.scroll_offset == 0 and key.matches(tui.Key.down, .{})) {
+                        try self.historyNavigateDown(input);
+                        continue;
+                    }
                     if (key.matches(tui.Key.enter, .{}) or key.matches('j', .{ .ctrl = true })) continue;
                     try input.update(.{ .key_press = key });
                 },
@@ -1048,6 +1109,14 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                 }
                 if (key.matches(tui.Key.end, .{ .ctrl = true })) {
                     state.jumpToBottom();
+                    continue;
+                }
+                if (state.scroll_offset == 0 and key.matches(tui.Key.up, .{})) {
+                    try state.historyNavigateUp(&input);
+                    continue;
+                }
+                if (state.scroll_offset == 0 and key.matches(tui.Key.down, .{})) {
+                    try state.historyNavigateDown(&input);
                     continue;
                 }
                 if (key.matches(tui.Key.enter, .{}) or key.matches('j', .{ .ctrl = true })) {
