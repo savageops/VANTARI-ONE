@@ -13,6 +13,7 @@ const shell_exec = @import("builtin/shell_exec.zig");
 const schedule_job = @import("builtin/schedule_job.zig");
 const log_ticket = @import("builtin/log_ticket.zig");
 const list_processes = @import("builtin/list_processes.zig");
+const manage_plugin = @import("builtin/manage_plugin.zig");
 const memory = @import("builtin/memory.zig");
 const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
@@ -45,6 +46,7 @@ pub const file_tool_definitions = [_]types.ToolDefinition{
     schedule_job.definition,
     log_ticket.definition,
     list_processes.definition,
+    manage_plugin.definition,
     skills.definition,
     memory.definitions[0],
     memory.definitions[1],
@@ -65,6 +67,7 @@ const availability_entries = [_]AvailabilityEntry{
     .{ .name = schedule_job.definition.name, .spec = schedule_job.availability },
     .{ .name = log_ticket.definition.name, .spec = log_ticket.availability },
     .{ .name = list_processes.definition.name, .spec = list_processes.availability },
+    .{ .name = manage_plugin.definition.name, .spec = manage_plugin.availability },
     .{ .name = skills.definition.name, .spec = skills.availability },
     .{ .name = memory.definitions[0].name, .spec = .{} },
     .{ .name = memory.definitions[1].name, .spec = .{} },
