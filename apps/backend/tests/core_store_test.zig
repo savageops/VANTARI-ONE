@@ -195,6 +195,7 @@ test "config loader rejects missing required keys" {
 }
 
 test "canonical config overlays non-secret context policy" {
+    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -222,6 +223,7 @@ test "canonical config overlays non-secret context policy" {
 }
 
 test "canonical config rejects unknown context policy keys" {
+    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
