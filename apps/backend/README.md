@@ -229,3 +229,30 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - Self-tuning doctrine
 - Role-routed bounded delegation with silent advisors
 - Surgical precision work ethic
+
+## Competitive Position
+
+No dominant coding agent does fire-and-forget background cognition today. Claude Code's Task tool is strictly blocking (issue #6854, closed not-planned). VANTARI's two-tier cognitive speculation pipeline (draft + buffer) is a **generational advance**, not a catch-up — it lifts speculative decoding from the token level to the reasoning level, inspired by Lookahead Reasoning (Hao AI Lab, NeurIPS 2025).
+
+The one thing VANTARI has that oh-my-pi (the closest competitor with async job orchestration) lacks: **durable, cold-start-recoverable session ledgers**. oh-my-pi's jobs are process-local and expire in 5 minutes. VANTARI's sessions are append-only JSONL that survive restart with byte-level integrity guarantees.
+
+## Engineering Stories
+
+### The Config/Auth Drift (5 recurrences, permanently fixed)
+
+A subtle bug where `runtimeRootForWorkspace` ignores the workspace argument when `VANTARI_HOME` is set, causing test fixtures to write to the real global config/auth path. This manifested 5 times across the session (config key `auto_compact` vs `auto_compaction`, auth reverting from glm-5.2 to glm-5.1, test providers leaking into the global ledger). A background code-reviewer agent independently flagged the pattern, leading to a systematic audit and permanent fix: 6 tests now carry the `VANTARI_HOME` skip guard.
+
+### The Parallel-System Detection
+
+A background reviewer caught that `knowledge_artifact(surface:"research")` duplicated `research_artifact` — two live tools with identical read/write semantics on `.var/research/`. This is the exact AGENTS.md §XII anti-pattern ("Parallel systems for the same responsibility"). Fixed by removing `research_artifact` entirely and making `knowledge_artifact` the sole owner.
+
+### The 15-Line Secondary Provider Call
+
+Deep recon (4 background agents) confirmed that making a secondary provider call to a different model (glm-5-turbo) from within the executor loop is a ~15-line operation, not 50. The transport is a stateless value type, thread-safe (fresh TCP+TLS per call, no connection pool), and three working precedents exist (embeddings, routes, supervisor.runModelTask). This enabled the entire draft+buffer pipeline without new infrastructure.
+
+## Deep Documentation
+
+- [Complete Session Inventory](.var/research/session-2026-08-07-complete-inventory.md) — every non-ordinary detail from this session
+- [Architecture](architecture.md) — full cognitive architecture section with flow diagrams
+- [Planning Chains](.docs/todo/pending/) — DRAFT-, BUF-, PROMPT-, PLUG-, TUI- chains (planning-spec v3.0)
+- [AGENTS.md](../AGENTS.md) — the operating contract (18 sections of runtime doctrine)
