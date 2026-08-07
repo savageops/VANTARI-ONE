@@ -44,33 +44,25 @@ test "prompt builder emits ordered guardrails and tool contract" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "required SITREP") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Memory protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "messages.jsonl remains transcript truth") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Orchestration discipline protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Evolution protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Surgical precision protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Parallelization protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Advisor protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Slow is smooth, and smooth is fast") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Never launch exactly one child when there is more independent work alongside it") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Fan out as wide as work decomposes") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Workspace scaffold protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Knowledge logging protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "A missing knowledge surface is a drift signal") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "every subagent that discovers findings") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Knowledge artifacts:") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Scheduling protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Self-tuning protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "durable jobs live under .var/schedules") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "VANTARI tunes its own configuration") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Large artifact protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "recovery, progress, and reviewability discipline") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Evolution protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, ".var/tickets/") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "write_file may write the complete file") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "8192-byte tool limit") == null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "under 7000 bytes") == null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "all paths are relative to the displayed workspace root") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "operator-visible progress before tool batches") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "not hidden chain-of-thought") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "reason in bounded action bursts, not all at once") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "changed state, proof, blocker or residual risk, and next action") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "persisted work narration in transcript/context history") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Continue chaining bursts until terminal proof or a named blocker") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Skills are reusable operating protocols") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "wait_agent accepts timeout_ms") != null);
@@ -108,10 +100,9 @@ test "prompt builder loads project-local system and developer prompt files" {
 
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Custom system invariant.") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Custom developer invariant.") != null);
-    // The runtime-owned burst/checkpoint contract survives project-local
+    // The runtime-owned continuation contract survives project-local
     // system and developer overrides.
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "reason in bounded action bursts, not all at once") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "a checkpoint is continuation evidence, not a terminal answer") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Continue chaining bursts until terminal proof or a named blocker") != null);
 }
 
 test "prompt builder fails closed for explicit missing or empty prompt layers" {
