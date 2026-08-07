@@ -230,6 +230,51 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - Role-routed bounded delegation with silent advisors
 - Surgical precision work ethic
 
+## Deep Architecture — Database-Grade Agent Runtime
+
+VANTARI treats the agent session as a **database transaction**, not a chat interaction. These mechanical invariants are baked into the kernel's design — they are not features bolted onto a chat wrapper.
+
+### Append-Only Event Spine with Monotonic Replay
+Every observable action is a typed event appended to `events.jsonl` with monotonic sequence numbers. The TUI is a read model over the event spine — it replays the same events and arrives at the same state after cold start. Timestamp-only cursors are insufficient under same-millisecond bursts.
+
+### Shard Graph — Branch/Converge Topology
+Agent delegation is modeled as a durable shard graph: parent sessions branch into child shards tracked through open → converged → abandoned lifecycle states. Orphaned branches are reconciled at cold start. Convergence is exactly-once via a `.reserved → .committed` state machine.
+
+### Write-Intent Ledger
+Before any write-capable tool mutates a file, VANTARI reserves a write-intent record. After mutation, it commits with before/after SHA-256 hashes. Abandoned intents (crash between reserve and commit) are reconciled at cold start. A crashed process never leaves the next client wondering "did that write complete?"
+
+### Byte-Level Session Integrity
+JSONL readers preserve valid prefix state across torn writes, UTF-8 BOMs, invalid UTF-8 bytes, duplicated sequence IDs, and malformed trailing rows — without corrupting the valid prefix. The session is recoverable up to the point of corruption.
+
+### Context Compiler (Not "Chat History")
+The context builder is the only owner that turns session storage into provider messages. It compiles from durable ledgers on every turn — there is no in-memory source of truth that can drift from disk. Tool-call adjacency is validated before dispatch; orphan tool results fail closed.
+
+### Semantic Compaction with Real Statistics
+Messages are scored by semantic relevance (embedding cosine similarity or TF-IDF), not just recency. The three-layer pipeline: value-weighting → TF-IDF/embeddings → agent summarization. Each layer has its own budget and validation gate.
+
+### TTSR — Time-Traveling Stream Rules
+Regex-based mid-stream abort: when the model emits a known-bad pattern (`Box::leak`, `eval(`, `os.system`), the stream is aborted mid-token, a reminder is injected, and the turn retries. Zero context cost when dormant; millisecond abort when triggered.
+
+### Hashline — Content-Hash Anchored Edits
+`read_file` returns a content hash; edit tools accept hash-anchored ranges. Stale anchors (file changed since read) are rejected before mutation. Eliminates "edited the wrong version" bugs entirely.
+
+### Provider Capability Probing
+Each adapter caches verified capabilities (streaming, tool-call shape, overflow signatures). Unknown capabilities fail closed — the adapter never assumes support for an unprobed capability.
+
+### Arena/Quota Discipline
+Allocators split by scope: turn, provider payload, tool result, UI frame. A 1000-turn session has the same memory profile as a 10-turn session — ephemeral allocations freed in bulk at scope boundaries.
+
+### DAP Integration — Agent Drives Real Debuggers
+Attach to running processes via Debug Adapter Protocol (lldb-dap, dlv, debugpy). Inspect stack frames, read variables, step through execution. The agent debugs using the same protocol VS Code uses.
+
+### Persistent Code Execution Sandbox
+Python and Bun workers with persistent state. Variables survive between calls. The sandbox can call back into the agent's own tools (read, search, task) over a loopback protocol — a reflective execution loop.
+
+### Durable Scheduler with Leader Lease
+Background thread with 5-second leader lease preventing dual-ticking. Jobs stored as individual JSON files. Crash-recoverable, workspace-scoped, no external cron dependency.
+
+**Full deep architecture document:** [`.var/research/deep-architecture-innovations.md`](.var/research/deep-architecture-innovations.md)
+
 ## Competitive Position
 
 No dominant coding agent does fire-and-forget background cognition today. Claude Code's Task tool is strictly blocking (issue #6854, closed not-planned). VANTARI's two-tier cognitive speculation pipeline (draft + buffer) is a **generational advance**, not a catch-up — it lifts speculative decoding from the token level to the reasoning level, inspired by Lookahead Reasoning (Hao AI Lab, NeurIPS 2025).
