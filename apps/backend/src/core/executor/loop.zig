@@ -258,15 +258,17 @@ pub fn runPromptWithOptions(
         }
 
         // Interjection protocol: drain queued operator messages and inject them
-        // as user messages at the step boundary. The agent sees them naturally
-        // in its provider context — no special prompt layering needed.
+        // as user messages at the step boundary. Tagged as USER_STEER_MESSAGE
+        // so the model's reasoning trace naturally acknowledges the interjection.
         if (options.hooks.drainPendingMessages(session.id)) |drained| {
             const has_messages = drained.len > 0;
             defer allocator.free(drained);
             for (drained) |msg| {
                 defer allocator.free(msg);
-                try store.appendSessionMessage(allocator, config.workspace_root, session.id, .user, msg, std.time.milliTimestamp());
-                try messages.append(try types.initTextMessage(allocator, .user, msg));
+                const tagged = std.fmt.allocPrint(allocator, "USER_STEER_MESSAGE: {s} (DO NOT IGNORE)", .{msg}) catch msg;
+                defer if (tagged.ptr != msg.ptr) allocator.free(tagged);
+                try store.appendSessionMessage(allocator, config.workspace_root, session.id, .user, tagged, std.time.milliTimestamp());
+                try messages.append(try types.initTextMessage(allocator, .user, tagged));
             }
             if (has_messages) {
                 try recordSessionEvent(allocator, config.workspace_root, options.hooks, session.id, "user_message_injected", "Interjected user message injected into context.", session.status);
