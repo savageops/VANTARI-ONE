@@ -143,6 +143,10 @@ const ChatState = struct {
     history_entries: std.ArrayList([]u8) = .{},
     history_cursor: usize = 0,
     history_draft: ?[]u8 = null,
+    /// Buffer model preview text — shown in the reasoning dock when the
+    /// heavyweight model is not actively reasoning. Populated by the buffer
+    /// model (draft/buffer layer). When null or empty, the dock collapses.
+    buffer_preview: ?[]u8 = null,
 
     fn deinit(self: *ChatState) void {
         if (self.session_id) |value| self.allocator.free(value);
@@ -154,6 +158,7 @@ const ChatState = struct {
         for (self.history_entries.items) |entry| self.allocator.free(entry);
         self.history_entries.deinit(self.allocator);
         if (self.history_draft) |draft| self.allocator.free(draft);
+        if (self.buffer_preview) |preview| self.allocator.free(preview);
     }
 
     fn appendHistory(self: *ChatState, prompt: []const u8) !void {
@@ -199,6 +204,17 @@ const ChatState = struct {
             const idx = self.history_entries.items.len - self.history_cursor;
             try input.insertSliceAtCursor(self.history_entries.items[idx]);
         }
+    }
+
+    /// Set the buffer model's navigation preview text. Shown in the reasoning
+    /// dock when the heavyweight model is not actively reasoning. Pass null or
+    /// empty to clear the preview and collapse the dock to idle.
+    fn setBufferPreview(self: *ChatState, preview: ?[]const u8) !void {
+        if (self.buffer_preview) |old| self.allocator.free(old);
+        self.buffer_preview = if (preview) |text|
+            if (text.len > 0) try self.allocator.dupe(u8, text) else null
+        else
+            null;
     }
 
     fn add(self: *ChatState, role: Role, text: []const u8) !void {
@@ -1193,7 +1209,17 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
     root.fill(.{ .style = styles.surface });
 
     const reasoning_body_width = @max(@as(usize, 1), @as(usize, root.width -| 8));
-    var reasoning_rows = try buildReasoningDockRows(state.allocator, state.reasoning_buffer.items, reasoning_body_width);
+    // Dual-mode dock: when the heavyweight model is actively reasoning,
+    // show the live reasoning trace. When idle, show the buffer model's
+    // navigation preview if available. The dock collapses when both are empty.
+    const dock_is_reasoning = state.waiting and state.reasoning_buffer.items.len > 0;
+    const dock_source: []const u8 = if (dock_is_reasoning)
+        state.reasoning_buffer.items
+    else if (state.buffer_preview) |preview|
+        preview
+    else
+        "";
+    var reasoning_rows = try buildReasoningDockRows(state.allocator, dock_source, reasoning_body_width);
     defer reasoning_rows.deinit(state.allocator);
     const layout = computeLayoutWithReasoningDock(root.height, @intCast(reasoning_rows.items.len));
 
@@ -1212,7 +1238,7 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
             .width = root.width -| 2,
             .height = layout.reasoning_height,
         });
-        drawReasoningDock(reasoning, reasoning_rows.items);
+        drawReasoningDock(reasoning, reasoning_rows.items, dock_is_reasoning);
     }
 
     const input_win = root.child(.{
@@ -1401,7 +1427,9 @@ fn drawTranscript(win: Window, state: *ChatState) void {
     }
 }
 
-fn drawReasoningDock(win: Window, rows: []const TranscriptRow) void {
+fn drawReasoningDock(win: Window, rows: []const TranscriptRow, is_reasoning: bool) void {
+    // Glyph distinguishes modes: ∞ for live reasoning, ◊ for buffer preview.
+    const header_glyph: []const u8 = if (is_reasoning) "∞ " else "◊ ";
     for (rows, 0..) |reasoning_row, index| {
         if (index >= win.height or index >= max_reasoning_dock_rows) break;
         const block = win.child(.{
@@ -1412,7 +1440,7 @@ fn drawReasoningDock(win: Window, rows: []const TranscriptRow) void {
             .border = .{ .where = .left, .style = styles.assistant },
         });
         _ = block.print(&.{.{
-            .text = if (index == 0) "∞ " else "  ",
+            .text = if (index == 0) header_glyph else "  ",
             .style = styles.assistant,
         }}, .{
             .row_offset = 0,

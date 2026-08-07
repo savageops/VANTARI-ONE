@@ -162,6 +162,36 @@
     "guardrails": null,
     "user_context": null
   },
+  "draft": {
+    "_help": {
+      "enabled": "When true, a lightweight draft model restructures the user's input into a compiled prompt before the heavyweight model starts. Reduces ambiguity and improves first-token latency. The draft model runs synchronously on submit.",
+      "model": "The model id for the draft layer. Should be a fast/lightweight model. Defaults to glm-5-turbo.",
+      "provider_id": "Optional provider id from auth.json for the draft model. Null uses the active provider.",
+      "effort": "Effort level for the draft model: low, medium, high, max. Low is recommended for speed.",
+      "temperature": "Sampling temperature for the draft model. Lower is more deterministic."
+    },
+    "enabled": false,
+    "model": "glm-5-turbo",
+    "provider_id": null,
+    "effort": "low",
+    "temperature": 0.2
+  },
+  "buffer": {
+    "_help": {
+      "enabled": "When true, a lightweight buffer model runs concurrently with the heavyweight model, producing navigation previews (next steps, directions, insights). The preview is shown in the TUI reasoning dock when the heavyweight is idle, and injected as context into the next turn.",
+      "model": "The model id for the buffer layer. Should be a fast/lightweight model. Defaults to glm-5-turbo.",
+      "provider_id": "Optional provider id from auth.json for the buffer model. Null uses the active provider.",
+      "effort": "Effort level for the buffer model: low, medium, high, max.",
+      "temperature": "Sampling temperature for the buffer model. Slightly higher for diverse predictions.",
+      "interval_ms": "Minimum milliseconds between buffer model invocations. Prevents excessive calls during fast turn cycles."
+    },
+    "enabled": false,
+    "model": "glm-5-turbo",
+    "provider_id": null,
+    "effort": "low",
+    "temperature": 0.4,
+    "interval_ms": 5000
+  },
   "memory": {
     "_help": {
       "enabled": "Loads bounded active session and global memories into the agent prompt. False preserves the files and tools but disables automatic recall.",

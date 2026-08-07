@@ -263,7 +263,7 @@ fn parseDocument(allocator: std.mem.Allocator, workspace_root: []const u8) !std.
 }
 
 fn validateDocumentShape(root: std.json.ObjectMap) !void {
-    try rejectUnknownKeys(root, &.{ "_about", "_help", "version", "runtime", "provider", "agent_routes", "agents", "context", "prompts", "memory", "environment" });
+    try rejectUnknownKeys(root, &.{ "_about", "_help", "version", "runtime", "provider", "agent_routes", "agents", "context", "prompts", "draft", "buffer", "memory", "environment" });
     try validateAbout(root);
     try validateHelp(root, &.{"version"});
     if (try validatedObjectField(root, "runtime")) |value| {
@@ -364,6 +364,16 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
     if (try validatedObjectField(root, "prompts")) |value| {
         const keys = &.{ "system_prompt_file", "developer_prompt_file", "persona", "guardrails", "user_context" };
         try rejectUnknownKeys(value, &.{ "_help", "system_prompt_file", "developer_prompt_file", "persona", "guardrails", "user_context" });
+        try validateHelp(value, keys);
+    }
+    if (try validatedObjectField(root, "draft")) |value| {
+        const keys = &.{ "enabled", "model", "provider_id", "effort", "temperature" };
+        try rejectUnknownKeys(value, &.{ "_help", "enabled", "model", "provider_id", "effort", "temperature" });
+        try validateHelp(value, keys);
+    }
+    if (try validatedObjectField(root, "buffer")) |value| {
+        const keys = &.{ "enabled", "model", "provider_id", "effort", "temperature", "interval_ms" };
+        try rejectUnknownKeys(value, &.{ "_help", "enabled", "model", "provider_id", "effort", "temperature", "interval_ms" });
         try validateHelp(value, keys);
     }
     if (try validatedObjectField(root, "memory")) |value| {
