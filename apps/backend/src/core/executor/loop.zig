@@ -33,6 +33,7 @@ pub const Hooks = struct {
     shouldCancelFn: ?*const fn (ctx: ?*anyopaque, session_id: []const u8) bool = null,
     drainPendingMessagesFn: ?*const fn (ctx: ?*anyopaque, session_id: []const u8) ?[][]u8 = null,
     hasPendingMessagesFn: ?*const fn (ctx: ?*anyopaque, session_id: []const u8) bool = null,
+    peekBufferPreviewFn: ?*const fn (ctx: ?*anyopaque) ?[]const u8 = null,
 
     pub fn onSessionInitialized(self: Hooks, session_id: []const u8) !void {
         if (self.onSessionInitializedFn) |callback| {
@@ -75,6 +76,15 @@ pub const Hooks = struct {
             return callback(self.context, session_id);
         }
         return false;
+    }
+
+    /// Peek the latest buffer model preview for advisory injection. Returns
+    /// a borrowed slice (caller must not free). Null if no preview available.
+    pub fn peekBufferPreview(self: Hooks) ?[]const u8 {
+        if (self.peekBufferPreviewFn) |callback| {
+            return callback(self.context);
+        }
+        return null;
     }
 };
 
@@ -332,6 +342,21 @@ pub fn runPromptWithOptions(
         // on session termination — a bad turn is overwritten by the next turn.
         // Only truly unrecoverable states (step limit, cancellation, context
         // overflow that can't compact) escape this block.
+
+        // Buffer speculation injection: if the buffer model produced a navigation
+        // preview, inject it as an advisory system message before the provider
+        // call. The model sees it as pre-computed guidance — it can use it or
+        // ignore it. Advisory only, never blocks. Borrowed slice — do not free.
+        if (options.hooks.peekBufferPreview()) |preview| {
+            if (preview.len > 0) {
+                const advisory = std.fmt.allocPrint(allocator, "BUFFER_INSIGHT (advisory, from lightweight model):\n{s}", .{preview}) catch null;
+                if (advisory) |text| {
+                    defer allocator.free(text);
+                    messages.insert(1, types.initTextMessage(allocator, .system, text) catch null orelse continue) catch {};
+                }
+            }
+        }
+
         const completion = completeWithContextRecovery(
             allocator,
             config,

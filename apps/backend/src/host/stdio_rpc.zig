@@ -187,6 +187,10 @@ const Server = struct {
     buffer_srv: ?buffer_service.Service = null,
     buffer_thread: ?std.Thread = null,
     buffer_session_id: ?[]const u8 = null,
+    /// Latest buffer preview text — written by the buffer thread callback,
+    /// read by the executor via peekBufferPreview hook. Mutex-guarded swap.
+    buffer_preview_mutex: std.Thread.Mutex = .{},
+    buffer_preview_text: ?[]u8 = null,
 
     fn deinit(self: *Server) void {
         self.agent_service.bindEventSink(.{});
@@ -199,6 +203,7 @@ const Server = struct {
             bsrv.requestStop();
             if (self.buffer_thread) |thread| thread.join();
         }
+        if (self.buffer_preview_text) |text| self.allocator.free(text);
         self.runtime.deinit(self.allocator);
     }
 
@@ -327,9 +332,20 @@ fn runSchedulerService(service: *scheduler.Service) void {
     service.run();
 }
 
-/// Buffer preview callback — emits a buffer_preview session event to the TUI.
+/// Buffer preview callback — stores the latest preview for executor injection
+/// and emits a buffer_preview session event to the TUI.
 fn onBufferPreview(ctx: ?*anyopaque, preview: []const u8) void {
     const server: *Server = @ptrCast(@alignCast(ctx.?));
+
+    // Store for executor injection (thread-safe swap)
+    {
+        server.buffer_preview_mutex.lock();
+        defer server.buffer_preview_mutex.unlock();
+        if (server.buffer_preview_text) |old| server.allocator.free(old);
+        server.buffer_preview_text = server.allocator.dupe(u8, preview) catch null;
+    }
+
+    // Emit to TUI
     const session_id = server.buffer_session_id orelse return;
     server.emitSessionEvent(session_id, "buffer_preview", preview, "running", std.time.milliTimestamp()) catch {};
 }
@@ -616,6 +632,7 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         .shouldCancelFn = onLoopShouldCancel,
         .drainPendingMessagesFn = onLoopDrainPendingMessages,
         .hasPendingMessagesFn = onLoopHasPendingMessages,
+        .peekBufferPreviewFn = onLoopPeekBufferPreview,
     };
 
     // Set the buffer service's active session context for root sessions.
@@ -1145,6 +1162,15 @@ fn onLoopDrainPendingMessages(ctx: ?*anyopaque, session_id: []const u8) ?[][]u8 
 fn onLoopHasPendingMessages(ctx: ?*anyopaque, session_id: []const u8) bool {
     const server: *Server = @ptrCast(@alignCast(ctx.?));
     return server.runtime.hasPendingMessages(session_id);
+}
+
+/// Peek the latest buffer model preview for advisory injection.
+/// Returns a borrowed slice — caller must not free.
+fn onLoopPeekBufferPreview(ctx: ?*anyopaque) ?[]const u8 {
+    const server: *Server = @ptrCast(@alignCast(ctx.?));
+    server.buffer_preview_mutex.lock();
+    defer server.buffer_preview_mutex.unlock();
+    return server.buffer_preview_text;
 }
 
 fn makeSessionSummary(session: types.SessionRecord, output: ?[]const u8) protocol_types.SessionSummary {
