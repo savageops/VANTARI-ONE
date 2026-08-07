@@ -102,10 +102,16 @@ pub const ContextPolicy = struct {
 pub const PromptPolicy = struct {
     system_prompt_file: ?[]u8 = null,
     developer_prompt_file: ?[]u8 = null,
+    persona: ?[]u8 = null,
+    guardrails: ?[]u8 = null,
+    user_context: ?[]u8 = null,
 
     pub fn deinit(self: PromptPolicy, allocator: std.mem.Allocator) void {
         if (self.system_prompt_file) |value| allocator.free(value);
         if (self.developer_prompt_file) |value| allocator.free(value);
+        if (self.persona) |value| allocator.free(value);
+        if (self.guardrails) |value| allocator.free(value);
+        if (self.user_context) |value| allocator.free(value);
     }
 };
 

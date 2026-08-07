@@ -215,6 +215,9 @@ fn clonePromptPolicy(allocator: std.mem.Allocator, defaults: types.PromptPolicy)
     return .{
         .system_prompt_file = if (defaults.system_prompt_file) |value| try allocator.dupe(u8, value) else null,
         .developer_prompt_file = if (defaults.developer_prompt_file) |value| try allocator.dupe(u8, value) else null,
+        .persona = if (defaults.persona) |value| try allocator.dupe(u8, value) else null,
+        .guardrails = if (defaults.guardrails) |value| try allocator.dupe(u8, value) else null,
+        .user_context = if (defaults.user_context) |value| try allocator.dupe(u8, value) else null,
     };
 }
 

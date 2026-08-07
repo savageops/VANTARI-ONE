@@ -147,10 +147,16 @@
   "prompts": {
     "_help": {
       "system_prompt_file": "Optional workspace-relative path to an additional non-empty system prompt file. Null uses only the kernel-owned system prompt.",
-      "developer_prompt_file": "Optional workspace-relative path to an additional non-empty developer prompt file. Null supplies no operator-managed developer prompt."
+      "developer_prompt_file": "Optional workspace-relative path to an additional non-empty developer prompt file. Null supplies no operator-managed developer prompt.",
+      "persona": "Optional inline persona description injected after the system prompt identity. Controls tone, voice, technical level, and communication style. Null omits the layer.",
+      "guardrails": "Optional inline user-owned guardrails injected after internal runtime guardrails. Use for prompt-injection protection, safety boundaries, or domain-specific constraints. Null omits the layer; the kernel-owned internal guardrails always apply.",
+      "user_context": "Optional inline custom context bolted on after the developer prompt. Use for project-specific instructions, operator preferences, or extra context the agent should always carry. Null omits the layer."
     },
     "system_prompt_file": null,
-    "developer_prompt_file": null
+    "developer_prompt_file": null,
+    "persona": "Direct, technical, concise. Senior systems engineer vocabulary. No hedging.",
+    "guardrails": null,
+    "user_context": null
   },
   "memory": {
     "_help": {

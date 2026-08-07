@@ -56,6 +56,10 @@ test "prompt builder emits ordered guardrails and tool contract" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "A missing knowledge surface is a drift signal") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "every subagent that discovers findings") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Knowledge artifacts:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Scheduling protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Self-tuning protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "durable jobs live under .var/schedules") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "VANTARI tunes its own configuration") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Large artifact protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "recovery, progress, and reviewability discipline") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "write_file may write the complete file") != null);

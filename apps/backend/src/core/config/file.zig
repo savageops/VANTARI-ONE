@@ -198,6 +198,18 @@ pub fn loadPromptPolicy(
         if (policy.developer_prompt_file) |old| allocator.free(old);
         policy.developer_prompt_file = value;
     }
+    if (try optionalStringClone(allocator, prompts, "persona")) |value| {
+        if (policy.persona) |old| allocator.free(old);
+        policy.persona = value;
+    }
+    if (try optionalStringClone(allocator, prompts, "guardrails")) |value| {
+        if (policy.guardrails) |old| allocator.free(old);
+        policy.guardrails = value;
+    }
+    if (try optionalStringClone(allocator, prompts, "user_context")) |value| {
+        if (policy.user_context) |old| allocator.free(old);
+        policy.user_context = value;
+    }
     return policy;
 }
 
@@ -340,8 +352,8 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
         try validateHelp(value, keys);
     }
     if (try validatedObjectField(root, "prompts")) |value| {
-        const keys = &.{ "system_prompt_file", "developer_prompt_file" };
-        try rejectUnknownKeys(value, &.{ "_help", "system_prompt_file", "developer_prompt_file" });
+        const keys = &.{ "system_prompt_file", "developer_prompt_file", "persona", "guardrails", "user_context" };
+        try rejectUnknownKeys(value, &.{ "_help", "system_prompt_file", "developer_prompt_file", "persona", "guardrails", "user_context" });
         try validateHelp(value, keys);
     }
     if (try validatedObjectField(root, "memory")) |value| {
@@ -546,6 +558,9 @@ fn clonePromptPolicy(allocator: std.mem.Allocator, defaults: types.PromptPolicy)
     return .{
         .system_prompt_file = if (defaults.system_prompt_file) |value| try allocator.dupe(u8, value) else null,
         .developer_prompt_file = if (defaults.developer_prompt_file) |value| try allocator.dupe(u8, value) else null,
+        .persona = if (defaults.persona) |value| try allocator.dupe(u8, value) else null,
+        .guardrails = if (defaults.guardrails) |value| try allocator.dupe(u8, value) else null,
+        .user_context = if (defaults.user_context) |value| try allocator.dupe(u8, value) else null,
     };
 }
 

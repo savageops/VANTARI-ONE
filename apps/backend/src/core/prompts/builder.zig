@@ -100,6 +100,24 @@ pub fn buildAgentSystemPromptWithMemory(
     else
         "Orchestrator-only mode is disabled. Agent discovery remains available through agents {}, and every launched child still receives only explicit context rather than the parent transcript.";
 
+    const guardrails_layer = if (prompt_policy.guardrails) |gr|
+        try std.fmt.allocPrint(allocator, "# Operator Guardrails\n{s}", .{gr})
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(guardrails_layer);
+
+    const persona_layer = if (prompt_policy.persona) |persona|
+        try std.fmt.allocPrint(allocator, "# Persona\n{s}", .{persona})
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(persona_layer);
+
+    const user_context_layer = if (prompt_policy.user_context) |uc|
+        try std.fmt.allocPrint(allocator, "# Operator Context\n{s}", .{uc})
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(user_context_layer);
+
     var output = std.array_list.Managed(u8).init(allocator);
     errdefer output.deinit();
     const writer = output.writer();
@@ -108,6 +126,12 @@ pub fn buildAgentSystemPromptWithMemory(
         \\# VAR1 Prompt Envelope
         \\Workspace root: `{s}`
         \\Provider role transport: system-compatible envelope with explicit internal, system, developer, and tool-contract sections.
+        \\
+        \\{s}
+        \\
+        \\{s}
+        \\
+        \\{s}
         \\
         \\{s}
         \\
@@ -149,6 +173,8 @@ pub fn buildAgentSystemPromptWithMemory(
         \\Advisor protocol: before committing to a non-trivial change, a risky decision, or a direction with unresolved alternatives, launch a silent advisor child — planner for direction and step sequencing, reviewer for findings-first critique, validator for independent proof probes. Advisors run in the background and return compact schema-bound SITREPs; consume them from the convergence record or memory blackboard at the next turn boundary without blocking. An advisor is a coach, not an authority: it sharpens strategy, pushes back on premature completion, flags drift from the operator's intent, and pulls you out of rabbit holes. Use advisors proactively on judgment calls, not mechanically on every step.
         \\Workspace scaffold protocol: on every cold start, review .var/ for the canonical knowledge surfaces — research, plans, advice, roadmap, todos, changelog, docs, sessions. If the workspace is a project that warrants tracking (has source code, configs, or ongoing work) and .var/ does not exist or is incomplete, scaffold it with init_workspace before doing substantive work. A missing knowledge surface is a drift signal, not permission to skip logging. Do not scaffold non-project directories (system roots, temp dirs, drive roots) — use judgment. Scaffolding creates the structure; populate surfaces only when real findings exist. Do not create empty records for compliance.
         \\Knowledge logging protocol: every subagent that discovers findings, performs research, extracts data, reverse-engineers a system, or produces a plan MUST persist its results to the appropriate .var/ surface before returning its SITREP. Research and DOM/scrape results go to .var/research/. Implementation plans go to .var/plans/. Advisor SITREPs (verification, critique, direction) go to .var/advice/. Roadmap decisions go to .var/roadmap/. Use knowledge_artifact with the matching surface. The orchestrator holds only the artifact index (paths, titles, summaries), never the full payloads. When a child returns, its SITREP must include the durable artifact paths it wrote so the parent can reference them without re-reading the child transcript. Raw payloads that would saturate the context window go to .var/ — the parent reads only the summary and the path.
+        \\Scheduling protocol: durable jobs live under .var/schedules/. Use schedule_job to create recurring prompts (interval), one-time delayed prompts (once), or shell commands. The scheduler runs as a background thread in the kernel; jobs survive process restarts via leader-lease reconciliation. Use scheduling for periodic maintenance, delayed reminders, background validation, or any work that must fire at a specific time rather than during a turn. Paused jobs retain their schedule; deleted jobs are soft-deleted. Use todo_slice for bounded execution tracking and changelog_ledger to archive completed work into .var/changelog/. Prefer schedule_job over shell-based cron or sleep loops.
+        \\Self-tuning protocol: VANTARI tunes its own configuration for stability, quality, and performance. When you observe a recurring instability — context overflow, tool-call loops, slow convergence, poor output quality, or a behavioral drift — adjust the relevant config knob via file tools: tune prompts.persona for voice, agent_routes.roles for per-agent thinking_mode, context for compaction thresholds, memory for recall budgets. Prove the change improves the observed metric before committing it. Log the tuning decision in .var/changelog/. The config is hot-loaded on the next session start; no recompilation is needed. Never store secrets in config.json — credentials belong in the sibling auth.json.
         \\Memory protocol: review the injected Memory Context at session start and after prompt rebuilds, keep relevant entries in mind, and verify any drift-prone claim against live code or runtime evidence. messages.jsonl remains transcript truth; memory is compact secondary context, never a second transcript. When the operator explicitly asks to remember or forget something, use memory_write. You may also retain a durable fact, decision, preference, invariant, or lesson when losing it would impair later work. Default uncertain, codebase-specific, project, task, and one-session knowledge to session scope. Use global scope only for genuinely cross-workspace operator preferences or reusable lessons. Reusing a topic supersedes it; forgetting appends a tombstone. Never store secrets, raw transcript text, guesses, generated summaries, or facts that are cheaper and safer to read from current source.
         \\{s}
         \\{s}
@@ -157,8 +183,11 @@ pub fn buildAgentSystemPromptWithMemory(
     , .{
         execution_context.workspace_root,
         internal_guardrails,
+        guardrails_layer,
         system_prompt,
+        persona_layer,
         developer_prompt,
+        user_context_layer,
         workspace_state_note,
         agent_mode_note,
     });
