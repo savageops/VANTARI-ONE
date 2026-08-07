@@ -1384,17 +1384,38 @@ fn isAgentLifecycleTool(tool_name: []const u8) bool {
 
 fn activityMarker(state: ActivityState) []const u8 {
     return switch (state) {
-        .pending => "[ ] ",
-        .running => "[>] ",
-        .completed => "[x] ",
-        .failed => "[!] ",
-        .cancelled => "[-] ",
+        .pending => "○ ",
+        .running => "◉ ",
+        .completed => "✓ ",
+        .failed => "✗ ",
+        .cancelled => "⊘ ",
     };
 }
 
 fn activityConnector(kind: ActivityKind, is_last: bool) []const u8 {
     if (kind != .item) return "";
-    return if (is_last) "`-- " else "|-- ";
+    return if (is_last) "└── " else "├── ";
+}
+
+/// Braille spinner frames for the reasoning/activity indicator.
+/// Variable-speed: the render loop advances the frame based on
+/// wall-clock time and activity level (reasoning deltas arriving).
+const braille_spinner_frames = [_][]const u8{
+    "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+};
+
+/// Compute the spinner frame index from wall-clock time.
+/// Active (recent deltas): ~80ms per frame. Idle: ~400ms per frame.
+fn spinnerFrameIndex(active: bool) usize {
+    const now_ms = std.time.milliTimestamp();
+    const interval_ms: i64 = if (active) 80 else 400;
+    const frame_count = braille_spinner_frames.len;
+    const idx = @as(usize, @intCast(@mod(@divFloor(now_ms, interval_ms), @as(i64, @intCast(frame_count)))));
+    return idx;
+}
+
+fn spinnerGlyph(active: bool) []const u8 {
+    return braille_spinner_frames[spinnerFrameIndex(active)];
 }
 
 fn activityMarkerStyle(state: ActivityState) Style {
@@ -1719,15 +1740,33 @@ fn drawTranscriptRow(win: Window, row: u16, transcript_row: TranscriptRow) void 
     const body = block.child(.{ .x_off = 1, .y_off = 0, .width = body_width, .height = 1 });
     if (transcript_row.activity_kind != .none) {
         const connector = activityConnector(transcript_row.activity_kind, transcript_row.activity_last);
-        _ = body.print(&.{
-            .{ .text = connector, .style = styles.progress },
-            .{ .text = activityMarker(transcript_row.activity_state), .style = activityMarkerStyle(transcript_row.activity_state) },
-            .{ .text = transcript_row.text, .style = activityTextStyle(transcript_row.activity_state) },
-        }, .{
-            .row_offset = 0,
-            .col_offset = 0,
-            .wrap = .none,
-        });
+        // Group headers get the ◍ (complete) or ◉ (running) glyph;
+        // items get the standard state marker (○/◉/✓/✗/⊘)
+        if (transcript_row.activity_kind == .group) {
+            const group_glyph: []const u8 = switch (transcript_row.activity_state) {
+                .completed => "◍ ",
+                .running => "◉ ",
+                else => "○ ",
+            };
+            _ = body.print(&.{
+                .{ .text = group_glyph, .style = styles.assistant },
+                .{ .text = transcript_row.text, .style = activityTextStyle(transcript_row.activity_state) },
+            }, .{
+                .row_offset = 0,
+                .col_offset = 0,
+                .wrap = .none,
+            });
+        } else {
+            _ = body.print(&.{
+                .{ .text = connector, .style = styles.progress },
+                .{ .text = activityMarker(transcript_row.activity_state), .style = activityMarkerStyle(transcript_row.activity_state) },
+                .{ .text = transcript_row.text, .style = activityTextStyle(transcript_row.activity_state) },
+            }, .{
+                .row_offset = 0,
+                .col_offset = 0,
+                .wrap = .none,
+            });
+        }
         return;
     }
     _ = body.print(&.{.{ .text = transcript_row.text, .style = if (transcript_row.pending) styles.thinking else bodyStyle(transcript_row.role) }}, .{
@@ -3425,12 +3464,12 @@ test "tui activity families share nested checkbox grammar" {
     try std.testing.expectEqualStrings("Agents", activityTitle("agents"));
     try std.testing.expectEqualStrings("To-dos", activityTitle("todo_slice"));
 
-    try std.testing.expectEqualStrings("[ ] ", activityMarker(.pending));
-    try std.testing.expectEqualStrings("[>] ", activityMarker(.running));
-    try std.testing.expectEqualStrings("[x] ", activityMarker(.completed));
-    try std.testing.expectEqualStrings("[!] ", activityMarker(.failed));
-    try std.testing.expectEqualStrings("[-] ", activityMarker(.cancelled));
-    try std.testing.expectEqualStrings("|-- ", activityConnector(.item, false));
-    try std.testing.expectEqualStrings("`-- ", activityConnector(.item, true));
+    try std.testing.expectEqualStrings("○ ", activityMarker(.pending));
+    try std.testing.expectEqualStrings("◉ ", activityMarker(.running));
+    try std.testing.expectEqualStrings("✓ ", activityMarker(.completed));
+    try std.testing.expectEqualStrings("✗ ", activityMarker(.failed));
+    try std.testing.expectEqualStrings("⊘ ", activityMarker(.cancelled));
+    try std.testing.expectEqualStrings("├── ", activityConnector(.item, false));
+    try std.testing.expectEqualStrings("└── ", activityConnector(.item, true));
     try std.testing.expectEqualStrings("", activityConnector(.group, false));
 }
