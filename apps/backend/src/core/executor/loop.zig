@@ -4,6 +4,7 @@ const docs_sync = @import("../docs/sync.zig");
 const context_builder = @import("../context/index.zig");
 const context_stream_rules = @import("../context/stream_rules.zig");
 const prompts = @import("../prompts/index.zig");
+const draft = @import("draft.zig");
 const provider = @import("../providers/openai_compatible.zig");
 const dispatch = @import("../providers/dispatch.zig");
 const store = @import("../sessions/store.zig");
@@ -199,6 +200,26 @@ pub fn runPromptWithOptions(
         try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err));
         return err;
     };
+
+    // Draft compilation (root sessions only): a lightweight model restructures
+    // the user's raw input before the heavyweight's first turn. Failures fall
+    // back gracefully to the raw prompt — never blocks the session.
+    if (execution_context.parent_session_id == null and options.session_id == null) {
+        const draft_policy = draft.loadDraftPolicy(allocator, config.workspace_root);
+        defer draft_policy.deinit(allocator);
+        if (draft_policy.enabled) {
+            if (draft.runDraft(allocator, config, draft_policy, session.prompt, options.transport)) |compiled| {
+                defer allocator.free(compiled);
+                // Append the compiled prompt as a system message after the
+                // agent system prompt, before the transcript context.
+                const msg = types.initTextMessage(allocator, .system, compiled) catch null;
+                if (msg) |m| {
+                    messages.insert(1, m) catch {};
+                    base_message_count = messages.items.len;
+                }
+            }
+        }
+    }
 
     var requires_child_supervision = false;
     var executed_tool_calls: usize = 0;
