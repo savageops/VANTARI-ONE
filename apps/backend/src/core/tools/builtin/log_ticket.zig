@@ -6,26 +6,30 @@ const module = @import("../module.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "log_ticket",
-    .description = "Append one durable self-evolution or defect ticket to the workspace ticket ledger (.var/tickets/tickets.jsonl). Use when VAR1 identifies a gap in its own capability, a recurring failure mode, a refactor opportunity, or a behavioral defect it cannot immediately fix.",
+    .description = "Create, transition, or list durable tickets in the workspace ticket ledger (.var/tickets/tickets.jsonl). Tickets track gaps, defects, tasks, and improvements through a full lifecycle: unassigned → assigned → in_progress → completed → closed. Use for long-task tracking, quality steps, and research-focused work.",
     .review_risk = .write_capable,
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "title": { "type": "string", "minLength": 1, "maxLength": 256, "description": "One-line summary of the gap or defect." },
-    \\    "description": { "type": "string", "minLength": 1, "maxLength": 8192, "description": "Full problem statement: observed behavior, expected behavior, reproduction, and impact." },
-    \\    "category": { "type": "string", "enum": ["bug", "feature", "task", "refactor", "security", "architecture", "agent", "tool", "plugin", "performance", "docs"], "description": "Ticket classification." },
+    \\    "action": { "type": "string", "enum": ["create", "transition", "list"], "description": "create appends a new ticket; transition moves an existing ticket to a new state; list reads recent tickets." },
+    \\    "title": { "type": "string", "minLength": 1, "maxLength": 256, "description": "One-line summary. Required for create." },
+    \\    "description": { "type": "string", "minLength": 1, "maxLength": 8192, "description": "Full problem statement. Required for create." },
+    \\    "category": { "type": "string", "enum": ["bug", "feature", "task", "refactor", "security", "architecture", "agent", "tool", "plugin", "performance", "docs"], "description": "Ticket classification. Required for create." },
     \\    "severity": { "type": "string", "enum": ["blocker", "high", "medium", "low"], "description": "Impact level. Defaults to medium." },
-    \\    "evidence": { "type": "array", "items": { "type": "string" }, "description": "Optional exact paths, commands, or links that ground the ticket." },
-    \\    "proposed_owner": { "type": "string", "description": "Optional suggested owner path, module, or agent id." },
-    \\    "status": { "type": "string", "enum": ["open", "in_progress", "blocked", "resolved"], "description": "Lifecycle state. Defaults to open." }
+    \\    "evidence": { "type": "array", "items": { "type": "string" }, "description": "Exact paths, commands, or links that ground the ticket." },
+    \\    "proposed_owner": { "type": "string", "description": "Suggested owner path, module, or agent id." },
+    \\    "status": { "type": "string", "enum": ["unassigned", "assigned", "in_progress", "blocked", "completed", "closed"], "description": "Lifecycle state. Defaults to unassigned for create; required for transition." },
+    \\    "ticket_id": { "type": "string", "description": "Ticket id returned from create. Required for transition." },
+    \\    "transition_reason": { "type": "string", "description": "Why the ticket is transitioning. Required for transition." },
+    \\    "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Max tickets to return for list. Defaults to 20." }
     \\  },
-    \\  "required": ["title", "description", "category"],
+    \\  "required": ["action"],
     \\  "additionalProperties": false
     \\}
     ,
-    .example_json = "{\"title\":\"search_files returns ToolUnavailable when iex is missing\",\"description\":\"The advertised iex dependency is unresolved on Windows installs, leaving search capability silently unavailable. A fallback or clearer diagnostic is needed.\",\"category\":\"tool\",\"severity\":\"high\",\"evidence\":[\"apps/backend/src/core/tools/registry.zig:141\",\"health --json reports iex unresolved\"],\"proposed_owner\":\"apps/backend/src/core/tools/registry.zig\"}",
-    .usage_hint = "Use this whenever you find a gap in your own capability, a defect, or an improvement opportunity you cannot immediately fix. The ticket is durable evidence in .var/tickets/tickets.jsonl; reference the returned ticket id in later turns. Never silently drop a discovered gap.",
+    .example_json = "{\"action\":\"create\",\"title\":\"search_files unavailable when iex missing\",\"description\":\"The iex dependency is unresolved on Windows.\",\"category\":\"tool\",\"severity\":\"high\"}",
+    .usage_hint = "Use create for new tickets, transition to move through lifecycle states (unassigned→assigned→in_progress→completed→closed), and list to review recent tickets. Every long task should be tracked as a ticket for accuracy and recovery. Never silently drop work items.",
 };
 
 pub const availability = module.AvailabilitySpec{};
@@ -69,10 +73,12 @@ pub const Severity = enum {
 };
 
 pub const Status = enum {
-    open,
+    unassigned,
+    assigned,
     in_progress,
     blocked,
-    resolved,
+    completed,
+    closed,
 
     pub fn parse(value: []const u8) error{InvalidStatus}!Status {
         inline for (@typeInfo(Status).@"enum".fields) |field| {
@@ -83,13 +89,17 @@ pub const Status = enum {
 };
 
 const Args = struct {
-    title: []const u8,
-    description: []const u8,
-    category: []const u8,
+    action: []const u8 = "create",
+    title: ?[]const u8 = null,
+    description: ?[]const u8 = null,
+    category: ?[]const u8 = null,
     severity: ?[]const u8 = null,
     evidence: []const []const u8 = &.{},
     proposed_owner: ?[]const u8 = null,
     status: ?[]const u8 = null,
+    ticket_id: ?[]const u8 = null,
+    transition_reason: ?[]const u8 = null,
+    limit: ?usize = null,
 };
 
 pub fn execute(
@@ -101,17 +111,34 @@ pub fn execute(
     defer parsed.deinit();
     const args = parsed.value;
 
-    const title = std.mem.trim(u8, args.title, " \t\r\n");
+    if (std.mem.eql(u8, args.action, "list")) {
+        return executeList(allocator, execution_context, args);
+    }
+
+    if (std.mem.eql(u8, args.action, "transition")) {
+        return executeTransition(allocator, execution_context, args);
+    }
+
+    // Default: create
+    return executeCreate(allocator, execution_context, args);
+}
+
+fn executeCreate(
+    allocator: std.mem.Allocator,
+    execution_context: module.ExecutionContext,
+    args: Args,
+) ![]u8 {
+    const title = std.mem.trim(u8, args.title orelse return module.Error.InvalidArguments, " \t\r\n");
     if (title.len == 0) return module.Error.InvalidArguments;
     if (title.len > max_title_bytes) return module.Error.ToolPayloadExceeded;
 
-    const description = std.mem.trim(u8, args.description, " \t\r\n");
+    const description = std.mem.trim(u8, args.description orelse return module.Error.InvalidArguments, " \t\r\n");
     if (description.len == 0) return module.Error.InvalidArguments;
     if (description.len > max_description_bytes) return module.Error.ToolPayloadExceeded;
 
-    const category = Category.parse(args.category) catch return module.Error.InvalidArguments;
+    const category = Category.parse(args.category orelse return module.Error.InvalidArguments) catch return module.Error.InvalidArguments;
     const severity = if (args.severity) |value| Severity.parse(value) catch return module.Error.InvalidArguments else .medium;
-    const status = if (args.status) |value| Status.parse(value) catch return module.Error.InvalidArguments else .open;
+    const status = if (args.status) |value| Status.parse(value) catch return module.Error.InvalidArguments else .unassigned;
 
     const now_ms = std.time.milliTimestamp();
     const nonce = std.crypto.random.int(u64);
@@ -146,6 +173,91 @@ pub fn execute(
     const receipt = try buildReceipt(allocator, ticket_id, category, severity, status, ledger_path, record.len);
     defer allocator.free(receipt);
     return module.okEnvelope(allocator, "log_ticket", receipt);
+}
+
+/// Transition a ticket to a new lifecycle state. Appends a transition record
+/// to the same ledger with the ticket_id, new status, reason, and timestamp.
+fn executeTransition(
+    allocator: std.mem.Allocator,
+    execution_context: module.ExecutionContext,
+    args: Args,
+) ![]u8 {
+    const ticket_id = args.ticket_id orelse return module.Error.InvalidArguments;
+    const new_status = Status.parse(args.status orelse return module.Error.InvalidArguments) catch return module.Error.InvalidArguments;
+    const reason = args.transition_reason orelse return module.Error.InvalidArguments;
+
+    const now_ms = std.time.milliTimestamp();
+    const record = try std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"var1.ticket_transition.v1\",\"ticket_id\":{f},\"status\":{f},\"reason\":{f},\"transitioned_at_ms\":{d},\"source\":\"agent\"}}",
+        .{
+            std.json.fmt(ticket_id, .{}),
+            std.json.fmt(@tagName(new_status), .{}),
+            std.json.fmt(reason, .{}),
+            now_ms,
+        },
+    );
+    defer allocator.free(record);
+
+    const ledger_path = try fsutil.join(allocator, &.{ execution_context.workspace_root, ".var", "tickets", "tickets.jsonl" });
+    defer allocator.free(ledger_path);
+
+    var line = std.array_list.Managed(u8).init(allocator);
+    defer line.deinit();
+    try line.appendSlice(record);
+    try line.append('\n');
+    try fsutil.appendText(ledger_path, line.items);
+
+    const receipt = try std.fmt.allocPrint(allocator, "{{\"ticket_id\":{f},\"transitioned_to\":{f},\"reason\":{f}}}", .{
+        std.json.fmt(ticket_id, .{}),
+        std.json.fmt(@tagName(new_status), .{}),
+        std.json.fmt(reason, .{}),
+    });
+    defer allocator.free(receipt);
+    return module.okEnvelope(allocator, "log_ticket", receipt);
+}
+
+/// List recent tickets from the ledger (most recent first).
+fn executeList(
+    allocator: std.mem.Allocator,
+    execution_context: module.ExecutionContext,
+    args: Args,
+) ![]u8 {
+    const limit = if (args.limit) |l| @min(@max(l, 1), 50) else 20;
+
+    const ledger_path = try fsutil.join(allocator, &.{ execution_context.workspace_root, ".var", "tickets", "tickets.jsonl" });
+    defer allocator.free(ledger_path);
+
+    const content = fsutil.readTextAlloc(allocator, ledger_path) catch |err| switch (err) {
+        error.FileNotFound => return module.okEnvelope(allocator, "log_ticket", "TICKETS empty\nREASON no ticket ledger found yet"),
+        else => return err,
+    };
+    defer allocator.free(content);
+
+    var lines = std.array_list.Managed([]const u8).init(allocator);
+    defer lines.deinit();
+    var iter = std.mem.splitScalar(u8, content, '\n');
+    while (iter.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len > 0) lines.append(trimmed) catch break;
+    }
+
+    const total = lines.items.len;
+    const start = if (total > limit) total - limit else 0;
+    const count = total - start;
+
+    var output = std.array_list.Managed(u8).init(allocator);
+    defer output.deinit();
+    const writer = output.writer();
+    try writer.print("TICKETS {d} of {d}\n", .{ count, total });
+
+    var i: usize = total;
+    while (i > start) {
+        i -= 1;
+        try writer.print("- {s}\n", .{lines.items[i]});
+    }
+
+    return module.okEnvelope(allocator, "log_ticket", output.items);
 }
 
 fn buildRecord(
