@@ -130,6 +130,27 @@ pub const definitions = [_]types.ToolDefinition{
         .usage_hint = "Path is relative to .var/docs. Use for current runtime contract docs only, not aspirational future claims.",
     },
     .{
+        .name = "knowledge_artifact",
+        .description = "Read, write, or list durable knowledge artifacts across the canonical .var surfaces: research, plans, advice, roadmap. Subagents persist findings here so the orchestrator holds only the artifact index, not full payloads.",
+        .review_risk = .write_capable,
+        .parameters_json =
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "action": { "type": "string", "enum": ["read", "write", "list"] },
+        \\    "surface": { "type": "string", "enum": ["research", "plans", "advice", "roadmap"], "description": "Knowledge surface under .var/." },
+        \\    "path": { "type": "string", "description": "Path relative to .var/<surface>/. Required for read and write; ignored for list." },
+        \\    "title": { "type": "string", "description": "Optional markdown heading prepended when action is write and content has no heading." },
+        \\    "content": { "type": "string", "description": "Markdown body to write when action is write." }
+        \\  },
+        \\  "required": ["action", "surface"],
+        \\  "additionalProperties": false
+        \\}
+        ,
+        .example_json = "{\"action\":\"write\",\"surface\":\"research\",\"path\":\"oh-my-pi-never-wait.md\",\"title\":\"oh-my-pi Never-Wait Mechanics\",\"content\":\"The yield-queue injects results as a new turn...\"}",
+        .usage_hint = "Every subagent that discovers findings MUST persist them to the matching surface before returning its SITREP. Research/DOM/scrape → research. Implementation plans → plans. Advisor SITREPs → advice. Roadmap decisions → roadmap. Use list to inventory artifacts without reading full payloads.",
+    },
+    .{
         .name = "git_worktree",
         .description = "Inspect or manage Git worktrees rooted under .var/worktrees/ when the workspace is a real Git checkout.",
         .review_risk = .write_capable,
@@ -218,6 +239,9 @@ pub fn execute(
     if (std.mem.eql(u8, tool_name, "docs_artifact")) {
         return executeDocsArtifact(allocator, workspace_root, arguments_json);
     }
+    if (std.mem.eql(u8, tool_name, "knowledge_artifact")) {
+        return executeKnowledgeArtifact(allocator, workspace_root, arguments_json);
+    }
     if (std.mem.eql(u8, tool_name, "git_worktree")) {
         return executeGitWorktree(allocator, workspace_root, arguments_json, runner);
     }
@@ -286,6 +310,26 @@ fn researchPath(allocator: std.mem.Allocator, workspace_root: []const u8, relati
 
 fn docsPath(allocator: std.mem.Allocator, workspace_root: []const u8, relative_path: []const u8) ![]u8 {
     const relative = try fsutil.join(allocator, &.{ ".var", "docs", relative_path });
+    defer allocator.free(relative);
+    return fsutil.resolveInWorkspace(allocator, workspace_root, relative);
+}
+
+fn knowledgeSurfaceDir(surface: []const u8) ![]const u8 {
+    if (std.mem.eql(u8, surface, "research")) return "research";
+    if (std.mem.eql(u8, surface, "plans")) return "plans";
+    if (std.mem.eql(u8, surface, "advice")) return "advice";
+    if (std.mem.eql(u8, surface, "roadmap")) return "roadmap";
+    return error.InvalidArguments;
+}
+
+fn knowledgeSurfaceRoot(allocator: std.mem.Allocator, workspace_root: []const u8, surface: []const u8) ![]u8 {
+    const dir = try knowledgeSurfaceDir(surface);
+    return fsutil.join(allocator, &.{ workspace_root, ".var", dir });
+}
+
+fn knowledgeSurfacePath(allocator: std.mem.Allocator, workspace_root: []const u8, surface: []const u8, relative_path: []const u8) ![]u8 {
+    const dir = try knowledgeSurfaceDir(surface);
+    const relative = try fsutil.join(allocator, &.{ ".var", dir, relative_path });
     defer allocator.free(relative);
     return fsutil.resolveInWorkspace(allocator, workspace_root, relative);
 }
@@ -359,7 +403,7 @@ fn defaultWorkspaceReadme() []const u8 {
         \\
         \\## Ownership
         \\
-        \\- `.var/` owns workspace-local todo, changelog, research, docs, backup, and worktree state for VAR1. Agent memory is owned by the runtime memory store, not this scaffold.
+        \\- `.var/` owns workspace-local todo, changelog, research, plans, advice, roadmap, docs, backup, and worktree state for VAR1. Agent memory is owned by the runtime memory store, not this scaffold.
         \\- `.docs/` remains readable repo documentation or preserved historical material when present.
         \\- `init_workspace` owns the default scaffold. Other workspace-state tools operate inside that canonical tree and do not create a parallel system.
     ;
@@ -415,6 +459,9 @@ fn defaultDocsArchitecture() []const u8 {
         \\      <session-name>/
         \\        session.md
         \\    research/
+        \\    plans/
+        \\    advice/
+        \\    roadmap/
         \\    docs/
         \\      _index.md
         \\      architecture.md
@@ -449,6 +496,7 @@ fn defaultToolContracts() []const u8 {
         \\- `session_record`
         \\- `research_artifact`
         \\- `docs_artifact`
+        \\- `knowledge_artifact`
         \\- `git_worktree`
         \\- `workspace_backup`
         \\- `instruction_ingestion`
@@ -488,6 +536,33 @@ fn defaultResearchReadme() []const u8 {
     return content;
 }
 
+fn defaultPlansReadme() []const u8 {
+    const content =
+        \\# .var Plans
+        \\
+        \\Store durable implementation plans, execution chains, step sequences, and proof-gate definitions here. Each plan carries its owner path, invariants, and stop conditions.
+    ;
+    return content;
+}
+
+fn defaultAdviceReadme() []const u8 {
+    const content =
+        \\# .var Advice
+        \\
+        \\Store advisor SITREPs, coaching records, verification findings, and critique summaries here. Advisors are coaches, not authorities: they sharpen strategy and flag drift.
+    ;
+    return content;
+}
+
+fn defaultRoadmapReadme() []const u8 {
+    const content =
+        \\# .var Roadmap
+        \\
+        \\Store roadmap artifacts here. Each roadmap entry must carry an owner path and exit criteria; an entry without both is an aspiration, not a roadmap item.
+    ;
+    return content;
+}
+
 fn scaffoldWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8, force_overwrite: bool) !ScaffoldStats {
     var stats = ScaffoldStats{};
 
@@ -498,6 +573,9 @@ fn scaffoldWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8, f
         try fsutil.join(allocator, &.{ workspace_root, ".var", "docs" }),
         try fsutil.join(allocator, &.{ workspace_root, ".var", "sessions" }),
         try fsutil.join(allocator, &.{ workspace_root, ".var", "research" }),
+        try fsutil.join(allocator, &.{ workspace_root, ".var", "plans" }),
+        try fsutil.join(allocator, &.{ workspace_root, ".var", "advice" }),
+        try fsutil.join(allocator, &.{ workspace_root, ".var", "roadmap" }),
         try fsutil.join(allocator, &.{ workspace_root, ".var", "worktrees" }),
         try fsutil.join(allocator, &.{ workspace_root, ".var", "backup" }),
         try fsutil.join(allocator, &.{ workspace_root, ".var", "todos" }),
@@ -517,6 +595,12 @@ fn scaffoldWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8, f
     defer allocator.free(backup_readme);
     const research_readme = try fsutil.join(allocator, &.{ workspace_root, ".var", "research", "README.md" });
     defer allocator.free(research_readme);
+    const plans_readme = try fsutil.join(allocator, &.{ workspace_root, ".var", "plans", "README.md" });
+    defer allocator.free(plans_readme);
+    const advice_readme = try fsutil.join(allocator, &.{ workspace_root, ".var", "advice", "README.md" });
+    defer allocator.free(advice_readme);
+    const roadmap_readme = try fsutil.join(allocator, &.{ workspace_root, ".var", "roadmap", "README.md" });
+    defer allocator.free(roadmap_readme);
 
     const readme = try readmePath(allocator, workspace_root);
     defer allocator.free(readme);
@@ -537,6 +621,9 @@ fn scaffoldWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8, f
     try writeTemplateFile(worktrees_readme, defaultWorktreesReadme(), force_overwrite, &stats);
     try writeTemplateFile(backup_readme, defaultBackupReadme(), force_overwrite, &stats);
     try writeTemplateFile(research_readme, defaultResearchReadme(), force_overwrite, &stats);
+    try writeTemplateFile(plans_readme, defaultPlansReadme(), force_overwrite, &stats);
+    try writeTemplateFile(advice_readme, defaultAdviceReadme(), force_overwrite, &stats);
+    try writeTemplateFile(roadmap_readme, defaultRoadmapReadme(), force_overwrite, &stats);
 
     return stats;
 }
@@ -867,6 +954,84 @@ fn executeDocsArtifact(
     arguments_json: []const u8,
 ) ![]u8 {
     return executeBodyFileTool(allocator, workspace_root, arguments_json, "docs_artifact", docsPath);
+}
+
+fn executeKnowledgeArtifact(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    arguments_json: []const u8,
+) ![]u8 {
+    const Args = struct {
+        action: []const u8,
+        surface: []const u8,
+        path: ?[]const u8 = null,
+        title: ?[]const u8 = null,
+        content: ?[]const u8 = null,
+    };
+
+    var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
+        .ignore_unknown_fields = false,
+    });
+    defer parsed.deinit();
+    const args = parsed.value;
+
+    // Validate surface early so list works without a path.
+    _ = try knowledgeSurfaceDir(args.surface);
+
+    if (std.mem.eql(u8, args.action, "list")) {
+        const surface_root = try knowledgeSurfaceRoot(allocator, workspace_root, args.surface);
+        defer allocator.free(surface_root);
+
+        var dir = std.fs.cwd().openDir(surface_root, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound => return okEnvelope(allocator, "knowledge_artifact", "SURFACE empty\nREASON surface directory does not exist yet"),
+            else => return err,
+        };
+        defer dir.close();
+
+        var entries = std.array_list.Managed(u8).init(allocator);
+        defer entries.deinit();
+        const writer = entries.writer();
+        try writer.print("SURFACE {s}\n", .{args.surface});
+
+        var count: usize = 0;
+        var walker = try dir.walk(allocator);
+        defer walker.deinit();
+        while (try walker.next()) |entry| {
+            if (entry.kind != .file) continue;
+            try writer.print("- {s}\n", .{entry.path});
+            count += 1;
+        }
+        if (count == 0) try writer.writeAll("(none)\n");
+        return okEnvelope(allocator, "knowledge_artifact", entries.items);
+    }
+
+    const relative_path = args.path orelse return error.InvalidArguments;
+    const file_path = try knowledgeSurfacePath(allocator, workspace_root, args.surface, relative_path);
+    defer allocator.free(file_path);
+
+    if (std.mem.eql(u8, args.action, "read")) {
+        const content = try fsutil.readTextAlloc(allocator, file_path);
+        defer allocator.free(content);
+        const payload = try std.fmt.allocPrint(allocator, "PATH {s}\n{s}", .{ file_path, content });
+        defer allocator.free(payload);
+        return okEnvelope(allocator, "knowledge_artifact", payload);
+    }
+
+    if (std.mem.eql(u8, args.action, "write")) {
+        const content_body = args.content orelse return error.InvalidArguments;
+        const rendered = try if (args.title) |title|
+            if (std.mem.startsWith(u8, content_body, "# ")) allocator.dupe(u8, content_body) else std.fmt.allocPrint(allocator, "# {s}\n\n{s}", .{ title, content_body })
+        else
+            allocator.dupe(u8, content_body);
+        defer allocator.free(rendered);
+
+        try fsutil.writeText(file_path, rendered);
+        const payload = try std.fmt.allocPrint(allocator, "SURFACE {s}\nPATH {s}\nBYTES {d}", .{ args.surface, file_path, rendered.len });
+        defer allocator.free(payload);
+        return okEnvelope(allocator, "knowledge_artifact", payload);
+    }
+
+    return error.InvalidArguments;
 }
 
 fn executeBodyFileTool(

@@ -1,5 +1,23 @@
 # Execution Log
 
+## 2026-08-07T16:30:00Z - Knowledge scaffolding + workspace doctrine + config drift root-cause fix
+
+**Outcome:** Expanded the `.var/` workspace scaffold with three new knowledge surfaces (`.var/plans/`, `.var/advice/`, `.var/roadmap/`), added a generalized `knowledge_artifact` tool (read/write/list across all four surfaces), embedded workspace-scaffold and knowledge-logging protocols into the system prompt, and permanently fixed the recurring config-key drift that broke `vantari` startup 5 times.
+
+**Mechanism:**
+
+- **Scaffold expansion** (`workspace_runtime.zig`): `scaffoldWorkspace` now creates 16 dirs (was 13). Added `.var/plans/`, `.var/advice/`, `.var/roadmap/` with purpose-stating README templates (`defaultPlansReadme`, `defaultAdviceReadme`, `defaultRoadmapReadme`). Updated `defaultDocsArchitecture` tree diagram, `defaultToolContracts` required-tools list, and `defaultWorkspaceReadme` ownership line to include the new surfaces — the scaffold is self-documenting and self-consistent.
+- **`knowledge_artifact` tool** (`workspace_runtime.zig`): a single generalized read/write/list tool with a `surface` enum (`research|plans|advice|roadmap`). The `list` action walks the surface directory and returns a file inventory — this is the orchestrator's metadata index, letting it see *what* research exists without reading full payloads. Path safety via `knowledgeSurfaceDir` enum resolver + `resolveInWorkspace`. Replaces the need for 4 near-identical sibling tools (one tool definition vs four = less catalog mass, less schema drift).
+- **Prompt doctrine** (`builder.zig`): added **Workspace scaffold protocol** (scaffold `.var/` on cold start for project workspaces; a missing knowledge surface is a drift signal; don't scaffold non-project dirs; don't create empty records for compliance) and **Knowledge logging protocol** (every subagent that discovers findings MUST persist to the matching `.var/` surface before returning its SITREP; the orchestrator holds only the artifact index). Added a sixth required section to the child-task template: `Knowledge artifacts: <surface + paths the child must return>`.
+- **Config drift permanent fix** (`core_store_test.zig`): two falsification tests ("canonical config overlays non-secret context policy" and "canonical config rejects unknown context policy keys") lacked the `VANTARI_HOME` skip guard. They called `config_file.path(tmp_workspace)` which resolves through `runtimeRootForWorkspace` — when `VANTARI_HOME` is set, this ignores the workspace argument and returns `~/.vantari/`, so the wrong-key fixture `{"context":{"auto_compact":false}}` was written to the REAL global config on every test run. Added the guard; post-test config now survives intact.
+
+**Proof:**
+
+- Full Zig 0.15.1 mesh: 1320/1464 passed, 81 failed, 63 skipped. The 81 failures are the same pre-existing Windows file-lock collisions (identical to baseline). Zero failures in knowledge_artifact, scaffold, or prompt-builder tests. The new "workspace scaffold creates knowledge surfaces and knowledge_artifact reads writes and lists" test passes and exercises all four surfaces, the `list` action, and unknown-surface rejection.
+- Post-test global config check: `{"version":1,"context":{"auto_compaction":false}}` — intact. The config drift root cause is fixed; this was the 5th and final recurrence.
+
+**Boundary:** The `workspace_state_enabled` gating is unchanged — knowledge/research tools remain keyword-gated (the prompt doctrine tells the model to mention `.var/` which triggers `workspaceStateRelevant`). Making these tools always-available to relevant capability profiles is a separate runtime-phase change. The never-wait control-flow (inbox/drain), invisible advisor visibility tier, and TUI tree nesting remain deferred.
+
 ## 2026-08-07T15:45:00Z - Surgical precision + never-wait fan-out + advisor coaching doctrine
 
 **Outcome:** Sharpened the runtime system prompt with three behavioral shifts distilled from oh-my-pi's proven `orchestrate-notice.md` and `advisor/system.md`, plus industry research (Erlang mailbox, Temporal Signals, A2A task-lifecycle). Zero runtime changes — this is the prompt-layer doctrine that prepares the model for the never-wait control-flow and invisible-advisor runtime mechanics to follow.

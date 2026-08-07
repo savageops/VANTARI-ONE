@@ -999,6 +999,90 @@ test "workspace-state tools scaffold and manage canonical root artifacts" {
     try std.testing.expect(std.mem.indexOf(u8, docs_write_output, "extra.md") != null);
 }
 
+test "workspace scaffold creates knowledge surfaces and knowledge_artifact reads writes and lists" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var init_call = try makeToolCall(std.testing.allocator, "init_workspace", "{}");
+    defer init_call.deinit(std.testing.allocator);
+    const init_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), init_call);
+    defer std.testing.allocator.free(init_output);
+    try std.testing.expect(std.mem.indexOf(u8, init_output, "FILES_WRITTEN") != null);
+
+    // The three new knowledge surfaces must exist after scaffolding.
+    const plans_readme = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "plans", "README.md" });
+    defer std.testing.allocator.free(plans_readme);
+    try std.testing.expect(VAR1.shared.fsutil.fileExists(plans_readme));
+
+    const advice_readme = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "advice", "README.md" });
+    defer std.testing.allocator.free(advice_readme);
+    try std.testing.expect(VAR1.shared.fsutil.fileExists(advice_readme));
+
+    const roadmap_readme = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "roadmap", "README.md" });
+    defer std.testing.allocator.free(roadmap_readme);
+    try std.testing.expect(VAR1.shared.fsutil.fileExists(roadmap_readme));
+
+    // Write a research artifact through knowledge_artifact.
+    var write_call = try makeToolCall(
+        std.testing.allocator,
+        "knowledge_artifact",
+        "{\"action\":\"write\",\"surface\":\"research\",\"path\":\"never-wait.md\",\"title\":\"Never-Wait Mechanics\",\"content\":\"The yield-queue injects results as a new turn.\"}",
+    );
+    defer write_call.deinit(std.testing.allocator);
+    const write_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), write_call);
+    defer std.testing.allocator.free(write_output);
+    try std.testing.expect(std.mem.indexOf(u8, write_output, "\"ok\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, write_output, "SURFACE research") != null);
+    try std.testing.expect(std.mem.indexOf(u8, write_output, "never-wait.md") != null);
+
+    // Read it back.
+    var read_call = try makeToolCall(
+        std.testing.allocator,
+        "knowledge_artifact",
+        "{\"action\":\"read\",\"surface\":\"research\",\"path\":\"never-wait.md\"}",
+    );
+    defer read_call.deinit(std.testing.allocator);
+    const read_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), read_call);
+    defer std.testing.allocator.free(read_output);
+    try std.testing.expect(std.mem.indexOf(u8, read_output, "yield-queue injects results") != null);
+
+    // Write a plan artifact to a different surface.
+    var plan_call = try makeToolCall(
+        std.testing.allocator,
+        "knowledge_artifact",
+        "{\"action\":\"write\",\"surface\":\"plans\",\"path\":\"inbox-drain.md\",\"content\":\"# Inbox Drain Plan\\n\\nStep 1: add per-parent inbox.\"}",
+    );
+    defer plan_call.deinit(std.testing.allocator);
+    const plan_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), plan_call);
+    defer std.testing.allocator.free(plan_output);
+    try std.testing.expect(std.mem.indexOf(u8, plan_output, "SURFACE plans") != null);
+
+    // List the research surface — must show never-wait.md.
+    var list_call = try makeToolCall(
+        std.testing.allocator,
+        "knowledge_artifact",
+        "{\"action\":\"list\",\"surface\":\"research\"}",
+    );
+    defer list_call.deinit(std.testing.allocator);
+    const list_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), list_call);
+    defer std.testing.allocator.free(list_output);
+    try std.testing.expect(std.mem.indexOf(u8, list_output, "SURFACE research") != null);
+    try std.testing.expect(std.mem.indexOf(u8, list_output, "never-wait.md") != null);
+
+    // Reject an unknown surface.
+    var bad_surface_call = try makeToolCall(
+        std.testing.allocator,
+        "knowledge_artifact",
+        "{\"action\":\"list\",\"surface\":\"unknown\"}",
+    );
+    defer bad_surface_call.deinit(std.testing.allocator);
+    const bad_surface_output = VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), bad_surface_call);
+    try std.testing.expectError(error.InvalidArguments, bad_surface_output);
+}
+
 test "instruction_ingestion resolves the applicable AGENTS chain" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
