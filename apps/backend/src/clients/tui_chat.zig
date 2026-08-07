@@ -163,7 +163,7 @@ const ChatState = struct {
             const oldest = self.history_entries.orderedRemove(0);
             self.allocator.free(oldest);
         }
-        try self.history_entries.append(try self.allocator.dupe(u8, prompt));
+        try self.history_entries.append(self.allocator, try self.allocator.dupe(u8, prompt));
         self.history_cursor = 0;
         if (self.history_draft) |draft| {
             self.allocator.free(draft);
@@ -176,16 +176,15 @@ const ChatState = struct {
         if (self.history_cursor >= self.history_entries.items.len) return;
         if (self.history_cursor == 0) {
             const current = try input.toOwnedSlice();
+            defer self.allocator.free(current);
             if (current.len > 0) {
-                self.history_draft = current;
-            } else {
-                self.allocator.free(current);
+                self.history_draft = try self.allocator.dupe(u8, current);
             }
         }
         self.history_cursor += 1;
         const idx = self.history_entries.items.len - self.history_cursor;
         input.clearAndFree();
-        try input.update(.{ .text = self.history_entries.items[idx] });
+        try input.insertSliceAtCursor(self.history_entries.items[idx]);
     }
 
     fn historyNavigateDown(self: *ChatState, input: *TextInput) !void {
@@ -194,11 +193,11 @@ const ChatState = struct {
         input.clearAndFree();
         if (self.history_cursor == 0) {
             if (self.history_draft) |draft| {
-                try input.update(.{ .text = draft });
+                try input.insertSliceAtCursor(draft);
             }
         } else {
             const idx = self.history_entries.items.len - self.history_cursor;
-            try input.update(.{ .text = self.history_entries.items[idx] });
+            try input.insertSliceAtCursor(self.history_entries.items[idx]);
         }
     }
 

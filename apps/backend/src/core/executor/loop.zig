@@ -771,10 +771,18 @@ fn rebuildProviderBaseMessages(
     for (messages.items) |message| message.deinit(allocator);
     messages.clearRetainingCapacity();
 
+    // Hot-load prompt policy from disk on every prompt rebuild so config.json
+    // changes (persona, guardrails, user_context, prompt files) take effect
+    // on the next turn, not the next session start. The disk read is
+    // sub-millisecond for a local file. Falls back to the cached policy
+    // if the file cannot be read (graceful degradation).
+    const hot_prompt_policy = config_file.loadPromptPolicy(allocator, config.workspace_root, config.prompt_policy) catch config.prompt_policy;
+    defer hot_prompt_policy.deinit(allocator);
+
     const system_prompt = try prompts.buildAgentSystemPromptWithMemory(
         allocator,
         execution_context,
-        config.prompt_policy,
+        hot_prompt_policy,
         config.memory_policy,
         session.prompt,
     );
