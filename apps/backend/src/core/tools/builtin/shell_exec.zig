@@ -117,12 +117,15 @@ pub fn executeToolCall(
         .onOutputFn = forwardCommandOutput,
     };
 
+    const started_at_ms = std.time.milliTimestamp();
     var result = try runner.runWithLimits(allocator, cwd, argv, .{
         .timeout_ms = timeout_ms,
         .max_output_bytes = max_output_bytes,
         .output_callback = callback,
     });
     defer result.deinit(allocator);
+
+    appendProcessLedger(allocator, execution_context, parsed.value.mode, cwd, argv, tool_call_id, started_at_ms, result) catch {};
 
     return renderResult(allocator, parsed.value.mode, cwd, argv, result);
 }
@@ -271,4 +274,57 @@ fn undefinedRun(
     _: []const []const u8,
 ) anyerror!module.CommandOutput {
     return module.Error.CommandFailed;
+}
+
+/// Append a process execution record to the workspace-local process ledger
+/// at .var/processes/processes.jsonl. Failures are swallowed (catch {}) so
+/// the command result is never blocked by a ledger write failure.
+fn appendProcessLedger(
+    allocator: std.mem.Allocator,
+    execution_context: module.ExecutionContext,
+    mode: []const u8,
+    cwd: []const u8,
+    argv: []const []const u8,
+    tool_call_id: []const u8,
+    started_at_ms: i64,
+    result: module.CommandOutput,
+) !void {
+    const now_ms = std.time.milliTimestamp();
+    const duration_ms = now_ms - started_at_ms;
+
+    var argv_buf = std.array_list.Managed(u8).init(allocator);
+    defer argv_buf.deinit();
+    const aw = argv_buf.writer();
+    try aw.writeByte('[');
+    for (argv, 0..) |arg, i| {
+        if (i > 0) try aw.writeByte(',');
+        try aw.print("{f}", .{std.json.fmt(arg, .{})});
+    }
+    try aw.writeByte(']');
+
+    const record = try std.fmt.allocPrint(allocator,
+        \\{{"schema":"var1.process.v1","mode":{f},"cwd":{f},"argv":{s},"exit_code":{d},"timed_out":{},"truncated":{},"duration_ms":{d},"started_at_ms":{d},"tool_call_id":{f},"workspace_root":{f},"session_id":{f}}}
+    , .{
+        std.json.fmt(mode, .{}),
+        std.json.fmt(cwd, .{}),
+        argv_buf.items,
+        result.exit_code,
+        result.timed_out,
+        result.truncated,
+        duration_ms,
+        started_at_ms,
+        std.json.fmt(tool_call_id, .{}),
+        std.json.fmt(execution_context.workspace_root, .{}),
+        std.json.fmt(execution_context.parent_session_id orelse "", .{}),
+    });
+    defer allocator.free(record);
+
+    const ledger_path = try fsutil.join(allocator, &.{ execution_context.workspace_root, ".var", "processes", "processes.jsonl" });
+    defer allocator.free(ledger_path);
+
+    var line = std.array_list.Managed(u8).init(allocator);
+    defer line.deinit();
+    try line.appendSlice(record);
+    try line.append('\n');
+    try fsutil.appendText(ledger_path, line.items);
 }
