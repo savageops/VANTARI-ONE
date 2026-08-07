@@ -1,0 +1,5 @@
+﻿,oh-my-pi,Claude Code,VANTARI (current),VANTARI (target)
+Never-wait,✅ yield-queue,❌ Task blocks (#6854),"⚠️ yields 1 turn, text re-parks",✅ drain inbox at boundaries
+Invisible advisors,✅ AgentKind,❌ none,❌ none,✅ visibility tier
+Durable ledger,⚠️ process-local,⚠️ session.jsonl,✅ append-only JSONL + cold-start,✅ surpass both
+TUI tree,✅ depth 8 + spinners,⚠️ flat,"⚠️ depth 1, static [>]",✅ match oh-my-pi

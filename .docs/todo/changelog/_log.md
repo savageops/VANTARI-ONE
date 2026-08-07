@@ -1,5 +1,25 @@
 # Execution Log
 
+## 2026-08-07T15:45:00Z - Surgical precision + never-wait fan-out + advisor coaching doctrine
+
+**Outcome:** Sharpened the runtime system prompt with three behavioral shifts distilled from oh-my-pi's proven `orchestrate-notice.md` and `advisor/system.md`, plus industry research (Erlang mailbox, Temporal Signals, A2A task-lifecycle). Zero runtime changes — this is the prompt-layer doctrine that prepares the model for the never-wait control-flow and invisible-advisor runtime mechanics to follow.
+
+**Mechanism:**
+
+- Sharpened `default_system_prompt` (Layer B): added surgical-precision identity ("every edit is the smallest reversible change that advances the contract... slow is smooth, and smooth is fast") and never-wait fan-out ultimatum ("never serialize independent slices... never launch a single child when there is more parallel work alongside it").
+- Sharpened `default_developer_prompt` (Layer C): added the surgical-edit ultimatum — prefer `replace_in_file` over `write_file` whole-file rewrites; whole-file rewrite admissible only for new/tiny/intentional content.
+- Added three new protocols to the envelope template:
+  - **Surgical precision protocol** — smallest reversible mutation, prove before next edit, small slices compound.
+  - **Parallelization protocol** — fan out as wide as work decomposes, never launch one child when more parallel work exists, sequence only strict dependencies, `background:true` for branchable work.
+  - **Advisor protocol** — launch silent planner/reviewer/validator children before non-trivial changes; consume SITREPs from the convergence record or memory blackboard at the next boundary without blocking; advisor is a coach not an authority.
+
+**Proof:**
+
+- Full Zig 0.15.1 mesh: 1319/1463 passed, 83 failed, 61 skipped — identical failure count to the committed baseline (verified by stash + re-run on prior commits). The 83 pre-existing failures are Windows file-lock collisions in store/loop/trellis tests, unrelated to this change. Zero failures in prompt-builder tests.
+- Prompt-builder test now asserts 7 new protocol/ultimatum strings alongside the existing 34: `Orchestration discipline protocol`, `Evolution protocol`, `Surgical precision protocol`, `Parallelization protocol`, `Advisor protocol`, `Slow is smooth, and smooth is fast`, and the fan-out ultimatum.
+
+**Boundary:** This is prompt-layer only. The runtime mechanics it prepares for — never-wait control-flow (inbox/drain in loop.zig to fix the text-re-parks-parent bug), AgentSpec visibility tier for invisible advisors, and TUI tree-style nesting with spinners — are separate roadmap slices. The prompt encodes the doctrine now so the model already behaves correctly when the mechanics land.
+
 ## 2026-08-07T14:20:00Z - Cockpit-orchestrator doctrine + self-evolution ticket tool
 
 **Outcome:** Refined the runtime system prompt from a generic coding-agent identity into a compact cockpit-orchestrator doctrine, and added a `log_ticket` builtin tool so VAR1 can durably log self-evolution findings (bugs, feature gaps, refactor opportunities) to a structured append-only ledger at `.var/tickets/tickets.jsonl`.
