@@ -509,6 +509,8 @@ const ChatState = struct {
             try self.setBufferPreview(message);
             return true;
         }
+        if (std.mem.eql(u8, event_type, "user_message_queued")) return true;
+        if (std.mem.eql(u8, event_type, "user_message_injected")) return true;
         if (skipProgressEvent(event_type)) return false;
 
         try self.addProgress(event_type, message);
@@ -965,7 +967,17 @@ const ChatState = struct {
                         try self.historyNavigateDown(input);
                         continue;
                     }
-                    if (key.matches(tui.Key.enter, .{}) or key.matches('j', .{ .ctrl = true })) continue;
+                    if (key.matches(tui.Key.enter, .{}) or key.matches('j', .{ .ctrl = true })) {
+                        // Interjection protocol: capture and queue the message
+                        const owned = input.toOwnedSlice() catch continue;
+                        defer self.allocator.free(owned);
+                        const text = std.mem.trim(u8, owned, " \t\r\n");
+                        if (text.len > 0) {
+                            try self.queueMessage(session_id, text);
+                            input.clearAndFree();
+                        }
+                        continue;
+                    }
                     try input.update(.{ .key_press = key });
                 },
                 .mouse => |mouse| {
@@ -987,6 +999,15 @@ const ChatState = struct {
         const call = self.client.call(protocol.methods.session_cancel, params) catch return;
         call.deinit(self.allocator);
         try self.add(.progress, "cancelling");
+    }
+
+    /// Fire-and-forget session/send to queue a message during an active turn
+    /// (interjection protocol). Mirrors requestCancel's non-blocking pattern.
+    fn queueMessage(self: *ChatState, session_id: []const u8, text: []const u8) !void {
+        const params = try renderJsonAlloc(self.allocator, .{ .session_id = session_id, .prompt = text });
+        defer self.allocator.free(params);
+        const call = self.client.call(protocol.methods.session_send, params) catch return;
+        call.deinit(self.allocator);
     }
 };
 

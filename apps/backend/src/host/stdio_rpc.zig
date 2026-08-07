@@ -49,7 +49,10 @@ const SessionRuntimeState = struct {
     enable_agent_tools: bool = true,
     cancel_requested: bool = false,
     running: bool = false,
+    pending_messages: std.ArrayListUnmanaged([]u8) = .{},
 };
+
+const max_pending_messages = 5;
 
 const Runtime = struct {
     mutex: std.Thread.Mutex = .{},
@@ -59,6 +62,8 @@ const Runtime = struct {
         var iterator = self.sessions.iterator();
         while (iterator.next()) |entry| {
             allocator.free(entry.key_ptr.*);
+            for (entry.value_ptr.pending_messages.items) |msg| allocator.free(msg);
+            entry.value_ptr.pending_messages.deinit(allocator);
         }
         self.sessions.deinit(allocator);
     }
@@ -118,6 +123,35 @@ const Runtime = struct {
 
         if (self.sessions.get(session_id)) |state| return state.cancel_requested;
         return false;
+    }
+
+    /// Queue a user message for mid-turn injection. Bounded at max_pending_messages;
+    /// oldest is dropped on overflow. The caller owns the message slice; we dupe it.
+    fn queuePendingMessage(self: *Runtime, allocator: std.mem.Allocator, session_id: []const u8, message: []const u8) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.sessions.getPtr(session_id)) |state| {
+            if (state.pending_messages.items.len >= max_pending_messages) {
+                const oldest = state.pending_messages.orderedRemove(0);
+                allocator.free(oldest);
+            }
+            try state.pending_messages.append(allocator, try allocator.dupe(u8, message));
+        }
+    }
+
+    /// Drain all pending messages for a session. Returns an owned slice of owned
+    /// strings. The caller must free each string and the slice itself.
+    fn drainPendingMessages(self: *Runtime, allocator: std.mem.Allocator, session_id: []const u8) ?[][]u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.sessions.getPtr(session_id)) |state| {
+            if (state.pending_messages.items.len == 0) return null;
+            const drained = state.pending_messages.toOwnedSlice(allocator) catch return null;
+            return drained;
+        }
+        return null;
     }
 
     fn enableAgentTools(self: *Runtime, session_id: []const u8) bool {
@@ -523,6 +557,14 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
     }
 
     if (server.runtime.isRunning(session.id)) {
+        // Interjection protocol: queue the message for mid-turn injection
+        // instead of silently returning stale state. The message is already
+        // persisted to the transcript at line 549. Emit a user_message_queued
+        // event so the TUI acknowledges receipt in the reasoning dock.
+        if (parsed.value.prompt) |prompt| {
+            server.runtime.queuePendingMessage(server.allocator, session.id, prompt) catch {};
+            server.emitSessionEvent(session.id, "user_message_queued", prompt, "running", std.time.milliTimestamp()) catch {};
+        }
         const current_output = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
         defer if (current_output) |value| server.allocator.free(value);
         return renderJsonAlloc(server.allocator, protocol_types.SessionSendResult{
@@ -556,6 +598,7 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         .onSessionInitializedFn = onLoopSessionInitialized,
         .onSessionEventFn = onLoopSessionEvent,
         .shouldCancelFn = onLoopShouldCancel,
+        .drainPendingMessagesFn = onLoopDrainPendingMessages,
     };
 
     // Set the buffer service's active session context for root sessions.
@@ -1073,6 +1116,13 @@ fn onLoopSessionEvent(
 fn onLoopShouldCancel(ctx: ?*anyopaque, session_id: []const u8) bool {
     const server: *Server = @ptrCast(@alignCast(ctx.?));
     return server.runtime.shouldCancel(session_id);
+}
+
+/// Drain pending user messages queued during an active turn (interjection protocol).
+/// Returns an owned slice of owned strings, or null if the queue is empty.
+fn onLoopDrainPendingMessages(ctx: ?*anyopaque, session_id: []const u8) ?[][]u8 {
+    const server: *Server = @ptrCast(@alignCast(ctx.?));
+    return server.runtime.drainPendingMessages(server.allocator, session_id);
 }
 
 fn makeSessionSummary(session: types.SessionRecord, output: ?[]const u8) protocol_types.SessionSummary {

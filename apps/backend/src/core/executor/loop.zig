@@ -31,6 +31,7 @@ pub const Hooks = struct {
         timestamp_ms: i64,
     ) anyerror!void = null,
     shouldCancelFn: ?*const fn (ctx: ?*anyopaque, session_id: []const u8) bool = null,
+    drainPendingMessagesFn: ?*const fn (ctx: ?*anyopaque, session_id: []const u8) ?[][]u8 = null,
 
     pub fn onSessionInitialized(self: Hooks, session_id: []const u8) !void {
         if (self.onSessionInitializedFn) |callback| {
@@ -56,6 +57,15 @@ pub const Hooks = struct {
             return callback(self.context, session_id);
         }
         return false;
+    }
+
+    /// Drain pending user messages queued during an active turn (interjection protocol).
+    /// Returns an owned slice of owned strings, or null if no messages are queued.
+    pub fn drainPendingMessages(self: Hooks, session_id: []const u8) ?[][]u8 {
+        if (self.drainPendingMessagesFn) |callback| {
+            return callback(self.context, session_id);
+        }
+        return null;
     }
 };
 
@@ -245,6 +255,30 @@ pub fn runPromptWithOptions(
         if (options.hooks.shouldCancel(session.id)) {
             try cancelSession(allocator, config.workspace_root, options.hooks, &session, "Cancellation requested.");
             return Error.Cancelled;
+        }
+
+        // Interjection protocol: drain queued operator messages and inject them
+        // as user messages at the step boundary. The agent sees them naturally
+        // in its provider context — no special prompt layering needed.
+        if (options.hooks.drainPendingMessages(session.id)) |drained| {
+            const has_messages = drained.len > 0;
+            defer allocator.free(drained);
+            for (drained) |msg| {
+                defer allocator.free(msg);
+                try store.appendSessionMessage(allocator, config.workspace_root, session.id, .user, msg, std.time.milliTimestamp());
+                try messages.append(try types.initTextMessage(allocator, .user, msg));
+            }
+            if (has_messages) {
+                try recordSessionEvent(allocator, config.workspace_root, options.hooks, session.id, "user_message_injected", "Interjected user message injected into context.", session.status);
+                base_message_count = try rebuildProviderBaseMessages(
+                    allocator,
+                    config,
+                    execution_context,
+                    session,
+                    &messages,
+                    messages.items.len,
+                );
+            }
         }
 
         // Typed turn ingress evidence: every provider turn starts with a
