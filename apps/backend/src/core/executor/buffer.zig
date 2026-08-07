@@ -93,8 +93,7 @@ pub const Service = struct {
 
         self.last_tick_ms = now_ms;
 
-        const preview = runBufferModel(self.allocator, self.parent_config, policy, self.active_prompt.?, self.transport) catch return;
-        if (preview) |text| {
+        if (runBufferModel(self.allocator, self.parent_config, policy, self.active_prompt.?, self.transport)) |text| {
             defer self.allocator.free(text);
             self.sink.onPreviewFn(self.sink.context, text);
         }

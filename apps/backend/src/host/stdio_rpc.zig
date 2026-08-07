@@ -5,6 +5,7 @@ const protocol_types = @import("../shared/protocol/types.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
 const models = @import("../core/providers/models.zig");
 const scheduler = @import("../core/scheduler/index.zig");
+const buffer_service = @import("../core/executor/buffer.zig");
 const store = @import("../core/sessions/store.zig");
 const auth_store = @import("../core/auth/store.zig");
 const tools = @import("../core/tools/runtime.zig");
@@ -138,6 +139,9 @@ const Server = struct {
     runtime: Runtime = .{},
     scheduler_service: ?scheduler.Service = null,
     scheduler_thread: ?std.Thread = null,
+    buffer_srv: ?buffer_service.Service = null,
+    buffer_thread: ?std.Thread = null,
+    buffer_session_id: ?[]const u8 = null,
 
     fn deinit(self: *Server) void {
         self.agent_service.bindEventSink(.{});
@@ -145,6 +149,10 @@ const Server = struct {
             service.requestStop();
             if (self.scheduler_thread) |thread| thread.join();
             service.deinit();
+        }
+        if (self.buffer_srv) |*bsrv| {
+            bsrv.requestStop();
+            if (self.buffer_thread) |thread| thread.join();
         }
         self.runtime.deinit(self.allocator);
     }
@@ -226,6 +234,21 @@ pub fn serveKernel(
     server.scheduler_service = try scheduler.Service.init(allocator, config, transport);
     server.scheduler_thread = try std.Thread.spawn(.{}, runSchedulerService, .{&server.scheduler_service.?});
 
+    // Buffer speculation service (background thread, concurrent with heavyweight).
+    // Only spawned if buffer is enabled in config; preview callback emits a
+    // buffer_preview session event to the TUI.
+    {
+        const buf_policy = buffer_service.loadBufferPolicy(allocator, config.workspace_root);
+        defer buf_policy.deinit(allocator);
+        if (buf_policy.enabled) {
+            server.buffer_srv = buffer_service.Service.init(allocator, config.*, transport, .{
+                .context = &server,
+                .onPreviewFn = onBufferPreview,
+            });
+            server.buffer_thread = try std.Thread.spawn(.{}, runBufferService, .{&server.buffer_srv.?});
+        }
+    }
+
     const stdin_file = std.fs.File.stdin();
     var frame_reader = wire.FrameReader.init(allocator);
     defer frame_reader.deinit();
@@ -256,6 +279,17 @@ fn onAgentParentEvent(
 }
 
 fn runSchedulerService(service: *scheduler.Service) void {
+    service.run();
+}
+
+/// Buffer preview callback — emits a buffer_preview session event to the TUI.
+fn onBufferPreview(ctx: ?*anyopaque, preview: []const u8) void {
+    const server: *Server = @ptrCast(@alignCast(ctx.?));
+    const session_id = server.buffer_session_id orelse return;
+    server.emitSessionEvent(session_id, "buffer_preview", preview, "running", std.time.milliTimestamp()) catch {};
+}
+
+fn runBufferService(service: *buffer_service.Service) void {
     service.run();
 }
 
@@ -523,6 +557,15 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         .onSessionEventFn = onLoopSessionEvent,
         .shouldCancelFn = onLoopShouldCancel,
     };
+
+    // Set the buffer service's active session context for root sessions.
+    // The buffer thread reads this to know what prompt to speculate on.
+    if (server.buffer_srv != null and session.parent_session_id == null) {
+        server.buffer_session_id = session.id;
+        if (parsed.value.prompt) |prompt| {
+            server.buffer_srv.?.setActivePrompt(prompt);
+        }
+    }
 
     const result = loop.runPromptWithOptions(server.allocator, effective_config, "", .{
         .transport = server.transport,

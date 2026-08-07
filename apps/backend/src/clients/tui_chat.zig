@@ -505,6 +505,10 @@ const ChatState = struct {
             try self.addReasoningDelta(message);
             return true;
         }
+        if (std.mem.eql(u8, event_type, "buffer_preview")) {
+            try self.setBufferPreview(message);
+            return true;
+        }
         if (skipProgressEvent(event_type)) return false;
 
         try self.addProgress(event_type, message);
