@@ -170,7 +170,7 @@ pub const testing = struct {
         request: types.CompletionRequest,
         stream: bool,
     ) ![]u8 {
-        return buildRequestJson(allocator, model, request, stream, "disabled");
+        return buildRequestJson(allocator, model, request, stream, "disabled", "", -1.0);
     }
 
     pub fn completionResponse(
@@ -201,7 +201,7 @@ pub fn completeWithTransportAndHooks(
     const url = try completionUrl(allocator, config.openai_base_url);
     defer allocator.free(url);
 
-    const payload = try buildRequestJson(allocator, config.openai_model, request, stream_hooks.hasHandlers(), config.thinking_mode);
+    const payload = try buildRequestJson(allocator, config.openai_model, request, stream_hooks.hasHandlers(), config.thinking_mode, config.effort, config.temperature);
     defer allocator.free(payload);
 
     clearFailureDiagnostic();
@@ -217,6 +217,8 @@ fn buildRequestJson(
     request: types.CompletionRequest,
     stream: bool,
     thinking_mode: []const u8,
+    effort: []const u8,
+    temperature: f64,
 ) ![]u8 {
     _ = thinking_mode;
     var payload = std.array_list.Managed(u8).init(allocator);
@@ -231,8 +233,21 @@ fn buildRequestJson(
         if (index > 0) try writer.writeAll(",");
         try writeMessageJson(writer, message);
     }
+    try writer.writeAll("]");
 
-    try writer.writeAll("],\"temperature\":0");
+    // Temperature: negative means omit (provider default).
+    if (temperature >= 0) {
+        try writer.print(",\"temperature\":{d}", .{temperature});
+    } else {
+        try writer.writeAll(",\"temperature\":0");
+    }
+
+    // Effort: non-empty string controls reasoning depth (low/medium/high/max).
+    if (effort.len > 0) {
+        try writer.writeAll(",\"effort\":");
+        try writeJsonValue(writer, effort);
+    }
+
     if (stream) try writer.writeAll(",\"stream\":true");
 
     if (request.tool_definitions.len > 0) {
@@ -1357,7 +1372,7 @@ test "provider request payload opts into streaming and parallel tool calls when 
     const payload = try buildRequestJson(std.testing.allocator, "test-model", .{
         .messages = messages[0..],
         .tool_definitions = tool_definitions[0..],
-    }, true, "disabled");
+    }, true, "disabled", "", -1.0);
     defer std.testing.allocator.free(payload);
 
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"stream\":true") != null);

@@ -12,9 +12,12 @@ pub const RuntimePolicy = struct {
     max_steps: usize = 4096,
     max_tool_calls_per_turn: usize = 16,
     max_tool_calls_per_session: usize = 96,
+    effort: ?[]u8 = null,
+    temperature: ?f64 = null,
 
     pub fn deinit(self: RuntimePolicy, allocator: std.mem.Allocator) void {
         if (self.workspace) |value| allocator.free(value);
+        if (self.effort) |value| allocator.free(value);
     }
 };
 
@@ -25,11 +28,14 @@ pub const AgentRouteOverride = struct {
     thinking_mode: ?[]u8 = null,
     context_window_tokens: ?u64 = null,
     reserve_output_tokens: ?u64 = null,
+    effort: ?[]u8 = null,
+    temperature: ?f64 = null,
 
     pub fn deinit(self: AgentRouteOverride, allocator: std.mem.Allocator) void {
         if (self.provider_id) |value| allocator.free(value);
         if (self.model) |value| allocator.free(value);
         if (self.thinking_mode) |value| allocator.free(value);
+        if (self.effort) |value| allocator.free(value);
     }
 };
 
@@ -69,6 +75,8 @@ pub fn loadRuntimePolicy(allocator: std.mem.Allocator, workspace_root: []const u
         result.max_steps = try optionalUsize(runtime, "max_steps", result.max_steps);
         result.max_tool_calls_per_turn = try optionalUsize(runtime, "max_tool_calls_per_turn", result.max_tool_calls_per_turn);
         result.max_tool_calls_per_session = try optionalUsize(runtime, "max_tool_calls_per_session", result.max_tool_calls_per_session);
+        result.effort = try optionalStringClone(allocator, runtime, "effort");
+        result.temperature = try optionalFloat(runtime, "temperature");
     }
 
     if (objectField(root, "environment")) |environment| {
@@ -129,6 +137,8 @@ pub fn loadAgentRouteOverride(
     result.provider_id = try optionalStringClone(allocator, role, "provider_id");
     result.model = try optionalStringClone(allocator, role, "model");
     result.thinking_mode = try optionalStringClone(allocator, role, "thinking_mode");
+    result.effort = try optionalStringClone(allocator, role, "effort");
+    result.temperature = try optionalFloat(role, "temperature");
     result.context_window_tokens = try optionalOptionalU64(role, "context_window_tokens");
     result.reserve_output_tokens = try optionalOptionalU64(role, "reserve_output_tokens");
     if (role.get("wire_api")) |value| {
@@ -257,8 +267,8 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
     try validateAbout(root);
     try validateHelp(root, &.{"version"});
     if (try validatedObjectField(root, "runtime")) |value| {
-        const keys = &.{ "workspace", "max_steps", "max_tool_calls_per_turn", "max_tool_calls_per_session" };
-        try rejectUnknownKeys(value, &.{ "_help", "workspace", "max_steps", "max_tool_calls_per_turn", "max_tool_calls_per_session" });
+        const keys = &.{ "workspace", "max_steps", "max_tool_calls_per_turn", "max_tool_calls_per_session", "effort", "temperature" };
+        try rejectUnknownKeys(value, &.{ "_help", "workspace", "max_steps", "max_tool_calls_per_turn", "max_tool_calls_per_session", "effort", "temperature" });
         try validateHelp(value, keys);
     }
     if (try validatedObjectField(root, "provider")) |value| {
@@ -454,8 +464,16 @@ fn optionalU64(object: std.json.ObjectMap, key: []const u8, default: u64) !u64 {
     return std.math.cast(u64, value.integer) orelse Error.InvalidConfig;
 }
 
+fn optionalFloat(object: std.json.ObjectMap, key: []const u8) !?f64 {
+    const value = object.get(key) orelse return null;
+    if (value == .null) return null;
+    if (value == .float) return value.float;
+    if (value == .integer) return @floatFromInt(value.integer);
+    return Error.InvalidConfig;
+}
+
 fn validateAgentRoute(route: std.json.ObjectMap) !void {
-    for (&[_][]const u8{ "provider_id", "model", "thinking_mode" }) |key| {
+    for (&[_][]const u8{ "provider_id", "model", "thinking_mode", "effort" }) |key| {
         const value = route.get(key) orelse continue;
         if (value == .null) continue;
         if (value != .string or std.mem.trim(u8, value.string, " \t\r\n").len == 0) return Error.InvalidConfig;

@@ -15,12 +15,16 @@
       "workspace": "Optional persistent workspace path used when no VANTARI_WORKSPACE process or environment entry is set and no workspace is discovered from the current directory. Null keeps automatic discovery.",
       "max_steps": "Maximum agent execution steps allowed in one run. Raise deliberately for long autonomous work; lower it to bound cost and runaway loops.",
       "max_tool_calls_per_turn": "Maximum tool calls accepted from a single provider turn. This limits oversized or cyclic tool batches before effects execute.",
-      "max_tool_calls_per_session": "Maximum cumulative tool calls across one session. It is the session-wide safety budget and must be at least as large as the per-turn limit."
+      "max_tool_calls_per_session": "Maximum cumulative tool calls across one session. It is the session-wide safety budget and must be at least as large as the per-turn limit.",
+      "effort": "Provider effort/reasoning level: low, medium, high, or max. Controls reasoning depth on models that accept the effort parameter. Null uses the provider default.",
+      "temperature": "Provider sampling temperature (0.0-2.0). Lower is more deterministic. Null uses the provider default; the compiled default sends 0 for determinism."
     },
     "workspace": null,
     "max_steps": 4096,
     "max_tool_calls_per_turn": 16,
-    "max_tool_calls_per_session": 96
+    "max_tool_calls_per_session": 96,
+    "effort": null,
+    "temperature": null
   },
   "provider": {
     "_help": {
@@ -31,7 +35,7 @@
   "agent_routes": {
     "_help": {
       "max_concurrency": "Maximum in-process agent or model-task workers allowed to execute concurrently. Additional admitted tasks remain queued in the same parent-owned supervisor.",
-      "roles": "Optional operator-owned overrides keyed by general, recon, planning, compaction, implementation, review, or validation. Each role accepts provider_id, model, wire_api, thinking_mode, context_window_tokens, and reserve_output_tokens. A provider_id references auth.json; credentials, execution kind, and capability profile never appear here."
+      "roles": "Optional operator-owned overrides keyed by general, recon, planning, compaction, implementation, review, or validation. Each role accepts provider_id, model, wire_api, thinking_mode, effort, temperature, context_window_tokens, and reserve_output_tokens. A provider_id references auth.json; credentials, execution kind, and capability profile never appear here."
     },
     "max_concurrency": 6,
     "roles": {}

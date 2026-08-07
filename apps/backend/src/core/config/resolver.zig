@@ -174,6 +174,12 @@ fn applyRuntimePolicy(allocator: std.mem.Allocator, config: *types.Config, polic
         allocator.free(config.workspace_root);
         config.workspace_root = replacement;
     }
+    if (policy.effort) |effort| {
+        config.effort = effort;
+    }
+    if (policy.temperature) |temp| {
+        config.temperature = temp;
+    }
 }
 
 /// Proactively detect the context window for local OpenAI-compatible servers

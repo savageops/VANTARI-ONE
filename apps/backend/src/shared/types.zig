@@ -57,6 +57,13 @@ pub const Config = struct {
     /// "enabled" = reasoning tokens streamed (slower but more thorough).
     /// Sent as the "thinking" parameter in the OpenAI-compatible request body.
     thinking_mode: []const u8 = "",
+    /// Provider effort/reasoning level: "low", "medium", "high", "max".
+    /// Empty string omits the field (provider default). Controls reasoning
+    /// depth on GLM-5.x and other models that accept the "effort" parameter.
+    effort: []const u8 = "",
+    /// Provider sampling temperature. Negative value omits the field
+    /// (provider default). Range 0.0–2.0; lower = more deterministic.
+    temperature: f64 = -1.0,
 
     pub fn deinit(self: Config, allocator: std.mem.Allocator) void {
         allocator.free(self.openai_base_url);

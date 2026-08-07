@@ -83,11 +83,13 @@ pub const ResolvedRoute = struct {
     capability_profile_id: []u8,
     config: types.Config,
     thinking_mode_owned: []u8,
+    effort_owned: []u8,
 
     pub fn deinit(self: ResolvedRoute, allocator: std.mem.Allocator) void {
         self.config.deinit(allocator);
         allocator.free(self.capability_profile_id);
         allocator.free(self.thinking_mode_owned);
+        if (self.effort_owned.len > 0) allocator.free(self.effort_owned);
     }
 
     pub fn providerId(self: ResolvedRoute) []const u8 {
@@ -97,6 +99,8 @@ pub const ResolvedRoute = struct {
     pub fn clone(self: ResolvedRoute, allocator: std.mem.Allocator) !ResolvedRoute {
         const thinking_mode_owned = try allocator.dupe(u8, self.thinking_mode_owned);
         errdefer allocator.free(thinking_mode_owned);
+        const effort_owned: []u8 = if (self.effort_owned.len > 0) try allocator.dupe(u8, self.effort_owned) else @constCast("");
+        errdefer if (self.effort_owned.len > 0) allocator.free(effort_owned);
         const capability_profile_id = try allocator.dupe(u8, self.capability_profile_id);
         errdefer allocator.free(capability_profile_id);
         var context_policy = self.config.context_policy;
@@ -123,6 +127,8 @@ pub const ResolvedRoute = struct {
             .memory_policy = self.config.memory_policy,
             .wire_api = self.config.wire_api,
             .thinking_mode = thinking_mode_owned,
+            .effort = effort_owned,
+            .temperature = self.config.temperature,
         };
         return .{
             .role = self.role,
@@ -130,6 +136,7 @@ pub const ResolvedRoute = struct {
             .capability_profile_id = capability_profile_id,
             .config = config,
             .thinking_mode_owned = thinking_mode_owned,
+            .effort_owned = effort_owned,
         };
     }
 };
@@ -169,10 +176,14 @@ pub fn resolve(
     const provider_model = if (selected_auth) |value| value.model else parent.openai_model;
     const model = override.model orelse provider_model;
     const thinking_mode = override.thinking_mode orelse parent.thinking_mode;
+    const effort = if (override.effort) |e| e else parent.effort;
+    const temperature = if (override.temperature) |t| t else parent.temperature;
     if (!hasText(base_url) or !hasText(model) or !hasText(provider_id)) return Error.InvalidRoute;
 
     const thinking_owned = try allocator.dupe(u8, thinking_mode);
     errdefer allocator.free(thinking_owned);
+    const effort_owned: []u8 = if (effort.len > 0) try allocator.dupe(u8, effort) else @constCast("");
+    errdefer if (effort.len > 0) allocator.free(effort_owned);
     const profile_owned = try allocator.dupe(u8, capability_profile_id);
     errdefer allocator.free(profile_owned);
 
@@ -215,6 +226,8 @@ pub fn resolve(
         .memory_policy = parent.memory_policy,
         .wire_api = override.wire_api orelse parent.wire_api,
         .thinking_mode = thinking_owned,
+        .effort = effort_owned,
+        .temperature = temperature,
     };
 
     return .{
@@ -223,6 +236,7 @@ pub fn resolve(
         .capability_profile_id = profile_owned,
         .config = config,
         .thinking_mode_owned = thinking_owned,
+        .effort_owned = effort_owned,
     };
 }
 
