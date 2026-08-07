@@ -1491,8 +1491,8 @@ fn buildTranscriptRows(allocator: std.mem.Allocator, win: Window, state: *const 
     return rows;
 }
 
-const max_reasoning_dock_rows: usize = 2;
-const max_reasoning_dock_scan_bytes: usize = 512;
+const max_reasoning_dock_rows: usize = 4;
+const max_reasoning_dock_scan_bytes: usize = 1024;
 
 fn buildReasoningDockRows(
     allocator: std.mem.Allocator,
@@ -3244,18 +3244,18 @@ test "tui transcript gives dense single-line treatment to runtime rows" {
     try std.testing.expectEqual(@as(usize, 2), messageRowCount(assistant_message.role, assistant_message.text, false, 80));
 }
 
-test "tui reasoning dock keeps the newest two rows" {
+test "tui reasoning dock keeps the newest four rows" {
     const allocator = std.testing.allocator;
     var rows = try buildReasoningDockRows(
         allocator,
-        "oldest words fall away while the newest reasoning words stay visible",
+        "the oldest reasoning words should fall away while the newest reasoning words always stay visible here",
         12,
     );
     defer rows.deinit(allocator);
 
-    try std.testing.expectEqual(@as(usize, 2), rows.items.len);
-    try std.testing.expectEqualStrings("words stay", rows.items[0].text);
-    try std.testing.expectEqualStrings("visible", rows.items[1].text);
+    try std.testing.expectEqual(@as(usize, 4), rows.items.len);
+    // The newest row should end with "here" — the last word in the input.
+    try std.testing.expect(std.mem.indexOf(u8, rows.items[3].text, "here") != null);
 }
 
 test "tui reasoning dock leaves one surface row above it without moving the composer" {
