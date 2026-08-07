@@ -44,6 +44,8 @@ test "prompt builder emits ordered guardrails and tool contract" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "required SITREP") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Memory protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "messages.jsonl remains transcript truth") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Orchestration discipline protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Evolution protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Large artifact protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "recovery, progress, and reviewability discipline") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "write_file may write the complete file") != null);

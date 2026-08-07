@@ -14,6 +14,7 @@ const append_file = @import("builtin/append_file.zig");
 const replace_in_file = @import("builtin/replace_in_file.zig");
 const shell_exec = @import("builtin/shell_exec.zig");
 const schedule_job = @import("builtin/schedule_job.zig");
+const log_ticket = @import("builtin/log_ticket.zig");
 const memory = @import("builtin/memory.zig");
 pub const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
@@ -54,6 +55,7 @@ const write_tool_definitions = read_tool_definitions ++ [_]types.ToolDefinition{
     append_file.definition,
     replace_in_file.definition,
     shell_exec.definition,
+    log_ticket.definition,
     memory.definitions[1],
 };
 const subagent_tool_definitions = write_tool_definitions ++ agent_tool_definitions;
@@ -426,6 +428,9 @@ pub fn executeWithRunner(
     if (std.mem.eql(u8, tool_call.name, "schedule_job")) {
         return schedule_job.execute(allocator, execution_context, tool_call.arguments_json);
     }
+    if (std.mem.eql(u8, tool_call.name, "log_ticket")) {
+        return log_ticket.execute(allocator, execution_context, tool_call.arguments_json);
+    }
     if (std.mem.eql(u8, tool_call.name, "skill_info")) {
         return skills.execute(allocator, tool_call.arguments_json);
     }
@@ -469,7 +474,8 @@ pub fn toolClassForName(tool_name: []const u8) ?profile_contract.ToolClass {
     if (std.mem.eql(u8, tool_name, "write_file") or
         std.mem.eql(u8, tool_name, "append_file") or
         std.mem.eql(u8, tool_name, "replace_in_file") or
-        std.mem.eql(u8, tool_name, "memory_write")) return .file_write;
+        std.mem.eql(u8, tool_name, "memory_write") or
+        std.mem.eql(u8, tool_name, "log_ticket")) return .file_write;
     if (std.mem.eql(u8, tool_name, "shell_exec")) return .command;
     if (std.mem.eql(u8, tool_name, "schedule_job")) return .scheduling;
     if (agents.handles(tool_name)) return .delegation;

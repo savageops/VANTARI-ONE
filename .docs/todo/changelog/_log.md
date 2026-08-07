@@ -1,5 +1,26 @@
 # Execution Log
 
+## 2026-08-07T14:20:00Z - Cockpit-orchestrator doctrine + self-evolution ticket tool
+
+**Outcome:** Refined the runtime system prompt from a generic coding-agent identity into a compact cockpit-orchestrator doctrine, and added a `log_ticket` builtin tool so VAR1 can durably log self-evolution findings (bugs, feature gaps, refactor opportunities) to a structured append-only ledger at `.var/tickets/tickets.jsonl`.
+
+**Mechanism:**
+
+- Rewrote `default_system_prompt` (Layer B): VAR1 is now the cockpit orchestrator that never holds full child context — only the metadata index (session ids, group ids, SITREPs, evidence paths). Embedded ravenous-knowledge, never-thumb-suck, and productive-autonomy ultimatums.
+- Rewrote `default_developer_prompt` (Layer C): added the evidence-first invariant — never assert without tool/child-sourced evidence; delegate a recon/research child async rather than guess.
+- Tightened the Delegation, Child-prompt, Context-isolation, and Supervision protocols in the envelope template. The Child-prompt protocol now dictates a required bounded task template the parent must populate: Objective / Scope bounds / Evidence required / SITREP shape / Stop condition.
+- Added two new protocols to the envelope: **Orchestration discipline protocol** (parent parks signal-driven on the supervisor condition, holds only metadata, fuses child SITREPs into one parent-owned conclusion) and **Evolution protocol** (VAR1 builds the tool/agent/plugin when it can prove correctness, or logs a durable ticket via `log_ticket` when ownership is not yet its own).
+- Added `log_ticket` builtin (`src/core/tools/builtin/log_ticket.zig`): schema `var1.ticket.v1` records with id `ticket-<ms>-<hex>`, category/severity/status enums parsed via `inline for` over tag fields, evidence array, proposed owner, workspace root, session id, and `source:"agent"`. Append-only to `.var/tickets/tickets.jsonl` via `fsutil.appendText`.
+- Registered `log_ticket` in `registry.zig` (definitions + availability) and `runtime.zig` (import, dispatch branch, `.file_write` tool class, `write_tool_definitions` catalog visibility). Classified as `.file_write` so it appears in root + subagent + write capability profiles and is denied to recon/model_task — matching the `memory_write` precedent.
+
+**Proof:**
+
+- Full Zig 0.15.1 mesh: 1319/1463 passed, 83 failed, 61 skipped — identical failure count to the committed baseline (verified by stash + re-run). The 83 pre-existing failures are Windows file-lock collisions in `core_store_test`/`runtime_loop_test`/`user_flow_trellis_test` and are unrelated to this change. Zero failures in `log_ticket` or prompt-builder tests.
+- In-file `log_ticket` tests cover: durable schema-bound append, empty title/description rejection, unknown category/severity rejection, and full enum tag surface mapping.
+- Prompt-builder tests assert the two new protocols (`Orchestration discipline protocol`, `Evolution protocol`) are present in the assembled envelope alongside all previously-asserted protocol strings.
+
+**Boundary:** The child-task template is enforced at the prompt layer (dictated by the system prompt's Child Prompt Protocol), not at the `launch_agent` tool-schema layer — the tool still accepts a free-form `task` string by design, so existing callers and tests are unbroken. Background advisor agents (invisible verifier/planner runs alongside compaction) and TUI tree-nesting layout are separate roadmap items studied under the never-wait orchestration theme.
+
 ## 2026-08-06T23:03:41Z - Surface gap above the live reasoning dock
 
 **Outcome:** Transcript and progress content no longer touches the live reasoning dock. One blank surface row now separates the two regions while the dock remains flush above the composer.
