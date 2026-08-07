@@ -73,6 +73,32 @@ VAR1 maintains a structured workspace knowledge surface under `.var/`:
 
 Every subagent that discovers findings **must persist them** to the appropriate surface before returning its SITREP. The orchestrator holds only the artifact index — paths, titles, summaries — never the full payloads.
 
+### Ticket Lifecycle (Full Work Tracking)
+
+All todos, tasks, and work items are tracked as tickets with a full lifecycle:
+
+```
+unassigned → assigned → in_progress → blocked → completed → closed
+```
+
+The `log_ticket` tool supports `create`, `transition` (with reason), and `list`. Every non-trivial task gets a ticket before work starts. Transitions are durable records in `.var/tickets/tickets.jsonl` with schema `var1.ticket_transition.v1`. Long tasks must have ticket tracking for accuracy, recovery, and audit.
+
+### Interjection Protocol (Speak While Working)
+
+The operator can send messages while the agent is actively working. Messages are:
+1. **Silently queued** (bounded at 5, nothing visible)
+2. **Injected at the next step boundary** as `USER_STEER_MESSAGE: {text} (DO NOT IGNORE)`
+3. **Naturally acknowledged** by the model's reasoning trace (visible in the ∞ dock)
+4. **Responded to** in the normal chat flow
+
+This is non-interrupting (never cancels the current step), non-destructive (nothing is lost), and more responsive than Claude Code (step boundary, not turn boundary). The reasoning dock shows genuine model reasoning triggered by the tagged format — no synthetic text.
+
+Synthesized from 8 competitor patterns (oh-my-pi, Eve, Scion, nullclaw, OpenClaw, Claude Code, Cursor, pi-mono). Simpler, more durable, more responsive than all of them.
+
+### Plugin Management
+
+The `manage_plugin` tool discovers, inspects, and toggles plugins from `.var/plugins/*/plugin.json`. Plugin manifests declare tool sockets that extend VANTARI's capability surface. Existing scaffolding (`manifest.zig`, `isolation.zig`, `sockets.zig`) provides validation and subprocess isolation contracts.
+
 ## Configuration Surface
 
 All config lives in `~/.vantari/config.json` (non-secret) and `~/.vantari/auth.json` (credentials). The config is hot-loaded per-turn.
@@ -219,14 +245,20 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 This lane is session-native end to end with frontier cognitive capabilities:
 - Cockpit orchestration with metadata-only context
 - Synthetic draft compilation (prompt pre-processing)
-- Buffer speculation (concurrent navigation previews)
+- Buffer speculation (concurrent navigation previews + next-turn injection)
+- Interjection protocol (speak while working — USER_STEER_MESSAGE at step boundary)
 - Per-turn config hot-loading
 - Per-agent effort/temperature/thinking controls
 - Knowledge scaffolding (research/plans/advice/roadmap/tickets/processes)
+- Full ticket lifecycle (create/transition/list — unassigned→assigned→in_progress→completed→closed)
 - Process tracking ledger
-- Dual-mode reasoning dock (4 rows, buffer preview)
-- TUI input history
+- Dual-mode reasoning dock (4 rows, ∞/◊ glyphs, buffer preview)
+- TUI Unicode glyph system (○/◉/✓/✗/⊘ markers, ├──/└── connectors, ◍/◉ group headers)
+- Braille spinner (variable-speed, wall-clock derived)
+- TUI input history (Up/Down cycling)
+- 9-word military checkpoint contract for subagents
 - Self-tuning doctrine
+- Plugin management surface (manage_plugin — list/info/enable/disable)
 - Role-routed bounded delegation with silent advisors
 - Surgical precision work ethic
 
