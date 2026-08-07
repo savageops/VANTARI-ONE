@@ -412,3 +412,114 @@ Latest local Windows validation on 2026-05-08:
 - `.\scripts\zigw.ps1 build test --summary all` -> `416/416 tests passed`
 - `.\scripts\health.ps1` -> `status: ready`
 - `.\zig-out\bin\VAR1.exe tools --json` -> `search_files` includes `external_command` dependency availability for `iex`
+
+## Cognitive architecture (frontier capabilities)
+
+### Draft compilation (synthetic drafting)
+
+When `draft.enabled` is true in config.json, a lightweight model (default: glm-5-turbo) restructures the user's raw input into a compiled prompt before the heavyweight model's first turn.
+
+```text
+user input → draft.runDraft (glm-5-turbo, non-streaming, ~4s)
+           → compiled prompt (intent + scope + context pointers)
+           → inserted as system message at index 1
+           → heavyweight receives structured input, not raw text
+```
+
+**Owner:** `src/core/executor/draft.zig` — `DraftPolicy` loader + `runDraft` function. Uses `dispatch.completeWithTransportAndHooks` with empty hooks (non-streaming). Root sessions only (`parent_session_id == null AND session_id == null`). Failures return null — the session falls back to the raw prompt, never blocks.
+
+**Architecture precedent:** BPO (Black-Box Prompt Optimization) — a small model rewrites human prompts into well-structured prompts before the frontier model processes them.
+
+### Buffer speculation (subconscious layer)
+
+A concurrent buffer model runs at `buffer.interval_ms` cadence, producing navigation previews that populate the TUI reasoning dock when idle and provide advisory context.
+
+```text
+buffer thread ticks (every interval_ms)
+  → reads active session prompt
+  → calls buffer model (glm-5-turbo, non-streaming)
+  → produces: NEXT_STEPS / DIRECTION / RISK / INSIGHT
+  → emits buffer_preview session event to TUI
+  → TUI dock switches to ◊ mode when heavyweight is idle
+```
+
+**Owner:** `src/core/executor/buffer.zig` — `BufferPolicy` loader + `Service` (background thread with tick loop). Spawned in `host/stdio_rpc.zig` alongside the scheduler thread. `PreviewSink` callback emits `buffer_preview` events via `emitSessionEvent`. Root sessions only. Failures are silent.
+
+**Architecture precedent:** Lookahead Reasoning (Hao AI Lab, NeurIPS 2025) — speculative decoding concepts lifted from token-level to reasoning-step level. The buffer is the "message from the future" — pre-computed guidance the heavyweight verifies or refines.
+
+### Dual-mode reasoning dock
+
+The TUI dock (`src/clients/tui_chat.zig`) operates in two modes:
+
+| Mode | Glyph | Source | When |
+|---|---|---|---|
+| Live reasoning | ∞ | `reasoning_buffer.items` | Heavyweight actively streaming (`state.waiting && buffer.len > 0`) |
+| Buffer preview | ◊ | `buffer_preview` field | Heavyweight idle; buffer model output available |
+| Collapsed | (none) | empty | Both sources empty |
+
+The dock is 4 rows with a 1024-byte scan window (`max_reasoning_dock_scan_bytes`). The layout math accepts any dock height; the composer position is invariant. `ChatState.buffer_preview` is populated by the `buffer_preview` event handler calling `setBufferPreview`.
+
+### Per-turn config hot-loading
+
+`rebuildProviderBaseMessages` (`src/core/executor/loop.zig`) re-reads `prompt_policy` from disk on every prompt rebuild. Changes to `persona`, `guardrails`, `user_context`, `system_prompt_file`, and `developer_prompt_file` take effect on the next turn — no restart, no recompilation. Falls back to cached policy if the disk read fails.
+
+### Per-agent effort and temperature
+
+The `Config` struct carries `effort` (`[]const u8`: low/medium/high/max) and `temperature` (`f64`). These are:
+
+1. Read from `config.json` `runtime.effort` / `runtime.temperature` (global defaults)
+2. Overridden per-role by `agent_routes.roles.<role>.effort` / `.temperature`
+3. Injected into the provider request body by `buildRequestJson` (`src/core/providers/openai_compatible.zig`)
+
+The `ResolvedRoute` struct (`src/core/providers/routes.zig`) owns `effort_owned` alongside `thinking_mode_owned`. Route overrides take precedence over global defaults.
+
+### Knowledge scaffolding
+
+The workspace knowledge surface under `.var/` provides structured persistence for agent findings:
+
+| Surface | Path | Tool | Purpose |
+|---|---|---|---|
+| Research | `.var/research/` | `knowledge_artifact` | DOM rips, reverse-engineering, scrape results |
+| Plans | `.var/plans/` | `knowledge_artifact` | Implementation plans, execution chains |
+| Advice | `.var/advice/` | `knowledge_artifact` | Advisor SITREPs, coaching, verification |
+| Roadmap | `.var/roadmap/` | `knowledge_artifact` | Roadmap with owner + exit criteria |
+| Todos | `.var/todos/` | `todo_slice` | Bounded execution tracking |
+| Changelog | `.var/changelog/` | `changelog_ledger` | Completed work archive |
+| Tickets | `.var/tickets/` | `log_ticket` | Self-evolution issue ledger |
+| Processes | `.var/processes/` | (automatic) | shell_exec execution audit |
+
+`init_workspace` scaffolds all surfaces with purpose-stating READMEs. The `knowledge_artifact` tool (read/write/list) is the unified primitive for the first four surfaces. Every subagent that discovers findings must persist them before returning its SITREP.
+
+### Process tracking
+
+Every `shell_exec` command appends a record (schema `var1.process.v1`) to `.var/processes/processes.jsonl` with: mode, cwd, argv, exit_code, timed_out, truncated, duration_ms, started_at_ms, tool_call_id, workspace_root, session_id. The `list_processes` tool reads the ledger (most recent first, capped at 20/100). Scheduled shells are auto-captured (distinguishable via tool_call_id).
+
+### Prompt doctrine
+
+The system prompt is assembled in ordered layers by `src/core/prompts/builder.zig`:
+
+```text
+internal guardrails (kernel-owned, always present)
+  ↓
+operator guardrails (config: prompts.guardrails)
+  ↓
+system prompt (compiled default or workspace override)
+  ↓
+persona (config: prompts.persona — tone/voice/technical level)
+  ↓
+developer prompt (compiled default or workspace override)
+  ↓
+operator context (config: prompts.user_context — custom instructions)
+  ↓
+tool contract (catalog + protocols)
+```
+
+The envelope protocols (tightened to ~40% token reduction) cover: delegation, child prompt, context isolation, continuation, advisor, workspace scaffold, knowledge logging, scheduling, self-tuning, evolution, memory. All conditional layers (persona, guardrails, user_context) are omitted when null — the default config produces the same prompt as the compiled defaults.
+
+### Self-tuning doctrine
+
+The system prompt instructs VAR1 to tune its own configuration: when it observes a recurring instability (context overflow, tool-call loops, slow convergence, poor output quality), it adjusts the relevant config knob (persona for voice, agent_routes.roles for per-agent thinking_mode, context for compaction thresholds, memory for recall budgets). Config is hot-loaded on the next turn. Tuning decisions are logged in `.var/changelog/`.
+
+### TUI input history
+
+The TUI composer maintains a persistent input history (ring buffer, cap 1000 entries). Up/Down arrow keys cycle through previous messages when the scroll position is at the transcript bottom. History is appended on every submit via `appendHistory`. When scrolled up, Up/Down still scroll the transcript — history navigation only activates at the bottom.

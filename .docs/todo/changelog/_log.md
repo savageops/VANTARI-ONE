@@ -1,5 +1,35 @@
 # Execution Log
 
+## 2026-08-07T21:00:00Z - Mega-session: cognitive speculation pipeline + configurability + docs
+
+**Outcome:** Shipped the full two-tier cognitive speculation pipeline (draft compilation + buffer speculation), per-turn config hot-loading, per-agent effort/temperature, prompt doctrine tightening (~40% token cut), process tracking, knowledge scaffolding, TUI input history, dual-mode reasoning dock, and comprehensive documentation update. 20+ commits across one session.
+
+**Shipped capabilities:**
+
+1. **Draft compilation (Phase 2)** — glm-5-turbo restructures user input before the heavyweight model starts. `src/core/executor/draft.zig`. Root-only, graceful fallback.
+2. **Buffer speculation (Phase 3+3b)** — concurrent buffer thread produces navigation previews. `src/core/executor/buffer.zig` + host wiring in `stdio_rpc.zig` + TUI `buffer_preview` handler. Root-only, silent failures.
+3. **Per-turn config hot-loading** — `rebuildProviderBaseMessages` re-reads `prompt_policy` from disk on every prompt rebuild. No restart needed.
+4. **Per-agent effort/temperature** — wired through Config → RouteOverride → ResolvedRoute → buildRequestJson. Global + per-role overrides.
+5. **Prompt doctrine tightening** — ~40% protocol token reduction, zero behavioral loss. Deleted 5 duplicate protocols, collapsed Orchestration cluster, cut child template to 3 sections.
+6. **Process tracking** — every shell_exec logged to `.var/processes/processes.jsonl` + `list_processes` tool.
+7. **Knowledge scaffolding** — `.var/plans/`, `.var/advice/`, `.var/roadmap/` + `knowledge_artifact` tool (read/write/list).
+8. **Config prompt layers** — `persona`, `guardrails`, `user_context` as inline config strings, hot-loaded.
+9. **TUI input history** — Up/Down-arrow cycling, ring buffer (cap 1000).
+10. **Dual-mode reasoning dock** — 4 rows, ∞ for reasoning, ◊ for buffer preview.
+11. **Config + auth drift permanent fix** — 6 unguarded tests guarded.
+12. **Scheduling + self-tuning + evolution protocols** in system prompt.
+13. **log_ticket tool** — self-evolution issue ledger.
+14. **Research artifact dedup** — removed parallel-owner of `.var/research/`.
+
+**Planning chains created (planning-spec v3.0):**
+- DRAFT- (6 files): draft compilation chain
+- BUF- (7 files): buffer speculation chain
+- PROMPT- (4 files): prompt tightening chain (executed)
+- PLUG- (4 files): plugin layer architecture (pending)
+- TUI- (pending): modular tree + aesthetic overhaul (background agent running)
+
+**Documentation updated:** README.md rewritten with full pipeline map and bleeding-edge feature descriptions. architecture.md extended with cognitive architecture section covering draft, buffer, dock, hot-loading, effort/temperature, scaffolding, process tracking, prompt doctrine, self-tuning, and TUI history.
+
 ## 2026-08-07T16:30:00Z - Knowledge scaffolding + workspace doctrine + config drift root-cause fix
 
 **Outcome:** Expanded the `.var/` workspace scaffold with three new knowledge surfaces (`.var/plans/`, `.var/advice/`, `.var/roadmap/`), added a generalized `knowledge_artifact` tool (read/write/list across all four surfaces), embedded workspace-scaffold and knowledge-logging protocols into the system prompt, and permanently fixed the recurring config-key drift that broke `vantari` startup 5 times.
