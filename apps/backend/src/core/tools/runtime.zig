@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const module = @import("module.zig");
 const registry = @import("registry.zig");
+const profile_contract = @import("../agents/profile.zig");
 pub const review = @import("review.zig");
 const workspace_state_tools = @import("workspace_runtime.zig");
 const types = @import("../../shared/types.zig");
@@ -26,9 +27,13 @@ pub const CommandProbe = module.CommandProbe;
 pub const CommandOutputStream = module.CommandOutputStream;
 pub const CommandLimits = module.CommandLimits;
 pub const AgentService = module.AgentService;
+pub const AgentTaskRequest = module.AgentTaskRequest;
+pub const AgentGroupSnapshot = module.AgentGroupSnapshot;
+pub const AgentEventSink = module.AgentEventSink;
 pub const ToolEventSink = module.ToolEventSink;
 pub const ExecutionContext = module.ExecutionContext;
 pub const FileInspectionLedger = module.FileInspectionLedger;
+pub const AgentDiscoveryLedger = module.AgentDiscoveryLedger;
 pub const DelegationScope = module.DelegationScope;
 
 const agent_tool_definitions = agents.definitions;
@@ -37,6 +42,22 @@ const workspace_state_tool_definitions = workspace_state_tools.definitions;
 const file_plus_workspace_state_tool_definitions = registry.file_tool_definitions ++ workspace_state_tool_definitions;
 const file_plus_agent_tool_definitions = registry.file_tool_definitions ++ agent_tool_definitions;
 const all_tool_definitions = file_plus_workspace_state_tool_definitions ++ agent_tool_definitions;
+const read_tool_definitions = [_]types.ToolDefinition{
+    list_files.definition,
+    search_files.definition,
+    read_file.definition,
+    skills.definition,
+    memory.definitions[0],
+};
+const write_tool_definitions = read_tool_definitions ++ [_]types.ToolDefinition{
+    write_file.definition,
+    append_file.definition,
+    replace_in_file.definition,
+    shell_exec.definition,
+    memory.definitions[1],
+};
+const subagent_tool_definitions = write_tool_definitions ++ agent_tool_definitions;
+const no_tool_definitions = [_]types.ToolDefinition{};
 
 fn toolDefinitionByName(tool_name: []const u8) ?types.ToolDefinition {
     for (all_tool_definitions) |tool_definition| {
@@ -73,6 +94,26 @@ pub fn builtinDefinitions(include_agent_tools: bool) []const types.ToolDefinitio
 }
 
 pub fn builtinDefinitionsForContext(execution_context: ExecutionContext) []const types.ToolDefinition {
+    if (execution_context.orchestrator_only) {
+        return if (execution_context.agent_service != null and execution_context.delegation_depth_remaining > 0)
+            agent_tool_definitions[0..]
+        else
+            no_tool_definitions[0..];
+    }
+    if (execution_context.capability_profile_id) |profile_id| {
+        const profile = profile_contract.resolveProfile(profile_id) catch return no_tool_definitions[0..];
+        if (std.mem.eql(u8, profile.id, "model_task")) return no_tool_definitions[0..];
+        if (std.mem.eql(u8, profile.id, "recon")) return read_tool_definitions[0..];
+        if (std.mem.eql(u8, profile.id, "write")) return write_tool_definitions[0..];
+        if (std.mem.eql(u8, profile.id, "subagent")) {
+            return if (execution_context.agent_service != null and execution_context.delegation_depth_remaining > 0)
+                subagent_tool_definitions[0..]
+            else
+                write_tool_definitions[0..];
+        }
+        if (!std.mem.eql(u8, profile.id, "root")) return no_tool_definitions[0..];
+    }
+
     if (execution_context.workspace_state_enabled) {
         return if (execution_context.agent_service != null) all_tool_definitions[0..] else file_plus_workspace_state_tool_definitions[0..];
     }
@@ -241,6 +282,10 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
         return "search_files is unavailable because its required iex executable dependency is not resolvable. Use list_files and read_file until capability availability reports search_files as available.";
     }
 
+    if (std.mem.eql(u8, error_name, "AgentCatalogRequired")) {
+        return "Call agents with an empty JSON object first. Select only an id returned by that hot-loaded compact catalog, then call launch_agent or configure_agent.";
+    }
+
     if (std.mem.eql(u8, tool_name, "launch_agent") and std.mem.eql(u8, error_name, "UnsupportedDelegationScope")) {
         return "launch_agent rejected the delegation scope. Use positive scope_depth/contact_budget values; include escalation_reason when either value expands beyond the default bounded child scope.";
     }
@@ -265,6 +310,8 @@ pub fn renderToolCallSummary(allocator: std.mem.Allocator, tool_calls: []const t
 }
 
 pub fn toolCallLogLabel(tool_name: []const u8) []const u8 {
+    if (std.mem.eql(u8, tool_name, "agents")) return "agent_catalog_discovery";
+    if (std.mem.eql(u8, tool_name, "configure_agent")) return "agent_registry_mutation";
     if (std.mem.eql(u8, tool_name, "launch_agent")) return "child_run_dispatch";
     if (std.mem.eql(u8, tool_name, "agent_status")) return "child_run_status_check";
     if (std.mem.eql(u8, tool_name, "wait_agent")) return "child_run_wait";
@@ -353,6 +400,8 @@ pub fn executeWithRunner(
     tool_call: types.ToolCall,
     runner: CommandRunner,
 ) ![]u8 {
+    try ensureToolAllowed(execution_context, tool_call.name);
+
     if (std.mem.eql(u8, tool_call.name, "list_files")) {
         return list_files.execute(allocator, execution_context, tool_call.arguments_json, runner);
     }
@@ -391,6 +440,41 @@ pub fn executeWithRunner(
     }
 
     return Error.UnknownTool;
+}
+
+/// Enforce the same resolved profile used to construct the provider catalog.
+fn ensureToolAllowed(execution_context: ExecutionContext, tool_name: []const u8) !void {
+    if (execution_context.orchestrator_only) {
+        if (!agents.handles(tool_name)) return Error.CapabilityDenied;
+        if (!std.mem.eql(u8, tool_name, "agents")) {
+            const ledger = execution_context.agent_discovery_ledger orelse return Error.AgentCatalogRequired;
+            if (!ledger.hasDiscovered()) return Error.AgentCatalogRequired;
+        }
+    }
+    const profile_id = execution_context.capability_profile_id orelse return;
+    const profile = profile_contract.resolveProfile(profile_id) catch return Error.CapabilityDenied;
+    const tool_class = toolClassForName(tool_name) orelse return Error.UnknownTool;
+    profile_contract.ensureToolClass(profile, tool_class) catch return Error.CapabilityDenied;
+    if (tool_class == .delegation and execution_context.delegation_depth_remaining == 0) {
+        return Error.CapabilityDenied;
+    }
+}
+
+pub fn toolClassForName(tool_name: []const u8) ?profile_contract.ToolClass {
+    if (std.mem.eql(u8, tool_name, "list_files") or
+        std.mem.eql(u8, tool_name, "search_files") or
+        std.mem.eql(u8, tool_name, "read_file") or
+        std.mem.eql(u8, tool_name, "skill_info") or
+        std.mem.eql(u8, tool_name, "memory_read")) return .file_read;
+    if (std.mem.eql(u8, tool_name, "write_file") or
+        std.mem.eql(u8, tool_name, "append_file") or
+        std.mem.eql(u8, tool_name, "replace_in_file") or
+        std.mem.eql(u8, tool_name, "memory_write")) return .file_write;
+    if (std.mem.eql(u8, tool_name, "shell_exec")) return .command;
+    if (std.mem.eql(u8, tool_name, "schedule_job")) return .scheduling;
+    if (agents.handles(tool_name)) return .delegation;
+    if (workspace_state_tools.handles(tool_name)) return .workspace_state;
+    return null;
 }
 
 fn runCommand(

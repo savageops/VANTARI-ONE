@@ -73,6 +73,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_tui_chat_tests = b.addRunArtifact(tui_chat_tests);
+    const tui_test_step = b.step("test-tui", "Run TUI chat tests");
+    tui_test_step.dependOn(&run_tui_chat_tests.step);
 
     const memory_tests = b.addTest(.{
         .root_module = b.createModule(.{

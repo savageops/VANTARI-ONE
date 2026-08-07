@@ -1,7 +1,12 @@
 const std = @import("std");
 const docs_sync = @import("../docs/sync.zig");
+const config_file = @import("../config/file.zig");
 const fsutil = @import("../../shared/fsutil.zig");
 const profile_contract = @import("profile.zig");
+const agent_spec = @import("spec.zig");
+const child_supervisor = @import("supervisor.zig");
+const provider = @import("../providers/openai_compatible.zig");
+const routes = @import("../providers/routes.zig");
 const store = @import("../sessions/store.zig");
 const scope_contract = @import("scope.zig");
 const tools = @import("../tools/runtime.zig");
@@ -12,40 +17,53 @@ pub const Error = error{
     SpawnFailed,
     UnknownAgent,
     NoBranchesToConverge,
+    InvalidBatch,
 };
 
 pub const Service = struct {
     config: *const types.Config,
+    transport: provider.Transport,
+    supervisor: child_supervisor.Supervisor = .{},
+    recovery_mutex: std.Thread.Mutex = .{},
+    recovered_parents: std.StringHashMapUnmanaged(void) = .{},
 
     pub fn init(config: *const types.Config) Service {
+        return initWithTransport(config, .{
+            .context = null,
+            .sendFn = provider.httpSend,
+            .streamFn = provider.httpSendStreaming,
+        });
+    }
+
+    pub fn initWithTransport(config: *const types.Config, transport: provider.Transport) Service {
         return .{
             .config = config,
+            .transport = transport,
         };
+    }
+
+    pub fn deinit(self: *Service) void {
+        self.supervisor.deinit();
+        var recovered = self.recovered_parents.iterator();
+        while (recovered.next()) |entry| std.heap.page_allocator.free(entry.key_ptr.*);
+        self.recovered_parents.deinit(std.heap.page_allocator);
     }
 
     pub fn handle(self: *Service) tools.AgentService {
         return .{
             .context = self,
             .launchFn = launchFromHandle,
+            .launchBatchFn = launchBatchFromHandle,
             .statusFn = statusFromHandle,
             .waitFn = waitFromHandle,
             .listFn = listFromHandle,
             .convergeFn = convergeFromHandle,
             .reconcileFn = reconcileFromHandle,
+            .waitParentFn = waitParentFromHandle,
+            .cancelGroupFn = cancelGroupFromHandle,
+            .cancelParentFn = cancelParentFromHandle,
+            .bindEventSinkFn = bindEventSinkFromHandle,
         };
-    }
-};
-
-const WatchJob = struct {
-    workspace_root: []u8,
-    session_id: []u8,
-    child: std.process.Child,
-
-    fn deinit(self: *WatchJob) void {
-        const allocator = std.heap.page_allocator;
-        allocator.free(self.workspace_root);
-        allocator.free(self.session_id);
-        allocator.destroy(self);
     }
 };
 
@@ -69,6 +87,18 @@ fn launchFromHandle(
 ) anyerror![]u8 {
     const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
     return launch(service, allocator, parent_session_id, prompt, requested_name, delegation_scope);
+}
+
+fn launchBatchFromHandle(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
+    shared_context: []const u8,
+    tasks_to_launch: []const tools.AgentTaskRequest,
+    delegation_scope: scope_contract.DelegationScope,
+) anyerror![]u8 {
+    const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
+    return launchBatch(service, allocator, parent_session_id, shared_context, tasks_to_launch, delegation_scope);
 }
 
 /// Launch a child session checkpoint-addressed to a parent checkpoint. The
@@ -171,7 +201,9 @@ fn convergeFromHandle(
     parent_session_id: []const u8,
 ) anyerror!void {
     const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
-    return convergeFromListing(service, allocator, parent_session_id);
+    _ = try recoverReceiptGroups(service, allocator, parent_session_id);
+    if (try service.supervisor.convergeParent(allocator, parent_session_id) > 0) return;
+    return convergeLegacyChildren(service, allocator, parent_session_id);
 }
 
 fn reconcileFromHandle(
@@ -180,52 +212,55 @@ fn reconcileFromHandle(
     parent_session_id: []const u8,
 ) anyerror!usize {
     const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
-    return reconcileOpenShards(service, allocator, parent_session_id);
+    const stale_receipts = try recoverReceiptGroups(service, allocator, parent_session_id);
+    const abandoned_legacy = try reconcileOpenShards(service, allocator, parent_session_id);
+    return stale_receipts + abandoned_legacy;
 }
 
-/// Extract a field value from a single-line list entry. The list format is
-/// space-separated `KEY VALUE` pairs on one line. Returns the value token
-/// after the key, or null if the key is not found.
-fn fieldValueFromListLine(line: []const u8, key: []const u8) ?[]const u8 {
-    var i: usize = 0;
-    while (i < line.len) {
-        // Skip whitespace to find the next token start.
-        while (i < line.len and line[i] == ' ') : (i += 1) {}
-        if (i >= line.len) break;
-
-        // Read the token.
-        const tok_start = i;
-        while (i < line.len and line[i] != ' ') : (i += 1) {}
-        const token = line[tok_start..i];
-
-        // The NEXT token (if any) is this key's value.
-        while (i < line.len and line[i] == ' ') : (i += 1) {}
-        if (i >= line.len) return null;
-        const val_start = i;
-        while (i < line.len and line[i] != ' ') : (i += 1) {}
-        const value = line[val_start..i];
-
-        if (std.mem.eql(u8, token, key)) return value;
-    }
-    return null;
+fn waitParentFromHandle(
+    ctx_ptr: ?*anyopaque,
+    parent_session_id: []const u8,
+    timeout_ms: usize,
+) anyerror!tools.AgentGroupSnapshot {
+    const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
+    _ = try recoverReceiptGroups(service, std.heap.page_allocator, parent_session_id);
+    return service.supervisor.waitParent(parent_session_id, timeout_ms);
 }
 
-/// Converge all terminal children of a parent session. Reads the child list,
-/// collects outputs from completed children, and calls convergeBranches to
-/// write the convergence evidence. This is called by the executor loop when
-/// all children are terminal — it's the live branch-and-converge path.
-fn convergeFromListing(
+fn cancelGroupFromHandle(
+    ctx_ptr: ?*anyopaque,
+    group_id: []const u8,
+    reason: []const u8,
+) anyerror!usize {
+    const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
+    return service.supervisor.cancelGroup(group_id, reason);
+}
+
+fn cancelParentFromHandle(
+    ctx_ptr: ?*anyopaque,
+    parent_session_id: []const u8,
+    reason: []const u8,
+) anyerror!usize {
+    const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
+    _ = recoverReceiptGroups(service, std.heap.page_allocator, parent_session_id) catch 0;
+    return service.supervisor.cancelParent(parent_session_id, reason);
+}
+
+fn bindEventSinkFromHandle(ctx_ptr: ?*anyopaque, sink: tools.AgentEventSink) void {
+    const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
+    service.supervisor.bindEventSink(sink);
+}
+
+/// Compatibility convergence for receipt-less children created before group
+/// receipts existed. Consume typed SessionRecord values directly; never parse
+/// the plaintext list read model back into kernel state.
+fn convergeLegacyChildren(
     service: *Service,
     allocator: std.mem.Allocator,
     parent_session_id: []const u8,
 ) !void {
-    const listing = try list(service, allocator, parent_session_id);
-    defer allocator.free(listing);
-
-    if (std.mem.eql(u8, std.mem.trim(u8, listing, " \r\n"), "No child agents.")) return;
-
-    // The list output is one line per child with space-separated KEY VALUE pairs:
-    // AGENT_NAME <name> STATUS <status> SESSION_ID <id> LIFECYCLE_STATE ... ...
+    const sessions = try store.listSessionRecords(allocator, service.config.workspace_root);
+    defer types.deinitSessionRecords(allocator, sessions);
     var results = std.array_list.Managed(ChildBranchResult).init(allocator);
     defer {
         for (results.items) |r| {
@@ -235,21 +270,13 @@ fn convergeFromListing(
         results.deinit();
     }
 
-    var lines = std.mem.splitScalar(u8, listing, '\n');
-    while (lines.next()) |raw_line| {
-        const line = std.mem.trim(u8, raw_line, " \r");
-        if (line.len == 0) continue;
-
-        const child_status = fieldValueFromListLine(line, "STATUS") orelse continue;
-        if (!std.mem.eql(u8, child_status, "completed")) continue;
-
-        const session_id = fieldValueFromListLine(line, "SESSION_ID") orelse continue;
-        const agent_name = fieldValueFromListLine(line, "AGENT_NAME") orelse "unknown";
-
-        const output = store.readOutput(allocator, service.config.workspace_root, session_id) catch null;
+    for (sessions) |session| {
+        if (!matchesChildSession(session, parent_session_id, null) or
+            session.execution_receipt != null or session.status != .completed) continue;
+        const output = store.readOutput(allocator, service.config.workspace_root, session.id) catch null;
         const owned_output = output orelse try allocator.dupe(u8, "");
         try results.append(.{
-            .agent_name = try allocator.dupe(u8, agent_name),
+            .agent_name = try allocator.dupe(u8, session.display_name orelse session.id),
             .output = owned_output,
         });
     }
@@ -279,7 +306,9 @@ fn nextBranchSeq(
     parent_session_id: []const u8,
 ) !u64 {
     const checkpoints = store.readAllContextCheckpoints(
-        allocator, workspace_root, parent_session_id,
+        allocator,
+        workspace_root,
+        parent_session_id,
     ) catch return 1;
     defer types.deinitContextCheckpoints(allocator, checkpoints);
 
@@ -299,138 +328,247 @@ fn launch(
     requested_name: ?[]const u8,
     delegation_scope: scope_contract.DelegationScope,
 ) ![]u8 {
+    const task = [_]tools.AgentTaskRequest{.{
+        .name = requested_name,
+        .agent_id = "general",
+        .task = prompt,
+    }};
+    return launchBatch(service, allocator, parent_session_id, "", task[0..], delegation_scope);
+}
+
+/// Compile, persist, and admit one canonical batch before any child executes.
+fn launchBatch(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
+    shared_context: []const u8,
+    tasks_to_launch: []const tools.AgentTaskRequest,
+    delegation_scope: scope_contract.DelegationScope,
+) ![]u8 {
+    if (tasks_to_launch.len == 0 or tasks_to_launch.len > 100) return Error.InvalidBatch;
+    if (shared_context.len > 128 * 1024) return Error.InvalidBatch;
+    if (delegation_scope.contact_budget < tasks_to_launch.len) return Error.InvalidBatch;
     try docs_sync.ensureRunStart(allocator, service.config.workspace_root);
-    const child_profile = profile_contract.defaultSubagentProfile();
-    try scope_contract.validateDelegationScope(delegation_scope, child_profile);
+    var registry = try agent_spec.loadRegistry(allocator, service.config.workspace_root);
+    defer registry.deinit();
 
-    const agent_name = if (requested_name) |value|
-        try allocator.dupe(u8, value)
-    else
-        try newAgentName(allocator);
-    defer allocator.free(agent_name);
-
-    if (try childNameExists(allocator, service.config.workspace_root, parent_session_id, agent_name)) {
-        return Error.AgentNameTaken;
+    const parent_profile_id = delegation_scope.parent_capability_profile orelse "root";
+    const parent_profile = try profile_contract.resolveProfile(parent_profile_id);
+    try scope_contract.validateDelegationScope(delegation_scope, parent_profile);
+    var parent_session = try store.readSessionRecord(allocator, service.config.workspace_root, parent_session_id);
+    defer parent_session.deinit(allocator);
+    if (parent_session.execution_receipt) |receipt| {
+        if (tasks_to_launch.len > receipt.budget.max_children) return Error.InvalidBatch;
     }
 
-    var child_session = try store.initSessionWithOptions(allocator, service.config.workspace_root, prompt, .{
-        .status = .initialized,
-        .parent_session_id = parent_session_id,
-        .display_name = agent_name,
-        .agent_profile = child_profile.id,
-    });
-    defer child_session.deinit(allocator);
-
-    const delegation_event = try scope_contract.renderDelegationEvent(allocator, delegation_scope, child_profile);
-    defer allocator.free(delegation_event);
-
-    try store.appendEvent(allocator, service.config.workspace_root, child_session.id, .{
-        .event_type = "session_delegated",
-        .message = delegation_event,
-        .timestamp_ms = std.time.milliTimestamp(),
-    });
-    try docs_sync.writePending(allocator, service.config.workspace_root, .{
-        .session_id = child_session.id,
-        .status = types.statusLabel(child_session.status),
-        .prompt = child_session.prompt,
-        .output = "",
-        .updated_at_ms = child_session.updated_at_ms,
-    });
-
-    const delegation_log = try std.fmt.allocPrint(allocator, "child session delegated: {s} -> {s}", .{
-        agent_name,
-        child_session.id,
-    });
-    defer allocator.free(delegation_log);
-    try docs_sync.appendLog(allocator, service.config.workspace_root, delegation_log);
-
-    // Write an `open` shard checkpoint to the PARENT's context.jsonl. This
-    // marks the branch as active in the shard ledger — the child's work is
-    // tracked as a branch of the parent. When the child completes and the
-    // executor's convergence path runs, this entry is superseded by a
-    // `converged` (or cold-start `abandoned`) entry. (roadmap P0-1, P0-2)
-    {
-        const branch_seq = try nextBranchSeq(allocator, service.config.workspace_root, parent_session_id);
-        const parent_cp_id = blk: {
-            const maybe_cp = store.readLatestContextCheckpoint(allocator, service.config.workspace_root, parent_session_id) catch null;
-            if (maybe_cp) |cp| {
-                defer allocator.free(cp.id);
-                break :blk try allocator.dupe(u8, cp.id);
+    for (tasks_to_launch, 0..) |task, task_index| {
+        if (!hasText(task.task) or task.task.len > 256 * 1024) return Error.InvalidBatch;
+        _ = try registry.resolve(task.agent_id);
+        var output_schema = std.json.parseFromSlice(std.json.Value, allocator, task.output_schema_json, .{}) catch return Error.InvalidBatch;
+        defer output_schema.deinit();
+        if (output_schema.value != .object) return Error.InvalidBatch;
+        if (task.name) |name| {
+            if (!hasText(name) or name.len > 96) return Error.InvalidBatch;
+            for (tasks_to_launch[0..task_index]) |prior| {
+                if (prior.name) |prior_name| {
+                    if (std.mem.eql(u8, name, prior_name)) return Error.AgentNameTaken;
+                }
             }
-            break :blk try allocator.dupe(u8, "parent-root");
-        };
-        defer allocator.free(parent_cp_id);
+        }
+    }
 
-        const branch_summary = try std.fmt.allocPrint(allocator, "Branch {d} ({s}): {s}", .{ branch_seq, agent_name, prompt });
+    // Resolve each distinct AgentSpec before the first session/effect. Batch
+    // fan-out clones this invocation-local receipt source instead of reparsing
+    // config/auth once per child.
+    var route_templates: std.StringHashMapUnmanaged(*routes.ResolvedRoute) = .{};
+    defer {
+        var iterator = route_templates.iterator();
+        while (iterator.next()) |entry| {
+            entry.value_ptr.*.deinit(std.heap.page_allocator);
+            std.heap.page_allocator.destroy(entry.value_ptr.*);
+        }
+        route_templates.deinit(allocator);
+    }
+    for (tasks_to_launch) |task| {
+        const spec = try registry.resolve(task.agent_id);
+        if (route_templates.contains(spec.id)) continue;
+        const template = try std.heap.page_allocator.create(routes.ResolvedRoute);
+        template.* = routes.resolve(std.heap.page_allocator, service.config.*, spec.route_role, .{
+            .max_steps = spec.max_steps,
+            .max_tool_calls = spec.max_tool_calls,
+            .execution_kind = spec.execution_kind,
+            .capability_profile_id = spec.capability_profile_id,
+        }) catch |err| {
+            std.heap.page_allocator.destroy(template);
+            return err;
+        };
+        route_templates.put(allocator, spec.id, template) catch |err| {
+            template.deinit(std.heap.page_allocator);
+            std.heap.page_allocator.destroy(template);
+            return err;
+        };
+    }
+
+    const max_concurrency = try config_file.loadAgentMaxConcurrency(allocator, service.config.workspace_root);
+    try service.supervisor.start(max_concurrency);
+    const group_id = try newGroupId(allocator);
+    defer allocator.free(group_id);
+    const parent_checkpoint_id = blk: {
+        const maybe_checkpoint = store.readLatestContextCheckpoint(allocator, service.config.workspace_root, parent_session_id) catch null;
+        if (maybe_checkpoint) |checkpoint| {
+            defer checkpoint.deinit(allocator);
+            break :blk try allocator.dupe(u8, checkpoint.id);
+        }
+        break :blk try allocator.dupe(u8, "parent-root");
+    };
+    defer allocator.free(parent_checkpoint_id);
+    const first_branch_seq = try nextBranchSeq(allocator, service.config.workspace_root, parent_session_id);
+
+    var prepared = std.array_list.Managed(*child_supervisor.Task).init(allocator);
+    defer prepared.deinit();
+    var submitted = false;
+    defer if (!submitted) {
+        for (prepared.items) |task| {
+            markAdmissionFailed(task, "BatchAdmissionFailed");
+            service.supervisor.destroyPreparedTask(task);
+        }
+    };
+
+    for (tasks_to_launch, 0..) |task_request, index| {
+        const spec = try registry.resolve(task_request.agent_id);
+        const route = try std.heap.page_allocator.create(routes.ResolvedRoute);
+        route.* = route_templates.get(spec.id).?.clone(std.heap.page_allocator) catch |err| {
+            std.heap.page_allocator.destroy(route);
+            return err;
+        };
+        var route_owned = true;
+        defer if (route_owned) {
+            route.deinit(std.heap.page_allocator);
+            std.heap.page_allocator.destroy(route);
+        };
+
+        const name = if (task_request.name) |value|
+            try allocator.dupe(u8, value)
+        else
+            try std.fmt.allocPrint(allocator, "{s}-{d}", .{ spec.id, index + 1 });
+        defer allocator.free(name);
+        const task_id = try std.fmt.allocPrint(allocator, "task-{d}", .{index + 1});
+        defer allocator.free(task_id);
+        const child_prompt = try renderChildPrompt(allocator, shared_context, task_request.task, spec, task_request.output_schema_json);
+        defer allocator.free(child_prompt);
+        const capability_hash = try agent_spec.capabilityHash(spec, route.capability_profile_id);
+        const output_schema_hash = agent_spec.contentHash(task_request.output_schema_json);
+        const branch_seq = first_branch_seq + @as(u64, @intCast(index));
+        const created_at_ms = std.time.milliTimestamp();
+
+        const execution_receipt = types.ExecutionReceiptView{
+            .execution_kind = route.execution_kind.label(),
+            .agent_spec_id = spec.id,
+            .route_role = route.role.label(),
+            .provider_id = route.providerId(),
+            .model = route.config.openai_model,
+            .wire_api = route.config.wire_api.label(),
+            .thinking_mode = route.config.thinking_mode,
+            .capability_profile_id = route.capability_profile_id,
+            .capability_hash = capability_hash[0..],
+            .parent_session_id = parent_session_id,
+            .parent_checkpoint_id = parent_checkpoint_id,
+            .group_id = group_id,
+            .task_id = task_id,
+            .branch_seq = branch_seq,
+            .budget = .{
+                .max_steps = spec.max_steps,
+                .max_tool_calls = spec.max_tool_calls,
+                .max_children = spec.max_children,
+            },
+            .output_schema_hash = output_schema_hash[0..],
+            .created_at_ms = created_at_ms,
+        };
+        var child_session = try store.initSessionWithExecutionReceipt(allocator, service.config.workspace_root, child_prompt, .{
+            .status = .initialized,
+            .parent_session_id = parent_session_id,
+            .display_name = name,
+            .agent_profile = route.capability_profile_id,
+        }, &execution_receipt);
+        defer child_session.deinit(allocator);
+
+        const branch_summary = try std.fmt.allocPrint(allocator, "Group {s} branch {d} ({s}): {s}", .{ group_id, branch_seq, name, task_request.task });
         defer allocator.free(branch_summary);
-        store.appendShardCheckpoint(
+        try store.appendShardCheckpoint(
             allocator,
             service.config.workspace_root,
             parent_session_id,
-            parent_cp_id,
+            parent_checkpoint_id,
             branch_seq,
             .open,
             branch_summary,
-        ) catch |err| {
-            // A shard checkpoint write failure is not fatal to the delegation
-            // itself — the child can still run. But it means the branch won't
-            // be tracked in the shard ledger, so log the failure.
-            const warn = try std.fmt.allocPrint(allocator, "shard checkpoint write failed for branch {d}: {s}", .{ branch_seq, @errorName(err) });
-            defer allocator.free(warn);
-            docs_sync.appendLog(allocator, service.config.workspace_root, warn) catch {};
+        );
+        const delegation_event = try scope_contract.renderDelegationEvent(allocator, delegation_scope, try profile_contract.resolveProfile(route.capability_profile_id));
+        defer allocator.free(delegation_event);
+        try store.appendEvent(allocator, service.config.workspace_root, child_session.id, .{
+            .event_type = "session_delegated",
+            .message = delegation_event,
+            .timestamp_ms = created_at_ms,
+        });
+        try docs_sync.writePending(allocator, service.config.workspace_root, .{
+            .session_id = child_session.id,
+            .status = types.statusLabel(child_session.status),
+            .prompt = child_session.prompt,
+            .output = "",
+            .updated_at_ms = child_session.updated_at_ms,
+        });
+
+        const prepared_task = try service.supervisor.createTask(.{
+            .parent_session_id = parent_session_id,
+            .parent_checkpoint_id = parent_checkpoint_id,
+            .session_id = child_session.id,
+            .task_id = task_id,
+            .name = name,
+            .agent_spec_id = spec.id,
+            .route_role = route.role.label(),
+            .capability_profile_id = route.capability_profile_id,
+            .branch_seq = branch_seq,
+            .remaining_depth = delegation_scope.scope_depth - 1,
+            .output_schema_json = task_request.output_schema_json,
+            .route = route,
+            .transport = service.transport,
+            .agent_service = service.handle(),
+        });
+        route_owned = false;
+        prepared.append(prepared_task) catch |err| {
+            service.supervisor.destroyPreparedTask(prepared_task);
+            return err;
         };
     }
 
-    const exe_path = try std.fs.selfExePathAlloc(allocator);
-    defer allocator.free(exe_path);
-
-    var argv = std.array_list.Managed([]const u8).init(allocator);
-    defer argv.deinit();
-    try argv.append(exe_path);
-    try argv.append("run");
-    try argv.append("--json");
-    try argv.append("--no-agent-tools");
-    try argv.append("--session-id");
-    try argv.append(child_session.id);
-
-    var child = std.process.Child.init(argv.items, allocator);
-    child.cwd = service.config.workspace_root;
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    try child.spawn();
-
-    const job = try std.heap.page_allocator.create(WatchJob);
-    errdefer std.heap.page_allocator.destroy(job);
-    job.* = .{
-        .workspace_root = try std.heap.page_allocator.dupe(u8, service.config.workspace_root),
-        .session_id = try std.heap.page_allocator.dupe(u8, child_session.id),
-        .child = child,
-    };
-
-    const thread = try std.Thread.spawn(.{}, watchChildProcess, .{job});
-    thread.detach();
-
-    return std.fmt.allocPrint(
-        allocator,
-        "AGENT_NAME {s}\nSTATUS {s}\nSESSION_ID {s}\nPARENT_SESSION_ID {s}\nCAPABILITY_PROFILE {s}\nSCOPE_DEPTH {}\nCONTACT_BUDGET {}\nVALIDATION_STATUS {s}\nESCALATION_REASON {s}\nPARENT_CAPABILITY_PROFILE {s}\nPROMPT {s}",
-        .{
-            agent_name,
-            types.statusLabel(child_session.status),
-            child_session.id,
-            parent_session_id,
-            child_profile.id,
-            delegation_scope.scope_depth,
-            delegation_scope.contact_budget,
-            scope_contract.validationStatusLabel(delegation_scope.validation_status),
-            scope_contract.escalationReasonLabel(delegation_scope),
-            scope_contract.parentCapabilityProfileLabel(delegation_scope),
-            prompt,
-        },
-    );
+    try service.supervisor.submitGroup(.{
+        .id = group_id,
+        .parent_session_id = parent_session_id,
+        .workspace_root = service.config.workspace_root,
+        .shared_context = shared_context,
+    }, prepared.items);
+    submitted = true;
+    const result = try service.supervisor.renderGroup(allocator, group_id);
+    const log_line = try std.fmt.allocPrint(allocator, "child group admitted: {s} tasks={d} concurrency={d}", .{ group_id, tasks_to_launch.len, max_concurrency });
+    defer allocator.free(log_line);
+    docs_sync.appendLog(allocator, service.config.workspace_root, log_line) catch {};
+    return result;
 }
 
 fn status(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
+    group_id_or_name: []const u8,
+) ![]u8 {
+    _ = try recoverReceiptGroups(service, allocator, parent_session_id);
+    return service.supervisor.renderGroup(allocator, group_id_or_name) catch |err| switch (err) {
+        child_supervisor.Error.UnknownGroup => statusLegacy(service, allocator, parent_session_id, group_id_or_name),
+        else => err,
+    };
+}
+
+fn statusLegacy(
     service: *Service,
     allocator: std.mem.Allocator,
     parent_session_id: []const u8,
@@ -445,30 +583,36 @@ fn wait(
     service: *Service,
     allocator: std.mem.Allocator,
     parent_session_id: []const u8,
+    group_id_or_name: []const u8,
+    timeout_ms: usize,
+) ![]u8 {
+    _ = try recoverReceiptGroups(service, allocator, parent_session_id);
+    _ = service.supervisor.waitGroup(group_id_or_name, timeout_ms) catch |err| switch (err) {
+        child_supervisor.Error.UnknownGroup => return waitLegacy(service, allocator, parent_session_id, group_id_or_name, timeout_ms),
+        else => return err,
+    };
+    return service.supervisor.renderGroup(allocator, group_id_or_name);
+}
+
+fn waitLegacy(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
     agent_name: []const u8,
     timeout_ms: usize,
 ) ![]u8 {
-    const started_at = std.time.milliTimestamp();
-
-    while (true) {
-        var session = try findChildSessionByName(allocator, service.config.workspace_root, parent_session_id, agent_name);
-        defer session.deinit(allocator);
-
-        if (isTerminal(session.status)) {
-            return renderChildSession(allocator, service.config.workspace_root, session, .{
-                .wait_state = "terminal",
-            });
-        }
-
-        if (timeout_ms > 0 and std.time.milliTimestamp() - started_at >= @as(i64, @intCast(timeout_ms))) {
-            return renderChildSession(allocator, service.config.workspace_root, session, .{
-                .wait_state = "timeout",
-                .wait_timeout_ms = timeout_ms,
-            });
-        }
-
-        std.Thread.sleep(10 * std.time.ns_per_ms);
+    var session = try findChildSessionByName(allocator, service.config.workspace_root, parent_session_id, agent_name);
+    defer session.deinit(allocator);
+    if (!isTerminal(session.status) and timeout_ms > 0) {
+        const bounded_ms = @min(timeout_ms, std.math.maxInt(u64) / std.time.ns_per_ms);
+        std.Thread.sleep(@as(u64, @intCast(bounded_ms)) * std.time.ns_per_ms);
+        session.deinit(allocator);
+        session = try findChildSessionByName(allocator, service.config.workspace_root, parent_session_id, agent_name);
     }
+    return renderChildSession(allocator, service.config.workspace_root, session, .{
+        .wait_state = if (isTerminal(session.status)) "terminal" else "timeout",
+        .wait_timeout_ms = timeout_ms,
+    });
 }
 
 /// Converge N child branch results into the parent session. This is the
@@ -541,6 +685,196 @@ pub const ChildBranchResult = struct {
     output: []const u8,
 };
 
+/// Rebuild the live parent/group index from secret-free child receipts exactly
+/// once per Service lifetime. A process restart cannot resume in-process
+/// workers, so initialized/running receipts become typed StaleAgentOwner
+/// failures; already-terminal receipts remain eligible for idempotent group
+/// convergence.
+fn recoverReceiptGroups(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
+) !usize {
+    service.recovery_mutex.lock();
+    defer service.recovery_mutex.unlock();
+    if (service.supervisor.hasParent(parent_session_id)) return 0;
+    if (service.recovered_parents.contains(parent_session_id)) return 0;
+
+    const sessions = try store.listSessionRecords(allocator, service.config.workspace_root);
+    defer types.deinitSessionRecords(allocator, sessions);
+    service.supervisor.recordColdStartDirectoryScan();
+    const parent_messages = try store.readSessionMessages(allocator, service.config.workspace_root, parent_session_id);
+    defer types.deinitSessionMessages(allocator, parent_messages);
+
+    var seen_groups: std.StringHashMapUnmanaged(void) = .{};
+    defer seen_groups.deinit(allocator);
+    var stale_count: usize = 0;
+
+    for (sessions) |candidate| {
+        const receipt = candidate.execution_receipt orelse continue;
+        if (!std.mem.eql(u8, receipt.parent_session_id, parent_session_id)) continue;
+        if (seen_groups.contains(receipt.group_id)) continue;
+        try seen_groups.put(allocator, receipt.group_id, {});
+        if (service.supervisor.hasGroup(receipt.group_id)) continue;
+
+        var prepared = std.array_list.Managed(*child_supervisor.Task).init(allocator);
+        defer prepared.deinit();
+        var submitted = false;
+        defer if (!submitted) {
+            for (prepared.items) |task| service.supervisor.destroyPreparedTask(task);
+        };
+        var group_stale_count: usize = 0;
+        const legacy_group_converged = groupHasConvergenceMessage(allocator, parent_messages, receipt.group_id);
+
+        for (sessions) |*member| {
+            const member_receipt = member.execution_receipt orelse continue;
+            if (!std.mem.eql(u8, member_receipt.parent_session_id, parent_session_id) or
+                !std.mem.eql(u8, member_receipt.group_id, receipt.group_id)) continue;
+
+            var lifecycle: child_supervisor.TaskLifecycle = switch (member.status) {
+                .completed => .completed,
+                .failed => .failed,
+                .cancelled => .cancelled,
+                .initialized, .running => .failed,
+            };
+            var failure_class: ?[]const u8 = member.failure_reason;
+            if (member.status == .initialized or member.status == .running) {
+                const stale_reason = "StaleAgentOwner";
+                try store.setSessionFailure(allocator, service.config.workspace_root, member, stale_reason);
+                try store.appendEvent(allocator, service.config.workspace_root, member.id, .{
+                    .event_type = "session_failed",
+                    .message = stale_reason,
+                    .timestamp_ms = std.time.milliTimestamp(),
+                });
+                try appendRecoveredTaskFinishedEvent(service, allocator, parent_session_id, member.*, stale_reason);
+                docs_sync.completeSession(allocator, service.config.workspace_root, .{
+                    .session_id = member.id,
+                    .status = types.statusLabel(member.status),
+                    .prompt = member.prompt,
+                    .output = stale_reason,
+                    .updated_at_ms = member.updated_at_ms,
+                }) catch {};
+                lifecycle = .failed;
+                failure_class = stale_reason;
+                stale_count += 1;
+                group_stale_count += 1;
+            }
+
+            const task = try service.supervisor.createRecoveredTask(.{
+                .parent_session_id = parent_session_id,
+                .parent_checkpoint_id = member_receipt.parent_checkpoint_id,
+                .session_id = member.id,
+                .task_id = member_receipt.task_id,
+                .name = member.display_name orelse member.id,
+                .agent_spec_id = member_receipt.agent_spec_id,
+                .route_role = member_receipt.route_role,
+                .capability_profile_id = member_receipt.capability_profile_id,
+                .branch_seq = member_receipt.branch_seq,
+                .lifecycle = lifecycle,
+                .converged = legacy_group_converged or taskHasConvergenceMessage(
+                    allocator,
+                    parent_messages,
+                    member_receipt.group_id,
+                    member_receipt.task_id,
+                ),
+                .failure_class = failure_class,
+            });
+            prepared.append(task) catch |err| {
+                service.supervisor.destroyPreparedTask(task);
+                return err;
+            };
+        }
+
+        if (prepared.items.len == 0) continue;
+        try service.supervisor.submitRecoveredGroup(.{
+            .id = receipt.group_id,
+            .parent_session_id = parent_session_id,
+            .workspace_root = service.config.workspace_root,
+            .shared_context = "",
+        }, prepared.items);
+        submitted = true;
+        try appendGroupRecoveredEvent(service, allocator, parent_session_id, receipt.group_id, prepared.items.len, group_stale_count);
+    }
+
+    const owned_parent_id = try std.heap.page_allocator.dupe(u8, parent_session_id);
+    errdefer std.heap.page_allocator.free(owned_parent_id);
+    try service.recovered_parents.put(std.heap.page_allocator, owned_parent_id, {});
+    return stale_count;
+}
+
+fn groupHasConvergenceMessage(
+    allocator: std.mem.Allocator,
+    messages: []const types.SessionMessage,
+    group_id: []const u8,
+) bool {
+    const expected = std.fmt.allocPrint(allocator, "group-convergence-{s}", .{group_id}) catch return false;
+    defer allocator.free(expected);
+    for (messages) |message| if (std.mem.eql(u8, message.id, expected)) return true;
+    return false;
+}
+
+fn taskHasConvergenceMessage(
+    allocator: std.mem.Allocator,
+    messages: []const types.SessionMessage,
+    group_id: []const u8,
+    task_id: []const u8,
+) bool {
+    const expected = std.fmt.allocPrint(allocator, "child-convergence-{s}-{s}", .{ group_id, task_id }) catch return false;
+    defer allocator.free(expected);
+    for (messages) |message| if (std.mem.eql(u8, message.id, expected)) return true;
+    return false;
+}
+
+fn appendRecoveredTaskFinishedEvent(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
+    session: types.SessionRecord,
+    failure_class: []const u8,
+) !void {
+    const receipt = session.execution_receipt orelse return;
+    const message = try std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"var1.child_event.v1\",\"group_id\":{f},\"child_session_id\":{f},\"task_id\":{f},\"child_seq\":0,\"name\":{f},\"agent_spec_id\":{f},\"route_role\":{f},\"status\":\"failed\",\"phase\":\"cold_start_reconciliation\",\"detail\":{f}}}",
+        .{
+            std.json.fmt(receipt.group_id, .{}),
+            std.json.fmt(session.id, .{}),
+            std.json.fmt(receipt.task_id, .{}),
+            std.json.fmt(session.display_name orelse session.id, .{}),
+            std.json.fmt(receipt.agent_spec_id, .{}),
+            std.json.fmt(receipt.route_role, .{}),
+            std.json.fmt(failure_class, .{}),
+        },
+    );
+    defer allocator.free(message);
+    try store.appendEvent(allocator, service.config.workspace_root, parent_session_id, .{
+        .event_type = "child_finished",
+        .message = message,
+        .timestamp_ms = std.time.milliTimestamp(),
+    });
+}
+
+fn appendGroupRecoveredEvent(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
+    group_id: []const u8,
+    task_count: usize,
+    stale_count: usize,
+) !void {
+    const message = try std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"var1.child_group_recovery.v1\",\"group_id\":{f},\"parent_session_id\":{f},\"tasks\":{d},\"stale_owners_reconciled\":{d},\"terminal\":true}}",
+        .{ std.json.fmt(group_id, .{}), std.json.fmt(parent_session_id, .{}), task_count, stale_count },
+    );
+    defer allocator.free(message);
+    try store.appendEvent(allocator, service.config.workspace_root, parent_session_id, .{
+        .event_type = "child_group_recovered",
+        .message = message,
+        .timestamp_ms = std.time.milliTimestamp(),
+    });
+}
+
 /// Reconcile open shard branches at cold start. Scans the parent session's
 /// context.jsonl for shard_checkpoint entries with branch_status "open".
 /// Any open shard whose latest lifecycle state is still "open" (no subsequent
@@ -554,8 +888,12 @@ pub fn reconcileOpenShards(
     allocator: std.mem.Allocator,
     parent_session_id: []const u8,
 ) !usize {
+    const sessions = try store.listSessionRecords(allocator, service.config.workspace_root);
+    defer types.deinitSessionRecords(allocator, sessions);
     const checkpoints = try store.readAllContextCheckpoints(
-        allocator, service.config.workspace_root, parent_session_id,
+        allocator,
+        service.config.workspace_root,
+        parent_session_id,
     );
     defer types.deinitContextCheckpoints(allocator, checkpoints);
 
@@ -572,6 +910,7 @@ pub fn reconcileOpenShards(
         // Only "open" shards are candidates for abandonment. If the branch
         // status is converged or abandoned, it's already settled.
         if (cp.branch_status != .open) continue;
+        if (hasReceiptBranch(sessions, parent_session_id, cp.parent_checkpoint_id.?, cp.branch_seq)) continue;
 
         // Check if any later checkpoint settles this branch (same parent +
         // branch_seq, with a non-open status). If so, the open entry was
@@ -616,7 +955,34 @@ pub fn reconcileOpenShards(
     return abandoned_count;
 }
 
+fn hasReceiptBranch(
+    sessions: []const types.SessionRecord,
+    parent_session_id: []const u8,
+    parent_checkpoint_id: []const u8,
+    branch_seq: u64,
+) bool {
+    for (sessions) |session| {
+        const receipt = session.execution_receipt orelse continue;
+        if (receipt.branch_seq == branch_seq and
+            std.mem.eql(u8, receipt.parent_session_id, parent_session_id) and
+            std.mem.eql(u8, receipt.parent_checkpoint_id, parent_checkpoint_id)) return true;
+    }
+    return false;
+}
+
 fn list(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    parent_session_id: []const u8,
+) ![]u8 {
+    _ = try recoverReceiptGroups(service, allocator, parent_session_id);
+    if (service.supervisor.hasParent(parent_session_id)) {
+        return service.supervisor.renderParent(allocator, parent_session_id);
+    }
+    return listLegacy(service, allocator, parent_session_id);
+}
+
+fn listLegacy(
     service: *Service,
     allocator: std.mem.Allocator,
     parent_session_id: []const u8,
@@ -668,74 +1034,6 @@ fn list(
 
     if (count == 0) return allocator.dupe(u8, "No child agents.");
     return output.toOwnedSlice();
-}
-
-fn watchChildProcess(job: *WatchJob) void {
-    defer job.deinit();
-
-    const allocator = std.heap.page_allocator;
-    const term = job.child.wait() catch {
-        finalizeAbnormalExit(allocator, job.workspace_root, job.session_id, "ChildWaitFailed", null) catch {};
-        return;
-    };
-
-    const exit_code: i32 = switch (term) {
-        .Exited => |code| code,
-        .Signal => |signal| @as(i32, @intCast(signal)),
-        .Stopped => |signal| @as(i32, @intCast(signal)),
-        .Unknown => |code| @as(i32, @intCast(code)),
-    };
-
-    if (exit_code != 0) {
-        finalizeAbnormalExit(allocator, job.workspace_root, job.session_id, "ChildExitNonZero", exit_code) catch {};
-        return;
-    }
-
-    var session = store.readSessionRecord(allocator, job.workspace_root, job.session_id) catch return;
-    defer session.deinit(allocator);
-
-    if (isTerminal(session.status)) return;
-    finalizeAbnormalExit(allocator, job.workspace_root, job.session_id, "ChildExitWithoutTerminalState", exit_code) catch {};
-}
-
-fn finalizeAbnormalExit(
-    allocator: std.mem.Allocator,
-    workspace_root: []const u8,
-    session_id: []const u8,
-    reason: []const u8,
-    exit_code: ?i32,
-) !void {
-    var session = store.readSessionRecord(allocator, workspace_root, session_id) catch return;
-    defer session.deinit(allocator);
-
-    if (isTerminal(session.status)) return;
-
-    const failure_reason = if (exit_code) |value|
-        try std.fmt.allocPrint(allocator, "{s} (exit code {d})", .{ reason, value })
-    else
-        try allocator.dupe(u8, reason);
-    defer allocator.free(failure_reason);
-
-    try store.appendEvent(allocator, workspace_root, session.id, .{
-        .event_type = "session_failed",
-        .message = failure_reason,
-        .timestamp_ms = std.time.milliTimestamp(),
-    });
-    try store.setSessionFailure(allocator, workspace_root, &session, failure_reason);
-    try docs_sync.writePending(allocator, workspace_root, .{
-        .session_id = session.id,
-        .status = types.statusLabel(session.status),
-        .prompt = session.prompt,
-        .output = failure_reason,
-        .updated_at_ms = session.updated_at_ms,
-    });
-
-    const log_line = try std.fmt.allocPrint(allocator, "child session failed: {s} ({s})", .{
-        session.display_name orelse session.id,
-        failure_reason,
-    });
-    defer allocator.free(log_line);
-    try docs_sync.appendLog(allocator, workspace_root, log_line);
 }
 
 fn findChildSessionByName(
@@ -894,6 +1192,45 @@ const RenderOptions = struct {
     wait_state: ?[]const u8 = null,
     wait_timeout_ms: ?usize = null,
 };
+
+/// Compile shared batch context and one finite specialist task into the child purpose.
+fn renderChildPrompt(
+    allocator: std.mem.Allocator,
+    shared_context: []const u8,
+    task: []const u8,
+    spec: agent_spec.AgentSpec,
+    output_schema_json: []const u8,
+) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "Agent: {s}\nMethod: {s}\nShared context:\n{s}\n\nTask:\n{s}\n\nOutput contract: {s}\nOutput schema: {s}",
+        .{ spec.id, spec.instruction_capsule, shared_context, task, spec.output_contract, output_schema_json },
+    );
+}
+
+/// Mark every partially persisted child truthfully when atomic batch admission fails.
+fn markAdmissionFailed(task: *child_supervisor.Task, reason: []const u8) void {
+    const route = task.route orelse return;
+    var session = store.readSessionRecord(std.heap.page_allocator, route.config.workspace_root, task.session_id) catch return;
+    defer session.deinit(std.heap.page_allocator);
+    store.setSessionFailure(std.heap.page_allocator, route.config.workspace_root, &session, reason) catch {};
+    store.appendEvent(std.heap.page_allocator, route.config.workspace_root, task.session_id, .{
+        .event_type = "session_failed",
+        .message = reason,
+        .timestamp_ms = std.time.milliTimestamp(),
+    }) catch {};
+}
+
+fn hasText(value: []const u8) bool {
+    return std.mem.trim(u8, value, " \t\r\n").len > 0;
+}
+
+fn newGroupId(allocator: std.mem.Allocator) ![]u8 {
+    return std.fmt.allocPrint(allocator, "group-{d}-{x}", .{
+        std.time.milliTimestamp(),
+        std.crypto.random.int(u64),
+    });
+}
 
 fn newAgentName(allocator: std.mem.Allocator) ![]u8 {
     return std.fmt.allocPrint(allocator, "agent-{d}-{x}", .{

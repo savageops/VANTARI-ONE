@@ -1,3 +1,10 @@
+---
+type: index
+id: roadmap/index
+status: active
+updated: 2026-08-07
+---
+
 # VANTARI Roadmap — Index
 
 > **North star:** *A harness that uses the least amount of tokens, where every message is a new context window, each window is a checkpoint (a "shard") of the parent chat, each step in the task process branches into its own context window, and all branches eventually converge and are reprocessed.*
@@ -6,11 +13,13 @@ This roadmap maps every item in the VANTARI pipeline, priced by value, and compa
 
 Reference inputs:
 
-- `.refs/vercel__eve/` — harvested 2026-08-04 (Temporal-durable workflow harness, TypeScript)
+- `.refs/can1357__oh-my-pi/` — harvested 2026-08-06 (specialist agents, batch task fan-out, role-backed model routing)
+- `.refs/vercel__eve/` — refreshed 2026-08-06 (Workflow SDK durability, subagent sessions, parent event projection)
 - `.refs/openai__codex/`, `.refs/badlogic__pi-mono/` — prior harvests
+- `.docs/research/2026-08-06-agent-scale-reset.md`
 - `.docs/research/2026-07-13-vantari-one-ix-agent-runtime-competition.md`
 - `.docs/research/2026-07-15-agent-memory-competitor-harvest.md`
-- `.docs/log.txt` — full project history 2026-04-19 → 2026-08-04
+- `.docs/log.txt` — full project history 2026-04-19 → 2026-08-06
 
 ---
 
@@ -40,7 +49,7 @@ Each theme file follows the same shape:
 | 3 | [Typed turn/event grammar](./03-typed-turn-event-grammar.md) | **P0** | Eve `workflow-steps.ts`, Codex items | Shard causality + replay |
 | 4 | [Durable session execution / recovery](./04-durable-session-execution.md) | **P0** | Eve Temporal, Codex | Shard persistence + cold start |
 | 5 | [Tool governance + effect receipts](./05-tool-governance-effect-receipts.md) | **P0** | Eve sandbox, Gemini CLI | Branch side-effect evidence |
-| 6 | [Parent/child delegation](./06-parent-child-delegation.md) | **P1** | Eve subagents, pi-mono | Branch fan-out + merge |
+| 6 | [Role-routed agent execution](./06-parent-child-delegation.md) | **P0 control plane complete / P1 model-task active** | Oh My Pi, Eve, Zig structured concurrency | Hot-loaded specialists + isolated bounded branch fan-out |
 | 7 | [Deterministic memory](./07-memory.md) | **P1** | Eve, Claude, Codex, Cursor | Shard-relevant recall |
 | 8 | [Provider transport / SSE](./08-provider-transport.md) | **P1** | Eve AI SDK, Codex | Delta streaming into shards |
 | 9 | [Windows-native runtime discipline](./09-windows-native.md) | **P1** | All (Node/Python) | The un-served operator |
@@ -73,3 +82,4 @@ Each theme file follows the same shape:
 3. **Branch and merge.** Each step in a task process branches into its own context window, converges, and is reprocessed. This is delegation + compaction unified, not two features.
 4. **Least tokens wins.** Every abstraction must lower a named cost center (context compile, provider turn, tool dispatch, command run, TUI frame, session recovery). If it adds a concept without lowering a cost center, it stays local.
 5. **Proof before promotion.** Every P0 item follows `Recon → Contract → Smallest durable slice → Canonical tests → Native installed proof → Event/session evidence → Docs/changelog`.
+6. **Reason in bounded bursts.** Interleave one observable decision, one tool/delegation action batch, evidence inspection, and one compact checkpoint. Persist the checkpoint as continuation context; do not stop until terminal proof or a named blocker.

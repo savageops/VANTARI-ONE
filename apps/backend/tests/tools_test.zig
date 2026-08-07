@@ -1497,11 +1497,25 @@ test "agent system prompt teaches schema repair and file-tool roles" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "one canonical parent-owned conclusion") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "messages.jsonl remains transcript truth") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Keep hidden runtime mechanics private") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "I will continue once agents complete; if any fail, I will follow up.") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "wait_agent accepts timeout_ms") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Use mode=argv with argv only") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "mode=powershell/shell/bash with command only") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Select-String/Get-ChildItem") != null);
+}
+
+test "orchestrator prompt requires compact discovery and signal-driven continuation" {
+    const prompt = try VAR1.core.prompts.buildAgentSystemPrompt(std.testing.allocator, .{
+        .workspace_root = ".",
+        .orchestrator_only = true,
+    }, .{});
+    defer std.testing.allocator.free(prompt);
+
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Your first tool call must be agents with {}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "private child instructions") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "I'll pick up as soon as an agent reports back.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "wakes on the first ready child result") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "checkpoint what converged and immediately route the next bounded slice") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "a checkpoint is continuation evidence, not a final answer") != null);
 }
 
 test "tool call summary masks child supervision tool names in logs" {

@@ -1,5 +1,72 @@
 # Execution Log
 
+## 2026-08-06T23:03:41Z - Surface gap above the live reasoning dock
+
+**Outcome:** Transcript and progress content no longer touches the live reasoning dock. One blank surface row now separates the two regions while the dock remains flush above the composer.
+
+**Mechanism:**
+
+- Added `reasoning_gap_height` to the kernel-owned TUI layout projection.
+- Reserved one shared-background row only when reasoning is visible and transcript space remains; terminals too short to afford the row collapse the gap to zero instead of displacing the dock or composer.
+- Kept the separation borderless. Placement and spacing establish hierarchy without adding chrome.
+
+**Proof:**
+
+- Test-first tracer failed on the absent layout field, then focused Zig 0.15.1 Debug and ReleaseFast lanes each passed 43/43 TUI tests.
+- ReleaseFast Windows build passed and installed to `%LOCALAPPDATA%\Vantari\bin\vantari.exe`, SHA-256 `F6F5A78EBE238B8136B74D2B9E649CABA0A87782725600BCD3277DDEF0045E5A`; prior binary backup: `vantari.exe.20260807-010607.bak`.
+- Installed 80x24 PTY proof rendered transcript content through row 18, a blank row 19, the continuously updating two-row reasoning dock on rows 20-21, and the composer on row 22.
+- Installed `config validate` and `health` passed. Live-state drift encountered during proof was repaired by renaming rejected `context.auto_compact` to canonical `context.auto_compaction`; backup: `config.json.pre-spacing-proof-20260807-0102.bak`.
+
+**Boundary:** The one-row gap intentionally collapses when the terminal has no transcript row left after reserving the reasoning dock. The composer and live reasoning remain the higher-priority controls.
+
+## 2026-08-06T21:44:03Z - Live reasoning dock pinned above the TUI composer
+
+**Outcome:** Reasoning is no longer transcript history. The TUI renders the newest reasoning words in a dedicated live dock immediately above the composer, capped at two rows, while transcript/tool progress continues independently above it.
+
+**Mechanism:**
+
+- Removed reasoning injection from `buildTranscriptRows`; a reasoning trace can no longer consume scrollback rows or remain stranded near the top of the session.
+- Added bounded `buildReasoningDockRows`: it scans at most 512 recent bytes, retains the newest two wrapped rows in-place, and borrows the durable reasoning buffer without copying text.
+- Added `computeLayoutWithReasoningDock` and `drawReasoningDock`; the dock reserves zero to two rows between transcript and footer, reuses the existing assistant/progress styles, and never displaces the composer.
+- Cleared the prior trace only at the next prompt ingress. The current trace remains visible while reasoning, tool, command, and assistant events advance.
+- Added the focused `zig build test-tui` build step so TUI regressions do not require the full backend matrix.
+
+**Proof:**
+
+- Zig 0.15.1 focused Debug and ReleaseFast lanes passed 41/41 TUI tests. The tracer feeds real `reasoning_delta` plus `session_waiting` events through `ChatState`, proves reasoning is absent from transcript rows, proves progress remains in the transcript, and proves dock-to-footer adjacency.
+- ReleaseFast Windows build passed and installed to `%LOCALAPPDATA%\Vantari\bin\vantari.exe`, SHA-256 `368108602548A32EA3B44AE96C5947CCCA5F911A7B439F2473A9DC8D631FFDA4`; prior binary backup: `vantari.exe.20260806-233857.bak`.
+- Installed PTY proof at 80x24 rendered reasoning continuously on rows 20-21 with the composer on row 22. `search_files` failure progress remained visible in the transcript on row 14, then `read_file` progress appeared on row 19, while the two-row dock continued updating below both.
+- Repaired live-state drift encountered during installed proof: renamed rejected `context.auto_compact` to `context.auto_compaction` and restored z.ai / `glm-5.2` auth from canonical project `.var/auth.json` after a test fixture had overwritten the global ledger with `active.test`. Backups: `config.json.pre-reasoning-dock.bak` and `auth.json.pre-reasoning-dock.bak`.
+
+**Boundary:** Installed `search_files` currently reports `ToolUnavailable` because the advertised `iex` executable dependency is unresolved. The dock correctly preserved the reasoning/progress layout through that failure; executable discovery remains a separate tool-availability repair.
+
+## 2026-08-06T21:20:44Z - TUI stream throughput: lossless stdio frames and adaptive rendering
+
+**Verdict:** The harness imposed the slow visible stream. Recent durable sessions already showed 58.05-125 deltas/s, which falsified a universal provider-throughput explanation. A live installed z.ai/GLM-5.2 TUI turn then measured 12,758 ms to first delta followed by 305 reasoning/assistant deltas in 1,837 ms (166.03 deltas/s). Provider first-token latency remains external; the post-first-token TUI path is now fast.
+
+**Root causes closed:**
+
+- Replaced the live 4 KiB chunk reader that discarded bytes after the first `Content-Length` body. One persistent `stdio_wire.FrameReader` now preserves coalesced and split frames on both client and server paths.
+- Removed the copied `LocalClient`, frame parser, frame writer, response envelopes, and queue logic from `stdio_rpc.zig`. `stdio_client.zig` owns the child-process client; `stdio_wire.zig` owns framing; `stdio_rpc.zig` owns server dispatch.
+- Closed the condition-variable lost-wake window by checking the notification predicate and waiting under the same mutex with a monotonic remaining timeout.
+- Drained notification bursts before painting, capped work at 128 notifications per pass, and scheduled frames at a 16 ms minimum cadence with a capped `2 x last frame cost` adaptive floor.
+- Replaced exact-size assistant `realloc` per delta with geometric growth; transferred parsed notification parameter ownership into the queue; removed dead typewriter/durable-sync fields.
+- Narrowed the stdio write mutex to the request frame write so cancellation is not blocked behind provider response latency.
+
+**Proof:**
+
+- Debug build passed. Focused transport filters passed 4/4 each: coalesced frames, split frame plus successor, 4,096-frame burst, condition wake, and notification cursor window. A debug `kernel-stdio` tracer returned both coalesced request IDs with zero residue.
+- The canonical Debug matrix stayed CPU-active without failure output for 102 minutes; it was aborted on operator direction and is not counted as green.
+- ReleaseFast installed to `%LOCALAPPDATA%\Vantari\bin\vantari.exe`, SHA-256 `F890E184587FCDA1387C5BBFB4AD9A64ADD6B254D6BA7F0B9B77BF8185127C28`; prior binary backed up as `vantari.exe.20260806-231424.bak`.
+- Installed `--help`, `config validate`, and `health --json` passed. Health reports z.ai, `glm-5.2`, active subscription, and the backend workspace.
+- Installed `kernel-stdio` received two `initialize` frames in one pipe write and returned `coalesced-1` plus `coalesced-2`, exit 0, zero unread bytes.
+- Installed CLI provider turn returned `STREAM_OK` in 15.33 s. Installed PTY TUI session `session-1786051031760-370a85ff64cb8a40` reached `turn_finished`, rendered reasoning plus answer deltas live, and exited cleanly.
+- GGUF dupe audit scanned 88 segments across the four changed runtime files: zero exact duplicates; one semantic candidate was repeated `stdio_rpc.zig` test-fixture setup, not a production owner.
+
+**Config repair:** The retained user config used rejected key `context.auto_compact`. Backed it up to `C:\Users\Savage\.vantari\config.json.pre-tui-throughput-fix.bak` and renamed the key to canonical `context.auto_compaction`; no auth material changed.
+
+**Boundary:** The in-memory notification tail remains capped at 512 and does not yet expose durable event-sequence gap recovery. `.docs/roadmap/12-binary-safe-event-spine.md` owns that separate multi-consumer replay contract.
+
 ## 2026-08-07T09:00:00Z - value-weighted compaction engine + auth/model fix
 
 **Auth/model fix:** The global auth ledger at `~/.vantari/auth.json` (resolved via `VANTARI_HOME`) had a placeholder key (`bom-ledger-key`) and model `GLM-5.1`. Updated to the real z.ai key and `glm-5.2`. This was the root cause of the user's 401 errors — the workspace `.var/auth.json` was correct but never read when `VANTARI_HOME` was set.
@@ -953,3 +1020,26 @@ Two consumer-breaking pipeline failures are now structurally impossible.
 - Made the global ledger resolve through the home-scoped runtime root and routed documentation bootstrap through the same memory owner; session memory remains isolated by session ID.
 - Reconciled stale tests with the current canonical `config.json` contract and sibling `auth.json` migration behavior instead of preserving the removed `settings.toml` and nested-auth expectations.
 - Re-ran the full backend test mesh, the focused memory suite with isolated home storage, native ReleaseFast installation, installed config validation, catalog JSON parsing, IX stale-path scan, and dupe audit: all passed; the focused suite is 38/38 with no failures.
+
+## 2026-08-06 - Role-routed bounded agent execution
+
+**Outcome:** Replaced process-per-child polling with a role-routed, bounded in-process supervisor. VANTARI now exposes stable `general`, `recon`, `planner`, `compactor`, `implementer`, `reviewer`, and `validator` specialists whose provider/model/wire routes can be remapped independently without creating a second runtime.
+
+**Mechanism:**
+
+- Added immutable `AgentSpec`, enforced tool-class profiles, one `RouteRole` resolver, and secret-free `ExecutionReceipt` persistence before dispatch.
+- Replaced one process plus detached watcher per child and 10 ms session-directory polling with one fixed `std.Thread.Pool`, hard concurrency limits, O(1) group/parent indexes, condition-based wait, cancellation, and cold-only ledger recovery.
+- Added canonical `{ context, tasks[] }` admission, group-addressed terminal reconciliation, exactly-once convergence, parent parking with zero provider calls, and one post-convergence synthesis turn.
+- Added tool-free, recursion-free, schema-bound model tasks for planner, compactor, and supplied-artifact reviewer roles.
+- Projected typed child lifecycle events through parent `events.jsonl`, stdio, CLI, and stable keyed TUI rows. Child assistant/reasoning deltas remain child-local so the parent control spine stays bounded.
+- Removed startup-wide `session.json` rewrites. `ensureStoreReady` now initializes only canonical path and process-local sequence state; explicit migrations own schema mutation.
+
+**Proof:**
+
+- Full Zig 0.15.1 mesh passed: `1541/1541` tests across `15/15` build steps.
+- Scale tests covered `1/5/20/100` children, worker ceilings, zero provider-spin waiting, zero healthy directory scans, overlapping groups, cancellation, exact terminal ordering, model-task schema failure, profile denial, receipt recovery, and additive-field preservation.
+- Dupe audit found zero exact duplicates across the new agent/profile/route owners.
+- ReleaseFast installed binary SHA-256: `F22F89A425FEE37CBC0F6868A30B61C4362D48A75EADF9C43893E3CF5A993389`.
+- Installed live planner proof: parent `session-1786054776392-4aa6b6b11363365f`, child `session-1786054787881-450b26e512e8c859`, group `group-1786054787880-30b9c9504fc3cf23`; route receipt resolved `zai / glm-5.2 / chat_completions`, enforced zero tool calls, survived terminal state, and contained no API key.
+
+**Open P1 boundary:** Normalize provider token usage before adding usage to receipts/events. Route the existing manual compaction writer and future classification/title owners through the model-task lane without moving deterministic checkpoint selection into the model.

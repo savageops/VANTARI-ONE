@@ -2,7 +2,7 @@
   "_about": [
     "This is the complete persistent, non-secret VANTARI configuration surface. Keys beginning with an underscore are documentation metadata and do not change runtime behavior.",
     "VANTARI_HOME is intentionally not configurable here because it locates this file. Set it in the launching process when the default ~/.vantari directory must change.",
-    "Provider credentials, provider identity, base URL, model, account metadata, and the active provider belong in the sibling auth.json file and are never accepted here.",
+    "Provider credentials, base URL, account metadata, and the active provider belong in the sibling auth.json file. Agent routes may reference a provider id and override its model, but never carry credentials.",
     "Host and port, per-turn context/output overrides, tool timeouts, and output caps are invocation-scoped controls; they remain CLI, RPC, or tool arguments rather than persistent global policy.",
     "Precedence is invocation argument, process environment, config.json environment entry, typed config section, then the compiled default where that layer applies."
   ],
@@ -27,6 +27,100 @@
       "wire_api": "Provider HTTP protocol shape: chat_completions for OpenAI-compatible /v1/chat/completions, responses for /v1/responses, or anthropic_messages for /v1/messages. This does not select credentials or a model."
     },
     "wire_api": "chat_completions"
+  },
+  "agent_routes": {
+    "_help": {
+      "max_concurrency": "Maximum in-process agent or model-task workers allowed to execute concurrently. Additional admitted tasks remain queued in the same parent-owned supervisor.",
+      "roles": "Optional operator-owned overrides keyed by general, recon, planning, compaction, implementation, review, or validation. Each role accepts provider_id, model, wire_api, thinking_mode, context_window_tokens, and reserve_output_tokens. A provider_id references auth.json; credentials, execution kind, and capability profile never appear here."
+    },
+    "max_concurrency": 6,
+    "roles": {}
+  },
+  "agents": {
+    "_help": {
+      "orchestrator_only": "When true, a root session receives only agent-control tools, must call agents before dispatch, and delegates artifact-heavy work into isolated child context windows. Child capability profiles are unchanged.",
+      "definitions": "Editable fixed specialist personas. Built-in ids may override the fields shown here. A new lowercase snake_case id must set extends to one built-in id; inheritance fixes execution kind and capability profile while the definition may tune persona, condition, route role, budgets, and output contract. Changes hot-load on the next agents or launch_agent call."
+    },
+    "orchestrator_only": true,
+    "definitions": {
+      "general": {
+        "enabled": true,
+        "description": "Bounded general-purpose VAR1 child session.",
+        "when_to_use": "Use when no narrower specialist owns the task.",
+        "instruction": "Return a concise SITREP with findings, evidence, uncertainty, blockers, and residual risk.",
+        "route_role": "general",
+        "max_steps": 96,
+        "max_tool_calls": 64,
+        "max_children": 2,
+        "output_contract": "var1.sitrep.v1"
+      },
+      "recon": {
+        "enabled": true,
+        "description": "Read-only repository or evidence reconnaissance.",
+        "when_to_use": "Use when ownership, architecture, dependencies, or exact source evidence must be mapped before a decision.",
+        "instruction": "Inspect only. Return findings with exact paths, commands, uncertainty, blockers, and residual risk.",
+        "route_role": "recon",
+        "max_steps": 64,
+        "max_tool_calls": 48,
+        "max_children": 0,
+        "output_contract": "var1.recon_sitrep.v1"
+      },
+      "planner": {
+        "enabled": true,
+        "description": "One-turn plan synthesis from supplied evidence.",
+        "when_to_use": "Use after reconnaissance when supplied evidence must become an ordered implementation contract.",
+        "instruction": "Use only supplied context. Return an ordered implementation plan with invariants, proof gates, blockers, and stop conditions.",
+        "route_role": "planning",
+        "max_steps": 1,
+        "max_tool_calls": 0,
+        "max_children": 0,
+        "output_contract": "var1.plan.v1"
+      },
+      "compactor": {
+        "enabled": true,
+        "description": "One-turn dense summary wording over supplied artifacts.",
+        "when_to_use": "Use when supplied evidence must be compressed without losing decisions, owners, or unresolved state.",
+        "instruction": "Preserve decisions, evidence, active state, unresolved risks, and exact owner paths. Do not invent facts.",
+        "route_role": "compaction",
+        "max_steps": 1,
+        "max_tool_calls": 0,
+        "max_children": 0,
+        "output_contract": "var1.compaction_summary.v1"
+      },
+      "implementer": {
+        "enabled": true,
+        "description": "Bounded implementation branch with read, write, and command capability.",
+        "when_to_use": "Use when one isolated file or module slice can be implemented and validated independently.",
+        "instruction": "Own only the assigned files. Preserve concurrent work. Implement, test, and return a diff-grounded SITREP.",
+        "route_role": "implementation",
+        "max_steps": 128,
+        "max_tool_calls": 96,
+        "max_children": 0,
+        "output_contract": "var1.implementation_sitrep.v1"
+      },
+      "reviewer": {
+        "enabled": true,
+        "description": "One-turn supplied-artifact review.",
+        "when_to_use": "Use when a bounded artifact set needs an independent findings-first review without tool access.",
+        "instruction": "Review only supplied evidence. Return severity-ordered findings with exact referents and falsification notes.",
+        "route_role": "review",
+        "max_steps": 1,
+        "max_tool_calls": 0,
+        "max_children": 0,
+        "output_contract": "var1.review.v1"
+      },
+      "validator": {
+        "enabled": true,
+        "description": "Read-only validation branch for independent proof.",
+        "when_to_use": "Use when commands or source checks can independently falsify an implementation claim without mutation.",
+        "instruction": "Run bounded validation probes without mutation. Return commands, observed outputs, failures, and residual risk.",
+        "route_role": "validation",
+        "max_steps": 64,
+        "max_tool_calls": 48,
+        "max_children": 0,
+        "output_contract": "var1.validation_sitrep.v1"
+      }
+    }
   },
   "context": {
     "_help": {

@@ -137,6 +137,94 @@ pub const SessionStatus = enum {
     cancelled,
 };
 
+pub const ExecutionBudget = struct {
+    max_steps: usize,
+    max_tool_calls: usize,
+    max_children: usize,
+};
+
+pub const ExecutionReceiptView = struct {
+    schema_version: u16 = 1,
+    execution_kind: []const u8,
+    agent_spec_id: []const u8,
+    route_role: []const u8,
+    provider_id: []const u8,
+    model: []const u8,
+    wire_api: []const u8,
+    thinking_mode: []const u8,
+    capability_profile_id: []const u8,
+    capability_hash: []const u8,
+    parent_session_id: []const u8,
+    parent_checkpoint_id: []const u8,
+    group_id: []const u8,
+    task_id: []const u8,
+    branch_seq: u64,
+    budget: ExecutionBudget,
+    output_schema_hash: []const u8,
+    created_at_ms: i64,
+};
+
+pub const ExecutionReceipt = struct {
+    schema_version: u16 = 1,
+    execution_kind: []u8,
+    agent_spec_id: []u8,
+    route_role: []u8,
+    provider_id: []u8,
+    model: []u8,
+    wire_api: []u8,
+    thinking_mode: []u8,
+    capability_profile_id: []u8,
+    capability_hash: []u8,
+    parent_session_id: []u8,
+    parent_checkpoint_id: []u8,
+    group_id: []u8,
+    task_id: []u8,
+    branch_seq: u64,
+    budget: ExecutionBudget,
+    output_schema_hash: []u8,
+    created_at_ms: i64,
+
+    pub fn deinit(self: ExecutionReceipt, allocator: std.mem.Allocator) void {
+        allocator.free(self.execution_kind);
+        allocator.free(self.agent_spec_id);
+        allocator.free(self.route_role);
+        allocator.free(self.provider_id);
+        allocator.free(self.model);
+        allocator.free(self.wire_api);
+        allocator.free(self.thinking_mode);
+        allocator.free(self.capability_profile_id);
+        allocator.free(self.capability_hash);
+        allocator.free(self.parent_session_id);
+        allocator.free(self.parent_checkpoint_id);
+        allocator.free(self.group_id);
+        allocator.free(self.task_id);
+        allocator.free(self.output_schema_hash);
+    }
+
+    pub fn view(self: ExecutionReceipt) ExecutionReceiptView {
+        return .{
+            .schema_version = self.schema_version,
+            .execution_kind = self.execution_kind,
+            .agent_spec_id = self.agent_spec_id,
+            .route_role = self.route_role,
+            .provider_id = self.provider_id,
+            .model = self.model,
+            .wire_api = self.wire_api,
+            .thinking_mode = self.thinking_mode,
+            .capability_profile_id = self.capability_profile_id,
+            .capability_hash = self.capability_hash,
+            .parent_session_id = self.parent_session_id,
+            .parent_checkpoint_id = self.parent_checkpoint_id,
+            .group_id = self.group_id,
+            .task_id = self.task_id,
+            .branch_seq = self.branch_seq,
+            .budget = self.budget,
+            .output_schema_hash = self.output_schema_hash,
+            .created_at_ms = self.created_at_ms,
+        };
+    }
+};
+
 pub const SessionRecord = struct {
     id: []u8,
     prompt: []u8,
@@ -145,6 +233,10 @@ pub const SessionRecord = struct {
     continued_from_session_id: ?[]u8 = null,
     display_name: ?[]u8 = null,
     agent_profile: ?[]u8 = null,
+    /// Heap-owned because the large optional-by-value shape miscompiled under
+    /// clean Zig 0.15.1 ReleaseFast builds. Pointer presence is the stable
+    /// discriminant; the receipt itself remains immutable session state.
+    execution_receipt: ?*ExecutionReceipt = null,
     failure_reason: ?[]u8 = null,
     created_at_ms: i64,
     updated_at_ms: i64,
@@ -156,6 +248,10 @@ pub const SessionRecord = struct {
         if (self.continued_from_session_id) |value| allocator.free(value);
         if (self.display_name) |value| allocator.free(value);
         if (self.agent_profile) |value| allocator.free(value);
+        if (self.execution_receipt) |value| {
+            value.deinit(allocator);
+            allocator.destroy(value);
+        }
         if (self.failure_reason) |value| allocator.free(value);
     }
 };

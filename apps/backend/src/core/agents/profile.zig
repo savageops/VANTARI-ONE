@@ -8,6 +8,8 @@ pub const Error = error{
 pub const ToolClass = enum {
     file_read,
     file_write,
+    command,
+    scheduling,
     delegation,
     workspace_state,
 };
@@ -36,12 +38,15 @@ pub const CapabilityProfile = struct {
 const subagent_tool_classes = [_]ToolClass{
     .file_read,
     .file_write,
+    .command,
     .delegation,
 };
 
 const root_tool_classes = [_]ToolClass{
     .file_read,
     .file_write,
+    .command,
+    .scheduling,
     .delegation,
     .workspace_state,
 };
@@ -55,7 +60,10 @@ const recon_tool_classes = [_]ToolClass{
 const write_branch_tool_classes = [_]ToolClass{
     .file_read,
     .file_write,
+    .command,
 };
+
+const model_task_tool_classes = [_]ToolClass{};
 
 pub fn defaultSubagentProfile() CapabilityProfile {
     return .{
@@ -111,11 +119,26 @@ pub fn writeBranchProfile() CapabilityProfile {
     };
 }
 
+/// Model tasks receive supplied context only and cannot dispatch tools.
+pub fn modelTaskProfile() CapabilityProfile {
+    return .{
+        .id = "model_task",
+        .allowed_tool_classes = model_task_tool_classes[0..],
+        .provider_policy = .inherit_parent,
+        .budget_policy = .{
+            .max_scope_depth_without_reason = 0,
+            .max_contact_budget_without_reason = 0,
+        },
+        .delegation_policy = .{ .allow_child_launch = false },
+    };
+}
+
 pub fn resolveProfile(profile_id: []const u8) Error!CapabilityProfile {
     if (std.mem.eql(u8, profile_id, "subagent")) return defaultSubagentProfile();
     if (std.mem.eql(u8, profile_id, "root")) return rootProfile();
     if (std.mem.eql(u8, profile_id, "recon")) return reconBranchProfile();
     if (std.mem.eql(u8, profile_id, "write")) return writeBranchProfile();
+    if (std.mem.eql(u8, profile_id, "model_task")) return modelTaskProfile();
     return Error.UnsupportedCapabilityProfile;
 }
 
@@ -134,6 +157,8 @@ pub fn toolClassLabel(tool_class: ToolClass) []const u8 {
     return switch (tool_class) {
         .file_read => "file_read",
         .file_write => "file_write",
+        .command => "command",
+        .scheduling => "scheduling",
         .delegation => "delegation",
         .workspace_state => "workspace_state",
     };

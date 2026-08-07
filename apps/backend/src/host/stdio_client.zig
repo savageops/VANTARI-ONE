@@ -10,7 +10,6 @@ const wire = @import("stdio_wire.zig");
 /// The client spawns a child `vantari kernel-stdio` process, writes framed
 /// JSON-RPC requests to its stdin, and reads framed responses/notifications
 /// from its stdout on a dedicated reader thread.
-
 pub const Error = error{
     MissingChildPipes,
     InvalidRpcResponse,
@@ -38,7 +37,6 @@ pub const Notification = struct {
 };
 
 const max_notification_backlog = 512;
-const notification_poll_ms: u64 = 50;
 
 const ClientState = struct {
     allocator: std.mem.Allocator,
@@ -46,6 +44,7 @@ const ClientState = struct {
     cond: std.Thread.Condition = .{},
     responses: std.StringHashMapUnmanaged([]u8) = .{},
     notifications: std.array_list.Managed(Notification),
+    notification_head: usize = 0,
     next_request_id: usize = 1,
     next_notification_sequence: u64 = 1,
     closed: bool = false,
@@ -66,7 +65,7 @@ const ClientState = struct {
         }
         self.responses.deinit(self.allocator);
 
-        for (self.notifications.items) |notification| notification.deinit(self.allocator);
+        for (self.notifications.items[self.notification_head..]) |notification| notification.deinit(self.allocator);
         self.notifications.deinit();
     }
 
@@ -81,21 +80,38 @@ const ClientState = struct {
     }
 
     fn recordNotification(self: *ClientState, method: []const u8, params_json: []const u8) !void {
+        const owned_params = try self.allocator.dupe(u8, params_json);
+        errdefer self.allocator.free(owned_params);
+        try self.recordNotificationOwnedParams(method, owned_params);
+    }
+
+    /// Takes ownership of `owned_params` on success. The caller retains it on
+    /// error so one allocation crosses the parser/queue seam without copying.
+    fn recordNotificationOwnedParams(self: *ClientState, method: []const u8, owned_params: []u8) !void {
         self.mutex.lock();
         defer {
             self.cond.broadcast();
             self.mutex.unlock();
         }
 
-        if (self.notifications.items.len >= max_notification_backlog) {
-            const dropped = self.notifications.orderedRemove(0);
-            dropped.deinit(self.allocator);
+        if (self.notifications.items.len - self.notification_head >= max_notification_backlog) {
+            self.notifications.items[self.notification_head].deinit(self.allocator);
+            self.notification_head += 1;
         }
 
+        if (self.notification_head >= max_notification_backlog / 2 and self.notification_head >= self.notifications.items.len / 2) {
+            const remaining = self.notifications.items[self.notification_head..];
+            std.mem.copyForwards(Notification, self.notifications.items[0..remaining.len], remaining);
+            self.notifications.items.len = remaining.len;
+            self.notification_head = 0;
+        }
+
+        const owned_method = try self.allocator.dupe(u8, method);
+        errdefer self.allocator.free(owned_method);
         try self.notifications.append(.{
             .sequence = self.next_notification_sequence,
-            .method = try self.allocator.dupe(u8, method),
-            .params_json = try self.allocator.dupe(u8, params_json),
+            .method = owned_method,
+            .params_json = owned_params,
         });
         self.next_notification_sequence += 1;
     }
@@ -222,9 +238,11 @@ pub const LocalClient = struct {
         const request_payload = try renderRpcRequest(self.allocator, request_id, method, params_json);
         defer self.allocator.free(request_payload);
 
-        self.stdin_mutex.lock();
-        defer self.stdin_mutex.unlock();
-        try wire.writeFrame(self.child.stdin.?, request_payload);
+        {
+            self.stdin_mutex.lock();
+            defer self.stdin_mutex.unlock();
+            try wire.writeFrame(self.child.stdin.?, request_payload);
+        }
 
         const response_payload = try waitForResponse(self, request_id);
         defer self.allocator.free(response_payload);
@@ -263,12 +281,7 @@ pub const LocalClient = struct {
         after_sequence: u64,
         timeout_ms: usize,
     ) !?Notification {
-        const deadline_ms = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms));
-        while (true) {
-            if (try takeNotificationAfter(self, after_sequence)) |notification| return notification;
-            if (std.time.milliTimestamp() >= deadline_ms) return null;
-            std.Thread.sleep(notification_poll_ms * std.time.ns_per_ms);
-        }
+        return waitForNotification(self.state, self.allocator, after_sequence, timeout_ms);
     }
 };
 
@@ -324,30 +337,66 @@ fn waitForResponse(self: *LocalClient, request_id: []const u8) ![]u8 {
     }
 }
 
-fn takeNotificationAfter(self: *LocalClient, after_sequence: u64) !?Notification {
-    self.state.mutex.lock();
-    defer self.state.mutex.unlock();
-
-    for (self.state.notifications.items) |notification| {
+fn copyNotificationAfterLocked(
+    state: *ClientState,
+    allocator: std.mem.Allocator,
+    after_sequence: u64,
+) !?Notification {
+    for (state.notifications.items[state.notification_head..]) |notification| {
         if (notification.sequence <= after_sequence) continue;
+        const method = try allocator.dupe(u8, notification.method);
+        errdefer allocator.free(method);
+        const params_json = try allocator.dupe(u8, notification.params_json);
         return .{
             .sequence = notification.sequence,
-            .method = try self.allocator.dupe(u8, notification.method),
-            .params_json = try self.allocator.dupe(u8, notification.params_json),
+            .method = method,
+            .params_json = params_json,
         };
-    }
-
-    if (self.state.closed) {
-        if (self.state.read_error) |read_error| return read_error;
     }
     return null;
 }
 
+fn waitForNotification(
+    state: *ClientState,
+    allocator: std.mem.Allocator,
+    after_sequence: u64,
+    timeout_ms: usize,
+) !?Notification {
+    const timeout_ns = @as(u64, @intCast(timeout_ms)) * std.time.ns_per_ms;
+
+    state.mutex.lock();
+    defer state.mutex.unlock();
+
+    if (try copyNotificationAfterLocked(state, allocator, after_sequence)) |notification| return notification;
+    if (state.closed) {
+        if (state.read_error) |read_error| return read_error;
+        return null;
+    }
+    if (timeout_ns == 0) return null;
+
+    var timer = try std.time.Timer.start();
+    while (true) {
+        const elapsed_ns = timer.read();
+        if (elapsed_ns >= timeout_ns) return null;
+        state.cond.timedWait(&state.mutex, timeout_ns - elapsed_ns) catch |err| switch (err) {
+            error.Timeout => return null,
+        };
+
+        if (try copyNotificationAfterLocked(state, allocator, after_sequence)) |notification| return notification;
+        if (state.closed) {
+            if (state.read_error) |read_error| return read_error;
+            return null;
+        }
+    }
+}
+
 fn readerLoop(reader_context: *ReaderContext) void {
     const stdout_file = reader_context.stdout_file;
+    var frame_reader = wire.FrameReader.init(reader_context.allocator);
+    defer frame_reader.deinit();
 
     while (true) {
-        const payload = wire.readFrame(reader_context.allocator, stdout_file) catch |err| {
+        const payload = frame_reader.readFrame(stdout_file) catch |err| {
             reader_context.state.recordClosure(err);
             return;
         } orelse {
@@ -379,7 +428,7 @@ fn processIncomingFrame(reader_context: *ReaderContext, payload: []u8) !void {
             try reader_context.allocator.dupe(u8, "null");
         errdefer reader_context.allocator.free(params_json);
 
-        try reader_context.state.recordNotification(method_value.string, params_json);
+        try reader_context.state.recordNotificationOwnedParams(method_value.string, params_json);
         reader_context.allocator.free(payload);
         return;
     }
@@ -392,4 +441,54 @@ fn extractRequestId(object: std.json.ObjectMap) ?[]const u8 {
     const value = object.get("id") orelse return null;
     if (value != .string) return null;
     return value.string;
+}
+
+const TestNotificationProducer = struct {
+    state: *ClientState,
+    err: ?anyerror = null,
+
+    fn run(self: *TestNotificationProducer) void {
+        std.Thread.sleep(2 * std.time.ns_per_ms);
+        self.state.recordNotification("session/event", "{\"delta\":\"fast\"}") catch |err| {
+            self.err = err;
+        };
+    }
+};
+
+test "notification wait wakes on the condition without polling latency" {
+    const allocator = std.testing.allocator;
+    var state = ClientState.init(allocator);
+    defer state.deinit();
+
+    var producer = TestNotificationProducer{ .state = &state };
+    const thread = try std.Thread.spawn(.{}, TestNotificationProducer.run, .{&producer});
+    defer thread.join();
+
+    const notification = (try waitForNotification(&state, allocator, 0, 1_000)).?;
+    defer notification.deinit(allocator);
+
+    if (producer.err) |err| return err;
+    try std.testing.expectEqual(@as(u64, 1), notification.sequence);
+    try std.testing.expectEqualStrings("session/event", notification.method);
+}
+
+test "notification backlog keeps the newest cursor window" {
+    const allocator = std.testing.allocator;
+    var state = ClientState.init(allocator);
+    defer state.deinit();
+
+    var index: usize = 0;
+    while (index < max_notification_backlog + 88) : (index += 1) {
+        try state.recordNotification("session/event", "{}");
+    }
+
+    state.mutex.lock();
+    const first = try copyNotificationAfterLocked(&state, allocator, 0);
+    const last = try copyNotificationAfterLocked(&state, allocator, max_notification_backlog + 87);
+    state.mutex.unlock();
+    defer first.?.deinit(allocator);
+    defer last.?.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u64, 89), first.?.sequence);
+    try std.testing.expectEqual(@as(u64, max_notification_backlog + 88), last.?.sequence);
 }

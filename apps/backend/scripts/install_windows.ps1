@@ -110,9 +110,65 @@ $env:VANTARI_HOME = $vantariHome
 $configTemplate = Join-Path $backendRoot "src\core\config\default.json"
 $installedConfig = Join-Path $vantariHome "config.json"
 $configInstallStatus = "Retained existing runtime config -> $installedConfig"
+
+function Test-InstalledRuntimeConfig {
+  param(
+    [Parameter(Mandatory = $true)][string]$ExecutablePath
+  )
+
+  $previousPreference = $ErrorActionPreference
+  try {
+    # Invalid config is the expected negative branch of this probe. PowerShell
+    # 5 promotes native stderr to NativeCommandError under Stop, so suppress
+    # only this command's output and inspect its process exit code directly.
+    $ErrorActionPreference = "Continue"
+    & $ExecutablePath config validate 1> $null 2> $null
+    return $LASTEXITCODE -eq 0
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+}
+
 if (!(Test-Path -LiteralPath $installedConfig)) {
   Copy-Item -LiteralPath $configTemplate -Destination $installedConfig -Force
   $configInstallStatus = "Seeded runtime config -> $installedConfig"
+} else {
+  # Retain valid operator-owned config verbatim. An invalid legacy file cannot
+  # hot-load the current agent registry, so preserve it as a recoverable backup
+  # and materialize the complete current schema. Carry the one known v1 rename
+  # (`context.auto_compact` -> `context.auto_compaction`) forward.
+  if (-not (Test-InstalledRuntimeConfig -ExecutablePath $InstallPath)) {
+    $configBackup = "$installedConfig.$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
+    $legacyAutoCompaction = $null
+    try {
+      $legacyDocument = Get-Content -LiteralPath $installedConfig -Raw | ConvertFrom-Json
+      if ($null -ne $legacyDocument.context) {
+        $legacyProperty = $legacyDocument.context.PSObject.Properties['auto_compact']
+        if ($null -eq $legacyProperty) {
+          $legacyProperty = $legacyDocument.context.PSObject.Properties['auto_compaction']
+        }
+        if ($null -ne $legacyProperty -and $legacyProperty.Value -is [bool]) {
+          $legacyAutoCompaction = [bool]$legacyProperty.Value
+        }
+      }
+    } catch {
+      # The byte-identical backup remains the recovery owner for malformed JSON.
+    }
+
+    Copy-Item -LiteralPath $installedConfig -Destination $configBackup -Force
+    Copy-Item -LiteralPath $configTemplate -Destination $installedConfig -Force
+    if ($legacyAutoCompaction -eq $false) {
+      $materializedConfig = Get-Content -LiteralPath $installedConfig -Raw
+      $materializedConfig = $materializedConfig.Replace('"auto_compaction": true', '"auto_compaction": false')
+      [System.IO.File]::WriteAllText($installedConfig, $materializedConfig, [System.Text.UTF8Encoding]::new($false))
+    }
+
+    if (-not (Test-InstalledRuntimeConfig -ExecutablePath $InstallPath)) {
+      Copy-Item -LiteralPath $configBackup -Destination $installedConfig -Force
+      throw "materialized runtime config failed validation; restored $configBackup"
+    }
+    $configInstallStatus = "Migrated invalid runtime config -> $installedConfig (backup: $configBackup)"
+  }
 }
 
 # Seed provider auth as ~/.vantari/auth.json. Nested and AppData locations are

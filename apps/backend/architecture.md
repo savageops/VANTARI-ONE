@@ -19,12 +19,14 @@ flowchart TB
   cli["VAR1 CLI"] --> client["src/clients/cli.zig"]
   browser["apps/frontend/var1-client"] --> bridge["src/host/http_bridge.zig"]
 
-  client --> rpcClient["Local stdio RPC client"]
+  client --> rpcClient["src/host/stdio_client.zig"]
+  bridge --> rpcClient
   rpcClient --> kernel["VAR1 kernel-stdio"]
   bridge --> bridgeAccess["src/host/bridge_access.zig"]
-  bridge --> kernel
 
   kernel --> host["src/host/stdio_rpc.zig"]
+  rpcClient --> wire["src/host/stdio_wire.zig"]
+  host --> wire
   host --> executor["src/core/executor/loop.zig"]
   host --> compactor["src/core/context/compactor.zig"]
   executor --> context["src/core/context/builder.zig"]
@@ -39,12 +41,17 @@ flowchart TB
   tools --> toolRegistry["src/core/tools/registry.zig"]
   tools --> toolModules["src/core/tools/builtin/*.zig"]
   tools --> agents["src/core/agents/service.zig"]
-  agents --> profile["src/core/agents/profile.zig + scope.zig"]
+  agents --> supervisor["src/core/agents/supervisor.zig"]
+  agents --> specs["src/core/agents/spec.zig"]
+  agents --> routes["src/core/providers/routes.zig"]
+  specs --> profile["src/core/agents/profile.zig + scope.zig"]
+  supervisor --> executor
+  supervisor --> store
   tools --> workspaceState["src/core/tools/workspace_runtime.zig"]
   tools --> review
   toolModules --> iex["iex executable"]
   executor --> docs["src/core/docs/sync.zig"]
-  executor --> config["src/core/config/settings.zig"]
+  executor --> config["src/core/config/file.zig"]
   kernel --> memory["src/core/memory/derivative.zig"]
 
   context --> store
@@ -220,7 +227,7 @@ sequenceDiagram
 
 The review gate is a kernel state transition, not a copied reviewer-agent architecture. Read-only tools receive review evidence and continue through the existing dispatch. Write-capable, workspace-state, and delegation tools are classified from active `ToolDefinition.review_risk` metadata before execution. Tool names absent from the active catalog, including context-unavailable tools, are denied before dispatch and returned to the provider as `ToolReviewBlocked`, preserving the OpenAI-compatible tool-call protocol.
 
-Scoped delegation is validated at the agent-tool boundary. `launch_agent` carries `scope_depth`, `contact_budget`, `validation_status`, `escalation_reason`, and `parent_capability_profile`; `src/core/agents/scope.zig` rejects zero-value scope and rejects profile expansion without a reason. `src/core/agents/profile.zig` owns capability profiles as runtime capability boundaries over tool classes, delegation policy, budget policy, and provider inheritance. The parent agent uses child agents for branchable research/recon/audit/probe lanes, requires SITREP-shaped evidence, supervises through `list_agents` / `agent_status` / bounded `wait_agent`, and alone integrates the canonical response.
+Delegation is validated at one catalog-first agent boundary. In root orchestrator mode, `agents {}` must precede launch or configuration mutation. `launch_agent` accepts one `{ context, tasks[] }` batch whose task ids must come from that hot-loaded catalog. `core/agents/spec.zig` resolves editable personas over compiled execution-kind and capability-profile floors; custom ids must inherit through `extends`, so config cannot grant arbitrary tools or provider credentials. `configure_agent` validates and atomically replaces `config.json`; the next discovery or launch reads the new registry. Child prompts contain only the selected private capsule, explicit shared context, finite task, and output contract. The parent transcript is never copied into a child window.
 
 Derivative memory and evaluator evidence are deliberately non-authoritative. `src/core/memory/derivative.zig` requires `session_id`, `source_seq_start`, and `source_seq_end`, and rejects transcript replay-shaped payloads. `src/core/evaluation/events.zig` appends redacted heartbeat/evaluator events with evaluator mutation forbidden. RecursiveMAS latent transfer, GRASP gradients, dynamic markets, autonomous background evolution, exact tokenizer integration, and plugin auto-discovery remain unsupported behavior until there is a tested contract for cancellation, idempotency, cold-start recovery, and lifecycle ownership.
 
@@ -280,11 +287,21 @@ Every session directory contains:
 
 `messages.jsonl` is the complete append-only transcript. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested.
 
-`$VANTARI_HOME/config.json` is the canonical non-secret policy file. Its typed sections own runtime limits, wire API selection, context policy, prompt paths, and supported environment-style overrides. `$VANTARI_HOME/auth.json` is the sibling credential/provider ledger. API keys, OAuth tokens, account identity, and active-provider state never move into config output. Nested/AppData auth paths are one-time migration inputs; `settings.toml` is no longer a runtime reader.
+`$VANTARI_HOME/config.json` is the canonical non-secret policy file. Its typed sections own runtime limits, wire API selection, role routing, editable agent definitions, context policy, prompt paths, and supported environment-style overrides. Built-in agent rows may tune persona/condition/route/budgets or be disabled; custom ids must inherit a compiled capability floor. `$VANTARI_HOME/auth.json` is the sibling credential/provider ledger. API keys, OAuth tokens, account identity, and active-provider state never move into config output. Nested/AppData auth paths are one-time migration inputs; `settings.toml` is no longer a runtime reader. The Windows installer preserves valid config byte-for-byte and backs up plus materializes the current schema only when the retained file fails validation.
 
-`src/core/prompts/` owns the model-presented prompt envelope. When no project prompt override is configured, it uses compiled system/developer layers. When an override path is configured, the file must exist and contain non-whitespace content; missing or empty configured prompt layers fail closed. The builder then injects the hidden runtime guardrail layer from compiled code and appends the live tool catalog plus tool-use contract. Provider transport remains OpenAI-compatible by sending the resulting envelope as a system-role message while preserving internal/system/developer/tool boundaries inside the prompt text.
+`src/core/prompts/` owns the model-presented prompt envelope. When no project prompt override is configured, it uses compiled system/developer layers. When an override path is configured, the file must exist and contain non-whitespace content; missing or empty configured prompt layers fail closed. The builder then injects the hidden runtime guardrail layer and appends the live catalog plus a runtime-owned burst/checkpoint contract. Long work interleaves one bounded observable step, one tool/delegation action batch, evidence inspection, and one compact checkpoint naming changed state, proof, blocker or residual risk, and next action. The assistant checkpoint is persisted in `messages.jsonl`, included by later context rebuilds, and never requests private chain-of-thought. A checkpoint does not terminate the run; the loop continues until terminal proof or a named blocker. Provider transport remains OpenAI-compatible by sending the resulting envelope as a system-role message while preserving internal/system/developer/tool boundaries inside the prompt text.
 
-`store.ensureStoreReady(...)` validates and rewrites existing `.var/sessions/<id>/session.json` records into the current canonical shape. It does not read old roots, old-layout files, or old-layout fields.
+`store.ensureStoreReady(...)` creates the canonical sessions directory and initializes process-local sequence state. It never scans or rewrites existing `session.json` records. Explicit migrations own schema changes; this prevents startup cost from scaling with session count and prevents mixed-version processes from erasing additive fields they do not understand.
+
+## Role-routed agent execution
+
+`core/agents/spec.zig` owns stable specialist identity and hot-loads `config.json.agents.definitions`. An `AgentSpec` fixes execution kind, capability profile, route role, execution ceilings, recursion policy, and output contract. Built-in rows may be tuned or disabled; a custom id must extend one built-in floor. Operator configuration may remap provider, model, wire API, thinking mode, and context/output budgets through `core/providers/routes.zig`; it cannot weaken the inherited execution kind or capability profile.
+
+`core/agents/service.zig` validates one `{ context, tasks[] }` batch, resolves routes, persists secret-free execution receipts, then admits the group to `core/agents/supervisor.zig`. The supervisor owns one fixed `std.Thread.Pool`, O(1) group/parent indexes, a completion condition, cancellation, terminal-event ordering, and exactly-once convergence. Healthy wait/status paths do not scan `.var/sessions`; ledger traversal is an explicit cold-start recovery path.
+
+`core/executor/loop.zig` parks a waiting parent on the supervisor condition without a provider call. The first unconsumed terminal child wakes the parent; the service appends that child's convergence record exactly once, rebuilds through the context compiler, and permits the next routing/synthesis turn while unfinished siblings remain supervised. A parent cannot emit terminal output while any owned child remains active. Full specialists execute as ordinary isolated VAR1 child sessions. Tool-free `model_task` specialists use one provider turn and validate their supplied output schema without acquiring a second transcript or tool runtime.
+
+Child assistant/reasoning deltas and tool transcripts stay in the child ledger. The parent event spine receives only bounded control events: group start, admission, queue, start, material progress/wait, child terminal, group terminal, and convergence. Every child `session.json` keeps a heap-owned immutable execution receipt containing the secret-free resolved agent, route, model, wire API, budgets, group, and branch identity; explicit checked JSON decoding preserves that receipt across optimized status rewrites and cold recovery. CLI, stdio, and TUI consume the same projection. The TUI renders Search, Explore, Agents, and To-dos through one group/item grammar with `[ ]`, `[>]`, `[x]`, `[!]`, `[-]` markers and `|--` / `` `--`` child rails; no second status bus exists.
 
 ## Module ownership
 
@@ -312,8 +329,16 @@ Every session directory contains:
   sole owner for assembling internal guardrails, user-editable system/developer prompt layers, and the live tool-use contract
 - `src/core/tools/`
   typed tool socket namespace, built-in module registry/runtime, pre-dispatch review, availability resolver, command-backed search dispatch, and workspace-state helpers
-- `src/core/agents/`
-  child-session launch service, scoped delegation validation, and typed capability profiles
+- `src/core/agents/spec.zig`
+  stable specialist ids, execution-kind floors, capability profiles, route roles, budgets, and output contracts
+- `src/core/agents/service.zig`
+  batch validation, route/receipt persistence, supervisor admission, cold recovery, and convergence integration
+- `src/core/agents/supervisor.zig`
+  fixed-pool group execution, O(1) live indexes, condition-based wait, cancellation, terminal ordering, and exactly-once convergence
+- `src/core/agents/profile.zig` + `scope.zig`
+  runtime-enforced tool-class profiles and scoped delegation validation
+- `src/core/providers/routes.zig`
+  secret-bearing route resolution plus secret-free provider/model/wire/thinking identity for execution receipts
 - `src/core/memory/`
   canonical two-scope memory schema, append stores, bounded recall compiler, source evidence, and derivative-memory validation without duplicating `messages.jsonl`
 - `src/core/evaluation/`
@@ -322,14 +347,20 @@ Every session directory contains:
   plugin manifest/socket contracts only; plugin implementations do not live in core
 - `src/shared/protocol/types.zig`
   JSON-RPC methods and payload shapes
+- `src/host/stdio_wire.zig`
+  canonical Content-Length frame decoder/encoder and JSON-RPC envelope rendering
+- `src/host/stdio_client.zig`
+  local kernel child-process lifecycle, request/notification transport, response correlation, and monotonic notification queue
 - `src/host/stdio_rpc.zig`
-  Content-Length framed stdio host and local child-process client
+  kernel-side JSON-RPC dispatch, request workers, session subscriptions, and response emission
 - `src/host/bridge_access.zig`
   local HTTP bridge access policy for origin checks, token validation, key-and-value redaction, audit classification, and durable audit event emission
 - `src/host/http_bridge.zig`
   local HTTP bridge route transport for `/rpc`, `/events`, and `/api/health`
 - `src/clients/cli.zig`
   thin protocol-backed CLI
+- `src/clients/tui_chat.zig`
+  terminal projection over monotonic `session/event` notifications with burst draining and adaptive frame backpressure
 - `apps/frontend/var1-client`
   external static browser client over `/api/health`, `/rpc`, and `/events`
 
@@ -359,13 +390,18 @@ The current validation lane should always prove these slices together:
 - tool catalog reports availability metadata
 - tool calls record `tool_reviewed` before `tool_completed` or `tool_blocked`
 - file mutation tools declare and enforce bounded generated payloads before write side effects
-- delegated agent launches validate scoped delegation and capability profile fields
+- agent discovery precedes launch/config mutation; hot-loaded custom ids inherit compiled capability floors
+- role-routed agent batches prove bounded 1/5/20/100 admission, zero provider-spin waiting, O(1) healthy lookup, exact convergence, cancellation, and receipt recovery
+- parked parents wake on the first terminal child, compile each ready result once, and remain non-terminal while siblings are active
+- parent child-control events remain bounded while assistant/reasoning deltas stay in child ledgers
+- TUI activity families share one nested checkbox/rail projection driven by typed events
 - derivative memory rejects transcript replay while citing source sequence ranges
 - heartbeat/evaluator evidence appends redacted non-mutating events
 - auto and provider-overflow compaction write observable checkpoint/event records
 - session JSONL ledgers tolerate malformed and partial suffix rows without rewriting append-only history
 - context reconstruction reads `session.json`, latest valid `context.jsonl` checkpoint, and `messages.jsonl` through `core/context/builder.zig`
 - explicit prompt-layer configuration fails closed when the configured file is missing or empty
+- the runtime-owned burst/checkpoint/continuation contract survives project prompt overrides
 - shared text-file reads are bounded by `fsutil.max_text_file_bytes` instead of inheriting unbounded allocator reads
 - shared text-file writes commit through Zig `AtomicFile`, so canonical metadata updates avoid truncate-before-write corruption windows
 - health preflights stale local `VAR1.exe` process diagnostics before build/test gates

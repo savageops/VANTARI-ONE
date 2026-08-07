@@ -13,6 +13,18 @@ const types = @import("../../shared/types.zig");
 const ledger_sync_batch_window_ms: i64 = 100;
 var last_ledger_sync_ms: i64 = 0;
 var last_session_touch_ms: i64 = 0;
+var store_ready_mutex: std.Thread.Mutex = .{};
+var ready_workspaces: std.StringHashMapUnmanaged(void) = .{};
+
+const EventSeqState = struct {
+    mutex: std.Thread.Mutex = .{},
+    initialized: bool = false,
+    next_seq: u64 = 1,
+};
+
+var event_seq_registry_mutex: std.Thread.Mutex = .{};
+var event_seq_states: std.StringHashMapUnmanaged(*EventSeqState) = .{};
+var message_append_mutex: std.Thread.Mutex = .{};
 
 /// Force a durable flush for a session's ledgers. Called by the executor at
 /// turn boundaries (after the final assistant response / failure / cancel)
@@ -104,6 +116,34 @@ const ParsedSessionRecord = struct {
     updated_at_ms: i64,
 };
 
+const SessionRecordProjectionWithReceipt = struct {
+    id: []const u8,
+    prompt: []const u8,
+    status: []const u8,
+    parent_session_id: ?[]const u8,
+    continued_from_session_id: ?[]const u8,
+    display_name: ?[]const u8,
+    agent_profile: ?[]const u8,
+    execution_receipt: types.ExecutionReceiptView,
+    failure_reason: ?[]const u8,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+};
+
+const SessionRecordProjectionWithoutReceipt = struct {
+    id: []const u8,
+    prompt: []const u8,
+    status: []const u8,
+    parent_session_id: ?[]const u8,
+    continued_from_session_id: ?[]const u8,
+    display_name: ?[]const u8,
+    agent_profile: ?[]const u8,
+    execution_receipt: ?types.ExecutionReceiptView = null,
+    failure_reason: ?[]const u8,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+};
+
 const ParsedSessionEvent = struct {
     event_type: []const u8,
     message: []const u8,
@@ -142,32 +182,21 @@ const ParsedContextCheckpoint = struct {
 };
 
 pub fn ensureStoreReady(allocator: std.mem.Allocator, workspace_root: []const u8) !void {
+    store_ready_mutex.lock();
+    defer store_ready_mutex.unlock();
+    if (ready_workspaces.contains(workspace_root)) return;
+
+    // Startup owns path readiness only. Rewriting every historical session to
+    // the current projection is both O(session_count) and destructive under
+    // mixed-version processes because an older reader drops fields it does not
+    // know. Readers already tolerate additive fields and absent optional
+    // ledgers, so schema migration must remain an explicit owner action.
     const sessions_root = try sessionsRootPath(allocator, workspace_root);
     defer allocator.free(sessions_root);
 
-    if (!fsutil.fileExists(sessions_root)) return;
-
-    const sessions_root_abs = try fsutil.resolveAbsolute(allocator, sessions_root);
-    defer allocator.free(sessions_root_abs);
-
-    var dir = try std.fs.openDirAbsolute(sessions_root_abs, .{ .iterate = true });
-    defer dir.close();
-
-    var iter = dir.iterate();
-    while (try iter.next()) |entry| {
-        if (entry.kind != .directory) continue;
-
-        const session_path = try sessionFilePath(allocator, workspace_root, entry.name);
-        defer allocator.free(session_path);
-        if (!fsutil.fileExists(session_path)) continue;
-
-        const session = try readSessionRecordRaw(allocator, session_path);
-        defer session.deinit(allocator);
-        try writeSessionRecord(allocator, workspace_root, session);
-        const memories_path = try memoriesFilePath(allocator, workspace_root, entry.name);
-        defer allocator.free(memories_path);
-        if (!fsutil.fileExists(memories_path)) try fsutil.writeText(memories_path, "");
-    }
+    const owned_workspace = try std.heap.page_allocator.dupe(u8, workspace_root);
+    errdefer std.heap.page_allocator.free(owned_workspace);
+    try ready_workspaces.put(std.heap.page_allocator, owned_workspace, {});
 }
 
 pub fn initSession(allocator: std.mem.Allocator, workspace_root: []const u8, prompt: []const u8) !types.SessionRecord {
@@ -179,6 +208,26 @@ pub fn initSessionWithOptions(
     workspace_root: []const u8,
     prompt: []const u8,
     options: InitSessionOptions,
+) !types.SessionRecord {
+    return initSessionRecord(allocator, workspace_root, prompt, options, null);
+}
+
+pub fn initSessionWithExecutionReceipt(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    prompt: []const u8,
+    options: InitSessionOptions,
+    execution_receipt: *const types.ExecutionReceiptView,
+) !types.SessionRecord {
+    return initSessionRecord(allocator, workspace_root, prompt, options, execution_receipt);
+}
+
+fn initSessionRecord(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    prompt: []const u8,
+    options: InitSessionOptions,
+    execution_receipt_view: ?*const types.ExecutionReceiptView,
 ) !types.SessionRecord {
     try ensureStoreReady(allocator, workspace_root);
 
@@ -198,6 +247,11 @@ pub fn initSessionWithOptions(
     errdefer if (display_name) |value| allocator.free(value);
     const agent_profile = if (options.agent_profile) |value| try allocator.dupe(u8, value) else null;
     errdefer if (agent_profile) |value| allocator.free(value);
+    const execution_receipt = if (execution_receipt_view) |value| try cloneExecutionReceiptOwned(allocator, value.*) else null;
+    errdefer if (execution_receipt) |value| {
+        value.deinit(allocator);
+        allocator.destroy(value);
+    };
 
     const session = types.SessionRecord{
         .id = id,
@@ -207,6 +261,7 @@ pub fn initSessionWithOptions(
         .continued_from_session_id = continued_from_session_id,
         .display_name = display_name,
         .agent_profile = agent_profile,
+        .execution_receipt = execution_receipt,
         .created_at_ms = now,
         .updated_at_ms = now,
     };
@@ -238,6 +293,24 @@ pub fn readSessionRecord(
     });
     defer parsed.deinit();
 
+    // Parse the receipt as a non-optional concrete object after inspecting the
+    // JSON field. Clean Zig 0.15.1 ReleaseFast builds can otherwise lower the
+    // large optional-by-value receipt to null during a later status rewrite.
+    var parsed_value = try std.json.parseFromSlice(std.json.Value, allocator, content, .{});
+    defer parsed_value.deinit();
+    const receipt_value = switch (parsed_value.value) {
+        .object => |object| object.get("execution_receipt"),
+        else => null,
+    };
+    const execution_receipt = if (receipt_value) |value| switch (value) {
+        .null => null,
+        else => try parseExecutionReceiptOwned(allocator, value),
+    } else null;
+    errdefer if (execution_receipt) |value| {
+        value.deinit(allocator);
+        allocator.destroy(value);
+    };
+
     return .{
         .id = try allocator.dupe(u8, parsed.value.id),
         .prompt = try allocator.dupe(u8, parsed.value.prompt),
@@ -246,6 +319,7 @@ pub fn readSessionRecord(
         .continued_from_session_id = if (parsed.value.continued_from_session_id) |value| try allocator.dupe(u8, value) else null,
         .display_name = if (parsed.value.display_name) |value| try allocator.dupe(u8, value) else null,
         .agent_profile = if (parsed.value.agent_profile) |value| try allocator.dupe(u8, value) else null,
+        .execution_receipt = execution_receipt,
         .failure_reason = if (parsed.value.failure_reason) |value| try allocator.dupe(u8, value) else null,
         .created_at_ms = parsed.value.created_at_ms,
         .updated_at_ms = parsed.value.updated_at_ms,
@@ -267,24 +341,138 @@ pub fn writeSessionRecord(
     const session_path = try sessionFilePath(allocator, workspace_root, session.id);
     defer allocator.free(session_path);
 
-    const payload = .{
-        .id = session.id,
-        .prompt = session.prompt,
-        .status = types.statusLabel(session.status),
-        .parent_session_id = session.parent_session_id,
-        .continued_from_session_id = session.continued_from_session_id,
-        .display_name = session.display_name,
-        .agent_profile = session.agent_profile,
-        .failure_reason = session.failure_reason,
-        .created_at_ms = session.created_at_ms,
-        .updated_at_ms = session.updated_at_ms,
-    };
-    const json = try std.fmt.allocPrint(allocator, "{f}\n", .{
-        std.json.fmt(payload, .{ .whitespace = .indent_2 }),
-    });
+    // Keep active and absent receipt payloads in distinct concrete types.
+    // This avoids Zig 0.15.1 ReleaseFast lowering an active nested optional to
+    // JSON null while preserving the explicit null field for root sessions.
+    const json = if (session.execution_receipt) |value|
+        try std.fmt.allocPrint(allocator, "{f}\n", .{std.json.fmt(SessionRecordProjectionWithReceipt{
+            .id = session.id,
+            .prompt = session.prompt,
+            .status = types.statusLabel(session.status),
+            .parent_session_id = session.parent_session_id,
+            .continued_from_session_id = session.continued_from_session_id,
+            .display_name = session.display_name,
+            .agent_profile = session.agent_profile,
+            .execution_receipt = value.*.view(),
+            .failure_reason = session.failure_reason,
+            .created_at_ms = session.created_at_ms,
+            .updated_at_ms = session.updated_at_ms,
+        }, .{ .whitespace = .indent_2 })})
+    else
+        try std.fmt.allocPrint(allocator, "{f}\n", .{std.json.fmt(SessionRecordProjectionWithoutReceipt{
+            .id = session.id,
+            .prompt = session.prompt,
+            .status = types.statusLabel(session.status),
+            .parent_session_id = session.parent_session_id,
+            .continued_from_session_id = session.continued_from_session_id,
+            .display_name = session.display_name,
+            .agent_profile = session.agent_profile,
+            .failure_reason = session.failure_reason,
+            .created_at_ms = session.created_at_ms,
+            .updated_at_ms = session.updated_at_ms,
+        }, .{ .whitespace = .indent_2 })});
     defer allocator.free(json);
 
     try fsutil.writeText(session_path, json);
+}
+
+/// Clone the secret-free execution contract into session-owned memory.
+fn cloneExecutionReceipt(allocator: std.mem.Allocator, value: types.ExecutionReceiptView) !types.ExecutionReceipt {
+    return .{
+        .schema_version = value.schema_version,
+        .execution_kind = try allocator.dupe(u8, value.execution_kind),
+        .agent_spec_id = try allocator.dupe(u8, value.agent_spec_id),
+        .route_role = try allocator.dupe(u8, value.route_role),
+        .provider_id = try allocator.dupe(u8, value.provider_id),
+        .model = try allocator.dupe(u8, value.model),
+        .wire_api = try allocator.dupe(u8, value.wire_api),
+        .thinking_mode = try allocator.dupe(u8, value.thinking_mode),
+        .capability_profile_id = try allocator.dupe(u8, value.capability_profile_id),
+        .capability_hash = try allocator.dupe(u8, value.capability_hash),
+        .parent_session_id = try allocator.dupe(u8, value.parent_session_id),
+        .parent_checkpoint_id = try allocator.dupe(u8, value.parent_checkpoint_id),
+        .group_id = try allocator.dupe(u8, value.group_id),
+        .task_id = try allocator.dupe(u8, value.task_id),
+        .branch_seq = value.branch_seq,
+        .budget = value.budget,
+        .output_schema_hash = try allocator.dupe(u8, value.output_schema_hash),
+        .created_at_ms = value.created_at_ms,
+    };
+}
+
+fn cloneExecutionReceiptOwned(allocator: std.mem.Allocator, value: types.ExecutionReceiptView) !*types.ExecutionReceipt {
+    const owned = try allocator.create(types.ExecutionReceipt);
+    errdefer allocator.destroy(owned);
+    owned.* = try cloneExecutionReceipt(allocator, value);
+    return owned;
+}
+
+/// Decode receipt fields explicitly instead of routing the large nested shape
+/// through `std.json.parseFromValue`. Zig 0.15.1 instantiates an invalid f64
+/// overflow comparison for u64/usize fields in that generic path. The
+/// persisted contract only admits integral JSON values, so explicit checked
+/// casts are both smaller and stricter.
+fn parseExecutionReceiptOwned(allocator: std.mem.Allocator, value: std.json.Value) !*types.ExecutionReceipt {
+    if (value != .object) return error.InvalidExecutionReceipt;
+    const object = value.object;
+    const budget_value = object.get("budget") orelse return error.InvalidExecutionReceipt;
+    if (budget_value != .object) return error.InvalidExecutionReceipt;
+    const budget = budget_value.object;
+
+    return cloneExecutionReceiptOwned(allocator, .{
+        .schema_version = try receiptU16(object, "schema_version", 1),
+        .execution_kind = try receiptString(object, "execution_kind"),
+        .agent_spec_id = try receiptString(object, "agent_spec_id"),
+        .route_role = try receiptString(object, "route_role"),
+        .provider_id = try receiptString(object, "provider_id"),
+        .model = try receiptString(object, "model"),
+        .wire_api = try receiptString(object, "wire_api"),
+        .thinking_mode = try receiptString(object, "thinking_mode"),
+        .capability_profile_id = try receiptString(object, "capability_profile_id"),
+        .capability_hash = try receiptString(object, "capability_hash"),
+        .parent_session_id = try receiptString(object, "parent_session_id"),
+        .parent_checkpoint_id = try receiptString(object, "parent_checkpoint_id"),
+        .group_id = try receiptString(object, "group_id"),
+        .task_id = try receiptString(object, "task_id"),
+        .branch_seq = try receiptU64(object, "branch_seq"),
+        .budget = .{
+            .max_steps = try receiptUsize(budget, "max_steps"),
+            .max_tool_calls = try receiptUsize(budget, "max_tool_calls"),
+            .max_children = try receiptUsize(budget, "max_children"),
+        },
+        .output_schema_hash = try receiptString(object, "output_schema_hash"),
+        .created_at_ms = try receiptI64(object, "created_at_ms"),
+    });
+}
+
+fn receiptString(object: std.json.ObjectMap, key: []const u8) ![]const u8 {
+    const value = object.get(key) orelse return error.InvalidExecutionReceipt;
+    if (value != .string) return error.InvalidExecutionReceipt;
+    return value.string;
+}
+
+fn receiptU16(object: std.json.ObjectMap, key: []const u8, default: u16) !u16 {
+    const value = object.get(key) orelse return default;
+    if (value != .integer or value.integer < 0) return error.InvalidExecutionReceipt;
+    return std.math.cast(u16, value.integer) orelse error.InvalidExecutionReceipt;
+}
+
+fn receiptU64(object: std.json.ObjectMap, key: []const u8) !u64 {
+    const value = object.get(key) orelse return error.InvalidExecutionReceipt;
+    if (value != .integer or value.integer < 0) return error.InvalidExecutionReceipt;
+    return std.math.cast(u64, value.integer) orelse error.InvalidExecutionReceipt;
+}
+
+fn receiptUsize(object: std.json.ObjectMap, key: []const u8) !usize {
+    const value = object.get(key) orelse return error.InvalidExecutionReceipt;
+    if (value != .integer or value.integer < 0) return error.InvalidExecutionReceipt;
+    return std.math.cast(usize, value.integer) orelse error.InvalidExecutionReceipt;
+}
+
+fn receiptI64(object: std.json.ObjectMap, key: []const u8) !i64 {
+    const value = object.get(key) orelse return error.InvalidExecutionReceipt;
+    if (value != .integer) return error.InvalidExecutionReceipt;
+    return value.integer;
 }
 
 pub fn touchSessionUpdatedAt(
@@ -357,15 +545,6 @@ pub fn setSessionFailure(
     try writeSessionRecord(allocator, workspace_root, session.*);
 }
 
-/// In-memory event seq cache. The previous implementation called
-/// `nextEventSeq` on EVERY event append, which reads the full events.jsonl
-/// and scans backward — O(n²) during streaming. This cache stores the last
-/// seq for the active session so only the first append reads from disk.
-/// The cache uses a fixed buffer (no allocation) so it's safe across tests.
-var cached_seq_buf: [256]u8 = undefined;
-var cached_seq_len: usize = 0;
-var cached_next_seq: u64 = 0;
-
 pub fn appendEvent(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
@@ -375,25 +554,15 @@ pub fn appendEvent(
     const events_path = try eventsFilePath(allocator, workspace_root, session_id);
     defer allocator.free(events_path);
 
-    // Use cached seq if this is the same session as last append. This avoids
-    // the O(n) disk read + backward scan on every streaming delta.
-    const use_cache = cached_seq_len > 0 and
-        cached_seq_len == session_id.len and
-        std.mem.eql(u8, cached_seq_buf[0..cached_seq_len], session_id);
-
-    const next_seq: u64 = if (use_cache) blk: {
-        const s = cached_next_seq;
-        cached_next_seq += 1;
-        break :blk s;
-    } else blk: {
-        // Cold start or session change: read from disk.
-        const from_disk = try nextEventSeq(allocator, events_path);
-        const copy_len = @min(session_id.len, cached_seq_buf.len);
-        @memcpy(cached_seq_buf[0..copy_len], session_id[0..copy_len]);
-        cached_seq_len = copy_len;
-        cached_next_seq = from_disk + 1;
-        break :blk from_disk;
-    };
+    const seq_state = try eventSeqState(workspace_root, session_id);
+    seq_state.mutex.lock();
+    defer seq_state.mutex.unlock();
+    if (!seq_state.initialized) {
+        seq_state.next_seq = try nextEventSeq(allocator, events_path);
+        seq_state.initialized = true;
+    }
+    const next_seq = seq_state.next_seq;
+    seq_state.next_seq += 1;
 
     var event_with_seq = event;
     event_with_seq.seq = next_seq;
@@ -403,7 +572,27 @@ pub fn appendEvent(
     });
     defer allocator.free(jsonl);
 
-    try appendJsonlRecord(events_path, jsonl);
+    appendJsonlRecord(events_path, jsonl) catch |err| {
+        seq_state.initialized = false;
+        return err;
+    };
+}
+
+/// Return a stable per-session sequencer so concurrent children never share a cursor cache.
+fn eventSeqState(workspace_root: []const u8, session_id: []const u8) !*EventSeqState {
+    const key = try std.fmt.allocPrint(std.heap.page_allocator, "{s}\x1f{s}", .{ workspace_root, session_id });
+    event_seq_registry_mutex.lock();
+    defer event_seq_registry_mutex.unlock();
+    if (event_seq_states.get(key)) |state| {
+        std.heap.page_allocator.free(key);
+        return state;
+    }
+
+    const state = try std.heap.page_allocator.create(EventSeqState);
+    errdefer std.heap.page_allocator.destroy(state);
+    state.* = .{};
+    try event_seq_states.put(std.heap.page_allocator, key, state);
+    return state;
 }
 
 pub fn readLatestEvent(
@@ -606,6 +795,8 @@ pub fn appendSessionMessageWithReasoning(
     reasoning: ?[]const u8,
     timestamp_ms: i64,
 ) !void {
+    message_append_mutex.lock();
+    defer message_append_mutex.unlock();
     const messages_path = try messagesFilePath(allocator, workspace_root, session_id);
     defer allocator.free(messages_path);
 
@@ -630,6 +821,43 @@ pub fn appendSessionMessageWithReasoning(
     defer allocator.free(jsonl);
 
     try appendJsonlRecord(messages_path, jsonl);
+}
+
+/// Append a deterministic message at most once for idempotent group convergence.
+pub fn appendSessionMessageOnce(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    message_id: []const u8,
+    role: types.SessionMessageRole,
+    content: []const u8,
+    timestamp_ms: i64,
+) !bool {
+    message_append_mutex.lock();
+    defer message_append_mutex.unlock();
+    const messages_path = try messagesFilePath(allocator, workspace_root, session_id);
+    defer allocator.free(messages_path);
+    if (!fsutil.fileExists(messages_path)) try writeSessionMessages(allocator, messages_path, &.{});
+
+    const existing = try readSessionMessagesFromPath(allocator, messages_path);
+    defer types.deinitSessionMessages(allocator, existing);
+    for (existing) |message| {
+        if (std.mem.eql(u8, message.id, message_id)) return false;
+    }
+
+    const next_seq = try nextSessionMessageSeq(allocator, messages_path);
+    const jsonl = try std.fmt.allocPrint(allocator, "{f}\n", .{
+        std.json.fmt(.{
+            .id = message_id,
+            .seq = next_seq,
+            .role = types.sessionMessageRoleLabel(role),
+            .content = content,
+            .timestamp_ms = timestamp_ms,
+        }, .{}),
+    });
+    defer allocator.free(jsonl);
+    try appendJsonlRecord(messages_path, jsonl);
+    return true;
 }
 
 pub fn upsertAssistantSessionMessage(
@@ -1445,31 +1673,4 @@ fn nextEventSeq(
 
 fn sessionMessageId(allocator: std.mem.Allocator, seq: u64) ![]u8 {
     return std.fmt.allocPrint(allocator, "msg-{d}", .{seq});
-}
-
-fn readSessionRecordRaw(
-    allocator: std.mem.Allocator,
-    session_path: []const u8,
-) !types.SessionRecord {
-    const raw_content = try fsutil.readTextAlloc(allocator, session_path);
-    defer allocator.free(raw_content);
-    const content = stripUtf8Bom(raw_content);
-
-    var parsed = try std.json.parseFromSlice(ParsedSessionRecord, allocator, content, .{
-        .ignore_unknown_fields = true,
-    });
-    defer parsed.deinit();
-
-    return .{
-        .id = try allocator.dupe(u8, parsed.value.id),
-        .prompt = try allocator.dupe(u8, parsed.value.prompt),
-        .status = try types.parseStatusLabel(parsed.value.status),
-        .parent_session_id = if (parsed.value.parent_session_id) |value| try allocator.dupe(u8, value) else null,
-        .continued_from_session_id = if (parsed.value.continued_from_session_id) |value| try allocator.dupe(u8, value) else null,
-        .display_name = if (parsed.value.display_name) |value| try allocator.dupe(u8, value) else null,
-        .agent_profile = if (parsed.value.agent_profile) |value| try allocator.dupe(u8, value) else null,
-        .failure_reason = if (parsed.value.failure_reason) |value| try allocator.dupe(u8, value) else null,
-        .created_at_ms = parsed.value.created_at_ms,
-        .updated_at_ms = parsed.value.updated_at_ms,
-    };
 }

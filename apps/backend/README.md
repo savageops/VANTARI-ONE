@@ -55,7 +55,7 @@ Runtime code is physically partitioned by ownership under `src/`:
 | `shared` | `VAR1.shared` | `shared/types.zig`, `shared/fsutil.zig`, `shared/protocol/` | contracts, filesystem helpers, wire payloads |
 | `core` | `VAR1.core` | `core/config/`, `core/sessions/`, `core/executor/`, `core/providers/`, `core/tools/`, `core/agents/`, `core/auth/` | execution, state, provider transport, tools, delegation, auth resolution |
 | `host` | `VAR1.host` | `host/stdio_rpc.zig`, `host/http_bridge.zig`, `host/bridge_access.zig` | stdio RPC host, HTTP bridge, local browser access policy, and durable bridge audit sink |
-| `clients` | `VAR1.clients` | `clients/cli.zig` | protocol-backed client shell |
+| `clients` | `VAR1.clients` | `clients/cli.zig`, `clients/tui_chat.zig` | protocol-backed CLI and terminal read model |
 
 The browser client lives outside the kernel at `apps/frontend/var1-client`.
 
@@ -81,7 +81,11 @@ An installed runtime must provide a real `iex` executable for `search_files`. Po
 
 The executor now has a review-before-effect state transition for tool calls. `src/core/executor/loop.zig` appends `tool_requested`, passes the active `ToolDefinition` catalog into `src/core/tools/review.zig`, appends `tool_reviewed`, and then either dispatches through `src/core/tools/runtime.zig` or appends `tool_blocked` with a protocol-visible denial result. Risk classification comes from each module-owned `ToolDefinition.review_risk`; the blocked path preserves the provider tool-message contract while preventing unknown or context-unavailable tools from reaching an implementation branch.
 
-Delegation is scoped, not implicit. The `launch_agent` tool accepts `scope_depth`, `contact_budget`, `validation_status`, `escalation_reason`, and `parent_capability_profile`; `src/core/agents/scope.zig` rejects zero-value scope and rejects expansion beyond the default profile without an escalation reason. `src/core/agents/profile.zig` owns `root` and `subagent` capability profiles as typed execution boundaries over tool classes, delegation policy, budget policy, and provider inheritance. They are not UI roles, company roles, or provider prompt taxonomy. Use delegation for branchable research, directory/codebase reconnaissance, isolated file audits, and validation probes that can return a SITREP while the parent continues integration. The parent owns launch decisions, status/wait supervision, contradiction reconciliation, and the final operator response.
+Agent orchestration is catalog-first. In `agents.orchestrator_only` mode, the root receives only `agents`, `launch_agent`, `configure_agent`, `list_agents`, `agent_status`, `wait_agent`, and `cancel_agents`; its first tool call must be `agents {}`. That compact hot-loaded catalog exposes selection fields without loading private child instructions into the parent window. `launch_agent` accepts one `{ context, tasks[] }` batch, and every task chooses an id from the latest catalog. `configure_agent` atomically upserts, disables, or resets `config.json.agents.definitions` and the next `agents` or launch call reloads it without a process restart.
+
+`src/core/agents/spec.zig` fixes each built-in capability floor and allows custom ids only through `extends`. `src/core/providers/routes.zig` maps route roles to provider, model, wire API, thinking mode, and budgets. `src/core/agents/supervisor.zig` owns bounded in-process admission, first-result wakeups, cancellation, and exactly-once convergence. A child receives only its private instruction capsule, explicit shared context, finite task, and output contract; it never inherits the parent transcript. The parent may park with zero provider calls or continue independent orchestration work. When the first terminal child becomes ready, the kernel appends one bounded convergence record, rebuilds the parent through the context compiler, and resumes automatically while unfinished siblings remain supervised.
+
+The TUI projects tools and children through one nested activity grammar. Search, Explore, Agents, and To-dos use the same pending `[ ]`, running `[>]`, completed `[x]`, failed `[!]`, and cancelled `[-]` markers. Typed child and tool-output items render under their stable group row with `|--` / `` `--`` rail connectors. Replayed events rebuild the same rows after cold start; there is no client-owned status bus or fake timer state.
 
 Memory and evaluation stay evidence-bound. `src/core/memory/derivative.zig` defines derivative memory entries that cite `session_id`, `source_seq_start`, and `source_seq_end`, and rejects transcript replay-shaped summaries. `src/core/evaluation/events.zig` appends redacted `runtime_heartbeat`, `evaluator_result`, and `runtime_unsupported_behavior` events; evaluator results carry `executor_mutation:"forbidden"` and never mutate loop state through a side channel.
 
@@ -218,11 +222,11 @@ Use `.env.example` only as a bootstrap template. Installed runtime state uses tw
   auth.json
 ```
 
-`vantari config path|show|init|validate` exposes the non-secret configuration owner. The standards-valid JSON template documents every value through adjacent `_help` maps and records ownership/precedence in `_about`; these keys are validated metadata and never runtime policy. Process environment values override the matching `config.json.environment` entries. API keys remain in `auth.json` and are never rendered by config commands.
+`vantari config path|show|init|validate` exposes the non-secret configuration owner. The standards-valid JSON template documents every value through adjacent `_help` maps and records ownership/precedence in `_about`; these keys are validated metadata and never runtime policy. `agents.definitions` carries editable specialist personas, conditional `when_to_use` text, route roles, bounded budgets, and output contracts; credentials and arbitrary tool grants are rejected. The Windows installer retains valid operator config verbatim. When an older invalid v1 file cannot load the current schema, it writes a timestamped byte-identical backup, materializes the complete template, preserves the known `context.auto_compact` setting as `auto_compaction`, and validates before keeping the migration. Process environment values override the matching `config.json.environment` entries. API keys remain in `auth.json` and are never rendered by config commands.
 
 The step policy and tool-call policy are separate controls. `MAX_STEPS` limits provider turns; `MAX_TOOL_CALLS_PER_TURN` and `MAX_TOOL_CALLS_PER_SESSION` limit the number of tool effects the model may request before dispatch. The context policy controls only model-window behavior. `messages.jsonl` stays append-only, `context.jsonl` stays the checkpoint ledger, manual `session/compact` remains available when `manual_compaction = true`, and executor auto-compaction calls the same compactor when estimates or provider overflow require a smaller model-visible window.
 
-Prompt policy controls only user-editable model instructions. `src/core/prompts/` always wraps those optional files with a hidden kernel guardrail layer and the current tool-use contract. Prompt paths are workspace-relative JSON strings; null uses the built-in layer, while missing, empty, absolute, or mistyped configured values fail closed.
+Prompt policy controls only user-editable model instructions. `src/core/prompts/` always wraps those optional files with a hidden kernel guardrail layer and the current tool-use contract. The runtime-owned contract requires bounded action bursts: state one observable step, act through a tool or delegation, inspect evidence, emit a compact checkpoint with changed state/proof/blocker/next action, then continue until terminal proof or a named blocker. Checkpoints are operator-visible transcript/context history, not private chain-of-thought, and remain present when project system/developer prompt files override the defaults. Prompt paths are workspace-relative JSON strings; null uses the built-in layer, while missing, empty, absolute, or mistyped configured values fail closed.
 
 ## Files worth reading first
 
@@ -242,8 +246,11 @@ Prompt policy controls only user-editable model instructions. `src/core/prompts/
 - `src/core/tools/review.zig`
 - `src/core/tools/registry.zig`
 - `src/core/tools/builtin/`
+- `src/core/agents/spec.zig`
+- `src/core/agents/supervisor.zig`
 - `src/core/agents/profile.zig`
 - `src/core/agents/scope.zig`
+- `src/core/providers/routes.zig`
 - `src/core/memory/derivative.zig`
 - `src/core/evaluation/events.zig`
 - `tests/`

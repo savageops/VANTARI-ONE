@@ -30,15 +30,89 @@ const Role = enum {
     system,
 };
 
+const ActivityKind = enum {
+    none,
+    group,
+    item,
+};
+
+const ActivityState = enum {
+    pending,
+    running,
+    completed,
+    failed,
+    cancelled,
+};
+
+const stream_min_frame_ns: u64 = 16 * std.time.ns_per_ms;
+const stream_max_adaptive_frame_ns: u64 = 100 * std.time.ns_per_ms;
+const stream_idle_wait_ms: usize = 100;
+const max_notifications_per_frame: usize = 128;
+
+fn nextStreamWaitMs(redraw_pending: bool, elapsed_ns: u64, frame_interval_ns: u64) usize {
+    if (!redraw_pending) return stream_idle_wait_ms;
+    if (elapsed_ns >= frame_interval_ns) return 0;
+
+    const remaining_ns = frame_interval_ns - elapsed_ns;
+    const rounded_ms = (remaining_ns + std.time.ns_per_ms - 1) / std.time.ns_per_ms;
+    return @min(stream_idle_wait_ms, @max(@as(usize, 1), @as(usize, @intCast(rounded_ms))));
+}
+
 const Message = struct {
     role: Role,
     text: []u8,
+    text_capacity: usize = 0,
     tool_call_id: ?[]u8 = null,
+    activity_parent_id: ?[]u8 = null,
+    activity_kind: ActivityKind = .none,
+    activity_state: ActivityState = .pending,
+    activity_last: bool = false,
     pending: bool = false,
 
     fn deinit(self: Message, allocator: std.mem.Allocator) void {
-        allocator.free(self.text);
+        self.freeText(allocator);
         if (self.tool_call_id) |tool_call_id| allocator.free(tool_call_id);
+        if (self.activity_parent_id) |parent_id| allocator.free(parent_id);
+    }
+
+    fn freeText(self: Message, allocator: std.mem.Allocator) void {
+        if (self.text_capacity == 0) {
+            allocator.free(self.text);
+        } else {
+            allocator.free(self.text.ptr[0..self.text_capacity]);
+        }
+    }
+
+    fn replaceTextOwned(self: *Message, allocator: std.mem.Allocator, replacement: []u8) void {
+        self.freeText(allocator);
+        self.text = replacement;
+        self.text_capacity = 0;
+    }
+
+    fn appendText(self: *Message, allocator: std.mem.Allocator, suffix: []const u8) !void {
+        if (suffix.len == 0) return;
+        if (suffix.len > std.math.maxInt(usize) - self.text.len) return error.OutOfMemory;
+
+        const previous_len = self.text.len;
+        const required_len = previous_len + suffix.len;
+        const current_capacity = if (self.text_capacity == 0) previous_len else self.text_capacity;
+
+        if (required_len > current_capacity) {
+            const next_capacity = @max(required_len, @max(@as(usize, 64), current_capacity *| 2));
+            const storage = if (self.text_capacity == 0) blk: {
+                const allocated = try allocator.alloc(u8, next_capacity);
+                @memcpy(allocated[0..previous_len], self.text);
+                allocator.free(self.text);
+                break :blk allocated;
+            } else try allocator.realloc(self.text.ptr[0..self.text_capacity], next_capacity);
+
+            self.text = storage[0..required_len];
+            self.text_capacity = next_capacity;
+        } else {
+            self.text = self.text.ptr[0..required_len];
+        }
+
+        @memcpy(self.text[previous_len..], suffix);
     }
 };
 
@@ -64,22 +138,7 @@ const ChatState = struct {
     /// are appended here and rendered as a single dimmed block, not
     /// one row per token.
     reasoning_buffer: std.ArrayList(u8) = .{},
-    /// Typewriter animation: instead of showing all buffered text instantly,
-    /// reveal characters progressively with an ease-in/ease-out cadence.
-    /// `anim_reveal_count` tracks how many chars of the combined reasoning +
-    /// assistant text are currently visible. Each draw tick advances the
-    /// reveal by a variable amount — fast when far behind (ease-in), slower
-    /// as it catches up (ease-out), creating the natural Disney/Apple motion
-    /// curve that makes streaming feel smooth even when tokens arrive in bursts.
-    anim_reveal_count: usize = 0,
-    anim_last_draw_ms: i64 = 0,
     last_notification_sequence: u64 = 0,
-    last_durable_event_count: usize = 0,
-    /// Monotonic event seq cursor for durable re-sync (roadmap P1-16).
-    /// Replaces positional indexing with seq-based cursor so torn writes
-    /// that drop events from the prefix don't desync the cursor.
-    last_durable_event_seq: u64 = 0,
-    last_durable_sync_ms: i64 = 0,
     last_transcript_body_width: usize = 80,
 
     fn deinit(self: *ChatState) void {
@@ -140,8 +199,6 @@ const ChatState = struct {
         for (self.seen_progress_events.items) |event_key| self.allocator.free(event_key);
         self.seen_progress_events.clearRetainingCapacity();
         self.last_notification_sequence = 0;
-        self.last_durable_sync_ms = 0;
-        self.last_durable_event_count = parsed_get.value.events.len;
         self.scroll_offset = 0;
         self.waiting = false;
         self.cancel_requested = false;
@@ -152,6 +209,7 @@ const ChatState = struct {
         try self.hydrateTranscript(parsed_get.value.messages);
         for (parsed_get.value.events) |event| {
             _ = try self.markProgressEventSeen(event.event_type, event.message, event.timestamp_ms);
+            if (replayProgressEvent(event.event_type)) try self.addProgress(event.event_type, event.message);
         }
         self.jumpToBottom();
     }
@@ -181,12 +239,12 @@ const ChatState = struct {
     ) !void {
         if (prompt.len == 0) return;
         self.jumpToBottom();
+        self.clearReasoningBuffer();
         try self.add(.user, prompt);
         self.status = "RUNNING";
         self.waiting = true;
         self.cancel_requested = false;
         self.received_assistant_delta = false;
-        self.last_durable_sync_ms = 0;
         try self.startAssistantPlaceholder();
         input.clearAndFree();
         try draw(vx, writer, self, input);
@@ -283,18 +341,43 @@ const ChatState = struct {
 
         const thread = try std.Thread.spawn(.{}, runSessionSend, .{&send_job});
 
-        // Block on notifications with a short timeout. This avoids busy-polling
-        // while still being responsive to UI events. The blocking wait sleeps
-        // the thread until a notification arrives or the timeout fires.
+        var render_clock = try std.time.Timer.start();
+        var last_render_finished_ns = render_clock.read();
+        var last_frame_cost_ns: u64 = 0;
+        var redraw_pending = false;
+
+        // Fold every notification burst into one frame. The cadence follows
+        // the reference TUI invariant: never discard stream state, never paint
+        // faster than the terminal can absorb, and keep input responsive.
         while (!send_job.isDone()) {
-            // Wait up to 100ms for a notification — this is the only sleep.
-            // If notifications arrive, drainProgress returns immediately with them.
-            var changed = try self.drainProgress(session_id, 100);
+            const now_ns = render_clock.read();
+            const adaptive_frame_ns = @max(
+                stream_min_frame_ns,
+                @min(stream_max_adaptive_frame_ns, last_frame_cost_ns *| 2),
+            );
+            const wait_ms = nextStreamWaitMs(
+                redraw_pending,
+                now_ns -| last_render_finished_ns,
+                adaptive_frame_ns,
+            );
+
+            var changed = try self.drainProgress(session_id, wait_ms);
             if (try self.drainUiEventsDuringTurn(vx, tty, loop, session_id, input)) changed += 1;
-            if (changed > 0) try draw(vx, writer, self, input);
+            redraw_pending = redraw_pending or changed > 0;
+
+            const ready_ns = render_clock.read();
+            if (redraw_pending and ready_ns -| last_render_finished_ns >= adaptive_frame_ns) {
+                const frame_start_ns = ready_ns;
+                try draw(vx, writer, self, input);
+                const frame_end_ns = render_clock.read();
+                last_frame_cost_ns = frame_end_ns -| frame_start_ns;
+                last_render_finished_ns = frame_end_ns;
+                redraw_pending = false;
+            }
         }
         thread.join();
-        _ = try self.drainProgress(session_id, 0);
+        if (try self.drainProgress(session_id, 0) > 0) redraw_pending = true;
+        if (redraw_pending) try draw(vx, writer, self, input);
 
         if (send_job.err) |err| return err;
         const send_call = send_job.result orelse return error.InvalidRpcResponse;
@@ -315,12 +398,21 @@ const ChatState = struct {
 
     fn drainProgress(self: *ChatState, session_id: []const u8, timeout_ms: usize) !usize {
         var changed: usize = 0;
+        var processed: usize = 0;
+        var wait_ms = timeout_ms;
         while (true) {
-            const notification = try self.client.waitForNotificationAfter(self.last_notification_sequence, timeout_ms) orelse return changed;
-            defer notification.deinit(self.allocator);
+            const notification = try self.client.waitForNotificationAfter(self.last_notification_sequence, wait_ms) orelse return changed;
             self.last_notification_sequence = notification.sequence;
-            if (try self.recordProgressNotification(session_id, notification)) changed += 1;
-            if (timeout_ms > 0) return changed;
+            const notification_changed = self.recordProgressNotification(session_id, notification) catch |err| {
+                notification.deinit(self.allocator);
+                return err;
+            };
+            notification.deinit(self.allocator);
+            if (notification_changed) changed += 1;
+
+            processed += 1;
+            wait_ms = 0;
+            if (timeout_ms > 0 and processed >= max_notifications_per_frame) return changed;
         }
     }
 
@@ -371,6 +463,12 @@ const ChatState = struct {
     }
 
     fn addProgress(self: *ChatState, event_type: []const u8, message: []const u8) !void {
+        if (std.mem.eql(u8, event_type, "child_convergence_started") or
+            std.mem.eql(u8, event_type, "session_waiting")) return;
+        if (std.mem.startsWith(u8, event_type, "child_")) {
+            try self.upsertChildProgress(event_type, message);
+            return;
+        }
         if (std.mem.eql(u8, event_type, "tool_requested") or std.mem.eql(u8, event_type, "tool_completed")) return;
         if (std.mem.eql(u8, event_type, "tool_started")) {
             try self.upsertToolStarted(message);
@@ -393,6 +491,79 @@ const ChatState = struct {
         try self.add(.progress, text);
     }
 
+    fn upsertChildProgress(self: *ChatState, event_type: []const u8, message: []const u8) !void {
+        if (std.mem.eql(u8, event_type, "child_group_started") or
+            std.mem.eql(u8, event_type, "child_group_finished") or
+            std.mem.eql(u8, event_type, "child_group_recovered"))
+        {
+            const GroupEvent = struct {
+                group_id: []const u8 = "",
+                queued: usize = 0,
+                running: usize = 0,
+                completed: usize = 0,
+                failed: usize = 0,
+                cancelled: usize = 0,
+                tasks: usize = 0,
+                stale_owners_reconciled: usize = 0,
+                terminal: bool = false,
+            };
+            var parsed = std.json.parseFromSlice(GroupEvent, self.allocator, message, .{ .ignore_unknown_fields = true }) catch return;
+            defer parsed.deinit();
+            if (parsed.value.group_id.len == 0) return;
+            const pending = parsed.value.queued + parsed.value.running;
+            const recovered = std.mem.eql(u8, event_type, "child_group_recovered");
+            const finished = if (recovered) parsed.value.tasks else parsed.value.completed + parsed.value.failed + parsed.value.cancelled;
+            const failed = if (recovered) parsed.value.stale_owners_reconciled else parsed.value.failed;
+            const total = pending + finished;
+            const state: ActivityState = if (!parsed.value.terminal)
+                .running
+            else if (failed > 0)
+                .failed
+            else if (parsed.value.cancelled > 0 and parsed.value.completed == 0)
+                .cancelled
+            else
+                .completed;
+            const text = if (parsed.value.terminal and failed == 0 and parsed.value.cancelled == 0)
+                try std.fmt.allocPrint(self.allocator, "Agents {d}/{d}", .{ finished, finished })
+            else if (parsed.value.terminal)
+                try std.fmt.allocPrint(self.allocator, "Agents {d}/{d} - {d} failed, {d} cancelled", .{ finished, finished, failed, parsed.value.cancelled })
+            else
+                try std.fmt.allocPrint(self.allocator, "Agents {d}/{d} - waiting on {d}", .{ finished, total, pending });
+            defer self.allocator.free(text);
+            const key = try std.fmt.allocPrint(self.allocator, "group:{s}", .{parsed.value.group_id});
+            defer self.allocator.free(key);
+            try self.upsertActivityProgress(key, text, .group, state, null);
+            return;
+        }
+
+        const ChildEvent = struct {
+            group_id: []const u8 = "",
+            task_id: []const u8 = "",
+            name: []const u8 = "agent",
+            status: []const u8 = "queued",
+            phase: ?[]const u8 = null,
+            detail: ?[]const u8 = null,
+        };
+        var parsed = std.json.parseFromSlice(ChildEvent, self.allocator, message, .{ .ignore_unknown_fields = true }) catch return;
+        defer parsed.deinit();
+        if (parsed.value.group_id.len == 0 or parsed.value.task_id.len == 0) return;
+        const phase = parsed.value.phase orelse parsed.value.status;
+        const state: ActivityState = if (std.mem.eql(u8, event_type, "child_waiting"))
+            .running
+        else
+            activityStateFromLabel(parsed.value.status);
+        const text = if (state == .completed)
+            try self.allocator.dupe(u8, parsed.value.name)
+        else if (std.mem.eql(u8, event_type, "child_finished") and parsed.value.detail != null)
+            try std.fmt.allocPrint(self.allocator, "{s} - {s}", .{ parsed.value.name, parsed.value.detail.? })
+        else
+            try std.fmt.allocPrint(self.allocator, "{s} - {s}", .{ parsed.value.name, phase });
+        defer self.allocator.free(text);
+        const key = try std.fmt.allocPrint(self.allocator, "agent:{s}:{s}", .{ parsed.value.group_id, parsed.value.task_id });
+        defer self.allocator.free(key);
+        try self.upsertActivityProgress(key, text, .item, state, parsed.value.group_id);
+    }
+
     fn upsertToolStarted(self: *ChatState, message: []const u8) !void {
         const ToolStarted = struct {
             tool_call_id: []const u8 = "",
@@ -408,9 +579,14 @@ const ChatState = struct {
         defer parsed.deinit();
 
         if (parsed.value.tool.len == 0) return;
-        const text = try std.fmt.allocPrint(self.allocator, "{s} running", .{parsed.value.tool});
-        defer self.allocator.free(text);
-        try self.addToolProgress(parsed.value.tool_call_id, text);
+        if (isAgentLifecycleTool(parsed.value.tool)) return;
+        try self.upsertActivityProgress(
+            parsed.value.tool_call_id,
+            activityTitle(parsed.value.tool),
+            .group,
+            .running,
+            null,
+        );
     }
 
     fn upsertToolFinished(self: *ChatState, message: []const u8) !void {
@@ -431,32 +607,48 @@ const ChatState = struct {
         };
         defer parsed.deinit();
 
-        const tool = if (parsed.value.tool.len == 0) "tool" else parsed.value.tool;
+        if (isAgentLifecycleTool(parsed.value.tool)) return;
+
+        const tool = activityTitle(if (parsed.value.tool.len == 0) "tool" else parsed.value.tool);
         var text = if (parsed.value.ok)
-            try std.fmt.allocPrint(self.allocator, "{s} {d}ms", .{ tool, parsed.value.duration_ms })
+            try std.fmt.allocPrint(self.allocator, "{s} - {d}ms", .{ tool, parsed.value.duration_ms })
         else if (parsed.value.error_name) |error_name|
             if (parsed.value.hint) |hint|
-                try std.fmt.allocPrint(self.allocator, "{s} error {s} {d}ms - {s}", .{ tool, error_name, parsed.value.duration_ms, hint })
+                try std.fmt.allocPrint(self.allocator, "{s} - {s} - {d}ms - {s}", .{ tool, error_name, parsed.value.duration_ms, hint })
             else
-                try std.fmt.allocPrint(self.allocator, "{s} error {s} {d}ms", .{ tool, error_name, parsed.value.duration_ms })
+                try std.fmt.allocPrint(self.allocator, "{s} - {s} - {d}ms", .{ tool, error_name, parsed.value.duration_ms })
         else
-            try std.fmt.allocPrint(self.allocator, "{s} failed {d}ms", .{ tool, parsed.value.duration_ms });
+            try std.fmt.allocPrint(self.allocator, "{s} - failed - {d}ms", .{ tool, parsed.value.duration_ms });
         text = try trimOwnedProgress(self.allocator, text);
         defer self.allocator.free(text);
-        try self.addToolProgress(parsed.value.tool_call_id, text);
+        const state: ActivityState = if (parsed.value.ok) .completed else .failed;
+        try self.upsertActivityProgress(parsed.value.tool_call_id, text, .group, state, null);
+        self.setActivityChildrenState(parsed.value.tool_call_id, state);
     }
 
     fn addToolProgress(self: *ChatState, tool_call_id: []const u8, text: []const u8) !void {
+        return self.upsertActivityProgress(tool_call_id, text, .none, .pending, null);
+    }
+
+    fn upsertActivityProgress(
+        self: *ChatState,
+        activity_id: []const u8,
+        text: []const u8,
+        kind: ActivityKind,
+        state: ActivityState,
+        parent_id: ?[]const u8,
+    ) !void {
         self.removeAssistantPlaceholder();
-        if (tool_call_id.len > 0) {
+        if (activity_id.len > 0) {
             for (self.messages.items) |*message| {
                 if (message.role != .progress) continue;
                 const existing = message.tool_call_id orelse continue;
-                if (!std.mem.eql(u8, existing, tool_call_id)) continue;
+                if (!std.mem.eql(u8, existing, activity_id)) continue;
 
-                const previous = message.text;
-                message.text = try self.allocator.dupe(u8, text);
-                self.allocator.free(previous);
+                const replacement = try self.allocator.dupe(u8, text);
+                message.replaceTextOwned(self.allocator, replacement);
+                message.activity_kind = kind;
+                message.activity_state = state;
                 return;
             }
         }
@@ -464,11 +656,37 @@ const ChatState = struct {
         if (self.scroll_offset > 0) {
             self.scroll_offset += messageRowCount(.progress, text, false, self.last_transcript_body_width);
         }
+        const owned_text = try self.allocator.dupe(u8, text);
+        errdefer self.allocator.free(owned_text);
+        const owned_activity_id = if (activity_id.len == 0) null else try self.allocator.dupe(u8, activity_id);
+        errdefer if (owned_activity_id) |value| self.allocator.free(value);
+        const owned_parent_id = if (parent_id) |value| try self.allocator.dupe(u8, value) else null;
+        errdefer if (owned_parent_id) |value| self.allocator.free(value);
+
+        if (parent_id) |value| self.markPriorActivitySiblings(value);
         try self.messages.append(self.allocator, .{
             .role = .progress,
-            .text = try self.allocator.dupe(u8, text),
-            .tool_call_id = if (tool_call_id.len == 0) null else try self.allocator.dupe(u8, tool_call_id),
+            .text = owned_text,
+            .tool_call_id = owned_activity_id,
+            .activity_parent_id = owned_parent_id,
+            .activity_kind = kind,
+            .activity_state = state,
+            .activity_last = kind == .item,
         });
+    }
+
+    fn markPriorActivitySiblings(self: *ChatState, parent_id: []const u8) void {
+        for (self.messages.items) |*message| {
+            const existing_parent = message.activity_parent_id orelse continue;
+            if (std.mem.eql(u8, existing_parent, parent_id)) message.activity_last = false;
+        }
+    }
+
+    fn setActivityChildrenState(self: *ChatState, parent_id: []const u8, state: ActivityState) void {
+        for (self.messages.items) |*message| {
+            const existing_parent = message.activity_parent_id orelse continue;
+            if (std.mem.eql(u8, existing_parent, parent_id)) message.activity_state = state;
+        }
     }
 
     fn upsertToolOutputDelta(self: *ChatState, message: []const u8) !void {
@@ -494,10 +712,10 @@ const ChatState = struct {
 
         const key = try std.fmt.allocPrint(self.allocator, "{s}\x1eoutput\x1e{s}", .{ parsed.value.tool_call_id, parsed.value.stream });
         defer self.allocator.free(key);
-        try self.appendToolProgress(key, parsed.value.stream, formatted);
+        try self.appendToolProgress(key, parsed.value.tool_call_id, parsed.value.stream, formatted);
     }
 
-    fn appendToolProgress(self: *ChatState, progress_key: []const u8, stream: []const u8, formatted: []const u8) !void {
+    fn appendToolProgress(self: *ChatState, progress_key: []const u8, parent_id: []const u8, stream: []const u8, formatted: []const u8) !void {
         self.removeAssistantPlaceholder();
         for (self.messages.items) |*message| {
             if (message.role != .progress) continue;
@@ -505,19 +723,12 @@ const ChatState = struct {
             if (!std.mem.eql(u8, existing, progress_key)) continue;
 
             const next = try appendBoundedProgress(self.allocator, message.text, stream, formatted);
-            self.allocator.free(message.text);
-            message.text = next;
+            message.replaceTextOwned(self.allocator, next);
+            message.activity_state = .running;
             return;
         }
 
-        if (self.scroll_offset > 0) {
-            self.scroll_offset += messageRowCount(.progress, formatted, false, self.last_transcript_body_width);
-        }
-        try self.messages.append(self.allocator, .{
-            .role = .progress,
-            .text = try self.allocator.dupe(u8, formatted),
-            .tool_call_id = try self.allocator.dupe(u8, progress_key),
-        });
+        try self.upsertActivityProgress(progress_key, formatted, .item, .running, parent_id);
     }
 
     fn addAssistantDelta(self: *ChatState, delta: []const u8) !void {
@@ -531,9 +742,8 @@ const ChatState = struct {
             if (self.messages.items[last_index].role == .assistant) {
                 const previous = self.messages.items[last_index].text;
                 const previous_rows = messageRowCount(.assistant, previous, false, self.last_transcript_body_width);
-                const expanded = try self.allocator.realloc(previous, previous.len + delta.len);
-                @memcpy(expanded[previous.len..], delta);
-                self.messages.items[last_index].text = expanded;
+                try self.messages.items[last_index].appendText(self.allocator, delta);
+                const expanded = self.messages.items[last_index].text;
                 if (self.scroll_offset > 0) {
                     const next_rows = messageRowCount(.assistant, expanded, false, self.last_transcript_body_width);
                     if (next_rows > previous_rows) self.scroll_offset += next_rows - previous_rows;
@@ -584,10 +794,9 @@ const ChatState = struct {
             return false;
         }
 
-        const previous = last.text;
-        const previous_rows = messageRowCount(.assistant, previous, true, self.last_transcript_body_width);
-        last.text = try self.allocator.dupe(u8, text);
-        self.allocator.free(previous);
+        const previous_rows = messageRowCount(.assistant, last.text, true, self.last_transcript_body_width);
+        const replacement = try self.allocator.dupe(u8, text);
+        last.replaceTextOwned(self.allocator, replacement);
         last.pending = false;
         self.pending_assistant_placeholder = false;
         if (self.scroll_offset > 0) {
@@ -915,7 +1124,10 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
     const root = vx.window();
     root.fill(.{ .style = styles.surface });
 
-    const layout = computeLayout(root.height);
+    const reasoning_body_width = @max(@as(usize, 1), @as(usize, root.width -| 8));
+    var reasoning_rows = try buildReasoningDockRows(state.allocator, state.reasoning_buffer.items, reasoning_body_width);
+    defer reasoning_rows.deinit(state.allocator);
+    const layout = computeLayoutWithReasoningDock(root.height, @intCast(reasoning_rows.items.len));
 
     const transcript = root.child(.{
         .x_off = 0,
@@ -924,6 +1136,16 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         .height = layout.transcript_height,
     });
     drawTranscript(transcript, state);
+
+    if (layout.reasoning_height > 0) {
+        const reasoning = root.child(.{
+            .x_off = 1,
+            .y_off = @intCast(layout.reasoning_y),
+            .width = root.width -| 2,
+            .height = layout.reasoning_height,
+        });
+        drawReasoningDock(reasoning, reasoning_rows.items);
+    }
 
     const input_win = root.child(.{
         .x_off = 0,
@@ -962,6 +1184,9 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
 
 const ChatLayout = struct {
     transcript_height: u16,
+    reasoning_y: u16 = 0,
+    reasoning_height: u16 = 0,
+    reasoning_gap_height: u16 = 0,
     footer_y: u16,
     footer_height: u16,
     editor_y: u16,
@@ -986,6 +1211,84 @@ fn computeLayout(root_height: u16) ChatLayout {
         .footer_height = footer_height,
         .editor_y = 0,
         .meta_y = if (footer_height > 1) footer_height - 1 else 0,
+    };
+}
+
+fn computeLayoutWithReasoningDock(root_height: u16, requested_reasoning_height: u16) ChatLayout {
+    var layout = computeLayout(root_height);
+    layout.reasoning_height = @min(requested_reasoning_height, layout.transcript_height);
+    const remaining_height = layout.transcript_height - layout.reasoning_height;
+    layout.reasoning_gap_height = @intFromBool(layout.reasoning_height > 0 and remaining_height > 0);
+    layout.transcript_height = remaining_height - layout.reasoning_gap_height;
+    layout.reasoning_y = layout.transcript_height + layout.reasoning_gap_height;
+    return layout;
+}
+
+fn activityStateFromLabel(label: []const u8) ActivityState {
+    if (std.ascii.eqlIgnoreCase(label, "completed") or
+        std.ascii.eqlIgnoreCase(label, "done") or
+        std.ascii.eqlIgnoreCase(label, "succeeded")) return .completed;
+    if (std.ascii.eqlIgnoreCase(label, "failed") or
+        std.ascii.eqlIgnoreCase(label, "error") or
+        std.ascii.eqlIgnoreCase(label, "blocked")) return .failed;
+    if (std.ascii.eqlIgnoreCase(label, "cancelled") or
+        std.ascii.eqlIgnoreCase(label, "canceled")) return .cancelled;
+    if (std.ascii.eqlIgnoreCase(label, "running") or
+        std.ascii.eqlIgnoreCase(label, "active") or
+        std.ascii.eqlIgnoreCase(label, "waiting")) return .running;
+    return .pending;
+}
+
+fn activityTitle(tool_name: []const u8) []const u8 {
+    if (std.ascii.eqlIgnoreCase(tool_name, "search_files") or
+        std.ascii.eqlIgnoreCase(tool_name, "web_search") or
+        std.ascii.eqlIgnoreCase(tool_name, "websearch") or
+        std.ascii.eqlIgnoreCase(tool_name, "web_fetch")) return "Search";
+    if (std.ascii.eqlIgnoreCase(tool_name, "list_files") or
+        std.ascii.eqlIgnoreCase(tool_name, "read_file") or
+        std.ascii.eqlIgnoreCase(tool_name, "explore")) return "Explore";
+    if (std.ascii.eqlIgnoreCase(tool_name, "agents") or
+        std.ascii.eqlIgnoreCase(tool_name, "configure_agent")) return "Agents";
+    if (std.ascii.eqlIgnoreCase(tool_name, "todo_slice") or
+        std.ascii.eqlIgnoreCase(tool_name, "todo_write") or
+        std.ascii.eqlIgnoreCase(tool_name, "update_plan")) return "To-dos";
+    return tool_name;
+}
+
+fn isAgentLifecycleTool(tool_name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(tool_name, "launch_agent") or
+        std.ascii.eqlIgnoreCase(tool_name, "wait_agent") or
+        std.ascii.eqlIgnoreCase(tool_name, "agent_status") or
+        std.ascii.eqlIgnoreCase(tool_name, "list_agents") or
+        std.ascii.eqlIgnoreCase(tool_name, "cancel_agents");
+}
+
+fn activityMarker(state: ActivityState) []const u8 {
+    return switch (state) {
+        .pending => "[ ] ",
+        .running => "[>] ",
+        .completed => "[x] ",
+        .failed => "[!] ",
+        .cancelled => "[-] ",
+    };
+}
+
+fn activityConnector(kind: ActivityKind, is_last: bool) []const u8 {
+    if (kind != .item) return "";
+    return if (is_last) "`-- " else "|-- ";
+}
+
+fn activityMarkerStyle(state: ActivityState) Style {
+    return switch (state) {
+        .running, .completed => styles.assistant,
+        .pending, .failed, .cancelled => styles.progress,
+    };
+}
+
+fn activityTextStyle(state: ActivityState) Style {
+    return switch (state) {
+        .completed, .cancelled => styles.system,
+        .pending, .running, .failed => styles.progress,
     };
 }
 
@@ -1030,6 +1333,38 @@ fn drawTranscript(win: Window, state: *ChatState) void {
     }
 }
 
+fn drawReasoningDock(win: Window, rows: []const TranscriptRow) void {
+    for (rows, 0..) |reasoning_row, index| {
+        if (index >= win.height or index >= max_reasoning_dock_rows) break;
+        const block = win.child(.{
+            .x_off = 0,
+            .y_off = @intCast(index),
+            .width = win.width,
+            .height = 1,
+            .border = .{ .where = .left, .style = styles.assistant },
+        });
+        _ = block.print(&.{.{
+            .text = if (index == 0) "∞ " else "  ",
+            .style = styles.assistant,
+        }}, .{
+            .row_offset = 0,
+            .col_offset = 1,
+            .wrap = .none,
+        });
+        const body = block.child(.{
+            .x_off = 3,
+            .y_off = 0,
+            .width = block.width -| 4,
+            .height = 1,
+        });
+        _ = body.print(&.{.{ .text = reasoning_row.text, .style = styles.progress }}, .{
+            .row_offset = 0,
+            .col_offset = 0,
+            .wrap = .none,
+        });
+    }
+}
+
 const VisibleRange = struct {
     start: usize,
     end: usize,
@@ -1065,37 +1400,14 @@ fn visibleStartRowForAvailable(available: u16, end: usize) usize {
 const TranscriptRow = struct {
     role: Role,
     text: []const u8,
+    activity_kind: ActivityKind = .none,
+    activity_state: ActivityState = .pending,
+    activity_last: bool = false,
     pending: bool = false,
     gap: bool = false,
     intro: bool = false,
     intro_version: bool = false,
 };
-
-/// Advance the typewriter reveal count. Called on every draw tick.
-/// The advance rate uses an ease-in/ease-out curve based on how far behind
-/// the reveal is: when many chars are pending (just received a burst), reveal
-/// fast (ease-in); as the reveal catches up to the buffer, slow down (ease-out).
-/// This creates the natural Apple/Disney motion feel.
-fn advanceAnimation(state: *ChatState) void {
-    const total_buffered = state.reasoning_buffer.items.len +
-        if (state.messages.items.len > 0 and state.messages.items[state.messages.items.len - 1].role == .assistant)
-            state.messages.items[state.messages.items.len - 1].text.len
-        else
-            @as(usize, 0);
-
-    if (total_buffered <= state.anim_reveal_count) {
-        state.anim_reveal_count = total_buffered;
-        return;
-    }
-
-    const pending = total_buffered - state.anim_reveal_count;
-    // Ease-in/ease-out: advance rate proportional to sqrt(pending).
-    // When far behind (pending=400): advance ~20 chars/tick (fast catch-up).
-    // When nearly caught up (pending=4): advance ~2 chars/tick (slow finish).
-    // This produces the natural deceleration curve.
-    const advance: usize = @max(@as(usize, 2), @as(usize, @intFromFloat(@floor(@sqrt(@as(f64, @floatFromInt(pending)))))));
-    state.anim_reveal_count = @min(total_buffered, state.anim_reveal_count + advance);
-}
 
 fn buildTranscriptRows(allocator: std.mem.Allocator, win: Window, state: *const ChatState) !std.ArrayList(TranscriptRow) {
     var rows: std.ArrayList(TranscriptRow) = .{};
@@ -1104,59 +1416,40 @@ fn buildTranscriptRows(allocator: std.mem.Allocator, win: Window, state: *const 
     const body_width = @max(@as(usize, 1), @as(usize, win.width -| 4));
     try appendStartupIntroRows(allocator, &rows);
 
-    // Reasoning block placement: the reasoning trace occupies the assistant
-    // slot — it REPLACES the "thinking" placeholder while streaming, and
-    // sits above the response once it arrives. The user never sees a
-    // floating reasoning block above the whole transcript; it lives where
-    // the assistant's turn is.
-    //
-    // IMPORTANT: the rows BORROW from state.reasoning_buffer — never allocate
-    // a labeled copy here. A previous version allocated a labeled string with
-    // `defer free` and handed it to the transcript row, causing a use-after-
-    // free on every reasoning draw (the TUI rendered "thinking" then crashed).
-    var reasoning_emitted = false;
-    // Compute how many chars of reasoning to reveal (typewriter animation).
-    const reasoning_reveal = if (state.anim_reveal_count > 0) state.anim_reveal_count else state.reasoning_buffer.items.len;
     for (state.messages.items) |message| {
-        if (state.reasoning_buffer.items.len > 0 and message.role == .assistant and !message.pending and !reasoning_emitted) {
-            try appendReasoningBlock(allocator, &rows, state, body_width, reasoning_reveal);
-            reasoning_emitted = true;
-        }
-        if (message.pending and state.reasoning_buffer.items.len > 0 and !reasoning_emitted) {
-            try appendReasoningBlock(allocator, &rows, state, body_width, reasoning_reveal);
-            reasoning_emitted = true;
-            continue;
-        }
+        if (message.pending and state.reasoning_buffer.items.len > 0) continue;
         try appendMessageRows(allocator, &rows, message, body_width);
-    }
-    if (!reasoning_emitted and state.reasoning_buffer.items.len > 0) {
-        try appendReasoningBlock(allocator, &rows, state, body_width, reasoning_reveal);
     }
     return rows;
 }
 
-/// Append the reasoning trace as a single dimmed block (one contiguous text
-/// block, not one row per token). Borrows from state.reasoning_buffer —
-/// never allocates a labeled copy that would dangle.
-fn appendReasoningBlock(
+const max_reasoning_dock_rows: usize = 2;
+const max_reasoning_dock_scan_bytes: usize = 512;
+
+fn buildReasoningDockRows(
     allocator: std.mem.Allocator,
-    rows: *std.ArrayList(TranscriptRow),
-    state: *const ChatState,
+    reasoning_text: []const u8,
     body_width: usize,
-    reveal_limit: usize,
-) !void {
-    try appendTranscriptRow(allocator, rows, .progress, "∞ reasoning", false, false);
-    const reasoning_text = state.reasoning_buffer.items;
-    // Truncate display to last ~500 chars to avoid flooding the TUI
-    // when reasoning is very long. The full trace is in the event spine.
-    const display_full = if (reasoning_text.len > 500) reasoning_text[reasoning_text.len - 500 ..] else reasoning_text;
-    // Apply typewriter reveal: only show up to `reveal_limit` chars of the
-    // reasoning text. This creates the smooth ease-in/ease-out animation.
-    const display = if (display_full.len > reveal_limit) display_full[0..reveal_limit] else display_full;
-    if (display.len > 0) {
-        try appendWrappedTranscriptRows(allocator, rows, .progress, display, body_width);
-    }
-    try appendTranscriptRow(allocator, rows, .progress, "", false, true);
+) !std.ArrayList(TranscriptRow) {
+    var wrapped: std.ArrayList(TranscriptRow) = .{};
+    errdefer wrapped.deinit(allocator);
+    if (reasoning_text.len == 0) return wrapped;
+
+    const display = reasoningTail(reasoning_text, max_reasoning_dock_scan_bytes);
+    try appendWrappedTranscriptRows(allocator, &wrapped, .progress, display, body_width);
+    if (wrapped.items.len <= max_reasoning_dock_rows) return wrapped;
+
+    const newest = wrapped.items[wrapped.items.len - max_reasoning_dock_rows ..];
+    std.mem.copyForwards(TranscriptRow, wrapped.items[0..max_reasoning_dock_rows], newest);
+    wrapped.shrinkRetainingCapacity(max_reasoning_dock_rows);
+    return wrapped;
+}
+
+fn reasoningTail(text: []const u8, max_bytes: usize) []const u8 {
+    if (text.len <= max_bytes) return text;
+    var start = text.len - max_bytes;
+    while (start < text.len and text[start] & 0b1100_0000 == 0b1000_0000) : (start += 1) {}
+    return text[start..];
 }
 
 fn appendStartupIntroRows(
@@ -1206,7 +1499,13 @@ fn appendMessageRows(
     }
 
     if (isCompactRole(message.role)) {
-        try appendTranscriptRow(allocator, rows, message.role, message.text, false, false);
+        try rows.append(allocator, .{
+            .role = message.role,
+            .text = message.text,
+            .activity_kind = message.activity_kind,
+            .activity_state = message.activity_state,
+            .activity_last = message.activity_last,
+        });
         return;
     }
 
@@ -1297,6 +1596,19 @@ fn drawTranscriptRow(win: Window, row: u16, transcript_row: TranscriptRow) void 
         .border = .{ .where = .left, .style = role_style },
     });
     const body = block.child(.{ .x_off = 1, .y_off = 0, .width = body_width, .height = 1 });
+    if (transcript_row.activity_kind != .none) {
+        const connector = activityConnector(transcript_row.activity_kind, transcript_row.activity_last);
+        _ = body.print(&.{
+            .{ .text = connector, .style = styles.progress },
+            .{ .text = activityMarker(transcript_row.activity_state), .style = activityMarkerStyle(transcript_row.activity_state) },
+            .{ .text = transcript_row.text, .style = activityTextStyle(transcript_row.activity_state) },
+        }, .{
+            .row_offset = 0,
+            .col_offset = 0,
+            .wrap = .none,
+        });
+        return;
+    }
     _ = body.print(&.{.{ .text = transcript_row.text, .style = if (transcript_row.pending) styles.thinking else bodyStyle(transcript_row.role) }}, .{
         .row_offset = 0,
         .col_offset = 0,
@@ -1543,7 +1855,6 @@ const max_progress_message_bytes: usize = 220;
 const max_tool_output_preview_bytes: usize = 180;
 const max_tool_output_payload_bytes: usize = 180;
 const max_seen_progress_events: usize = 512;
-const progress_poll_ms: u64 = 16;
 
 fn formatProgress(allocator: std.mem.Allocator, event_type: []const u8, message: []const u8) !?[]u8 {
     if (std.mem.eql(u8, event_type, "tool_requested")) return formatToolRequested(allocator, message);
@@ -1554,7 +1865,8 @@ fn formatProgress(allocator: std.mem.Allocator, event_type: []const u8, message:
     if (std.mem.eql(u8, event_type, "tool_completed")) return formatToolCompleted(allocator, message);
     if (std.mem.eql(u8, event_type, "tool_blocked")) return formatToolBlocked(allocator, message);
     if (std.mem.eql(u8, event_type, "tool_budget_exceeded")) return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "budget: {s}", .{message}));
-    if (std.mem.eql(u8, event_type, "session_waiting")) return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "waiting: {s}", .{message}));
+    if (std.mem.eql(u8, event_type, "session_waiting")) return try allocator.dupe(u8, "waiting on child group");
+    if (std.mem.eql(u8, event_type, "child_convergence_started")) return try allocator.dupe(u8, "agents converging");
     if (std.mem.eql(u8, event_type, "session_failed")) return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "failed: {s}", .{message}));
     if (std.mem.startsWith(u8, event_type, "context_compaction_")) return formatContextCompaction(allocator, event_type, message);
 
@@ -1885,8 +2197,11 @@ fn skipProgressEvent(event_type: []const u8) bool {
         std.mem.eql(u8, event_type, "provider_turn_recovered") or
         std.mem.eql(u8, event_type, "branch_converged") or
         std.mem.eql(u8, event_type, "session_delegated") or
-        std.mem.eql(u8, event_type, "session_waiting") or
         std.mem.startsWith(u8, event_type, "context_compaction_");
+}
+
+fn replayProgressEvent(event_type: []const u8) bool {
+    return std.mem.startsWith(u8, event_type, "child_") or std.mem.eql(u8, event_type, "session_waiting");
 }
 
 fn progressLabel(event_type: []const u8) []const u8 {
@@ -1912,6 +2227,31 @@ fn expectKernelResult(allocator: std.mem.Allocator, call: stdio_rpc.RpcCallResul
 
 fn renderJsonAlloc(allocator: std.mem.Allocator, value: anytype) ![]u8 {
     return std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(value, .{})});
+}
+
+test "tui stream cadence coalesces bursts without delaying an idle first frame" {
+    try std.testing.expectEqual(stream_idle_wait_ms, nextStreamWaitMs(false, 0, stream_min_frame_ns));
+    try std.testing.expectEqual(@as(usize, 15), nextStreamWaitMs(true, std.time.ns_per_ms, stream_min_frame_ns));
+    try std.testing.expectEqual(@as(usize, 1), nextStreamWaitMs(true, stream_min_frame_ns - 1, stream_min_frame_ns));
+    try std.testing.expectEqual(@as(usize, 0), nextStreamWaitMs(true, stream_min_frame_ns, stream_min_frame_ns));
+}
+
+test "tui assistant stream grows geometrically instead of reallocating every delta" {
+    const allocator = std.testing.allocator;
+    var message = Message{
+        .role = .assistant,
+        .text = try allocator.dupe(u8, "a"),
+    };
+    defer message.deinit(allocator);
+
+    try message.appendText(allocator, "bc");
+    const capacity_after_growth = message.text_capacity;
+    const pointer_after_growth = message.text.ptr;
+    try message.appendText(allocator, "def");
+
+    try std.testing.expectEqualStrings("abcdef", message.text);
+    try std.testing.expect(capacity_after_growth >= 6);
+    try std.testing.expectEqual(pointer_after_growth, message.text.ptr);
 }
 
 test "tui progress hides successful approval review noise" {
@@ -2121,7 +2461,7 @@ test "tui hinted tool errors remain bounded and replace running rows under hosti
 
     try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
     try std.testing.expectEqual(Role.progress, state.messages.items[0].role);
-    try std.testing.expect(std.mem.startsWith(u8, state.messages.items[0].text, "shell_exec error InvalidArguments 4ms - Use mode=argv"));
+    try std.testing.expect(std.mem.startsWith(u8, state.messages.items[0].text, "shell_exec - InvalidArguments - 4ms - Use mode=argv"));
     try std.testing.expect(state.messages.items[0].text.len <= max_progress_message_bytes);
     try std.testing.expect(std.mem.endsWith(u8, state.messages.items[0].text, "..."));
 }
@@ -2244,12 +2584,15 @@ test "tui tool lifecycle updates one progress row instead of appending request s
     try state.addProgress("tool_started", "{\"schema\":\"var1.tool_started.v1\",\"tool\":\"write_file\",\"tool_call_id\":\"call_1\",\"timestamp_ms\":1}");
     try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
     try std.testing.expectEqual(Role.progress, state.messages.items[0].role);
-    try std.testing.expectEqualStrings("write_file running", state.messages.items[0].text);
+    try std.testing.expectEqualStrings("write_file", state.messages.items[0].text);
+    try std.testing.expectEqual(ActivityKind.group, state.messages.items[0].activity_kind);
+    try std.testing.expectEqual(ActivityState.running, state.messages.items[0].activity_state);
 
     try state.addProgress("tool_finished", "{\"schema\":\"var1.tool_finished.v1\",\"tool\":\"write_file\",\"tool_call_id\":\"call_1\",\"ok\":true,\"duration_ms\":42}");
     try state.addProgress("tool_completed", "tool completed: write_file");
     try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
-    try std.testing.expectEqualStrings("write_file 42ms", state.messages.items[0].text);
+    try std.testing.expectEqualStrings("write_file - 42ms", state.messages.items[0].text);
+    try std.testing.expectEqual(ActivityState.completed, state.messages.items[0].activity_state);
 }
 
 test "tui tool lifecycle keeps actionable schema errors in the keyed tool row" {
@@ -2270,7 +2613,7 @@ test "tui tool lifecycle keeps actionable schema errors in the keyed tool row" {
     try state.addProgress("tool_completed", "tool errored: shell_exec (InvalidArguments) - legacy hint should stay suppressed");
 
     try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
-    try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "shell_exec error InvalidArguments 4ms - Use mode=argv") != null);
+    try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "shell_exec - InvalidArguments - 4ms - Use mode=argv") != null);
     try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "Select-String") != null);
 }
 
@@ -2322,7 +2665,7 @@ test "tui chat removes pending assistant placeholder when tool progress arrives 
     try std.testing.expect(!state.pending_assistant_placeholder);
     try std.testing.expectEqual(@as(usize, 2), state.messages.items.len);
     try std.testing.expectEqual(Role.progress, state.messages.items[0].role);
-    try std.testing.expectEqualStrings("shell_exec running", state.messages.items[0].text);
+    try std.testing.expectEqualStrings("shell_exec", state.messages.items[0].text);
     try std.testing.expectEqual(Role.assistant, state.messages.items[1].role);
     try std.testing.expectEqualStrings("Done.", state.messages.items[1].text);
 }
@@ -2705,7 +3048,7 @@ test "tui assistant deltas after progress open a new readable response block" {
     try std.testing.expectEqual(Role.progress, state.messages.items[1].role);
     try std.testing.expectEqual(Role.assistant, state.messages.items[2].role);
     try std.testing.expectEqualStrings("I will inspect first.", state.messages.items[0].text);
-    try std.testing.expectEqualStrings("read_file running", state.messages.items[1].text);
+    try std.testing.expectEqualStrings("Explore", state.messages.items[1].text);
     try std.testing.expectEqualStrings("Now I have the file.", state.messages.items[2].text);
 }
 
@@ -2833,12 +3176,32 @@ test "tui transcript gives dense single-line treatment to runtime rows" {
     try std.testing.expectEqual(@as(usize, 2), messageRowCount(assistant_message.role, assistant_message.text, false, 80));
 }
 
-test "tui reasoning block borrows persistent buffer (no use-after-free)" {
-    // Regression: a previous version allocated a labeled reasoning string with
-    // `defer free` and handed it to the transcript row, causing a use-after-
-    // free on every reasoning draw — the TUI rendered "thinking" then crashed.
-    // The reasoning rows must borrow from state.reasoning_buffer, which lives
-    // as long as the ChatState.
+test "tui reasoning dock keeps the newest two rows" {
+    const allocator = std.testing.allocator;
+    var rows = try buildReasoningDockRows(
+        allocator,
+        "oldest words fall away while the newest reasoning words stay visible",
+        12,
+    );
+    defer rows.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), rows.items.len);
+    try std.testing.expectEqualStrings("words stay", rows.items[0].text);
+    try std.testing.expectEqualStrings("visible", rows.items[1].text);
+}
+
+test "tui reasoning dock leaves one surface row above it without moving the composer" {
+    const layout = computeLayoutWithReasoningDock(20, 2);
+    try std.testing.expectEqual(@as(u16, 1), layout.reasoning_gap_height);
+    try std.testing.expectEqual(layout.transcript_height + layout.reasoning_gap_height, layout.reasoning_y);
+    try std.testing.expectEqual(layout.footer_y, layout.reasoning_y + layout.reasoning_height);
+
+    const cramped = computeLayoutWithReasoningDock(4, 2);
+    try std.testing.expectEqual(@as(u16, 0), cramped.reasoning_gap_height);
+    try std.testing.expectEqual(cramped.footer_y, cramped.reasoning_y + cramped.reasoning_height);
+}
+
+test "tui reasoning events project only into the dock while progress stays in transcript" {
     const allocator = std.testing.allocator;
     var unicode = try tui.Unicode.init(allocator);
     defer unicode.deinit(allocator);
@@ -2857,8 +3220,10 @@ test "tui reasoning block borrows persistent buffer (no use-after-free)" {
     };
     defer state.deinit();
 
-    try state.addReasoningDelta("Step one: analyze the request");
-    try state.addReasoningDelta(" carefully before answering.");
+    try state.startAssistantPlaceholder();
+    try std.testing.expect(try state.recordProgressEvent("reasoning_delta", "checking the first seam", 1));
+    try std.testing.expect(try state.recordProgressEvent("session_waiting", "child group", 2));
+    try std.testing.expect(try state.recordProgressEvent("reasoning_delta", " and now the newest words", 3));
 
     const win = Window{
         .x_off = 0,
@@ -2871,19 +3236,80 @@ test "tui reasoning block borrows persistent buffer (no use-after-free)" {
         .unicode = &unicode,
     };
 
-    var rows = try buildTranscriptRows(allocator, win, &state);
-    defer rows.deinit(allocator);
-
-    // Every non-empty reasoning row must borrow from the persistent buffer.
-    const buffer = state.reasoning_buffer.items;
-    var found_reasoning_content = false;
-    for (rows.items) |row| {
-        if (row.text.len == 0 or row.intro) continue;
-        if (std.mem.indexOf(u8, buffer, row.text) != null) {
-            found_reasoning_content = true;
-            break;
-        }
+    var transcript_rows = try buildTranscriptRows(allocator, win, &state);
+    defer transcript_rows.deinit(allocator);
+    for (transcript_rows.items) |row| {
+        try std.testing.expect(std.mem.indexOf(u8, row.text, "checking the first seam") == null);
+        try std.testing.expect(std.mem.indexOf(u8, row.text, "newest words") == null);
     }
-    try std.testing.expect(found_reasoning_content);
-    try std.testing.expect(std.mem.indexOf(u8, buffer, "analyze the request") != null);
+
+    var dock_rows = try buildReasoningDockRows(allocator, state.reasoning_buffer.items, 80);
+    defer dock_rows.deinit(allocator);
+    try std.testing.expect(dock_rows.items.len <= max_reasoning_dock_rows);
+    try std.testing.expect(std.mem.indexOf(u8, dock_rows.items[dock_rows.items.len - 1].text, "newest words") != null);
+
+    const layout = computeLayoutWithReasoningDock(20, @intCast(dock_rows.items.len));
+    try std.testing.expectEqual(layout.footer_y, layout.reasoning_y + layout.reasoning_height);
+    try std.testing.expectEqual(layout.transcript_height + layout.reasoning_gap_height, layout.reasoning_y);
+}
+
+test "tui child replay keeps one keyed row per group and task" {
+    const allocator = std.testing.allocator;
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "glm-5.2",
+        .base_url = "https://api.z.ai/api/coding/paas/v4",
+        .auth_provider = "zai",
+        .plan = "coding",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    try state.addProgress("child_group_started", "{\"group_id\":\"group-one\",\"queued\":1,\"terminal\":false}");
+    try std.testing.expectEqualStrings("Agents 0/1 - waiting on 1", state.messages.items[0].text);
+    try std.testing.expectEqual(ActivityKind.group, state.messages.items[0].activity_kind);
+    try std.testing.expectEqual(ActivityState.running, state.messages.items[0].activity_state);
+    try state.addProgress("child_admitted", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"queued\"}");
+    try std.testing.expectEqualStrings("Recon - queued", state.messages.items[1].text);
+    try std.testing.expectEqual(ActivityKind.item, state.messages.items[1].activity_kind);
+    try std.testing.expectEqual(ActivityState.pending, state.messages.items[1].activity_state);
+    try std.testing.expectEqualStrings("group-one", state.messages.items[1].activity_parent_id.?);
+    try state.addProgress("child_started", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\"}");
+    try std.testing.expectEqualStrings("Recon - running", state.messages.items[1].text);
+    try std.testing.expectEqual(ActivityState.running, state.messages.items[1].activity_state);
+    try state.addProgress("child_waiting", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"waiting\"}");
+    try std.testing.expectEqualStrings("Recon - waiting", state.messages.items[1].text);
+    try state.addProgress("child_finished", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"completed\"}");
+    try state.addProgress("child_group_finished", "{\"group_id\":\"group-one\",\"completed\":1,\"terminal\":true}");
+    try std.testing.expectEqual(@as(usize, 2), state.messages.items.len);
+    try std.testing.expectEqualStrings("Agents 1/1", state.messages.items[0].text);
+    try std.testing.expectEqual(ActivityState.completed, state.messages.items[0].activity_state);
+    try std.testing.expectEqualStrings("Recon", state.messages.items[1].text);
+    try std.testing.expectEqual(ActivityState.completed, state.messages.items[1].activity_state);
+
+    try state.addProgress("child_group_recovered", "{\"group_id\":\"group-one\",\"tasks\":1,\"stale_owners_reconciled\":1,\"terminal\":true}");
+    try std.testing.expectEqual(@as(usize, 2), state.messages.items.len);
+    try std.testing.expectEqualStrings("Agents 1/1 - 1 failed, 0 cancelled", state.messages.items[0].text);
+    try std.testing.expectEqual(ActivityState.failed, state.messages.items[0].activity_state);
+    try std.testing.expect(replayProgressEvent("child_progress"));
+    try std.testing.expect(replayProgressEvent("session_waiting"));
+    try std.testing.expect(!replayProgressEvent("assistant_delta"));
+}
+
+test "tui activity families share nested checkbox grammar" {
+    try std.testing.expectEqualStrings("Search", activityTitle("web_search"));
+    try std.testing.expectEqualStrings("Explore", activityTitle("read_file"));
+    try std.testing.expectEqualStrings("Agents", activityTitle("agents"));
+    try std.testing.expectEqualStrings("To-dos", activityTitle("todo_slice"));
+
+    try std.testing.expectEqualStrings("[ ] ", activityMarker(.pending));
+    try std.testing.expectEqualStrings("[>] ", activityMarker(.running));
+    try std.testing.expectEqualStrings("[x] ", activityMarker(.completed));
+    try std.testing.expectEqualStrings("[!] ", activityMarker(.failed));
+    try std.testing.expectEqualStrings("[-] ", activityMarker(.cancelled));
+    try std.testing.expectEqualStrings("|-- ", activityConnector(.item, false));
+    try std.testing.expectEqualStrings("`-- ", activityConnector(.item, true));
+    try std.testing.expectEqualStrings("", activityConnector(.group, false));
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const config_file = @import("../config/file.zig");
 const docs_sync = @import("../docs/sync.zig");
 const context_builder = @import("../context/index.zig");
 const context_stream_rules = @import("../context/stream_rules.zig");
@@ -107,6 +108,7 @@ pub fn runPromptWithOptions(
     defer session.deinit(allocator);
 
     if (session.status == .cancelled) return Error.Cancelled;
+    const should_recover_child_groups = options.session_id != null and session.status != .initialized;
 
     try store.setSessionStatus(allocator, config.workspace_root, &session, .running);
     try options.hooks.onSessionInitialized(session.id);
@@ -143,6 +145,17 @@ pub fn runPromptWithOptions(
     var file_inspection_ledger = tools.FileInspectionLedger.init(allocator);
     defer file_inspection_ledger.deinit();
     execution_context.file_inspection_ledger = &file_inspection_ledger;
+    var agent_discovery_ledger = tools.AgentDiscoveryLedger{};
+    const root_agent_run = execution_context.agent_service != null and
+        (execution_context.capability_profile_id == null or
+            std.mem.eql(u8, execution_context.capability_profile_id.?, "root"));
+    if (execution_context.agent_service != null) {
+        execution_context.agent_discovery_ledger = &agent_discovery_ledger;
+    }
+    if (root_agent_run) {
+        const agent_policy = try config_file.loadAgentPolicy(allocator, config.workspace_root);
+        execution_context.orchestrator_only = agent_policy.orchestrator_only;
+    }
     var tool_delta_context = ToolDeltaContext{
         .allocator = allocator,
         .workspace_root = config.workspace_root,
@@ -157,6 +170,23 @@ pub fn runPromptWithOptions(
     if (!execution_context.workspace_state_enabled and tools.workspaceStateRelevant(session.prompt)) {
         execution_context.workspace_state_enabled = true;
     }
+
+    // A resumed parent rebuilds its child-group index from receipts before the
+    // first provider dispatch. Any recovered group is parked/converged through
+    // the same condition path as a live launch, so cold start cannot skip or
+    // duplicate child evidence.
+    if (should_recover_child_groups) if (execution_context.agent_service) |agent_service| {
+        if (agent_service.waitParentFn != null) {
+            _ = try agent_service.reconcile(allocator, session.id);
+            _ = try awaitChildGroups(
+                allocator,
+                config.workspace_root,
+                options.hooks,
+                &session,
+                agent_service,
+            );
+        }
+    };
 
     var base_message_count = rebuildProviderBaseMessages(
         allocator,
@@ -180,7 +210,9 @@ pub fn runPromptWithOptions(
     // allocations: system prompt build, checkpoint reads, context compilation.
     // The persistent message list uses the parent allocator and survives resets.
     var turn_arena = @import("../memory/scopes.zig").ScopedArena.init(
-        .turn, allocator, @import("../memory/scopes.zig").defaultQuota(.turn),
+        .turn,
+        allocator,
+        @import("../memory/scopes.zig").defaultQuota(.turn),
     );
     defer turn_arena.deinit();
 
@@ -289,6 +321,10 @@ pub fn runPromptWithOptions(
         };
         defer completion.deinit(allocator);
         provider_retries = 0; // reset on success
+        if (options.hooks.shouldCancel(session.id)) {
+            try cancelSession(allocator, config.workspace_root, options.hooks, &session, "Cancellation requested during provider execution.");
+            return Error.Cancelled;
+        }
 
         if (completion.hasToolCalls()) {
             const session_budget_exceeded = completion.tool_calls.len > config.max_tool_calls_per_session or
@@ -463,72 +499,106 @@ pub fn runPromptWithOptions(
                 );
             }
 
-            base_message_count = messages.items.len;
-            continue;
-        }
-
-        if (completion.content) |content| {
             if (requires_child_supervision) {
-                const child_summary = childStatusSummary(allocator, execution_context) catch ChildStatusSummary{};
-                if (child_summary.pending > 0) {
-                    const waiting_message = "I will continue once agents complete; if any fail, I will follow up.";
+                const agent_service = execution_context.agent_service orelse return tools.Error.AgentServiceUnavailable;
+                const park_after_launch = if (execution_context.agent_discovery_ledger) |ledger|
+                    ledger.consumeParkRequest()
+                else
+                    true;
+                if (park_after_launch) {
+                    requires_child_supervision = try awaitChildGroups(
+                        allocator,
+                        config.workspace_root,
+                        options.hooks,
+                        &session,
+                        agent_service,
+                    );
+                    base_message_count = try rebuildProviderBaseMessages(
+                        allocator,
+                        config,
+                        execution_context,
+                        session,
+                        &messages,
+                        messages.items.len,
+                    );
+                    continue;
+                }
+                const child_snapshot = try agent_service.waitParent(session.id, 0);
+                if (child_snapshot.ready) {
                     try recordSessionEvent(
                         allocator,
                         config.workspace_root,
                         options.hooks,
                         session.id,
-                        "session_waiting",
-                        waiting_message,
+                        "child_convergence_started",
+                        "{\"schema\":\"var1.parent_wait.v1\",\"state\":\"compiling_ready_children\"}",
                         session.status,
                     );
-                    const waiting_log = try std.fmt.allocPrint(allocator, "parent waiting on child agents: {d} pending", .{child_summary.pending});
-                    defer allocator.free(waiting_log);
-                    try docs_sync.appendLog(allocator, config.workspace_root, waiting_log);
-
-                    try messages.append(try types.initTextMessage(allocator, .assistant, content));
-                    const supervision_prompt = try std.fmt.allocPrint(
+                    try agent_service.converge(allocator, session.id);
+                    base_message_count = try rebuildProviderBaseMessages(
                         allocator,
-                        "Supervision checkpoint: {d} child runs are still non-terminal. Continue supervising child runs internally until they finish or fail. Do not ask the operator to run status tools.",
-                        .{child_summary.pending},
+                        config,
+                        execution_context,
+                        session,
+                        &messages,
+                        messages.items.len,
                     );
-                    defer allocator.free(supervision_prompt);
-                    try messages.append(try types.initTextMessage(allocator, .user, supervision_prompt));
-                    continue;
+                    const after_convergence = try agent_service.waitParent(session.id, 0);
+                    requires_child_supervision = !after_convergence.terminal or after_convergence.ready;
+                } else {
+                    // Give the parent another provider turn so it can dispatch
+                    // more independent work or emit its waiting update. A text
+                    // response while children remain active parks below.
+                    base_message_count = messages.items.len;
                 }
-
-                if (child_summary.failed > 0 and !contentMentionsFailure(content)) {
-                    try messages.append(try types.initTextMessage(allocator, .assistant, content));
-                    const failure_prompt = try std.fmt.allocPrint(
-                        allocator,
-                        "Child supervision checkpoint: {d} child runs failed. Follow up clearly on those failures in your operator response.",
-                        .{child_summary.failed},
-                    );
-                    defer allocator.free(failure_prompt);
-                    try messages.append(try types.initTextMessage(allocator, .user, failure_prompt));
-                    continue;
-                }
-                // All children are terminal — converge their outputs into the
-                // parent transcript. This writes a `converged` shard checkpoint
-                // + merged assistant message to the parent's ledgers. The
-                // merged result becomes part of the context the provider sees
-                // when synthesizing the final response below. (roadmap P0-2)
-                if (execution_context.agent_service) |agent_service| {
-                    agent_service.converge(allocator, session.id) catch |err| {
-                        const converge_warn = std.fmt.allocPrint(allocator, "branch convergence failed: {s}", .{@errorName(err)}) catch "branch convergence failed";
-                        defer allocator.free(converge_warn);
-                        docs_sync.appendLog(allocator, config.workspace_root, converge_warn) catch {};
-                    };
-                    // Rebuild the message list so the convergence summary is
-                    // visible in the provider's context window for the final
-                    // synthesis turn. The convergence appended a new assistant
-                    // message to the transcript — the context builder will pick
-                    // it up from first_kept_seq on the next compilation.
-                }
-                requires_child_supervision = false;
+            } else {
+                base_message_count = messages.items.len;
             }
 
+            continue;
+        }
+
+        if (completion.content) |content| {
             const final_output = try sanitizeOperatorResponse(allocator, session.prompt, content);
             defer allocator.free(final_output);
+
+            if (requires_child_supervision) {
+                const progress_timestamp = std.time.milliTimestamp();
+                try store.upsertAssistantSessionMessageWithReasoning(
+                    allocator,
+                    config.workspace_root,
+                    session.id,
+                    final_output,
+                    completion.reasoning,
+                    progress_timestamp,
+                );
+                try recordSessionEvent(
+                    allocator,
+                    config.workspace_root,
+                    options.hooks,
+                    session.id,
+                    "assistant_progress",
+                    final_output,
+                    session.status,
+                );
+                const agent_service = execution_context.agent_service orelse return tools.Error.AgentServiceUnavailable;
+                requires_child_supervision = try awaitChildGroups(
+                    allocator,
+                    config.workspace_root,
+                    options.hooks,
+                    &session,
+                    agent_service,
+                );
+                base_message_count = try rebuildProviderBaseMessages(
+                    allocator,
+                    config,
+                    execution_context,
+                    session,
+                    &messages,
+                    messages.items.len,
+                );
+                continue;
+            }
 
             const final_timestamp = std.time.milliTimestamp();
             try store.upsertAssistantSessionMessageWithReasoning(allocator, config.workspace_root, session.id, final_output, completion.reasoning, final_timestamp);
@@ -625,6 +695,58 @@ pub fn runPromptWithOptions(
 
     try failSession(allocator, config.workspace_root, options.hooks, &session, "StepLimitExceeded");
     return Error.StepLimitExceeded;
+}
+
+/// Park one parent on its in-memory child condition until the first
+/// unconsumed terminal result is ready. This path performs no provider
+/// dispatch. It converges every result ready at wake time exactly once, then
+/// returns whether unfinished or newly-ready siblings still require
+/// supervision.
+fn awaitChildGroups(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    hooks: Hooks,
+    session: *types.SessionRecord,
+    agent_service: tools.AgentService,
+) !bool {
+    var snapshot = try agent_service.waitParent(session.id, 0);
+    if (snapshot.groups == 0) return false;
+    if (!snapshot.ready and !snapshot.terminal) {
+        try recordSessionEvent(
+            allocator,
+            workspace_root,
+            hooks,
+            session.id,
+            "session_waiting",
+            "{\"schema\":\"var1.parent_wait.v1\",\"state\":\"waiting_first_child\"}",
+            session.status,
+        );
+        try docs_sync.appendLog(allocator, workspace_root, "parent parked on first-ready child condition");
+    }
+
+    while (!snapshot.ready and !snapshot.terminal) {
+        if (hooks.shouldCancel(session.id)) {
+            _ = agent_service.cancelParent(session.id, "Parent cancellation requested.") catch 0;
+            try cancelSession(allocator, workspace_root, hooks, session, "Cancellation requested while waiting for child groups.");
+            return Error.Cancelled;
+        }
+        snapshot = try agent_service.waitParent(session.id, 250);
+    }
+
+    if (snapshot.ready) {
+        try recordSessionEvent(
+            allocator,
+            workspace_root,
+            hooks,
+            session.id,
+            "child_convergence_started",
+            "{\"schema\":\"var1.parent_wait.v1\",\"state\":\"compiling_ready_children\"}",
+            session.status,
+        );
+        try agent_service.converge(allocator, session.id);
+    }
+    const after_convergence = try agent_service.waitParent(session.id, 0);
+    return !after_convergence.terminal or after_convergence.ready;
 }
 
 fn rebuildProviderBaseMessages(
@@ -1201,71 +1323,6 @@ fn executeToolCall(
         .ok = true,
         .error_name = null,
     };
-}
-
-const ChildStatusSummary = struct {
-    pending: usize = 0,
-    failed: usize = 0,
-};
-
-fn childStatusSummary(allocator: std.mem.Allocator, execution_context: tools.ExecutionContext) !ChildStatusSummary {
-    const service = execution_context.agent_service orelse return .{};
-    const parent_session_id = execution_context.parent_session_id orelse return .{};
-
-    const listing = try service.list(allocator, parent_session_id);
-    defer allocator.free(listing);
-
-    if (std.mem.eql(u8, std.mem.trim(u8, listing, " \r\n"), "No child agents.")) return .{};
-
-    var summary: ChildStatusSummary = .{};
-    var lines = std.mem.splitScalar(u8, listing, '\n');
-    while (lines.next()) |raw_line| {
-        const line = std.mem.trim(u8, raw_line, " \r");
-        if (line.len == 0) continue;
-
-        const status_label = statusLabelFromListLine(line) orelse continue;
-        if (!isTerminalStatusLabel(status_label)) {
-            summary.pending += 1;
-            continue;
-        }
-        if (std.mem.eql(u8, status_label, "failed") or std.mem.eql(u8, status_label, "cancelled")) {
-            summary.failed += 1;
-        }
-    }
-
-    return summary;
-}
-
-fn statusLabelFromListLine(line: []const u8) ?[]const u8 {
-    const status_key = " STATUS ";
-    const status_start = std.mem.indexOf(u8, line, status_key) orelse return null;
-    const value_start = status_start + status_key.len;
-    const remainder = line[value_start..];
-    const value_end = std.mem.indexOfScalar(u8, remainder, ' ') orelse remainder.len;
-    return remainder[0..value_end];
-}
-
-fn isTerminalStatusLabel(status_label: []const u8) bool {
-    return std.mem.eql(u8, status_label, "completed") or
-        std.mem.eql(u8, status_label, "failed") or
-        std.mem.eql(u8, status_label, "cancelled");
-}
-
-fn contentMentionsFailure(content: []const u8) bool {
-    const keywords = [_][]const u8{
-        "fail",
-        "failed",
-        "failure",
-        "errored",
-        "error",
-        "cancelled",
-    };
-
-    for (keywords) |keyword| {
-        if (std.ascii.indexOfIgnoreCase(content, keyword) != null) return true;
-    }
-
-    return false;
 }
 
 fn sanitizeOperatorResponse(

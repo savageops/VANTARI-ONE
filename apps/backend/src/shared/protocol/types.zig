@@ -40,6 +40,8 @@ pub const Capabilities = struct {
     /// event spine supports replay cursors. Clients can use seq for
     /// deterministic same-millisecond ordering (AGENTS.md §IV).
     event_seq_supported: bool = true,
+    child_groups: bool = true,
+    agent_route_receipts: bool = true,
 };
 
 pub const InitializeResult = struct {
@@ -56,6 +58,7 @@ pub const SessionSummary = struct {
     continued_from_session_id: ?[]const u8 = null,
     display_name: ?[]const u8 = null,
     agent_profile: ?[]const u8 = null,
+    execution_receipt: ?types.ExecutionReceiptView = null,
     failure_reason: ?[]const u8 = null,
     created_at_ms: i64,
     updated_at_ms: i64,

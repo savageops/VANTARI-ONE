@@ -56,7 +56,9 @@ pub const CommandProbe = struct {
 };
 
 pub const Error = error{
+    AgentCatalogRequired,
     AgentServiceUnavailable,
+    CapabilityDenied,
     CommandFailed,
     CommandTerminated,
     CommandTimedOut,
@@ -158,6 +160,49 @@ pub const CommandRunner = struct {
     }
 };
 
+pub const AgentTaskRequest = struct {
+    name: ?[]const u8 = null,
+    agent_id: []const u8,
+    task: []const u8,
+    output_schema_json: []const u8 = "{}",
+};
+
+pub const AgentGroupSnapshot = struct {
+    groups: usize = 0,
+    queued: usize = 0,
+    running: usize = 0,
+    completed: usize = 0,
+    failed: usize = 0,
+    cancelled: usize = 0,
+    /// At least one terminal child has durable evidence that has not yet been
+    /// converged into the parent context.
+    ready: bool = false,
+    terminal: bool = true,
+};
+
+pub const AgentEventSink = struct {
+    context: ?*anyopaque = null,
+    notifyFn: ?*const fn (
+        ctx: ?*anyopaque,
+        parent_session_id: []const u8,
+        event_type: []const u8,
+        message: []const u8,
+        timestamp_ms: i64,
+    ) anyerror!void = null,
+
+    pub fn notify(
+        self: AgentEventSink,
+        parent_session_id: []const u8,
+        event_type: []const u8,
+        message: []const u8,
+        timestamp_ms: i64,
+    ) !void {
+        if (self.notifyFn) |callback| {
+            try callback(self.context, parent_session_id, event_type, message, timestamp_ms);
+        }
+    }
+};
+
 pub const AgentService = struct {
     context: ?*anyopaque,
     launchFn: *const fn (
@@ -168,6 +213,14 @@ pub const AgentService = struct {
         name: ?[]const u8,
         scope: DelegationScope,
     ) anyerror![]u8,
+    launchBatchFn: ?*const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+        shared_context: []const u8,
+        tasks: []const AgentTaskRequest,
+        scope: DelegationScope,
+    ) anyerror![]u8 = null,
     statusFn: *const fn (
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
@@ -196,6 +249,25 @@ pub const AgentService = struct {
         allocator: std.mem.Allocator,
         parent_session_id: []const u8,
     ) anyerror!usize,
+    waitParentFn: ?*const fn (
+        ctx: ?*anyopaque,
+        parent_session_id: []const u8,
+        timeout_ms: usize,
+    ) anyerror!AgentGroupSnapshot = null,
+    cancelGroupFn: ?*const fn (
+        ctx: ?*anyopaque,
+        group_id: []const u8,
+        reason: []const u8,
+    ) anyerror!usize = null,
+    cancelParentFn: ?*const fn (
+        ctx: ?*anyopaque,
+        parent_session_id: []const u8,
+        reason: []const u8,
+    ) anyerror!usize = null,
+    bindEventSinkFn: ?*const fn (
+        ctx: ?*anyopaque,
+        sink: AgentEventSink,
+    ) void = null,
 
     pub fn launch(
         self: AgentService,
@@ -206,6 +278,21 @@ pub const AgentService = struct {
         scope: DelegationScope,
     ) anyerror![]u8 {
         return self.launchFn(self.context, allocator, parent_session_id, prompt, name, scope);
+    }
+
+    pub fn launchBatch(
+        self: AgentService,
+        allocator: std.mem.Allocator,
+        parent_session_id: []const u8,
+        shared_context: []const u8,
+        tasks: []const AgentTaskRequest,
+        scope: DelegationScope,
+    ) anyerror![]u8 {
+        if (self.launchBatchFn) |launch_batch| {
+            return launch_batch(self.context, allocator, parent_session_id, shared_context, tasks, scope);
+        }
+        if (tasks.len != 1) return Error.AgentServiceUnavailable;
+        return self.launch(allocator, parent_session_id, tasks[0].task, tasks[0].name, scope);
     }
 
     pub fn status(
@@ -257,6 +344,25 @@ pub const AgentService = struct {
     ) anyerror!usize {
         return self.reconcileFn(self.context, allocator, parent_session_id);
     }
+
+    pub fn waitParent(self: AgentService, parent_session_id: []const u8, timeout_ms: usize) anyerror!AgentGroupSnapshot {
+        const wait_parent = self.waitParentFn orelse return Error.AgentServiceUnavailable;
+        return wait_parent(self.context, parent_session_id, timeout_ms);
+    }
+
+    pub fn cancelGroup(self: AgentService, group_id: []const u8, reason: []const u8) anyerror!usize {
+        const cancel_group = self.cancelGroupFn orelse return Error.AgentServiceUnavailable;
+        return cancel_group(self.context, group_id, reason);
+    }
+
+    pub fn cancelParent(self: AgentService, parent_session_id: []const u8, reason: []const u8) anyerror!usize {
+        const cancel_parent = self.cancelParentFn orelse return Error.AgentServiceUnavailable;
+        return cancel_parent(self.context, parent_session_id, reason);
+    }
+
+    pub fn bindEventSink(self: AgentService, sink: AgentEventSink) void {
+        if (self.bindEventSinkFn) |bind| bind(self.context, sink);
+    }
 };
 
 pub const ToolEventSink = struct {
@@ -292,8 +398,33 @@ pub const ExecutionContext = struct {
     command_probe: ?CommandProbe = null,
     tool_events: ?ToolEventSink = null,
     file_inspection_ledger: ?*FileInspectionLedger = null,
+    agent_discovery_ledger: ?*AgentDiscoveryLedger = null,
+    orchestrator_only: bool = false,
     workspace_state_enabled: bool = false,
+    capability_profile_id: ?[]const u8 = null,
+    delegation_depth_remaining: usize = std.math.maxInt(usize),
     memory_policy: @import("../../shared/types.zig").MemoryPolicy = .{},
+};
+
+pub const AgentDiscoveryLedger = struct {
+    discovered: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    park_after_launch: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    pub fn mark(self: *AgentDiscoveryLedger) void {
+        self.discovered.store(true, .release);
+    }
+
+    pub fn hasDiscovered(self: *const AgentDiscoveryLedger) bool {
+        return self.discovered.load(.acquire);
+    }
+
+    pub fn noteLaunch(self: *AgentDiscoveryLedger, background: bool) void {
+        if (!background) self.park_after_launch.store(true, .release);
+    }
+
+    pub fn consumeParkRequest(self: *AgentDiscoveryLedger) bool {
+        return self.park_after_launch.swap(false, .acq_rel);
+    }
 };
 
 pub const FileInspectionState = enum {

@@ -123,6 +123,7 @@ const ParsedSessionSummary = struct {
     continued_from_session_id: ?[]const u8 = null,
     display_name: ?[]const u8 = null,
     agent_profile: ?[]const u8 = null,
+    execution_receipt: ?shared_types.ExecutionReceiptView = null,
     failure_reason: ?[]const u8 = null,
     created_at_ms: i64 = 0,
     updated_at_ms: i64 = 0,
@@ -614,7 +615,8 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
             .sendFn = provider.httpSend,
             .streamFn = provider.httpSendStreaming,
         };
-        var agent_service = agents.Service.init(&loaded_config);
+        var agent_service = agents.Service.initWithTransport(&loaded_config, transport);
+        defer agent_service.deinit();
         try stdio_rpc.serveKernel(allocator, &loaded_config, transport, agent_service.handle());
         return;
     }
@@ -1420,6 +1422,7 @@ fn makeCliSessionSummary(session: shared_types.SessionRecord, output: ?[]const u
         .continued_from_session_id = session.continued_from_session_id,
         .display_name = session.display_name,
         .agent_profile = session.agent_profile,
+        .execution_receipt = if (session.execution_receipt) |receipt| receipt.*.view() else null,
         .failure_reason = session.failure_reason,
         .created_at_ms = session.created_at_ms,
         .updated_at_ms = session.updated_at_ms,

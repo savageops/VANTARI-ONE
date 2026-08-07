@@ -3,7 +3,15 @@ const fsutil = @import("../../shared/fsutil.zig");
 const types = @import("../../shared/types.zig");
 const memory = @import("../memory/store.zig");
 
+var docs_mutex: std.Thread.Mutex = .{};
+
 pub fn ensureRunStart(allocator: std.mem.Allocator, workspace_root: []const u8) !void {
+    docs_mutex.lock();
+    defer docs_mutex.unlock();
+    return ensureRunStartUnlocked(allocator, workspace_root);
+}
+
+fn ensureRunStartUnlocked(allocator: std.mem.Allocator, workspace_root: []const u8) !void {
     const log_path = try runLogPath(allocator, workspace_root);
     defer allocator.free(log_path);
     if (!fsutil.fileExists(log_path)) {
@@ -55,6 +63,8 @@ pub fn appendLog(allocator: std.mem.Allocator, workspace_root: []const u8, messa
         message,
     });
     defer allocator.free(line);
+    docs_mutex.lock();
+    defer docs_mutex.unlock();
     try fsutil.appendText(log_path, line);
 }
 
@@ -119,7 +129,7 @@ fn renderSessionDoc(allocator: std.mem.Allocator, snapshot: types.ProgressSnapsh
         \\
         \\{s}
         \\
-        ,
+    ,
         .{
             snapshot.session_id,
             snapshot.status,

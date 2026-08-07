@@ -9,6 +9,17 @@ const store = @import("../core/sessions/store.zig");
 const auth_store = @import("../core/auth/store.zig");
 const tools = @import("../core/tools/runtime.zig");
 const types = @import("../shared/types.zig");
+const stdio_client = @import("stdio_client.zig");
+const wire = @import("stdio_wire.zig");
+
+pub const LocalClient = stdio_client.LocalClient;
+pub const Notification = stdio_client.Notification;
+pub const RpcCallResult = stdio_client.RpcCallResult;
+
+const errorResponseOrNull = wire.errorResponseOrNull;
+const renderErrorResponse = wire.renderErrorResponse;
+const renderJsonAlloc = wire.renderJsonAlloc;
+const renderSuccessResponse = wire.renderSuccessResponse;
 
 pub const Error = error{
     InvalidRequest,
@@ -25,9 +36,6 @@ pub const Error = error{
     RpcRemoteError,
 };
 
-const max_header_line_bytes = 8 * 1024;
-const max_notification_backlog = 512;
-const notification_poll_ms: u64 = 50;
 /// Stale-running reconciliation window. A session is considered stale when
 /// its persisted status is `.running` but no in-process kernel owns it AND
 /// no event has touched it for this duration. The previous 120s window was
@@ -132,6 +140,7 @@ const Server = struct {
     scheduler_thread: ?std.Thread = null,
 
     fn deinit(self: *Server) void {
+        self.agent_service.bindEventSink(.{});
         if (self.scheduler_service) |*service| {
             service.requestStop();
             if (self.scheduler_thread) |thread| thread.join();
@@ -187,121 +196,13 @@ const Server = struct {
     fn writePayload(self: *Server, payload: []const u8) !void {
         self.write_mutex.lock();
         defer self.write_mutex.unlock();
-        try writeFrame(self.stdout_file, payload);
+        try wire.writeFrame(self.stdout_file, payload);
     }
 };
 
 const RequestJob = struct {
     server: *Server,
     request_payload: []u8,
-};
-
-pub const RpcCallResult = struct {
-    result_json: ?[]u8 = null,
-    error_json: ?[]u8 = null,
-
-    pub fn deinit(self: RpcCallResult, allocator: std.mem.Allocator) void {
-        if (self.result_json) |value| allocator.free(value);
-        if (self.error_json) |value| allocator.free(value);
-    }
-};
-
-pub const Notification = struct {
-    sequence: u64,
-    method: []u8,
-    params_json: []u8,
-
-    pub fn deinit(self: Notification, allocator: std.mem.Allocator) void {
-        allocator.free(self.method);
-        allocator.free(self.params_json);
-    }
-};
-
-const ClientState = struct {
-    allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex = .{},
-    cond: std.Thread.Condition = .{},
-    responses: std.StringHashMapUnmanaged([]u8) = .{},
-    notifications: std.array_list.Managed(Notification),
-    next_request_id: usize = 1,
-    next_notification_sequence: u64 = 1,
-    closed: bool = false,
-    read_error: ?anyerror = null,
-
-    fn init(allocator: std.mem.Allocator) ClientState {
-        return .{
-            .allocator = allocator,
-            .notifications = std.array_list.Managed(Notification).init(allocator),
-        };
-    }
-
-    fn deinit(self: *ClientState) void {
-        var iterator = self.responses.iterator();
-        while (iterator.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
-        }
-        self.responses.deinit(self.allocator);
-
-        for (self.notifications.items) |notification| notification.deinit(self.allocator);
-        self.notifications.deinit();
-    }
-
-    fn recordResponse(self: *ClientState, request_id: []const u8, response_payload: []u8) !void {
-        self.mutex.lock();
-        defer {
-            self.cond.broadcast();
-            self.mutex.unlock();
-        }
-
-        try self.responses.put(self.allocator, try self.allocator.dupe(u8, request_id), response_payload);
-    }
-
-    fn recordNotification(self: *ClientState, method: []const u8, params_json: []const u8) !void {
-        self.mutex.lock();
-        defer {
-            self.cond.broadcast();
-            self.mutex.unlock();
-        }
-
-        if (self.notifications.items.len >= max_notification_backlog) {
-            const dropped = self.notifications.orderedRemove(0);
-            dropped.deinit(self.allocator);
-        }
-
-        try self.notifications.append(.{
-            .sequence = self.next_notification_sequence,
-            .method = try self.allocator.dupe(u8, method),
-            .params_json = try self.allocator.dupe(u8, params_json),
-        });
-        self.next_notification_sequence += 1;
-    }
-
-    fn recordClosure(self: *ClientState, read_error: ?anyerror) void {
-        self.mutex.lock();
-        defer {
-            self.cond.broadcast();
-            self.mutex.unlock();
-        }
-
-        self.closed = true;
-        self.read_error = read_error;
-    }
-
-    fn nextRequestId(self: *ClientState) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const request_id = self.next_request_id;
-        self.next_request_id += 1;
-        return request_id;
-    }
-};
-
-const ReaderContext = struct {
-    allocator: std.mem.Allocator,
-    stdout_file: std.fs.File,
-    state: *ClientState,
 };
 
 pub fn serveKernel(
@@ -318,12 +219,18 @@ pub fn serveKernel(
         .stdout_file = std.fs.File.stdout(),
     };
     defer server.deinit();
+    server.agent_service.bindEventSink(.{
+        .context = &server,
+        .notifyFn = onAgentParentEvent,
+    });
     server.scheduler_service = try scheduler.Service.init(allocator, config, transport);
     server.scheduler_thread = try std.Thread.spawn(.{}, runSchedulerService, .{&server.scheduler_service.?});
 
     const stdin_file = std.fs.File.stdin();
+    var frame_reader = wire.FrameReader.init(allocator);
+    defer frame_reader.deinit();
     while (true) {
-        const request_payload = try readFrame(allocator, stdin_file) orelse break;
+        const request_payload = try frame_reader.readFrame(stdin_file) orelse break;
 
         const job = try std.heap.page_allocator.create(RequestJob);
         job.* = .{
@@ -336,171 +243,21 @@ pub fn serveKernel(
     }
 }
 
+/// Project already-persisted child-group events onto the live stdio notification lane.
+fn onAgentParentEvent(
+    ctx: ?*anyopaque,
+    parent_session_id: []const u8,
+    event_type: []const u8,
+    message: []const u8,
+    timestamp_ms: i64,
+) anyerror!void {
+    const server: *Server = @ptrCast(@alignCast(ctx.?));
+    try server.emitSessionEvent(parent_session_id, event_type, message, "running", timestamp_ms);
+}
+
 fn runSchedulerService(service: *scheduler.Service) void {
     service.run();
 }
-
-pub const LocalClient = struct {
-    allocator: std.mem.Allocator,
-    child: std.process.Child,
-    state: *ClientState,
-    stdin_mutex: std.Thread.Mutex = .{},
-    reader_context: ?*ReaderContext = null,
-    reader_thread: ?std.Thread = null,
-
-    pub fn init(allocator: std.mem.Allocator) !LocalClient {
-        return initInWorkspace(allocator, null);
-    }
-
-    pub fn initInWorkspace(allocator: std.mem.Allocator, workspace_root: ?[]const u8) !LocalClient {
-        const exe_path = try std.fs.selfExePathAlloc(allocator);
-        defer allocator.free(exe_path);
-
-        var argv = [_][]const u8{ exe_path, "kernel-stdio" };
-        var child = std.process.Child.init(&argv, allocator);
-        child.cwd = workspace_root;
-        child.stdin_behavior = .Pipe;
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Ignore;
-        try child.spawn();
-        errdefer {
-            if (child.stdin) |*stdin_file| {
-                stdin_file.close();
-                child.stdin = null;
-            }
-            if (child.stdout) |*stdout_file| {
-                stdout_file.close();
-                child.stdout = null;
-            }
-            _ = child.kill() catch {};
-            _ = child.wait() catch {};
-        }
-
-        const state = try allocator.create(ClientState);
-        errdefer allocator.destroy(state);
-        state.* = ClientState.init(allocator);
-        errdefer state.deinit();
-
-        const reader_context = try allocator.create(ReaderContext);
-        errdefer allocator.destroy(reader_context);
-        reader_context.* = .{
-            .allocator = allocator,
-            .stdout_file = child.stdout orelse return Error.MissingChildPipes,
-            .state = state,
-        };
-        child.stdout = null;
-        errdefer reader_context.stdout_file.close();
-
-        var client = LocalClient{
-            .allocator = allocator,
-            .child = child,
-            .state = state,
-            .reader_context = reader_context,
-        };
-
-        const reader = try std.Thread.spawn(.{}, readerLoop, .{reader_context});
-        client.reader_thread = reader;
-        return client;
-    }
-
-    pub fn deinit(self: *LocalClient) void {
-        if (self.child.stdin) |*stdin_file| {
-            stdin_file.close();
-            self.child.stdin = null;
-        }
-
-        _ = self.child.wait() catch {};
-
-        if (self.reader_thread) |thread| thread.join();
-
-        if (self.reader_context) |reader_context| {
-            reader_context.stdout_file.close();
-            self.allocator.destroy(reader_context);
-            self.reader_context = null;
-        }
-
-        self.state.deinit();
-        self.allocator.destroy(self.state);
-    }
-
-    pub fn call(self: *LocalClient, method: []const u8, params_json: []const u8) !RpcCallResult {
-        if (self.child.stdin == null) return Error.MissingChildPipes;
-
-        const request_number = self.state.nextRequestId();
-        const request_id = try std.fmt.allocPrint(self.allocator, "req-{d}", .{request_number});
-        defer self.allocator.free(request_id);
-
-        const request_payload = try std.fmt.allocPrint(
-            self.allocator,
-            "{{\"jsonrpc\":\"2.0\",\"id\":\"{s}\",\"method\":\"{s}\",\"params\":{s}}}",
-            .{ request_id, method, params_json },
-        );
-        defer self.allocator.free(request_payload);
-
-        self.stdin_mutex.lock();
-        defer self.stdin_mutex.unlock();
-        try writeFrame(self.child.stdin.?, request_payload);
-
-        const response_payload = try waitForResponse(self, request_id);
-        defer self.allocator.free(response_payload);
-
-        var parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, response_payload, .{});
-        defer parsed.deinit();
-
-        if (parsed.value != .object) return Error.InvalidRpcResponse;
-        const object = parsed.value.object;
-
-        if (object.get("error")) |error_value| {
-            return .{
-                .error_json = try renderJsonAlloc(self.allocator, error_value),
-            };
-        }
-
-        const result_value = object.get("result") orelse return Error.InvalidRpcResponse;
-        return .{
-            .result_json = try renderJsonAlloc(self.allocator, result_value),
-        };
-    }
-
-    pub fn waitForNotificationAfter(
-        self: *LocalClient,
-        after_sequence: u64,
-        timeout_ms: usize,
-    ) !?Notification {
-        // Use the condition variable for instant wake. The reader thread
-        // calls cond.broadcast() when a notification arrives. This replaces
-        // the previous 50ms Thread.sleep poll.
-        const deadline_ns = @as(u64, timeout_ms) * std.time.ns_per_ms;
-        while (true) {
-            self.state.mutex.lock();
-            // Inline the notification check (can't call takeNotificationAfter
-            // which locks the same mutex — would deadlock).
-            var found: ?Notification = null;
-            for (self.state.notifications.items, 0..) |notification, i| {
-                if (notification.sequence <= after_sequence) continue;
-                // Found one — remove it from the queue and return it.
-                found = .{
-                    .sequence = notification.sequence,
-                    .method = try self.allocator.dupe(u8, notification.method),
-                    .params_json = try self.allocator.dupe(u8, notification.params_json),
-                };
-                _ = self.state.notifications.orderedRemove(i);
-                self.allocator.free(notification.method);
-                self.allocator.free(notification.params_json);
-                break;
-            }
-            self.state.mutex.unlock();
-
-            if (found) |notification| return notification;
-            if (timeout_ms == 0) return null;
-
-            // Wait on the condition variable with a timeout.
-            self.state.mutex.lock();
-            defer self.state.mutex.unlock();
-            self.state.cond.timedWait(&self.state.mutex, deadline_ns) catch return null;
-        }
-    }
-};
 
 fn processRequestWorker(job: *RequestJob) void {
     defer std.heap.page_allocator.destroy(job);
@@ -1285,6 +1042,7 @@ fn makeSessionSummary(session: types.SessionRecord, output: ?[]const u8) protoco
         .continued_from_session_id = session.continued_from_session_id,
         .display_name = session.display_name,
         .agent_profile = session.agent_profile,
+        .execution_receipt = if (session.execution_receipt) |receipt| receipt.*.view() else null,
         .failure_reason = session.failure_reason,
         .created_at_ms = session.created_at_ms,
         .updated_at_ms = session.updated_at_ms,
@@ -1325,224 +1083,6 @@ fn extractRequestId(object: std.json.ObjectMap) !?[]const u8 {
     const value = object.get("id") orelse return null;
     if (value != .string) return Error.InvalidRequest;
     return value.string;
-}
-
-fn waitForResponse(self: *LocalClient, request_id: []const u8) ![]u8 {
-    while (true) {
-        self.state.mutex.lock();
-        defer self.state.mutex.unlock();
-
-        if (self.state.responses.fetchRemove(request_id)) |entry| {
-            self.allocator.free(entry.key);
-            return entry.value;
-        }
-
-        if (self.state.closed) {
-            if (self.state.read_error) |read_error| return read_error;
-            return Error.InvalidRpcResponse;
-        }
-
-        self.state.cond.wait(&self.state.mutex);
-    }
-}
-
-fn takeNotificationAfter(self: *LocalClient, after_sequence: u64) !?Notification {
-    self.state.mutex.lock();
-    defer self.state.mutex.unlock();
-
-    for (self.state.notifications.items) |notification| {
-        if (notification.sequence <= after_sequence) continue;
-        return .{
-            .sequence = notification.sequence,
-            .method = try self.allocator.dupe(u8, notification.method),
-            .params_json = try self.allocator.dupe(u8, notification.params_json),
-        };
-    }
-
-    if (self.state.closed) {
-        if (self.state.read_error) |read_error| return read_error;
-    }
-    return null;
-}
-
-fn readerLoop(reader_context: *ReaderContext) void {
-    const stdout_file = reader_context.stdout_file;
-
-    while (true) {
-        const payload = readFrame(reader_context.allocator, stdout_file) catch |err| {
-            reader_context.state.recordClosure(err);
-            return;
-        } orelse {
-            reader_context.state.recordClosure(null);
-            return;
-        };
-
-        processIncomingFrame(reader_context, payload) catch |err| {
-            reader_context.allocator.free(payload);
-            reader_context.state.recordClosure(err);
-            return;
-        };
-    }
-}
-
-fn processIncomingFrame(reader_context: *ReaderContext, payload: []u8) !void {
-    errdefer reader_context.allocator.free(payload);
-
-    var parsed = try std.json.parseFromSlice(std.json.Value, reader_context.allocator, payload, .{});
-    defer parsed.deinit();
-    if (parsed.value != .object) return Error.InvalidRpcResponse;
-    const object = parsed.value.object;
-
-    if (object.get("method")) |method_value| {
-        if (method_value != .string) return Error.InvalidRpcResponse;
-        const params_json = if (object.get("params")) |params_value|
-            try renderJsonAlloc(reader_context.allocator, params_value)
-        else
-            try reader_context.allocator.dupe(u8, "null");
-        errdefer reader_context.allocator.free(params_json);
-
-        try reader_context.state.recordNotification(method_value.string, params_json);
-        reader_context.allocator.free(payload);
-        return;
-    }
-
-    const request_id = (try extractRequestId(object)) orelse return Error.InvalidRpcResponse;
-    try reader_context.state.recordResponse(request_id, payload);
-}
-
-fn renderSuccessResponse(
-    allocator: std.mem.Allocator,
-    id: []const u8,
-    result_payload: []const u8,
-) ![]u8 {
-    const id_payload = try renderJsonAlloc(allocator, id);
-    defer allocator.free(id_payload);
-
-    return std.fmt.allocPrint(
-        allocator,
-        "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"result\":{s}}}",
-        .{ id_payload, result_payload },
-    );
-}
-
-fn renderErrorResponse(
-    allocator: std.mem.Allocator,
-    id: ?[]const u8,
-    code: i32,
-    message: []const u8,
-) ![]u8 {
-    const id_payload = if (id) |value|
-        try renderJsonAlloc(allocator, value)
-    else
-        try allocator.dupe(u8, "null");
-    defer allocator.free(id_payload);
-
-    const error_payload = try renderJsonAlloc(allocator, .{
-        .code = code,
-        .message = message,
-    });
-    defer allocator.free(error_payload);
-
-    return std.fmt.allocPrint(
-        allocator,
-        "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"error\":{s}}}",
-        .{ id_payload, error_payload },
-    );
-}
-
-fn errorResponseOrNull(
-    allocator: std.mem.Allocator,
-    id: ?[]const u8,
-    code: i32,
-    message: []const u8,
-) !?[]u8 {
-    if (id) |request_id| {
-        const response = try renderErrorResponse(allocator, request_id, code, message);
-        return response;
-    }
-
-    return null;
-}
-
-fn renderJsonAlloc(allocator: std.mem.Allocator, value: anytype) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{f}", .{
-        std.json.fmt(value, .{}),
-    });
-}
-
-fn writeFrame(file: std.fs.File, payload: []const u8) !void {
-    var write_buffer: [4096]u8 = undefined;
-    var writer = file.writer(&write_buffer);
-    try writer.interface.print("Content-Length: {d}\r\n\r\n", .{payload.len});
-    try writer.interface.writeAll(payload);
-    try writer.interface.flush();
-}
-
-fn readFrame(allocator: std.mem.Allocator, file: std.fs.File) !?[]u8 {
-    // Read the entire frame using a chunk-based approach instead of
-    // byte-at-a-time. Reads into a 4KB buffer, scans for \r\n\r\n to find
-    // the header/body boundary, parses Content-Length, then reads the body.
-    // This replaces the previous ~40 syscalls/frame with ~1-2.
-    var header_buf: [4096]u8 = undefined;
-    var header_len: usize = 0;
-
-    // Read until we find the header terminator \r\n\r\n.
-    while (header_len < header_buf.len) {
-        // readSliceShort blocks until at least 1 byte is available on pipes,
-        // and returns as soon as any data arrives (not filling the buffer).
-        const read_len = file.read(header_buf[header_len..]) catch return null;
-        if (read_len == 0) {
-            if (header_len == 0) return null;
-            return Error.InvalidFrame;
-        }
-        header_len += read_len;
-
-        // Check for header terminator.
-        if (std.mem.indexOf(u8, header_buf[0..header_len], "\r\n\r\n")) |header_end| {
-            const header_section = header_buf[0..header_end];
-
-            // Parse Content-Length from the header.
-            var content_length: usize = 0;
-            var line_iter = std.mem.splitSequence(u8, header_section, "\r\n");
-            while (line_iter.next()) |line| {
-                if (std.mem.startsWith(u8, line, "Content-Length:")) {
-                    const value = std.mem.trim(u8, line["Content-Length:".len..], " \t");
-                    content_length = std.fmt.parseInt(usize, value, 10) catch return Error.InvalidFrame;
-                }
-            }
-
-            if (content_length == 0) return Error.InvalidFrame;
-
-            // The body may have partially arrived in the header read.
-            const body_start = header_end + 4;
-            const body_available = header_len - body_start;
-
-            const payload = try allocator.alloc(u8, content_length);
-            errdefer allocator.free(payload);
-
-            // Copy any body bytes that arrived with the header read.
-            const to_copy = @min(body_available, content_length);
-            @memcpy(payload[0..to_copy], header_buf[body_start .. body_start + to_copy]);
-
-            // Read the remaining body bytes if any.
-            if (to_copy < content_length) {
-                try readExactly(file, payload[to_copy..]);
-            }
-
-            return payload;
-        }
-    }
-
-    return Error.InvalidFrame;
-}
-
-fn readExactly(file: std.fs.File, buffer: []u8) !void {
-    var offset: usize = 0;
-    while (offset < buffer.len) {
-        const read_len = try file.read(buffer[offset..]);
-        if (read_len == 0) return Error.InvalidFrame;
-        offset += read_len;
-    }
 }
 
 test "success response includes id and payload" {

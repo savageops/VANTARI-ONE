@@ -52,7 +52,10 @@ test "prompt builder emits ordered guardrails and tool contract" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "all paths are relative to the displayed workspace root") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "operator-visible progress before tool batches") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "not hidden chain-of-thought") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "do not collapse long work into one silent tool burst") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "reason in bounded action bursts, not all at once") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "changed state, proof, blocker or residual risk, and next action") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "persisted work narration in transcript/context history") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Continue chaining bursts until terminal proof or a named blocker") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Skills are reusable operating protocols") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "wait_agent accepts timeout_ms") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "run-insect-rs.ps1") != null);
@@ -89,6 +92,10 @@ test "prompt builder loads project-local system and developer prompt files" {
 
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Custom system invariant.") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Custom developer invariant.") != null);
+    // The runtime-owned burst/checkpoint contract survives project-local
+    // system and developer overrides.
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "reason in bounded action bursts, not all at once") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "a checkpoint is continuation evidence, not a terminal answer") != null);
 }
 
 test "prompt builder fails closed for explicit missing or empty prompt layers" {

@@ -18,6 +18,27 @@ pub const RuntimePolicy = struct {
     }
 };
 
+pub const AgentRouteOverride = struct {
+    provider_id: ?[]u8 = null,
+    model: ?[]u8 = null,
+    wire_api: ?types.WireApi = null,
+    thinking_mode: ?[]u8 = null,
+    context_window_tokens: ?u64 = null,
+    reserve_output_tokens: ?u64 = null,
+
+    pub fn deinit(self: AgentRouteOverride, allocator: std.mem.Allocator) void {
+        if (self.provider_id) |value| allocator.free(value);
+        if (self.model) |value| allocator.free(value);
+        if (self.thinking_mode) |value| allocator.free(value);
+    }
+};
+
+pub const AgentPolicy = struct {
+    /// Root sessions become orchestration-only and must discover the compact
+    /// agent catalog before dispatching or mutating a specialist definition.
+    orchestrator_only: bool = true,
+};
+
 pub const default_document = @embedFile("default.json");
 
 pub fn path(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
@@ -67,6 +88,56 @@ pub fn loadWireApi(allocator: std.mem.Allocator, workspace_root: []const u8) !?t
     const value = provider.get("wire_api") orelse return null;
     if (value != .string) return Error.InvalidConfig;
     return types.WireApi.fromString(value.string) orelse Error.InvalidConfig;
+}
+
+/// Load the fixed worker-pool ceiling from the canonical config owner.
+pub fn loadAgentMaxConcurrency(allocator: std.mem.Allocator, workspace_root: []const u8) !usize {
+    var parsed = try parseDocument(allocator, workspace_root);
+    defer parsed.deinit();
+    const routes = objectField(parsed.value.object, "agent_routes") orelse return 6;
+    const value = try optionalUsize(routes, "max_concurrency", 6);
+    if (value == 0 or value > 64) return Error.InvalidConfig;
+    return value;
+}
+
+/// Load root orchestration policy from the canonical config owner. Specialist
+/// definitions themselves are resolved by core/agents/spec.zig on every
+/// discovery and launch so config edits hot-load without a kernel restart.
+pub fn loadAgentPolicy(allocator: std.mem.Allocator, workspace_root: []const u8) !AgentPolicy {
+    var parsed = try parseDocument(allocator, workspace_root);
+    defer parsed.deinit();
+    const agents = objectField(parsed.value.object, "agents") orelse return .{};
+    return .{
+        .orchestrator_only = try optionalBool(agents, "orchestrator_only", true),
+    };
+}
+
+/// Load one role override without turning config.json into a credential store.
+pub fn loadAgentRouteOverride(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    role_id: []const u8,
+) !AgentRouteOverride {
+    var parsed = try parseDocument(allocator, workspace_root);
+    defer parsed.deinit();
+    const routes = objectField(parsed.value.object, "agent_routes") orelse return .{};
+    const roles = objectField(routes, "roles") orelse return .{};
+    const role = objectField(roles, role_id) orelse return .{};
+
+    var result = AgentRouteOverride{};
+    errdefer result.deinit(allocator);
+    result.provider_id = try optionalStringClone(allocator, role, "provider_id");
+    result.model = try optionalStringClone(allocator, role, "model");
+    result.thinking_mode = try optionalStringClone(allocator, role, "thinking_mode");
+    result.context_window_tokens = try optionalOptionalU64(role, "context_window_tokens");
+    result.reserve_output_tokens = try optionalOptionalU64(role, "reserve_output_tokens");
+    if (role.get("wire_api")) |value| {
+        if (value != .null) {
+            if (value != .string) return Error.InvalidConfig;
+            result.wire_api = types.WireApi.fromString(value.string) orelse return Error.InvalidConfig;
+        }
+    }
+    return result;
 }
 
 pub fn loadContextPolicy(
@@ -147,6 +218,17 @@ pub fn loadMemoryPolicy(allocator: std.mem.Allocator, workspace_root: []const u8
     return policy;
 }
 
+pub fn readValidatedDocument(allocator: std.mem.Allocator, workspace_root: []const u8) !std.json.Parsed(std.json.Value) {
+    return parseDocument(allocator, workspace_root);
+}
+
+pub fn validateDocumentValue(value: std.json.Value) !void {
+    if (value != .object) return Error.InvalidConfig;
+    const version = value.object.get("version") orelse return Error.InvalidConfig;
+    if (version != .integer or version.integer != 1) return Error.UnsupportedVersion;
+    try validateDocumentShape(value.object);
+}
+
 fn parseDocument(allocator: std.mem.Allocator, workspace_root: []const u8) !std.json.Parsed(std.json.Value) {
     const config_path = try ensure(allocator, workspace_root);
     defer allocator.free(config_path);
@@ -154,15 +236,12 @@ fn parseDocument(allocator: std.mem.Allocator, workspace_root: []const u8) !std.
     defer allocator.free(content);
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, stripUtf8Bom(content), .{}) catch return Error.InvalidConfig;
     errdefer parsed.deinit();
-    if (parsed.value != .object) return Error.InvalidConfig;
-    const version = parsed.value.object.get("version") orelse return Error.InvalidConfig;
-    if (version != .integer or version.integer != 1) return Error.UnsupportedVersion;
-    try validateDocumentShape(parsed.value.object);
+    try validateDocumentValue(parsed.value);
     return parsed;
 }
 
 fn validateDocumentShape(root: std.json.ObjectMap) !void {
-    try rejectUnknownKeys(root, &.{ "_about", "_help", "version", "runtime", "provider", "context", "prompts", "memory", "environment" });
+    try rejectUnknownKeys(root, &.{ "_about", "_help", "version", "runtime", "provider", "agent_routes", "agents", "context", "prompts", "memory", "environment" });
     try validateAbout(root);
     try validateHelp(root, &.{"version"});
     if (try validatedObjectField(root, "runtime")) |value| {
@@ -173,6 +252,66 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
     if (try validatedObjectField(root, "provider")) |value| {
         try rejectUnknownKeys(value, &.{ "_help", "wire_api" });
         try validateHelp(value, &.{"wire_api"});
+    }
+    if (try validatedObjectField(root, "agent_routes")) |value| {
+        try rejectUnknownKeys(value, &.{ "_help", "max_concurrency", "roles" });
+        try validateHelp(value, &.{ "max_concurrency", "roles" });
+        const max_concurrency = try optionalUsize(value, "max_concurrency", 6);
+        if (max_concurrency == 0 or max_concurrency > 64) return Error.InvalidConfig;
+        if (try validatedObjectField(value, "roles")) |roles| {
+            var iterator = roles.iterator();
+            while (iterator.next()) |entry| {
+                if (!isKnownAgentRouteRole(entry.key_ptr.*)) return Error.InvalidConfig;
+                if (entry.value_ptr.* != .object) return Error.InvalidConfig;
+                try rejectUnknownKeys(entry.value_ptr.object, &.{
+                    "provider_id",
+                    "model",
+                    "wire_api",
+                    "thinking_mode",
+                    "context_window_tokens",
+                    "reserve_output_tokens",
+                });
+                try validateAgentRoute(entry.value_ptr.object);
+            }
+        }
+    }
+    if (try validatedObjectField(root, "agents")) |value| {
+        try rejectUnknownKeys(value, &.{ "_help", "orchestrator_only", "definitions" });
+        try validateHelp(value, &.{ "orchestrator_only", "definitions" });
+        _ = try optionalBool(value, "orchestrator_only", true);
+        if (try validatedObjectField(value, "definitions")) |definitions| {
+            var iterator = definitions.iterator();
+            while (iterator.next()) |entry| {
+                if (!isValidAgentId(entry.key_ptr.*)) return Error.InvalidConfig;
+                if (entry.value_ptr.* != .object) return Error.InvalidConfig;
+                const definition = entry.value_ptr.object;
+                try rejectUnknownKeys(definition, &.{
+                    "extends",
+                    "enabled",
+                    "description",
+                    "when_to_use",
+                    "instruction",
+                    "route_role",
+                    "max_steps",
+                    "max_tool_calls",
+                    "max_children",
+                    "output_contract",
+                });
+                try validateOptionalAgentString(definition, "extends", 64);
+                try validateOptionalAgentString(definition, "description", 512);
+                try validateOptionalAgentString(definition, "when_to_use", 512);
+                try validateOptionalAgentString(definition, "instruction", 16 * 1024);
+                try validateOptionalAgentString(definition, "output_contract", 256);
+                _ = try optionalBool(definition, "enabled", true);
+                if (definition.get("route_role")) |role| {
+                    if (role != .null and (role != .string or !isKnownAgentRouteRole(role.string))) return Error.InvalidConfig;
+                }
+                const max_steps = try optionalUsize(definition, "max_steps", 1);
+                const max_tool_calls = try optionalUsize(definition, "max_tool_calls", 0);
+                const max_children = try optionalUsize(definition, "max_children", 0);
+                if (max_steps == 0 or max_steps > 4096 or max_tool_calls > 4096 or max_children > 64) return Error.InvalidConfig;
+            }
+        }
     }
     if (try validatedObjectField(root, "context")) |value| {
         const keys = &.{
@@ -303,6 +442,62 @@ fn optionalU64(object: std.json.ObjectMap, key: []const u8, default: u64) !u64 {
     return std.math.cast(u64, value.integer) orelse Error.InvalidConfig;
 }
 
+fn validateAgentRoute(route: std.json.ObjectMap) !void {
+    for (&[_][]const u8{ "provider_id", "model", "thinking_mode" }) |key| {
+        const value = route.get(key) orelse continue;
+        if (value == .null) continue;
+        if (value != .string or std.mem.trim(u8, value.string, " \t\r\n").len == 0) return Error.InvalidConfig;
+    }
+    if (route.get("wire_api")) |value| {
+        if (value != .null and (value != .string or types.WireApi.fromString(value.string) == null)) return Error.InvalidConfig;
+    }
+    const context_window = try optionalOptionalU64(route, "context_window_tokens");
+    const output_reserve = try optionalOptionalU64(route, "reserve_output_tokens");
+    if (context_window != null and output_reserve != null and output_reserve.? >= context_window.?) return Error.InvalidConfig;
+}
+
+fn validateOptionalAgentString(object: std.json.ObjectMap, key: []const u8, max_len: usize) !void {
+    const value = object.get(key) orelse return;
+    if (value == .null) return;
+    if (value != .string) return Error.InvalidConfig;
+    const trimmed = std.mem.trim(u8, value.string, " \t\r\n");
+    if (trimmed.len == 0 or value.string.len > max_len) return Error.InvalidConfig;
+}
+
+fn isValidAgentId(value: []const u8) bool {
+    if (value.len == 0 or value.len > 64 or value[0] < 'a' or value[0] > 'z') return false;
+    for (value[1..]) |character| {
+        if ((character >= 'a' and character <= 'z') or
+            (character >= '0' and character <= '9') or
+            character == '_') continue;
+        return false;
+    }
+    return true;
+}
+
+fn optionalOptionalU64(object: std.json.ObjectMap, key: []const u8) !?u64 {
+    const value = object.get(key) orelse return null;
+    if (value == .null) return null;
+    if (value != .integer or value.integer <= 0) return Error.InvalidConfig;
+    return std.math.cast(u64, value.integer) orelse Error.InvalidConfig;
+}
+
+fn isKnownAgentRouteRole(value: []const u8) bool {
+    const roles = [_][]const u8{
+        "general",
+        "recon",
+        "planning",
+        "compaction",
+        "implementation",
+        "review",
+        "validation",
+    };
+    for (roles) |role| {
+        if (std.mem.eql(u8, role, value)) return true;
+    }
+    return false;
+}
+
 fn optionalU16(object: std.json.ObjectMap, key: []const u8, default: u16) !u16 {
     const value = object.get(key) orelse return default;
     if (value == .null) return default;
@@ -359,7 +554,7 @@ test "default config documents every persistent value" {
     defer parsed.deinit();
     try validateDocumentShape(parsed.value.object);
 
-    const sections = [_][]const u8{ "runtime", "provider", "context", "prompts", "memory", "environment" };
+    const sections = [_][]const u8{ "runtime", "provider", "agent_routes", "agents", "context", "prompts", "memory", "environment" };
     for (&sections) |section_name| {
         const section = objectField(parsed.value.object, section_name).?;
         const help = objectField(section, "_help").?;
@@ -420,4 +615,20 @@ test "comment metadata cannot drift from configurable values" {
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
     defer parsed.deinit();
     try std.testing.expectError(Error.InvalidConfig, validateDocumentShape(parsed.value.object));
+}
+
+test "agent routes remap providers but cannot redefine specialist capability" {
+    const forbidden =
+        \\{"version":1,"agent_routes":{"roles":{"recon":{"capability_profile_id":"root"}}}}
+    ;
+    var forbidden_parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, forbidden, .{});
+    defer forbidden_parsed.deinit();
+    try std.testing.expectError(Error.InvalidConfig, validateDocumentShape(forbidden_parsed.value.object));
+
+    const invalid_budget =
+        \\{"version":1,"agent_routes":{"roles":{"recon":{"context_window_tokens":100,"reserve_output_tokens":100}}}}
+    ;
+    var budget_parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, invalid_budget, .{});
+    defer budget_parsed.deinit();
+    try std.testing.expectError(Error.InvalidConfig, validateDocumentShape(budget_parsed.value.object));
 }
