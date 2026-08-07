@@ -32,6 +32,7 @@ pub const Hooks = struct {
     ) anyerror!void = null,
     shouldCancelFn: ?*const fn (ctx: ?*anyopaque, session_id: []const u8) bool = null,
     drainPendingMessagesFn: ?*const fn (ctx: ?*anyopaque, session_id: []const u8) ?[][]u8 = null,
+    hasPendingMessagesFn: ?*const fn (ctx: ?*anyopaque, session_id: []const u8) bool = null,
 
     pub fn onSessionInitialized(self: Hooks, session_id: []const u8) !void {
         if (self.onSessionInitializedFn) |callback| {
@@ -66,6 +67,14 @@ pub const Hooks = struct {
             return callback(self.context, session_id);
         }
         return null;
+    }
+
+    /// Non-destructive peek: returns true if the session has pending messages.
+    pub fn hasPendingMessages(self: Hooks, session_id: []const u8) bool {
+        if (self.hasPendingMessagesFn) |callback| {
+            return callback(self.context, session_id);
+        }
+        return false;
     }
 };
 
@@ -787,6 +796,10 @@ fn awaitChildGroups(
             try cancelSession(allocator, workspace_root, hooks, session, "Cancellation requested while waiting for child groups.");
             return Error.Cancelled;
         }
+        // If the operator interjected while parked, break early so the step
+        // loop can drain and inject the message. The step loop's drain will
+        // consume the queue; we just need to stop blocking.
+        if (hooks.hasPendingMessages(session.id)) break;
         snapshot = try agent_service.waitParent(session.id, 250);
     }
 

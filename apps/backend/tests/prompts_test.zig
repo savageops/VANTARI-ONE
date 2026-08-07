@@ -57,6 +57,8 @@ test "prompt builder emits ordered guardrails and tool contract" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "VANTARI tunes its own configuration") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Evolution protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, ".var/tickets/") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Interjection protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "USER_STEER_MESSAGE") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "write_file may write the complete file") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "8192-byte tool limit") == null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "under 7000 bytes") == null);

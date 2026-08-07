@@ -154,6 +154,17 @@ const Runtime = struct {
         return null;
     }
 
+    /// Non-destructive peek: check if a session has pending messages.
+    fn hasPendingMessages(self: *Runtime, session_id: []const u8) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.sessions.getPtr(session_id)) |state| {
+            return state.pending_messages.items.len > 0;
+        }
+        return false;
+    }
+
     fn enableAgentTools(self: *Runtime, session_id: []const u8) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -546,8 +557,13 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         const next_prompt = std.mem.trim(u8, next_prompt_raw, " \t\r\n");
         if (next_prompt.len == 0) return Error.InvalidParams;
         const timestamp_ms = std.time.milliTimestamp();
-        try store.appendSessionMessage(server.allocator, server.config.workspace_root, session.id, .user, next_prompt, timestamp_ms);
-        try store.setSessionPrompt(server.allocator, server.config.workspace_root, &session, next_prompt, .initialized);
+        // Don't persist to transcript yet if the session is running — the
+        // interjection drain in loop.zig will persist the tagged version.
+        // For non-running sessions, persist now (normal submit path).
+        if (!server.runtime.isRunning(session.id)) {
+            try store.appendSessionMessage(server.allocator, server.config.workspace_root, session.id, .user, next_prompt, timestamp_ms);
+            try store.setSessionPrompt(server.allocator, server.config.workspace_root, &session, next_prompt, .initialized);
+        }
     } else if (session.status == .completed or session.status == .failed or session.status == .cancelled) {
         const current_output = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
         defer if (current_output) |value| server.allocator.free(value);
@@ -599,6 +615,7 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         .onSessionEventFn = onLoopSessionEvent,
         .shouldCancelFn = onLoopShouldCancel,
         .drainPendingMessagesFn = onLoopDrainPendingMessages,
+        .hasPendingMessagesFn = onLoopHasPendingMessages,
     };
 
     // Set the buffer service's active session context for root sessions.
@@ -1123,6 +1140,11 @@ fn onLoopShouldCancel(ctx: ?*anyopaque, session_id: []const u8) bool {
 fn onLoopDrainPendingMessages(ctx: ?*anyopaque, session_id: []const u8) ?[][]u8 {
     const server: *Server = @ptrCast(@alignCast(ctx.?));
     return server.runtime.drainPendingMessages(server.allocator, session_id);
+}
+
+fn onLoopHasPendingMessages(ctx: ?*anyopaque, session_id: []const u8) bool {
+    const server: *Server = @ptrCast(@alignCast(ctx.?));
+    return server.runtime.hasPendingMessages(session_id);
 }
 
 fn makeSessionSummary(session: types.SessionRecord, output: ?[]const u8) protocol_types.SessionSummary {
