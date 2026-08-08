@@ -494,6 +494,29 @@ The workspace knowledge surface under `.var/` provides structured persistence fo
 
 Every `shell_exec` command appends a record (schema `var1.process.v1`) to `.var/processes/processes.jsonl` with: mode, cwd, argv, exit_code, timed_out, truncated, duration_ms, started_at_ms, tool_call_id, workspace_root, session_id. The `list_processes` tool reads the ledger (most recent first, capped at 20/100). Scheduled shells are auto-captured (distinguishable via tool_call_id).
 
+### Session summary ledger
+
+Every session — root orchestrator, subagents, past sessions — maintains a permanent ≤100-word summary as its handoff record. The ledger is a single JSON object at `.var/sessions/summaries.json` (schema `var1.session_summary.v1`), atomically rewritten on upsert:
+
+```text
+<session_id>: {
+  schema, session_id, parent_session_id, title, topic,
+  summary (≤100 words), status, workspace_root,
+  source ("agent" | "kernel_fallback"), updated_at_ms, turn_count
+}
+```
+
+Ownership lives in `src/core/sessions/summaries.zig` (word counting, truncation, read/upsert, newest-first timeline, and the turn-end freshness gate). The executor loop binds `execution_context.session_id`, and every terminal exit runs `ensureFreshSummary`: if the agent did not update its row during the run, the kernel writes a deterministic fallback (status + 40-word objective + 40-word outcome) with `source: kernel_fallback` — the row itself is the durable enforcement evidence, so the typed event grammar is untouched.
+
+Two tools expose the ledger:
+
+| Tool | Risk | Contract |
+|---|---|---|
+| `session_summaries` | read_only | Timeline of every session's last summary, newest first. `scope: project` (current workspace) vs `global` (all rows — spans workspaces when VANTARI_HOME is set); `session_id` returns the full single row; `query` filters title/topic/summary; 40-word previews by default, `full` for untruncated. |
+| `update_session_summary` | write_capable | MANDATORY pre-turn-end update. Rejects >100-word summaries; mirrors the live session status into the row; returns an effect receipt (session_id, words, turn_count, ledger_path, schema). |
+
+The buffer speculation service consumes the active session's summary row as its work-state context on every tick — the summary ledger is the single source of work-state truth for both the timeline tool and the buffer, never a raw transcript tail. The prompt envelope carries the "Session summary discipline" doctrine: update before the turn ends (subagents before their SITREP), and read `session_summaries` before delegating or continuing cross-session work.
+
 ### Prompt doctrine
 
 The system prompt is assembled in ordered layers by `src/core/prompts/builder.zig`:

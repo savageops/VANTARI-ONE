@@ -24,6 +24,7 @@ pub const provider_capability = @import("providers/capability.zig");
 pub const provider_routes = @import("providers/routes.zig");
 pub const scheduler = @import("scheduler/index.zig");
 pub const session_store = @import("sessions/store.zig");
+pub const session_summaries = @import("sessions/summaries.zig");
 pub const tools = @import("tools/index.zig");
 pub const tool_runtime = tools.runtime;
 
@@ -40,6 +41,7 @@ test "core namespace exposes executor and store" {
     try std.testing.expect(@hasDecl(@This(), "agent_profile"));
     try std.testing.expect(@hasDecl(@This(), "agent_scope"));
     try std.testing.expect(@hasDecl(@This(), "session_store"));
+    try std.testing.expect(@hasDecl(@This(), "session_summaries"));
     try std.testing.expect(@hasDecl(@This(), "config"));
     try std.testing.expect(@hasDecl(@This(), "config_file"));
     try std.testing.expect(@hasDecl(@This(), "auth_store"));

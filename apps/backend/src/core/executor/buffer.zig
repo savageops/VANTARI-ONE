@@ -11,6 +11,7 @@ const auth_store = @import("../auth/store.zig");
 const config_file = @import("../config/file.zig");
 const dispatch = @import("../providers/dispatch.zig");
 const provider = @import("../providers/openai_compatible.zig");
+const summaries = @import("../sessions/summaries.zig");
 const types = @import("../../shared/types.zig");
 
 pub const BufferPolicy = struct {
@@ -36,11 +37,16 @@ pub const PreviewSink = struct {
 };
 
 const buffer_prompt_template =
-    \\You are a navigation preview engine for a coding agent. Given the current work state, produce a concise preview:
-    \\NEXT_STEPS: <3 highest-value next actions>
+    \\You are a navigation preview engine for a coding agent orchestrator. You receive the user's original request plus the session's durable summary — the orchestrator's own record of the objective, key decisions, completed work, and open threads.
+    \\
+    \\Context format: the user's original request, followed by RECENT WORK STATE (the session summary from the durable summary ledger, maintained by the orchestrator before each turn ends).
+    \\
+    \\Output format (exactly these 3 lines, nothing else):
+    \\NEXT_STEPS: <3 highest-value next actions based on the work state>
     \\DIRECTION: <where this is heading, one sentence>
     \\RISK: <one thing to watch for>
-    \\Keep it under 4 lines. No reasoning, no meta-commentary.
+    \\
+    \\Rules: Be specific to the actual work. Reference real files, tools, or tasks from the context. Never give generic advice. If the context is about agents, mention agents. If about files, mention files.
 ;
 
 pub const Service = struct {
@@ -52,6 +58,11 @@ pub const Service = struct {
     last_tick_ms: i64 = 0,
     /// Set by the host when a root session is active; null when idle.
     active_prompt: ?[]const u8 = null,
+    /// The active root session id — the buffer reads its durable summary row
+    /// from the summary ledger each tick for work-state awareness.
+    active_session_id: ?[]const u8 = null,
+    /// Latest summary text read from the ledger (owned by the service).
+    context_text: ?[]const u8 = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -75,6 +86,10 @@ pub const Service = struct {
         self.active_prompt = prompt;
     }
 
+    pub fn setSessionId(self: *Service, session_id: ?[]const u8) void {
+        self.active_session_id = session_id;
+    }
+
     pub fn run(self: *Service) void {
         while (!self.stop_requested.load(.acquire)) {
             self.tick() catch {};
@@ -93,7 +108,30 @@ pub const Service = struct {
 
         self.last_tick_ms = now_ms;
 
-        if (runBufferModel(self.allocator, self.parent_config, policy, self.active_prompt.?, self.transport)) |text| {
+        // Work-state context comes from the durable session summary ledger —
+        // the orchestrator's mandatory pre-turn-end update — never a raw
+        // transcript tail. Refreshed per tick so the preview tracks the
+        // latest summary without host plumbing.
+        if (self.active_session_id) |sid| {
+            var maybe_row = summaries.readSummary(self.allocator, self.parent_config.workspace_root, sid) catch null;
+            if (maybe_row) |*row| {
+                defer row.deinit(self.allocator);
+                const fresh = if (self.context_text) |cur| !std.mem.eql(u8, cur, row.summary) else true;
+                if (fresh) {
+                    if (self.context_text) |old| self.allocator.free(@constCast(old));
+                    self.context_text = self.allocator.dupe(u8, row.summary) catch null;
+                }
+            }
+        }
+
+        // Build combined context: prompt + session summary (RECENT WORK STATE)
+        const combined = if (self.context_text) |ctx|
+            std.fmt.allocPrint(self.allocator, "USER REQUEST:\n{s}\n\nRECENT WORK STATE:\n{s}", .{ self.active_prompt.?, ctx }) catch return
+        else
+            std.fmt.allocPrint(self.allocator, "USER REQUEST:\n{s}", .{self.active_prompt.?}) catch return;
+        defer self.allocator.free(combined);
+
+        if (runBufferModel(self.allocator, self.parent_config, policy, combined, self.transport)) |text| {
             defer self.allocator.free(text);
             self.sink.onPreviewFn(self.sink.context, text);
         }

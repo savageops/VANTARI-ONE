@@ -14,6 +14,8 @@ const schedule_job = @import("builtin/schedule_job.zig");
 const log_ticket = @import("builtin/log_ticket.zig");
 const list_processes = @import("builtin/list_processes.zig");
 const manage_plugin = @import("builtin/manage_plugin.zig");
+const session_summaries = @import("builtin/session_summaries.zig");
+const update_session_summary = @import("builtin/update_session_summary.zig");
 const memory = @import("builtin/memory.zig");
 const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
@@ -47,6 +49,8 @@ pub const file_tool_definitions = [_]types.ToolDefinition{
     log_ticket.definition,
     list_processes.definition,
     manage_plugin.definition,
+    session_summaries.definition,
+    update_session_summary.definition,
     skills.definition,
     memory.definitions[0],
     memory.definitions[1],
@@ -68,6 +72,8 @@ const availability_entries = [_]AvailabilityEntry{
     .{ .name = log_ticket.definition.name, .spec = log_ticket.availability },
     .{ .name = list_processes.definition.name, .spec = list_processes.availability },
     .{ .name = manage_plugin.definition.name, .spec = manage_plugin.availability },
+    .{ .name = session_summaries.definition.name, .spec = session_summaries.availability },
+    .{ .name = update_session_summary.definition.name, .spec = update_session_summary.availability },
     .{ .name = skills.definition.name, .spec = skills.availability },
     .{ .name = memory.definitions[0].name, .spec = .{} },
     .{ .name = memory.definitions[1].name, .spec = .{} },

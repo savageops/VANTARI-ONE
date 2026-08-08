@@ -393,6 +393,10 @@ pub const ToolEventSink = struct {
 
 pub const ExecutionContext = struct {
     workspace_root: []const u8,
+    /// The session this tool call belongs to. Set by the executor loop;
+    /// used by session-scoped tools (update_session_summary) to write into
+    /// their own summary ledger row.
+    session_id: ?[]const u8 = null,
     parent_session_id: ?[]const u8 = null,
     agent_service: ?AgentService = null,
     command_probe: ?CommandProbe = null,

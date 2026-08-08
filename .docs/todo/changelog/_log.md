@@ -1,5 +1,29 @@
 # Execution Log
 
+## 2026-08-08 - Session summary ledger: permanent cross-session handoff records
+
+**Outcome:** Replaced the cookie-cutter "last 6 transcript messages" buffer context with a durable session summary ledger — every session (root orchestrator, subagents, past sessions) maintains a permanent ≤100-word summary, updated by the orchestrator before its turn ends, globally readable by any session via a dedicated tool. The buffer model now consumes the session's own summary as work-state context instead of a raw transcript tail.
+
+**Shipped capabilities:**
+
+1. **Summary ledger** — `.var/sessions/summaries.json`, one durable row per session (schema `var1.session_summary.v1`): session_id, parent_session_id, title, topic, summary (≤100 words), status, workspace_root, source (`agent` | `kernel_fallback`), updated_at_ms, turn_count. Atomic rewrite via `fsutil.writeText` (temp+rename); `src/core/sessions/summaries.zig` owns path, word counting, truncation, upsert, timeline listing, and the freshness gate.
+2. **`session_summaries` tool (read)** — timeline of every session's last summary, newest first; `scope: project|global` (global spans workspaces when VANTARI_HOME is set), `session_id` for full single-row recall, `query` keyword filter, `full` for untruncated summaries, 40-word previews by default, relative age labels.
+3. **`update_session_summary` tool (write, mandatory)** — orchestrator writes its session's summary before the turn ends; rejects >100-word payloads; mirrors live session status into the row; emits effect receipt (session_id, words, turn_count, ledger_path, schema).
+4. **Turn-end enforcement gate** — `ensureFreshSummary` runs at every terminal exit (completed, empty-response, failed): if no agent update landed during the run, the kernel writes a deterministic fallback (status + 40-word objective + 40-word outcome) with `source: kernel_fallback`. The typed event grammar is untouched — the row itself is the durable evidence, so exact event-spine tests remain valid.
+5. **Buffer context swap** — buffer service reads its active session's summary row from the ledger each tick (no host transcript plumbing, no stale `setContext`); `setSessionId` replaces the removed last-6-messages context builder in `stdio_rpc.zig`.
+6. **Doctrine** — "Session summary discipline" added to the prompt envelope: MUST call `update_session_summary` before turn end; subagents before SITREP; read `session_summaries` before delegating/continuing cross-session work.
+
+**Wiring:** `ExecutionContext.session_id` (set by the loop) → tools write their own row; registry/runtime dispatch + profile tool classes (`session_summaries` → file_read, `update_session_summary` → file_write); core namespace export `session_summaries`.
+
+**Proof:**
+
+- Clean-environment mesh: `1463/1465` passed, `2` failed — identical to the pristine baseline (both pre-existing stale assertions: `todo_slice` workspace-state relevance at `runtime_loop_test.zig:1077`, file-inspection phrase at `tools_test.zig:579`). Zero leaks; zero regressions (verified by stash-diff of pristine vs feature failure sets).
+- Ledger module tests: word-cap enforcement, turn_count increment, row preservation, newest-first sort, kernel fallback vs fresh-agent-update gate, poisoned-ledger tolerance.
+- Tool tests: schema-bound ledger rows with effect receipts, 101-word rejection, query/session_id filters, project-vs-global scope against a hand-written cross-workspace ledger.
+- New `session_summaries_test.zig` harness registered in `all_tests.zig`.
+- `agent_pipeline_deep_matrix_test.zig` guarded with the canonical `VANTARI_HOME` skip (same pattern as `agent_scale_test.zig`) — 10 cases were accumulating 12k+ sessions into the real `%USERPROFILE%\.vantari\sessions` root in this environment.
+- ReleaseFast installed binary SHA-256: `ee535b3b58b38696a1c1a82529001ac12cf1d42eba75ac230039eacaf516c6fb`.
+
 ## 2026-08-07T21:00:00Z - Mega-session: cognitive speculation pipeline + configurability + docs
 
 **Outcome:** Shipped the full two-tier cognitive speculation pipeline (draft compilation + buffer speculation), per-turn config hot-loading, per-agent effort/temperature, prompt doctrine tightening (~40% token cut), process tracking, knowledge scaffolding, TUI input history, dual-mode reasoning dock, and comprehensive documentation update. 20+ commits across one session.

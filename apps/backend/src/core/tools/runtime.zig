@@ -17,6 +17,8 @@ const schedule_job = @import("builtin/schedule_job.zig");
 const log_ticket = @import("builtin/log_ticket.zig");
 const list_processes = @import("builtin/list_processes.zig");
 const manage_plugin = @import("builtin/manage_plugin.zig");
+const session_summaries = @import("builtin/session_summaries.zig");
+const update_session_summary = @import("builtin/update_session_summary.zig");
 const memory = @import("builtin/memory.zig");
 pub const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
@@ -440,6 +442,12 @@ pub fn executeWithRunner(
     if (std.mem.eql(u8, tool_call.name, "manage_plugin")) {
         return manage_plugin.execute(allocator, execution_context, tool_call.arguments_json);
     }
+    if (std.mem.eql(u8, tool_call.name, "session_summaries")) {
+        return session_summaries.execute(allocator, execution_context, tool_call.arguments_json);
+    }
+    if (std.mem.eql(u8, tool_call.name, "update_session_summary")) {
+        return update_session_summary.execute(allocator, execution_context, tool_call.arguments_json);
+    }
     if (std.mem.eql(u8, tool_call.name, "skill_info")) {
         return skills.execute(allocator, tool_call.arguments_json);
     }
@@ -481,12 +489,14 @@ pub fn toolClassForName(tool_name: []const u8) ?profile_contract.ToolClass {
         std.mem.eql(u8, tool_name, "skill_info") or
         std.mem.eql(u8, tool_name, "memory_read") or
         std.mem.eql(u8, tool_name, "list_processes") or
-        std.mem.eql(u8, tool_name, "manage_plugin")) return .file_read;
+        std.mem.eql(u8, tool_name, "manage_plugin") or
+        std.mem.eql(u8, tool_name, "session_summaries")) return .file_read;
     if (std.mem.eql(u8, tool_name, "write_file") or
         std.mem.eql(u8, tool_name, "append_file") or
         std.mem.eql(u8, tool_name, "replace_in_file") or
         std.mem.eql(u8, tool_name, "memory_write") or
-        std.mem.eql(u8, tool_name, "log_ticket")) return .file_write;
+        std.mem.eql(u8, tool_name, "log_ticket") or
+        std.mem.eql(u8, tool_name, "update_session_summary")) return .file_write;
     if (std.mem.eql(u8, tool_name, "shell_exec")) return .command;
     if (std.mem.eql(u8, tool_name, "schedule_job")) return .scheduling;
     if (agents.handles(tool_name)) return .delegation;

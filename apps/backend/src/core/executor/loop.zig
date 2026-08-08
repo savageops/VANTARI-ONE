@@ -8,6 +8,7 @@ const draft = @import("draft.zig");
 const provider = @import("../providers/openai_compatible.zig");
 const dispatch = @import("../providers/dispatch.zig");
 const store = @import("../sessions/store.zig");
+const summaries = @import("../sessions/summaries.zig");
 const tools = @import("../tools/runtime.zig");
 const types = @import("../../shared/types.zig");
 
@@ -137,6 +138,12 @@ pub fn runPromptWithOptions(
         try store.initSession(allocator, config.workspace_root, prompt);
     defer session.deinit(allocator);
 
+    // Turn-end freshness gate anchor: any summary row updated after this
+    // instant is evidence the agent satisfied the mandatory pre-turn-end
+    // update (AGENTS.md summary discipline). Rows older than this trigger
+    // the kernel fallback in finalizeSessionSummary.
+    const run_start_ms = std.time.milliTimestamp();
+
     if (session.status == .cancelled) return Error.Cancelled;
     const should_recover_child_groups = options.session_id != null and session.status != .initialized;
 
@@ -168,6 +175,7 @@ pub fn runPromptWithOptions(
 
     var execution_context = options.execution_context;
     execution_context.workspace_root = config.workspace_root;
+    execution_context.session_id = session.id;
     execution_context.memory_policy = config.memory_policy;
     if (execution_context.parent_session_id == null) {
         execution_context.parent_session_id = session.id;
@@ -226,7 +234,7 @@ pub fn runPromptWithOptions(
         &messages,
         0,
     ) catch |err| {
-        try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err));
+        try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err), run_start_ms);
         return err;
     };
 
@@ -332,7 +340,7 @@ pub fn runPromptWithOptions(
             &messages,
             base_message_count,
         ) catch |err| {
-            try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err));
+            try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err), run_start_ms);
             return err;
         };
 
@@ -373,7 +381,7 @@ pub fn runPromptWithOptions(
                 err == error.NetworkUnreachable or
                 err == error.ConnectionTimedOut)
             {
-                try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err));
+                try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err), run_start_ms);
                 return err;
             }
             // ContextWindowExceeded is NOT terminal — it triggers the
@@ -400,7 +408,7 @@ pub fn runPromptWithOptions(
             );
             provider_retries += 1;
             if (provider_retries >= max_provider_retries) {
-                try failSession(allocator, config.workspace_root, options.hooks, &session, diag);
+                try failSession(allocator, config.workspace_root, options.hooks, &session, diag, run_start_ms);
                 return err;
             }
             // Brief backoff before retry
@@ -444,7 +452,7 @@ pub fn runPromptWithOptions(
                     session.status,
                 );
                 try docs_sync.appendLog(allocator, config.workspace_root, budget_message);
-                try failSession(allocator, config.workspace_root, options.hooks, &session, @errorName(Error.ToolBudgetExceeded));
+                try failSession(allocator, config.workspace_root, options.hooks, &session, @errorName(Error.ToolBudgetExceeded), run_start_ms);
                 return Error.ToolBudgetExceeded;
             }
 
@@ -695,6 +703,22 @@ pub fn runPromptWithOptions(
             try store.upsertAssistantSessionMessageWithReasoning(allocator, config.workspace_root, session.id, final_output, completion.reasoning, final_timestamp);
             try store.writeOutput(allocator, config.workspace_root, session.id, final_output);
             try store.setSessionStatus(allocator, config.workspace_root, &session, .completed);
+            // Mandatory summary discipline: the orchestrator must leave a fresh
+            // <=100-word summary before the turn ends. If update_session_summary
+            // was not called during this run, the kernel writes a deterministic
+            // fallback so the ledger never goes stale. The fallback is durable
+            // evidence itself (row.source == "kernel_fallback") — no extra event
+            // is appended, keeping the typed turn grammar unchanged.
+            _ = try summaries.ensureFreshSummary(
+                allocator,
+                config.workspace_root,
+                session.id,
+                session.parent_session_id orelse "",
+                types.statusLabel(session.status),
+                session.prompt,
+                final_output,
+                run_start_ms,
+            );
             try store.appendEvent(allocator, config.workspace_root, session.id, .{
                 .event_type = "assistant_response",
                 .message = final_output,
@@ -758,6 +782,16 @@ pub fn runPromptWithOptions(
         try store.upsertAssistantSessionMessage(allocator, config.workspace_root, session.id, final_output, final_timestamp);
         try store.writeOutput(allocator, config.workspace_root, session.id, final_output);
         try store.setSessionStatus(allocator, config.workspace_root, &session, .completed);
+        _ = try summaries.ensureFreshSummary(
+            allocator,
+            config.workspace_root,
+            session.id,
+            session.parent_session_id orelse "",
+            types.statusLabel(session.status),
+            session.prompt,
+            final_output,
+            run_start_ms,
+        );
         try store.appendEvent(allocator, config.workspace_root, session.id, .{
             .event_type = "assistant_response",
             .message = final_output,
@@ -784,7 +818,7 @@ pub fn runPromptWithOptions(
         };
     }
 
-    try failSession(allocator, config.workspace_root, options.hooks, &session, "StepLimitExceeded");
+    try failSession(allocator, config.workspace_root, options.hooks, &session, "StepLimitExceeded", run_start_ms);
     return Error.StepLimitExceeded;
 }
 
@@ -1564,9 +1598,22 @@ fn failSession(
     hooks: Hooks,
     session: *types.SessionRecord,
     failure_reason: []const u8,
+    run_start_ms: i64,
 ) !void {
     try store.setSessionFailure(allocator, workspace_root, session, failure_reason);
     try recordSessionEvent(allocator, workspace_root, hooks, session.id, "session_failed", failure_reason, session.status);
+    // Failed turns still end the session — the summary timeline must show why.
+    // The fallback row (source == "kernel_fallback") is the durable evidence.
+    _ = try summaries.ensureFreshSummary(
+        allocator,
+        workspace_root,
+        session.id,
+        session.parent_session_id orelse "",
+        types.statusLabel(session.status),
+        session.prompt,
+        failure_reason,
+        run_start_ms,
+    );
     store.syncSessionLedgers(allocator, workspace_root, session.id) catch {};
     try docs_sync.writePending(allocator, workspace_root, .{
         .session_id = session.id,

@@ -12,6 +12,7 @@ test {
     _ = @import("pipeline_matrix_test.zig");
     _ = @import("provider_test.zig");
     _ = @import("runtime_loop_test.zig");
+    _ = @import("session_summaries_test.zig");
     _ = @import("tools_test.zig");
     _ = @import("user_flow_trellis_test.zig");
     _ = @import("web_test.zig");

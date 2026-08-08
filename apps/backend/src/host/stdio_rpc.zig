@@ -637,8 +637,12 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
 
     // Set the buffer service's active session context for root sessions.
     // The buffer thread reads this to know what prompt to speculate on.
+    // Work-state context is served by the buffer service itself from the
+    // durable session summary ledger (.var/sessions/summaries.json) — the
+    // orchestrator's mandatory pre-turn-end update, not a raw transcript tail.
     if (server.buffer_srv != null and session.parent_session_id == null) {
         server.buffer_session_id = session.id;
+        server.buffer_srv.?.setSessionId(session.id);
         if (parsed.value.prompt) |prompt| {
             server.buffer_srv.?.setActivePrompt(prompt);
         }
