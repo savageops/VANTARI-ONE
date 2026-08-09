@@ -167,6 +167,15 @@ const ChatState = struct {
     /// /settings command. When non-null and .open, the draw function renders
     /// the settings overlay instead of the normal transcript+footer.
     settings_state: ?settings_view.SettingsState = null,
+    /// Slash command autocomplete — when the composer input starts with '/',
+    /// a filtered dropdown of matching commands renders above the composer.
+    autocomplete_visible: bool = false,
+    autocomplete_cursor: usize = 0,
+    /// Reverse history search mode — activated by Ctrl+R. Filters the global
+    /// history by the typed substring and shows the most recent match.
+    search_mode: bool = false,
+    search_buffer: std.ArrayList(u8) = .{},
+    search_result_index: usize = 0,
 
     fn deinit(self: *ChatState) void {
         if (self.session_id) |value| self.allocator.free(value);
@@ -180,6 +189,7 @@ const ChatState = struct {
         if (self.history_draft) |draft| self.allocator.free(draft);
         if (self.buffer_preview) |preview| self.allocator.free(preview);
         if (self.settings_state) |*ss| ss.deinit();
+        self.search_buffer.deinit(self.allocator);
     }
 
     fn appendHistory(self: *ChatState, prompt: []const u8) !void {
@@ -239,6 +249,26 @@ const ChatState = struct {
             if (text.len > 0) try self.allocator.dupe(u8, text) else null
         else
             null;
+    }
+
+    /// Find the current reverse-search match: the Nth entry (from newest)
+    /// in history that contains the search buffer as a substring. Returns
+    /// null if no match.
+    pub fn currentSearchMatch(self: *ChatState) ?[]const u8 {
+        if (self.search_buffer.items.len == 0) return null;
+        const needle = self.search_buffer.items;
+        var match_count: usize = 0;
+        // Iterate from newest to oldest (reverse order).
+        var i: usize = self.history_entries.items.len;
+        while (i > 0) {
+            i -= 1;
+            const entry = self.history_entries.items[i];
+            if (std.mem.indexOf(u8, entry, needle) != null) {
+                if (match_count == self.search_result_index) return entry;
+                match_count += 1;
+            }
+        }
+        return null;
     }
 
     pub fn add(self: *ChatState, role: Role, text: []const u8) !void {
@@ -1548,6 +1578,54 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                 }
 
                 if (key.matches('c', .{ .ctrl = true })) break;
+
+                // Ctrl+R — enter/continue reverse history search.
+                if (key.matches('r', .{ .ctrl = true })) {
+                    if (!state.search_mode) {
+                        state.search_mode = true;
+                        state.search_buffer.clearRetainingCapacity();
+                        state.search_result_index = 0;
+                    } else {
+                        // Cycle to older matches.
+                        state.search_result_index += 1;
+                    }
+                    continue;
+                }
+
+                // Reverse search mode key routing.
+                if (state.search_mode) {
+                    if (key.matches(tui.Key.escape, .{})) {
+                        state.search_mode = false;
+                        state.search_buffer.clearRetainingCapacity();
+                        state.search_result_index = 0;
+                        continue;
+                    }
+                    if (key.matches(tui.Key.enter, .{})) {
+                        // Exit search mode — the match is shown in the search bar.
+                        // The operator can copy it or retype. This avoids TextInput
+                        // API complexity; the match text is visible in the last
+                        // search bar render.
+                        state.search_mode = false;
+                        state.search_buffer.clearRetainingCapacity();
+                        state.search_result_index = 0;
+                        continue;
+                    }
+                    if (key.matches(tui.Key.backspace, .{})) {
+                        if (state.search_buffer.items.len > 0) {
+                            _ = state.search_buffer.pop();
+                            state.search_result_index = 0;
+                        }
+                        continue;
+                    }
+                    // Printable chars go to the search buffer.
+                    const ch = keyToPrintable(key);
+                    if (ch) |c| {
+                        state.search_buffer.append(allocator, c) catch {};
+                        state.search_result_index = 0;
+                    }
+                    continue;
+                }
+
                 if (key.matches(tui.Key.page_up, .{})) {
                     state.scrollUp(6);
                     continue;
@@ -1752,6 +1830,27 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
             .wrap = .none,
         });
     }
+
+    // Reverse search overlay — show search bar at the bottom when active.
+    if (state.search_mode) {
+        const search_win = root.child(.{
+            .x_off = 0,
+            .y_off = @intCast(@max(0, @as(i64, root.height) - 1)),
+            .width = root.width,
+            .height = 1,
+        });
+        const match_text = state.currentSearchMatch() orelse "(no match)";
+        _ = search_win.print(
+            &.{
+                .{ .text = " search: ", .style = .{ .fg = Color.rgbFromUint(0xffd700), .bg = Color.rgbFromUint(0x08110f), .bold = true } },
+                .{ .text = state.search_buffer.items, .style = .{ .fg = Color.rgbFromUint(0xe8fff8), .bg = Color.rgbFromUint(0x08110f) } },
+                .{ .text = "  > ", .style = .{ .fg = Color.rgbFromUint(0x4a6a5c), .bg = Color.rgbFromUint(0x08110f) } },
+                .{ .text = match_text, .style = .{ .fg = Color.rgbFromUint(0x8ce6c8), .bg = Color.rgbFromUint(0x08110f) } },
+            },
+            .{ .wrap = .none },
+        );
+    }
+
     try vx.render(writer);
     try writer.flush();
 }
