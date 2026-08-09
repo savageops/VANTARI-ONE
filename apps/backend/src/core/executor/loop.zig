@@ -1644,5 +1644,8 @@ fn recordSessionEvent(
         .timestamp_ms = timestamp_ms,
     });
     try store.touchSessionUpdatedAt(allocator, workspace_root, session_id, timestamp_ms);
-    try hooks.onSessionEvent(session_id, event_type, message, types.statusLabel(status), timestamp_ms);
+    // Live notification is a read model over the durable event spine
+    // (AGENTS.md §IV). A slow/broken TUI pipe must never corrupt the
+    // provider turn — the durable event has already been persisted above.
+    hooks.onSessionEvent(session_id, event_type, message, types.statusLabel(status), timestamp_ms) catch {};
 }

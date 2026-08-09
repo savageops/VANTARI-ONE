@@ -1148,7 +1148,13 @@ fn onLoopSessionEvent(
     timestamp_ms: i64,
 ) anyerror!void {
     const server: *Server = @ptrCast(@alignCast(ctx.?));
-    try server.emitSessionEvent(session_id, event_type, message, status, timestamp_ms);
+    // The live notification is a read model over events.jsonl (AGENTS.md §IV).
+    // The durable event has already been appended to the event spine by
+    // recordSessionEvent before this hook fires — losing a live frame to a
+    // slow/broken TUI pipe must never corrupt the provider turn. Swallowing
+    // WriteFailed here breaks the producer-consumer coupling that bricked
+    // sessions under sustained streaming when the TUI fell behind.
+    server.emitSessionEvent(session_id, event_type, message, status, timestamp_ms) catch {};
 }
 
 fn onLoopShouldCancel(ctx: ?*anyopaque, session_id: []const u8) bool {
