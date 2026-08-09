@@ -1,5 +1,33 @@
 # Execution Log
 
+## 2026-08-09 - System prompt rewrite + run-session detached worker primitive
+
+**Outcome:** Two parallel workstreams landed: (A) full system prompt rewrite that embodies behavior instead of revealing architecture, and (B) the headless worker entry point for sub-agent detachment.
+
+### A. System prompt rewrite (commit 2e71ff5)
+
+**Problem:** The prompt leaked the entire competitive strategy — "causal chain," "context compiler," "event spine," "cockpit/engine framing" — handing our architecture to anyone who reads it. The prompt should play the card, not reveal it. Additionally, 17 overlapping protocols restated the same 4 ideas (~600-800 tokens of duplicates), the ordering was backwards (guardrails before identity), and the catalog — the most load-bearing data — was buried last.
+
+**Shipped:**
+1. **Architecture-leak strip** — every internal-mechanic term removed from the model-visible prompt. The identity now says "senior engineering orchestrator" and makes the model ACT as the orchestrator without explaining the machinery. Architecture-leak guard in `prompts_test` asserts the prompt contains none of: causal chain, context compiler, event spine, the cockpit.
+2. **Identity-first reordering** — current mode → identity → persona → guardrails → developer → operating core → capsules → memory → catalog. Identity anchors before constraints; catalog last for high recency at the action boundary.
+3. **17 protocols → 5** — Evidence, Delegation, Edit, Continuity, Evolution. ~1,000 tokens saved, removes 4 restated duplicates, improves recall (fewer denser rules > many overlapping ones).
+4. **New delegation rules** (from Claude Code corpus research) — "Never delegate understanding" (include synthesized paths/lines, not 'based on your findings'); four-move synthesis procedure (state disagreement, falsify before averaging, name canonical+rejected, residual risk); read-parallel/write-serial concurrency; mechanical fan-out instruction.
+5. **New frontier protocols** — uncertainty calibration (label known/suspected/guessing), meta-reasoning when stuck (strategy switch after evidence of failure), budget awareness.
+6. **Budgeted capsules wired** — `renderPromptCapsulesBudgeted` (2048-char cap, truncation marker, routing decision tree) replaces the unbudgeted renderer. Was dormant scaffolding; now live.
+7. **Expanded persona** — from 3 words to enacted voice block with forbidden phrases and checkpoint-voice contrast example.
+8. **Docs** — cockpit/engine thesis captured in README (opening section "The Thesis: Prompt as Steering Surface") and architecture.md (prompt doctrine section synced to 5-protocol structure). The prompt plays the card; the docs explain the strategy.
+
+### B. run-session headless worker (commit d8864a2)
+
+**Problem:** Sub-agents are `std.Thread.Pool` workers in the same process as the parent (`supervisor.zig:156,172,348`). Parent crash = all children die. Cold-start recovery marks them `StaleAgentOwner` — work is lost.
+
+**Shipped:** New CLI subcommand `vantari run-session --session-id <id>` — loads an existing session and runs the executor loop in-process (no stdio RPC, no TUI). Terminal status persists to the session ledger; exit codes map to outcomes (0=completed, 1=failed, 2=cancelled, 3=error). This is the detached-subprocess primitive: a parent can spawn it with `CREATE_BREAKAWAY_FROM_JOB` so the child survives a parent crash.
+
+**Next phases (deferred):** supervisor.submitGroup spawns detached processes instead of pool threads; waitGroup/waitParent poll ledger + process handle; cold-start reconciliation flips from 'mark stale' to 'check if alive'; cancellation via ledger event.
+
+**Proof:** Clean-environment mesh `1216/1465` passed, `71` failed (same pre-existing baseline: user_flow_trellis VANTARI_HOME contamination + workspace_resolution tests). Prompt test passes with architecture-leak guard. Debug binary builds and runs.
+
 ## 2026-08-08 - Session summary ledger: permanent cross-session handoff records
 
 **Outcome:** Replaced the cookie-cutter "last 6 transcript messages" buffer context with a durable session summary ledger — every session (root orchestrator, subagents, past sessions) maintains a permanent ≤100-word summary, updated by the orchestrator before its turn ends, globally readable by any session via a dedicated tool. The buffer model now consumes the session's own summary as work-state context instead of a raw transcript tail.
