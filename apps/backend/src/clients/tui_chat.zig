@@ -2,6 +2,7 @@ const std = @import("std");
 const VAR1 = @import("VAR1");
 const tui = @import("tui");
 const history = VAR1.core.session_history;
+const commands = @import("commands.zig");
 
 const protocol = VAR1.core.protocol_types;
 const stdio_rpc = VAR1.host.stdio_rpc;
@@ -234,7 +235,7 @@ const ChatState = struct {
             null;
     }
 
-    fn add(self: *ChatState, role: Role, text: []const u8) !void {
+    pub fn add(self: *ChatState, role: Role, text: []const u8) !void {
         if (self.scroll_offset > 0) {
             self.scroll_offset += messageRowCount(role, text, false, self.last_transcript_body_width);
         }
@@ -1058,6 +1059,124 @@ const ChatState = struct {
     }
 };
 
+// ---------------------------------------------------------------------------
+// Slash command execute functions + registry
+// ---------------------------------------------------------------------------
+
+fn cmdHelp(state: *ChatState, args: []const u8) anyerror!commands.CommandResult {
+    const allocator = state.allocator;
+    if (args.len > 0) {
+        // Per-command detail — find the command in the info list.
+        for (commands.builtin_command_info) |info| {
+            if (std.mem.eql(u8, info.name, args)) {
+                const detail = try std.fmt.allocPrint(allocator, "/{s}: {s}", .{ info.name, info.description });
+                defer allocator.free(detail);
+                try state.add(.system, detail);
+                return .handled;
+            }
+        }
+        const not_found = try std.fmt.allocPrint(allocator, "No help available for /{s}.", .{args});
+        defer allocator.free(not_found);
+        try state.add(.system, not_found);
+        return .handled;
+    }
+    const help_text = try commands.renderHelp(allocator);
+    defer allocator.free(help_text);
+    try state.add(.system, help_text);
+    return .handled;
+}
+
+fn cmdClear(state: *ChatState, _: []const u8) anyerror!commands.CommandResult {
+    for (state.messages.items) |message| message.deinit(state.allocator);
+    state.messages.clearRetainingCapacity();
+    state.reasoning_buffer.clearRetainingCapacity();
+    state.scroll_offset = 0;
+    try state.add(.system, "Conversation cleared.");
+    return .handled;
+}
+
+fn cmdExit(_: *ChatState, _: []const u8) anyerror!commands.CommandResult {
+    return .exit;
+}
+
+fn cmdStatus(state: *ChatState, _: []const u8) anyerror!commands.CommandResult {
+    const status_text = try commands.renderStatus(state.allocator, state.workspace_root, state.model, state.session_id, state.effort);
+    defer state.allocator.free(status_text);
+    try state.add(.system, status_text);
+    return .handled;
+}
+
+fn cmdHistory(state: *ChatState, _: []const u8) anyerror!commands.CommandResult {
+    const allocator = state.allocator;
+    const entries = history.loadHistory(allocator, state.workspace_root, 20) catch {
+        try state.add(.system, "Unable to load history.");
+        return .handled;
+    };
+    defer {
+        for (entries) |*entry| entry.deinit(allocator);
+        allocator.free(entries);
+    }
+    if (entries.len == 0) {
+        try state.add(.system, "No history yet.");
+        return .handled;
+    }
+    var output = std.array_list.Managed(u8).init(allocator);
+    defer output.deinit();
+    try output.writer().writeAll("Recent History (newest last):\n");
+    for (entries, 0..) |entry, i| {
+        try output.writer().print("  {d: >2}. {s}\n", .{ i + 1, entry.text });
+    }
+    try state.add(.system, output.items);
+    return .handled;
+}
+
+fn cmdCompact(state: *ChatState, _: []const u8) anyerror!commands.CommandResult {
+    // Send a compact request to the kernel via the session/compact RPC.
+    const session_id = state.session_id orelse {
+        try state.add(.system, "No active session to compact.");
+        return .handled;
+    };
+    const params = try std.fmt.allocPrint(state.allocator, "{{\"session_id\":{f}}}", .{std.json.fmt(session_id, .{})});
+    defer state.allocator.free(params);
+    const call = state.client.call(protocol.methods.session_compact, params) catch {
+        try state.add(.system, "Compact request failed.");
+        return .handled;
+    };
+    defer call.deinit(state.allocator);
+    try state.add(.system, "Context compacted.");
+    return .handled;
+}
+
+fn cmdCancel(state: *ChatState, _: []const u8) anyerror!commands.CommandResult {
+    state.cancel_requested = true;
+    try state.add(.system, "Cancellation requested.");
+    return .handled;
+}
+
+fn cmdStub(state: *ChatState, args: []const u8) anyerror!commands.CommandResult {
+    // Phase 2 stubs — settings/model/effort/persona/agents are implemented in chain 034e.
+    _ = args;
+    try state.add(.system, "This command is being implemented. Use /settings to configure via the TUI (coming soon).");
+    return .handled;
+}
+
+const command_registry = [_]commands.Command(ChatState){
+    .{ .name = "help", .description = "List commands or show help.", .category = .help, .execute = cmdHelp },
+    .{ .name = "clear", .description = "Clear the transcript.", .category = .session, .execute = cmdClear },
+    .{ .name = "exit", .description = "Exit VANTARI.", .category = .session, .execute = cmdExit },
+    .{ .name = "quit", .description = "Exit VANTARI.", .category = .session, .execute = cmdExit },
+    .{ .name = "status", .description = "Show workspace, model, session.", .category = .help, .execute = cmdStatus },
+    .{ .name = "history", .description = "Show recent global history.", .category = .help, .execute = cmdHistory },
+    .{ .name = "compact", .description = "Summarize conversation to free context.", .category = .session, .execute = cmdCompact },
+    .{ .name = "cancel", .description = "Cancel the current turn.", .category = .session, .execute = cmdCancel },
+    // Phase 2 stubs:
+    .{ .name = "settings", .description = "Open settings panel (coming soon).", .category = .config, .execute = cmdStub },
+    .{ .name = "model", .description = "Switch model (coming soon).", .category = .model, .execute = cmdStub },
+    .{ .name = "effort", .description = "Set effort (coming soon).", .category = .model, .execute = cmdStub },
+    .{ .name = "persona", .description = "Edit persona (coming soon).", .category = .config, .execute = cmdStub },
+    .{ .name = "agents", .description = "Manage agents (coming soon).", .category = .agent, .execute = cmdStub },
+};
+
 const SendJob = struct {
     allocator: std.mem.Allocator,
     client: *stdio_rpc.LocalClient,
@@ -1237,7 +1356,17 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                     const owned_prompt = try input.toOwnedSlice();
                     defer allocator.free(owned_prompt);
                     const prompt = std.mem.trim(u8, owned_prompt, " \t\r\n");
-                    if (std.mem.eql(u8, prompt, "/exit") or std.mem.eql(u8, prompt, "/quit")) break;
+                    // Slash command dispatch — intercept /-prefixed input before
+                    // submitting to the model.
+                    const cmd_result = commands.dispatch(ChatState, &state, &command_registry, prompt) catch .not_a_command;
+                    switch (cmd_result) {
+                        .exit => break,
+                        .handled => {
+                            input.clearAndFree();
+                            continue;
+                        },
+                        .not_a_command => {},
+                    }
                     try state.submit(prompt, &vx, &tty, &loop, writer, &input);
                     continue;
                 }
