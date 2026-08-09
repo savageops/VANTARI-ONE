@@ -1,5 +1,18 @@
 # Execution Log
 
+## 2026-08-09 - TUI history + slash commands + settings panel (chain 034)
+
+**Outcome:** Three deliverables landed across 6 execution units: global persistent message history, typed slash command system, and in-TUI settings panel.
+
+- **034a** (`fe20989`): Global persistent user message history — `sessions/history.zig`, cross-session JSONL at `<runtimeRoot>/tui/history.jsonl`. TUI loads on startup, persists on submit. Fixes the doc lie that claimed persistence but delivered in-memory only. 7 tests.
+- **034b** (`74f9d60`): Slash command dispatcher — `commands.zig`, typed `Command(StateT)` generic replacing the hardcoded `/exit` check. 13 commands registered (8 live + 5 settings-dependent). `renderHelp()` groups by category.
+- **034c** (`b5eea31`): Config write primitive — `writeConfigKey()` in `config/file.zig` with validation-before-write invariant. `config/set` RPC method for atomic validated writes. Hot-loads on next turn (competitive advantage — no restart needed).
+- **034d** (`edb40ab`): Settings panel TUI overlay — `settings_view.zig`, full-screen overlay revealing ALL 10 config sections with current values, `_help` tooltips, and inline editing. Bool toggle + text edit modes.
+- **034e** (`c93c7e5`): One-shot settings commands — `/model`, `/effort`, `/persona`, `/agents` write via config/set RPC. Each validates and prints confirmation.
+- **034f** (`fb52fc6`): Ctrl+R reverse history search — incremental substring search mirroring bash, cycles older matches on repeated Ctrl+R.
+
+**Competitor research:** 6-competitor slash command harvest (Claude Code 90+, Cursor 24, Codex 40+, Copilot 60+, Aider 30, Gemini 35+) + 6-competitor settings panel research. Command canon: `/help` `/clear` `/compact` `/model` `/init` `/permissions` `/mcp` `/quit`.
+
 ## 2026-08-09 - System prompt rewrite + run-session detached worker primitive
 
 **Outcome:** Two parallel workstreams landed: (A) full system prompt rewrite that embodies behavior instead of revealing architecture, and (B) the headless worker entry point for sub-agent detachment.
@@ -1184,3 +1197,34 @@ Two consumer-breaking pipeline failures are now structurally impossible.
 - Installed live planner proof: parent `session-1786054776392-4aa6b6b11363365f`, child `session-1786054787881-450b26e512e8c859`, group `group-1786054787880-30b9c9504fc3cf23`; route receipt resolved `zai / glm-5.2 / chat_completions`, enforced zero tool calls, survived terminal state, and contained no API key.
 
 **Open P1 boundary:** Normalize provider token usage before adding usage to receipts/events. Route the existing manual compaction writer and future classification/title owners through the model-task lane without moving deterministic checkpoint selection into the model.
+
+## 2026-08-09 - TUI runtime footer telemetry and surface hierarchy
+
+**Added:**
+
+- Exposed resolved effort, thinking mode, context capacity, and output reserve through the health protocol.
+- Projected typed turn-boundary window tokens into the TUI footer.
+- Added compact model, effort, context used/capacity/percentage/remaining, and live agent count metadata.
+- Added a status dot with ready, working, and failed states.
+
+**Changed:**
+
+- Raised the composer tint above the transcript surface and the metadata row below it without adding borders or extra chrome.
+- Removed the visible `Esc cancel` hint while preserving Escape/Ctrl-C cancellation behavior.
+- Kept agent counts derived from existing keyed child activity rows rather than creating a second registry.
+- Kept runtime-policy effort storage owned through config resolution so the
+  footer and health projection cannot read freed config memory.
+- Repaired the existing prompt-history cleanup and Zig 0.15.1 ArrayList calls
+  required by the clean Windows ReleaseFast install lane.
+
+**Proof:**
+
+- `apps/backend/scripts/zigw.ps1 build test-tui` passed on Windows Debug.
+- `apps/backend/scripts/zigw.ps1 build test-tui -Doptimize=ReleaseFast` passed.
+- Clean-cache `apps/backend/scripts/install_windows.ps1` passed; installed and
+  repository ReleaseFast hashes matched.
+- Installed `vantari health --json` reported `effort: max`,
+  `context_window_tokens: 128000`, and `reserve_output_tokens: 8192`.
+- Installed TUI startup rendered `glm-5.2 · max · ctx — / 128k`; non-interactive
+  startup failed closed with typed `TerminalUnavailable` evidence.
+- Research and owner mapping: `.docs/research/2026-08-09-tui-status-surface-and-repair-loop.md`.

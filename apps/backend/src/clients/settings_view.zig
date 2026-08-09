@@ -355,7 +355,7 @@ test "SettingsState init and deinit" {
 test "section_names has 10 entries" {
     try std.testing.expectEqual(@as(usize, 10), section_names.len);
     try std.testing.expectEqualStrings("runtime", section_names[0]);
-    try std.testing.expectEqualStrings("memory", section_names[9]);
+    try std.testing.expectEqualStrings("environment", section_names[9]);
 }
 
 test "valueToString converts types" {
