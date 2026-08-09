@@ -1,6 +1,7 @@
 const std = @import("std");
 const VAR1 = @import("VAR1");
 const tui = @import("tui");
+const history = VAR1.core.session_history;
 
 const protocol = VAR1.core.protocol_types;
 const stdio_rpc = VAR1.host.stdio_rpc;
@@ -42,6 +43,11 @@ const ActivityState = enum {
     completed,
     failed,
     cancelled,
+};
+
+const AgentCounts = struct {
+    running: usize = 0,
+    total: usize = 0,
 };
 
 const stream_min_frame_ns: u64 = 16 * std.time.ns_per_ms;
@@ -125,6 +131,14 @@ const ChatState = struct {
     auth_provider: []const u8,
     plan: []const u8,
     subscription_status: []const u8,
+    effort: []const u8 = "",
+    thinking_mode: []const u8 = "",
+    context_window_tokens: u64 = 0,
+    reserve_output_tokens: u64 = 0,
+    /// Latest context compiler estimate from the typed turn boundary event.
+    /// Null is intentional before the first provider turn or after a cold
+    /// start with no replayable turn telemetry.
+    context_used_tokens: ?u64 = null,
     session_id: ?[]u8 = null,
     status: []const u8 = "READY",
     messages: std.ArrayList(Message) = .{},
@@ -174,6 +188,9 @@ const ChatState = struct {
             self.allocator.free(draft);
             self.history_draft = null;
         }
+        // Persist to the global history file — fire-and-forget. A write failure
+        // does not block the TUI; the in-memory ring buffer still works.
+        history.appendHistoryEntry(self.allocator, self.workspace_root, prompt) catch {};
     }
 
     fn historyNavigateUp(self: *ChatState, input: *TextInput) !void {
@@ -497,6 +514,7 @@ const ChatState = struct {
     fn recordProgressEvent(self: *ChatState, event_type: []const u8, message: []const u8, timestamp_ms: i64) !bool {
         if (!try self.markProgressEventSeen(event_type, message, timestamp_ms)) return false;
 
+        if (try self.recordTurnTelemetry(event_type, message)) return true;
         if (std.mem.eql(u8, event_type, "assistant_delta")) {
             try self.addAssistantDelta(message);
             return true;
@@ -514,6 +532,22 @@ const ChatState = struct {
         if (skipProgressEvent(event_type)) return false;
 
         try self.addProgress(event_type, message);
+        return true;
+    }
+
+    fn recordTurnTelemetry(self: *ChatState, event_type: []const u8, message: []const u8) !bool {
+        if (!std.mem.eql(u8, event_type, "turn_started") and
+            !std.mem.eql(u8, event_type, "turn_finished")) return false;
+
+        const TurnTelemetry = struct {
+            window_tokens: u64 = 0,
+        };
+        var parsed = std.json.parseFromSlice(TurnTelemetry, self.allocator, message, .{
+            .ignore_unknown_fields = true,
+        }) catch return false;
+        defer parsed.deinit();
+
+        self.context_used_tokens = parsed.value.window_tokens;
         return true;
     }
 
@@ -909,6 +943,19 @@ const ChatState = struct {
         return false;
     }
 
+    fn agentCounts(self: *const ChatState) AgentCounts {
+        var counts = AgentCounts{};
+        for (self.messages.items) |message| {
+            if (message.role != .progress or
+                message.activity_kind != .item or
+                message.activity_parent_id == null) continue;
+
+            counts.total += 1;
+            if (message.activity_state == .running) counts.running += 1;
+        }
+        return counts;
+    }
+
     fn scrollUp(self: *ChatState, amount: usize) void {
         self.scroll_offset = @min(self.scroll_offset + amount, self.maxScrollOffsetRows());
     }
@@ -1119,8 +1166,35 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
         .auth_provider = parsed_health.value.auth_provider orelse "unconfigured",
         .plan = parsed_health.value.subscription_plan_label orelse "unknown",
         .subscription_status = parsed_health.value.subscription_status orelse "unknown",
+        .effort = parsed_health.value.effort,
+        .thinking_mode = parsed_health.value.thinking_mode,
+        .context_window_tokens = parsed_health.value.context_window_tokens,
+        .reserve_output_tokens = parsed_health.value.reserve_output_tokens,
     };
     defer state.deinit();
+
+    // Load global persistent message history into the in-memory ring buffer
+    // so Up/Down navigation recalls prompts from previous sessions.
+    {
+        const entries: []history.HistoryEntry = history.loadHistory(allocator, state.workspace_root, history.max_history_entries) catch try allocator.alloc(history.HistoryEntry, 0);
+        defer {
+            for (entries) |*entry| entry.deinit(allocator);
+            allocator.free(entries);
+        }
+        for (entries) |entry| {
+            // Dedup against entries already in the buffer (shouldn't happen on
+            // fresh load, but guards against double-load edge cases).
+            const already = blk: {
+                for (state.history_entries.items) |existing| {
+                    if (std.mem.eql(u8, existing, entry.text)) break :blk true;
+                }
+                break :blk false;
+            };
+            if (already) continue;
+            state.history_entries.append(allocator, allocator.dupe(u8, entry.text) catch continue) catch continue;
+        }
+        state.history_cursor = 0;
+    }
 
     if (startup_mode == .continue_latest) {
         if (!try state.loadLatestSession()) {
@@ -1272,33 +1346,62 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         .width = root.width,
         .height = layout.footer_height,
     });
-    input_win.fill(.{ .style = styles.surface });
-    const editor = input_win.child(.{
-        .x_off = 1,
+    input_win.fill(.{ .style = styles.meta_surface });
+    const composer_row = input_win.child(.{
+        .x_off = 0,
         .y_off = @intCast(layout.editor_y),
-        .width = input_win.width -| 2,
+        .width = input_win.width,
+        .height = 1,
+    });
+    composer_row.fill(.{ .style = styles.composer });
+    const editor = composer_row.child(.{
+        .x_off = 1,
+        .y_off = 0,
+        .width = composer_row.width -| 2,
         .height = 1,
     });
     input.drawWithStyle(editor, styles.composer);
+    const agent_counts = state.agentCounts();
+    const meta_width = @as(usize, input_win.width) -| 4;
     const footer_meta = try formatFooterMeta(
         state.allocator,
-        state.workspace_root,
         state.model,
-        state.auth_provider,
+        state.effort,
+        state.thinking_mode,
+        state.context_used_tokens,
+        state.context_window_tokens,
+        agent_counts.running,
+        agent_counts.total,
         state.waiting,
         state.cancel_requested,
         state.scroll_offset,
-        @intCast(input_win.width -| 2),
+        meta_width,
     );
     defer state.allocator.free(footer_meta);
 
-    _ = input_win.print(&.{.{ .text = footer_meta, .style = styles.meta_value }}, .{
-        .row_offset = layout.meta_y,
-        .col_offset = 1,
-        .wrap = .none,
-    });
+    if (input_win.width > 1) {
+        _ = input_win.print(&.{.{ .text = "●", .style = footerStatusStyle(state) }}, .{
+            .row_offset = layout.meta_y,
+            .col_offset = 1,
+            .wrap = .none,
+        });
+    }
+    if (footer_meta.len > 0 and input_win.width > 3) {
+        _ = input_win.print(&.{.{ .text = footer_meta, .style = styles.meta_value }}, .{
+            .row_offset = layout.meta_y,
+            .col_offset = 3,
+            .wrap = .none,
+        });
+    }
     try vx.render(writer);
     try writer.flush();
+}
+
+fn footerStatusStyle(state: *const ChatState) Style {
+    if (std.ascii.eqlIgnoreCase(state.status, "FAILED") or
+        std.ascii.eqlIgnoreCase(state.status, "RPC_ERROR")) return styles.status_failed;
+    if (state.waiting or std.ascii.eqlIgnoreCase(state.status, "CANCELLING")) return styles.status_working;
+    return styles.status_ready;
 }
 
 const ChatLayout = struct {
@@ -1434,7 +1537,11 @@ fn activityTextStyle(state: ActivityState) Style {
 
 const styles = struct {
     const surface: Style = .{ .fg = Color.rgbFromUint(0xd9f7ef), .bg = Color.rgbFromUint(0x08110f) };
-    const composer: Style = .{ .fg = Color.rgbFromUint(0xe8fff8), .bg = Color.rgbFromUint(0x08110f) };
+    /// Footer metadata is a quiet intermediate tint. The hierarchy is
+    /// surface < meta_surface < composer; no border or extra chrome is
+    /// needed to separate the focused input from runtime telemetry.
+    const meta_surface: Style = .{ .fg = Color.rgbFromUint(0x78958d), .bg = Color.rgbFromUint(0x0a1614) };
+    const composer: Style = .{ .fg = Color.rgbFromUint(0xe8fff8), .bg = Color.rgbFromUint(0x10221f) };
     const user: Style = .{ .fg = Color.rgbFromUint(0xcff8ec), .bg = Color.rgbFromUint(0x08110f), .bold = true };
     const assistant: Style = .{ .fg = Color.rgbFromUint(0x8ff5d2), .bg = Color.rgbFromUint(0x08110f), .bold = true };
     const user_text: Style = .{ .fg = Color.rgbFromUint(0xe8fff8), .bg = Color.rgbFromUint(0x08110f) };
@@ -1445,8 +1552,11 @@ const styles = struct {
     const intro: Style = .{ .fg = Color.rgbFromUint(0x8ff5d2), .bg = Color.rgbFromUint(0x08110f), .bold = true };
     const intro_version: Style = .{ .fg = Color.rgbFromUint(0x78958d), .bg = Color.rgbFromUint(0x08110f), .dim = true };
     const text: Style = .{ .fg = Color.rgbFromUint(0xd9f7ef), .bg = Color.rgbFromUint(0x08110f) };
-    const meta_label: Style = .{ .fg = Color.rgbFromUint(0x5d746e), .bg = Color.rgbFromUint(0x08110f), .dim = true };
-    const meta_value: Style = .{ .fg = Color.rgbFromUint(0x78958d), .bg = Color.rgbFromUint(0x08110f), .dim = true };
+    const meta_label: Style = .{ .fg = Color.rgbFromUint(0x5d746e), .bg = Color.rgbFromUint(0x0a1614), .dim = true };
+    const meta_value: Style = .{ .fg = Color.rgbFromUint(0x9bbab1), .bg = Color.rgbFromUint(0x0a1614), .dim = true };
+    const status_ready: Style = .{ .fg = Color.rgbFromUint(0x43c58b), .bg = Color.rgbFromUint(0x0a1614) };
+    const status_working: Style = .{ .fg = Color.rgbFromUint(0xd7ad5a), .bg = Color.rgbFromUint(0x0a1614) };
+    const status_failed: Style = .{ .fg = Color.rgbFromUint(0xe06c75), .bg = Color.rgbFromUint(0x0a1614) };
 };
 
 fn drawTranscript(win: Window, state: *ChatState) void {
@@ -1916,9 +2026,13 @@ fn roleStyle(role: Role) Style {
 
 fn formatFooterMeta(
     allocator: std.mem.Allocator,
-    workspace: []const u8,
     model: []const u8,
-    provider: []const u8,
+    effort: []const u8,
+    thinking_mode: []const u8,
+    context_used_tokens: ?u64,
+    context_window_tokens: u64,
+    running_agents: usize,
+    total_agents: usize,
     waiting: bool,
     cancel_requested: bool,
     scroll_offset: usize,
@@ -1926,26 +2040,125 @@ fn formatFooterMeta(
 ) ![]u8 {
     if (width == 0) return allocator.dupe(u8, "");
 
+    const effort_label = footerEffortLabel(effort, thinking_mode);
+    const context_full = try formatContextMeta(allocator, context_used_tokens, context_window_tokens, true);
+    defer allocator.free(context_full);
+    const context_compact = try formatContextMeta(allocator, context_used_tokens, context_window_tokens, false);
+    defer allocator.free(context_compact);
+
+    const agents = if (waiting and total_agents > 0)
+        try std.fmt.allocPrint(allocator, "agents {d}/{d}", .{ running_agents, total_agents })
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(agents);
+
     const status = try formatFooterStatus(allocator, waiting, cancel_requested, scroll_offset);
     defer allocator.free(status);
 
-    const right = if (status.len == 0)
-        try std.fmt.allocPrint(allocator, "{s} / {s}", .{ provider, model })
-    else
-        try std.fmt.allocPrint(allocator, "{s} / {s}   {s}", .{ provider, model, status });
-    defer allocator.free(right);
+    var candidate = try buildFooterMetaLine(allocator, model, effort_label, context_full, agents, status, true, true, true);
+    if (candidate.len <= width) return candidate;
+    allocator.free(candidate);
 
-    const label = "workspace ";
-    const separator = "   ";
-    if (width <= right.len + separator.len + label.len) {
-        return truncateEnd(allocator, right, width);
+    candidate = try buildFooterMetaLine(allocator, model, effort_label, context_compact, agents, "", true, true, false);
+    if (candidate.len <= width) return candidate;
+    allocator.free(candidate);
+
+    candidate = try buildFooterMetaLine(allocator, model, "", context_compact, agents, "", false, true, false);
+    if (candidate.len <= width) return candidate;
+    allocator.free(candidate);
+
+    candidate = try buildFooterMetaLine(allocator, model, "", context_compact, "", "", false, false, false);
+    if (candidate.len <= width) return candidate;
+    allocator.free(candidate);
+
+    const context_budget = @min(context_compact.len, width);
+    if (context_budget == width) return truncateEnd(allocator, context_compact, width);
+    const model_budget = width - context_budget -| 3;
+    const compact_model = try truncateEnd(allocator, model, model_budget);
+    defer allocator.free(compact_model);
+    return std.fmt.allocPrint(allocator, "{s} · {s}", .{ compact_model, context_compact });
+}
+
+fn footerEffortLabel(effort: []const u8, thinking_mode: []const u8) []const u8 {
+    if (effort.len > 0) return effort;
+    if (std.ascii.eqlIgnoreCase(thinking_mode, "enabled")) return "thinking";
+    return "default";
+}
+
+fn formatContextMeta(
+    allocator: std.mem.Allocator,
+    context_used_tokens: ?u64,
+    context_window_tokens: u64,
+    include_remaining: bool,
+) ![]u8 {
+    if (context_window_tokens == 0) return allocator.dupe(u8, "ctx —");
+
+    const capacity = try compactTokenCount(allocator, context_window_tokens);
+    defer allocator.free(capacity);
+    if (context_used_tokens == null) {
+        return std.fmt.allocPrint(allocator, "ctx — / {s}", .{capacity});
     }
 
-    const path_budget = width - right.len - separator.len - label.len;
-    const compact_workspace = try compactPathTail(allocator, workspace, path_budget);
-    defer allocator.free(compact_workspace);
+    const used_value = @min(context_used_tokens.?, context_window_tokens);
+    const used = try compactTokenCount(allocator, used_value);
+    defer allocator.free(used);
+    const percent: u64 = @intCast(((@as(u128, used_value) * 100) + (@as(u128, context_window_tokens) / 2)) / @as(u128, context_window_tokens));
+    if (!include_remaining) {
+        return std.fmt.allocPrint(allocator, "ctx {s} / {s} ({d}%)", .{ used, capacity, percent });
+    }
 
-    return std.fmt.allocPrint(allocator, "{s}{s}{s}{s}", .{ label, compact_workspace, separator, right });
+    const remaining = try compactTokenCount(allocator, context_window_tokens - used_value);
+    defer allocator.free(remaining);
+    return std.fmt.allocPrint(allocator, "ctx {s} / {s} ({d}%) · {s} left", .{ used, capacity, percent, remaining });
+}
+
+fn compactTokenCount(allocator: std.mem.Allocator, value: u64) ![]u8 {
+    if (value >= 1_000_000) {
+        const whole = value / 1_000_000;
+        const tenths = (value % 1_000_000) / 100_000;
+        return if (tenths == 0)
+            std.fmt.allocPrint(allocator, "{d}m", .{whole})
+        else
+            std.fmt.allocPrint(allocator, "{d}.{d}m", .{ whole, tenths });
+    }
+    if (value >= 1_000) {
+        const whole = value / 1_000;
+        const tenths = (value % 1_000) / 100;
+        return if (tenths == 0)
+            std.fmt.allocPrint(allocator, "{d}k", .{whole})
+        else
+            std.fmt.allocPrint(allocator, "{d}.{d}k", .{ whole, tenths });
+    }
+    return std.fmt.allocPrint(allocator, "{d}", .{value});
+}
+
+fn buildFooterMetaLine(
+    allocator: std.mem.Allocator,
+    model: []const u8,
+    effort: []const u8,
+    context: []const u8,
+    agents: []const u8,
+    status: []const u8,
+    include_effort: bool,
+    include_agents: bool,
+    include_status: bool,
+) ![]u8 {
+    var line = std.array_list.Managed(u8).init(allocator);
+    errdefer line.deinit();
+    var first = true;
+    try appendFooterPart(&line, &first, model);
+    if (include_effort) try appendFooterPart(&line, &first, effort);
+    try appendFooterPart(&line, &first, context);
+    if (include_agents) try appendFooterPart(&line, &first, agents);
+    if (include_status) try appendFooterPart(&line, &first, status);
+    return line.toOwnedSlice();
+}
+
+fn appendFooterPart(line: *std.array_list.Managed(u8), first: *bool, part: []const u8) !void {
+    if (part.len == 0) return;
+    if (!first.*) try line.appendSlice(" · ");
+    try line.appendSlice(part);
+    first.* = false;
 }
 
 fn formatFooterStatus(
@@ -1954,17 +2167,18 @@ fn formatFooterStatus(
     cancel_requested: bool,
     scroll_offset: usize,
 ) ![]u8 {
+    // Waiting is rendered by the agent-count segment in formatFooterMeta;
+    // status itself only carries cancellation and scrollback state.
+    _ = waiting;
     var status = std.array_list.Managed(u8).init(allocator);
     errdefer status.deinit();
 
     if (cancel_requested) {
         try status.appendSlice("cancelling");
-    } else if (waiting) {
-        try status.appendSlice("Esc cancel");
     }
 
     if (scroll_offset > 0) {
-        if (status.items.len > 0) try status.appendSlice("   ");
+        if (status.items.len > 0) try status.appendSlice(" · ");
         try status.writer().print("older +{d}", .{scroll_offset});
     }
 
@@ -3231,9 +3445,11 @@ test "tui transcript authorship uses styling instead of label rows" {
     try std.testing.expect(Style.eql(styles.system, bodyStyle(.system)));
     try std.testing.expect(Color.eql(styles.user_text.bg, styles.surface.bg));
     try std.testing.expect(Color.eql(styles.assistant_text.bg, styles.surface.bg));
-    try std.testing.expect(Color.eql(styles.composer.bg, styles.surface.bg));
-    try std.testing.expect(Color.eql(styles.meta_label.bg, styles.surface.bg));
-    try std.testing.expect(Color.eql(styles.meta_value.bg, styles.surface.bg));
+    try std.testing.expect(!Color.eql(styles.composer.bg, styles.surface.bg));
+    try std.testing.expect(!Color.eql(styles.meta_surface.bg, styles.surface.bg));
+    try std.testing.expect(!Color.eql(styles.composer.bg, styles.meta_surface.bg));
+    try std.testing.expect(Color.eql(styles.meta_label.bg, styles.meta_surface.bg));
+    try std.testing.expect(Color.eql(styles.meta_value.bg, styles.meta_surface.bg));
     try std.testing.expectEqualStrings("VANTARI-ONE", basename("E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE\\"));
     try std.testing.expectEqualStrings("project", basename("/tmp/project/"));
 }
@@ -3259,9 +3475,13 @@ test "tui footer metadata preserves high-value fields inside narrow terminals" {
 
     const wide = try formatFooterMeta(
         allocator,
-        "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
         "glm-5.1",
-        "zai",
+        "high",
+        "",
+        5_000,
+        200_000,
+        2,
+        4,
         false,
         false,
         0,
@@ -3269,15 +3489,19 @@ test "tui footer metadata preserves high-value fields inside narrow terminals" {
     );
     defer allocator.free(wide);
     try std.testing.expectEqualStrings(
-        "workspace E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE   zai / glm-5.1",
+        "glm-5.1 · high · ctx 5k / 200k (3%) · 195k left",
         wide,
     );
 
     const narrow = try formatFooterMeta(
         allocator,
-        "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
         "glm-5.1",
-        "zai",
+        "high",
+        "",
+        5_000,
+        200_000,
+        2,
+        4,
         false,
         false,
         0,
@@ -3285,8 +3509,8 @@ test "tui footer metadata preserves high-value fields inside narrow terminals" {
     );
     defer allocator.free(narrow);
     try std.testing.expect(narrow.len <= 40);
-    try std.testing.expect(std.mem.indexOf(u8, narrow, "...") != null);
-    try std.testing.expect(std.mem.indexOf(u8, narrow, "zai / glm-5.1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, narrow, "ctx 5k / 200k (3%)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, narrow, "glm-5.1") != null);
 }
 
 test "tui footer metadata exposes only actionable transient state" {
@@ -3294,23 +3518,31 @@ test "tui footer metadata exposes only actionable transient state" {
 
     const waiting = try formatFooterMeta(
         allocator,
-        "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
         "glm-5.1",
-        "zai",
+        "high",
+        "",
+        5_000,
+        200_000,
+        0,
+        0,
         true,
         false,
         7,
         96,
     );
     defer allocator.free(waiting);
-    try std.testing.expect(std.mem.indexOf(u8, waiting, "Esc cancel") != null);
+    try std.testing.expect(std.mem.indexOf(u8, waiting, "Esc cancel") == null);
     try std.testing.expect(std.mem.indexOf(u8, waiting, "older +7") != null);
 
     const cancelling = try formatFooterMeta(
         allocator,
-        "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
         "glm-5.1",
-        "zai",
+        "high",
+        "",
+        5_000,
+        200_000,
+        0,
+        0,
         true,
         true,
         0,
@@ -3319,6 +3551,58 @@ test "tui footer metadata exposes only actionable transient state" {
     defer allocator.free(cancelling);
     try std.testing.expect(std.mem.indexOf(u8, cancelling, "cancelling") != null);
     try std.testing.expect(std.mem.indexOf(u8, cancelling, "Esc cancel") == null);
+}
+
+test "tui footer projects context telemetry and live agent cardinality" {
+    const allocator = std.testing.allocator;
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "Qwen3.6 35B-A3B",
+        .base_url = "http://localhost:1234",
+        .auth_provider = "lmstudio",
+        .plan = "local",
+        .subscription_status = "active",
+        .effort = "high",
+        .context_window_tokens = 200_000,
+        .waiting = true,
+    };
+    defer state.deinit();
+
+    try std.testing.expect(try state.recordProgressEvent(
+        "turn_started",
+        "{\"schema\":\"var1.turn_started.v1\",\"window_tokens\":5000}",
+        1,
+    ));
+    try state.upsertActivityProgress("agent-1", "recon - running", .item, .running, "group-1");
+    try state.upsertActivityProgress("agent-2", "review - queued", .item, .pending, "group-1");
+
+    const counts = state.agentCounts();
+    try std.testing.expectEqual(@as(usize, 1), counts.running);
+    try std.testing.expectEqual(@as(usize, 2), counts.total);
+    try std.testing.expectEqual(@as(u64, 5_000), state.context_used_tokens.?);
+
+    const footer = try formatFooterMeta(
+        allocator,
+        state.model,
+        state.effort,
+        state.thinking_mode,
+        state.context_used_tokens,
+        state.context_window_tokens,
+        counts.running,
+        counts.total,
+        state.waiting,
+        state.cancel_requested,
+        state.scroll_offset,
+        96,
+    );
+    defer allocator.free(footer);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "Qwen3.6 35B-A3B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "high") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "ctx 5k / 200k (3%)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "195k left") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "agents 1/2") != null);
 }
 
 test "tui transcript gives dense single-line treatment to runtime rows" {

@@ -25,6 +25,7 @@ pub const provider_routes = @import("providers/routes.zig");
 pub const scheduler = @import("scheduler/index.zig");
 pub const session_store = @import("sessions/store.zig");
 pub const session_summaries = @import("sessions/summaries.zig");
+pub const session_history = @import("sessions/history.zig");
 pub const tools = @import("tools/index.zig");
 pub const tool_runtime = tools.runtime;
 
