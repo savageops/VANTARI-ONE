@@ -1,5 +1,6 @@
 const std = @import("std");
 const context_compactor = @import("../core/context/compactor.zig");
+const config_file = @import("../core/config/file.zig");
 const loop = @import("../core/executor/loop.zig");
 const protocol_types = @import("../shared/protocol/types.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
@@ -472,6 +473,10 @@ fn dispatch(
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.models_list)) {
         return handleModelsList(server, params);
+    }
+
+    if (std.mem.eql(u8, method_name, protocol_types.methods.config_set)) {
+        return handleConfigSet(server, params);
     }
 
     return Error.MethodNotFound;
@@ -1041,6 +1046,10 @@ fn handleHealthGet(server: *Server) ![]u8 {
         .subscription_plan_label = server.config.subscription_plan_label,
         .subscription_status = server.config.subscription_status,
         .scheduler_supervisor = server.scheduler_thread != null,
+        .effort = server.config.effort,
+        .thinking_mode = server.config.thinking_mode,
+        .context_window_tokens = server.config.context_policy.context_window_tokens,
+        .reserve_output_tokens = server.config.context_policy.reserve_output_tokens,
     });
 }
 
@@ -1146,6 +1155,38 @@ fn handleModelsList(server: *Server, params: ?std.json.Value) ![]u8 {
         .models = summaries,
         .context_from_native_surface = discovered.context_from_native_surface,
         .status = "ok",
+    });
+}
+
+/// config/set RPC handler — atomically mutates one config key with validation.
+/// Params: {"section":"runtime","key":"effort","value":"max"}
+/// The value can be a string, number, bool, object, or null (to disable).
+/// Validation-before-write: if the mutation produces an invalid document,
+/// the file is NOT modified and an error is returned.
+fn handleConfigSet(server: *Server, params: ?std.json.Value) ![]u8 {
+    const params_value = params orelse return Error.InvalidParams;
+    if (params_value != .object) return Error.InvalidParams;
+
+    const section = blk: {
+        const v = params_value.object.get("section") orelse return Error.InvalidParams;
+        if (v != .string) return Error.InvalidParams;
+        break :blk v.string;
+    };
+    const key = blk: {
+        const v = params_value.object.get("key") orelse return Error.InvalidParams;
+        if (v != .string) return Error.InvalidParams;
+        break :blk v.string;
+    };
+    const value = params_value.object.get("value") orelse return Error.InvalidParams;
+
+    config_file.writeConfigKey(server.allocator, server.config.workspace_root, section, key, value) catch {
+        return Error.ExecutionFailed;
+    };
+
+    // Build the success response as a JSON string.
+    return std.fmt.allocPrint(server.allocator, "{{\"schema\":\"var1.config_set.v1\",\"section\":{f},\"key\":{f},\"hotload\":\"applies on next turn\"}}", .{
+        std.json.fmt(section, .{}),
+        std.json.fmt(key, .{}),
     });
 }
 

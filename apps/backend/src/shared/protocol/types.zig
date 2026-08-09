@@ -20,6 +20,7 @@ pub const methods = struct {
     pub const events_subscribe = "events/subscribe";
     pub const health_get = "health/get";
     pub const models_list = "models/list";
+    pub const config_set = "config/set";
 };
 
 pub const Capabilities = struct {
@@ -146,6 +147,12 @@ pub const HealthGetResult = struct {
     subscription_plan_label: ?[]const u8 = null,
     subscription_status: ?[]const u8 = null,
     scheduler_supervisor: bool = false,
+    /// Resolved runtime values used by operator-facing clients. These are
+    /// additive so older clients can continue to parse health responses.
+    effort: []const u8 = "",
+    thinking_mode: []const u8 = "",
+    context_window_tokens: u64 = 0,
+    reserve_output_tokens: u64 = 0,
 };
 
 pub const ToolsListResult = struct {

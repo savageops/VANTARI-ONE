@@ -62,6 +62,78 @@ pub fn ensure(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
     return config_path;
 }
 
+/// Atomically set one config key under a section. Reads the current document,
+/// mutates the key, re-validates the entire document, and writes atomically.
+/// Returns Error.InvalidConfig if validation fails — the file is NOT modified
+/// on validation failure. This is the primitive the TUI settings panel and
+/// self-tuning protocol use to mutate config without a text editor.
+pub fn writeConfigKey(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    section: []const u8,
+    key: []const u8,
+    value: std.json.Value,
+) !void {
+    const config_path = try ensure(allocator, workspace_root);
+    defer allocator.free(config_path);
+    const content = try fsutil.readTextAlloc(allocator, config_path);
+    defer allocator.free(content);
+
+    // Parse the current document.
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, stripUtf8Bom(content), .{}) catch return Error.InvalidConfig;
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return Error.InvalidConfig;
+    const root = parsed.value.object;
+
+    // Navigate to the section.
+    var section_obj = root.get(section) orelse return Error.InvalidConfig;
+    if (section_obj != .object) return Error.InvalidConfig;
+
+    // Mutate the key within the section. The ObjectMap uses the parsed
+    // arena's managed allocator internally.
+    try section_obj.object.put(key, value);
+
+    // Re-validate the ENTIRE document after mutation. If validation fails,
+    // the file is NOT written — the caller gets Error.InvalidConfig and the
+    // on-disk file remains in its previous valid state.
+    try validateDocumentValue(parsed.value);
+
+    // Serialize the validated document and write atomically. Use std.json.fmt
+    // which produces a Formatter compatible with allocPrint.
+    const formatted = try std.fmt.allocPrint(allocator, "{f}", .{
+        std.json.fmt(parsed.value, .{ .whitespace = .indent_2 }),
+    });
+    defer allocator.free(formatted);
+    try fsutil.writeText(config_path, formatted);
+}
+
+/// Set a config key to a string value — convenience wrapper for the common
+/// case (effort, model, persona text, etc.).
+pub fn writeConfigString(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    section: []const u8,
+    key: []const u8,
+    value: []const u8,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+    const json_value = std.json.Value{ .string = try arena_alloc.dupe(u8, value) };
+    try writeConfigKey(allocator, workspace_root, section, key, json_value);
+}
+
+/// Set a config key to null (disable it). Used for guardrails/persona toggles.
+pub fn writeConfigNull(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    section: []const u8,
+    key: []const u8,
+) !void {
+    try writeConfigKey(allocator, workspace_root, section, key, .null);
+}
+
 pub fn loadRuntimePolicy(allocator: std.mem.Allocator, workspace_root: []const u8) !RuntimePolicy {
     var parsed = try parseDocument(allocator, workspace_root);
     defer parsed.deinit();
