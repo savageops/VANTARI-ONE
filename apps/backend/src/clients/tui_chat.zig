@@ -1169,10 +1169,181 @@ fn cmdSettings(state: *ChatState, _: []const u8) anyerror!commands.CommandResult
     return .handled;
 }
 
+/// One-shot model switch. Calls config/set to write runtime.openai_model.
+fn cmdModel(state: *ChatState, args: []const u8) anyerror!commands.CommandResult {
+    const allocator = state.allocator;
+    if (args.len == 0) {
+        // Show current model.
+        const msg = try std.fmt.allocPrint(allocator, "Current model: {s}. Use /model <name> to switch.", .{state.model});
+        defer allocator.free(msg);
+        try state.add(.system, msg);
+        return .handled;
+    }
+    const params = try std.fmt.allocPrint(allocator, "{{\"section\":\"runtime\",\"key\":\"openai_model\",\"value\":\"{s}\"}}", .{args});
+    defer allocator.free(params);
+    const call = state.client.call(protocol.methods.config_set, params) catch {
+        try state.add(.system, "Error: config/set RPC failed");
+        return .handled;
+    };
+    defer call.deinit(allocator);
+    const msg = try std.fmt.allocPrint(allocator, "Model set to {s}. Applies on next turn.", .{args});
+    defer allocator.free(msg);
+    try state.add(.system, msg);
+    return .handled;
+}
+
+/// One-shot effort switch. Validates against allowed levels.
+fn cmdEffort(state: *ChatState, args: []const u8) anyerror!commands.CommandResult {
+    const allocator = state.allocator;
+    const valid_levels = [_][]const u8{ "low", "medium", "high", "max" };
+    if (args.len == 0) {
+        const msg = try std.fmt.allocPrint(allocator, "Current effort: {s}. Levels: low, medium, high, max.", .{state.effort});
+        defer allocator.free(msg);
+        try state.add(.system, msg);
+        return .handled;
+    }
+    var valid = false;
+    for (valid_levels) |level| {
+        if (std.mem.eql(u8, args, level)) {
+            valid = true;
+            break;
+        }
+    }
+    if (!valid) {
+        try state.add(.system, "Invalid effort. Levels: low, medium, high, max.");
+        return .handled;
+    }
+    const params = try std.fmt.allocPrint(allocator, "{{\"section\":\"runtime\",\"key\":\"effort\",\"value\":\"{s}\"}}", .{args});
+    defer allocator.free(params);
+    const call = state.client.call(protocol.methods.config_set, params) catch {
+        try state.add(.system, "Error: config/set RPC failed");
+        return .handled;
+    };
+    defer call.deinit(allocator);
+    const msg = try std.fmt.allocPrint(allocator, "Effort set to {s}. Applies on next turn.", .{args});
+    defer allocator.free(msg);
+    try state.add(.system, msg);
+    return .handled;
+}
+
+/// One-shot persona edit. Sets prompts.persona inline.
+fn cmdPersona(state: *ChatState, args: []const u8) anyerror!commands.CommandResult {
+    const allocator = state.allocator;
+    if (args.len == 0) {
+        // Show current persona by reading config.
+        var parsed = VAR1.core.config_file.readValidatedDocument(allocator, state.workspace_root) catch {
+            try state.add(.system, "Unable to read config.");
+            return .handled;
+        };
+        defer parsed.deinit();
+        const prompts = parsed.value.object.get("prompts") orelse {
+            try state.add(.system, "No prompts section in config.");
+            return .handled;
+        };
+        const persona = prompts.object.get("persona");
+        if (persona) |p| {
+            if (p == .string) {
+                const msg = try std.fmt.allocPrint(allocator, "Current persona: {s}", .{p.string});
+                defer allocator.free(msg);
+                try state.add(.system, msg);
+            }
+        } else {
+            try state.add(.system, "Persona is not set (null). Use /persona <text> to set.");
+        }
+        return .handled;
+    }
+    if (std.mem.eql(u8, args, "--clear")) {
+        const params = try std.fmt.allocPrint(allocator, "{{\"section\":\"prompts\",\"key\":\"persona\",\"value\":null}}", .{});
+        defer allocator.free(params);
+        const call = state.client.call(protocol.methods.config_set, params) catch {
+            try state.add(.system, "Error: config/set RPC failed");
+            return .handled;
+        };
+        defer call.deinit(allocator);
+        try state.add(.system, "Persona cleared (reverted to compiled default).");
+        return .handled;
+    }
+    // Escape the args for JSON string.
+    const escaped = try escapeForJson(allocator, args);
+    defer allocator.free(escaped);
+    const params = try std.fmt.allocPrint(allocator, "{{\"section\":\"prompts\",\"key\":\"persona\",\"value\":\"{s}\"}}", .{escaped});
+    defer allocator.free(params);
+    const call = state.client.call(protocol.methods.config_set, params) catch {
+        try state.add(.system, "Error: config/set RPC failed");
+        return .handled;
+    };
+    defer call.deinit(allocator);
+    const msg = try std.fmt.allocPrint(allocator, "Persona updated. Applies on next turn.", .{});
+    defer allocator.free(msg);
+    try state.add(.system, msg);
+    return .handled;
+}
+
+/// List specialist agent personas from config.
+fn cmdAgents(state: *ChatState, _: []const u8) anyerror!commands.CommandResult {
+    const allocator = state.allocator;
+    var parsed = VAR1.core.config_file.readValidatedDocument(allocator, state.workspace_root) catch {
+        try state.add(.system, "Unable to read config.");
+        return .handled;
+    };
+    defer parsed.deinit();
+    const agents_section = parsed.value.object.get("agents") orelse {
+        try state.add(.system, "No agents section in config.");
+        return .handled;
+    };
+    const defs = agents_section.object.get("definitions") orelse {
+        try state.add(.system, "No agent definitions in config.");
+        return .handled;
+    };
+    if (defs != .object) {
+        try state.add(.system, "Agent definitions are not an object.");
+        return .handled;
+    }
+    var output = std.array_list.Managed(u8).init(allocator);
+    defer output.deinit();
+    try output.writer().writeAll("Specialist Agents:\n");
+    var iter = defs.object.iterator();
+    while (iter.next()) |entry| {
+        const id = entry.key_ptr.*;
+        const agent = entry.value_ptr.*;
+        const enabled = if (agent == .object) blk: {
+            const e = agent.object.get("enabled") orelse break :blk true;
+            if (e == .bool) break :blk e.bool;
+            break :blk true;
+        } else true;
+        const role = if (agent == .object) blk: {
+            const r = agent.object.get("route_role") orelse break :blk "general";
+            if (r == .string) break :blk r.string;
+            break :blk "general";
+        } else "general";
+        const status_str = if (enabled) "enabled" else "disabled";
+        try output.writer().print("  {s: <16} [{s}] role={s}\n", .{ id, status_str, role });
+    }
+    try output.writer().writeAll("\nUse /settings to edit agent definitions. Use configure_agent tool for programmatic mutation.");
+    try state.add(.system, output.items);
+    return .handled;
+}
+
+/// Escape a string for embedding in a JSON string literal value.
+fn escapeForJson(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    var output = std.array_list.Managed(u8).init(allocator);
+    errdefer output.deinit();
+    for (text) |char| {
+        switch (char) {
+            '"' => try output.appendSlice("\\\""),
+            '\\' => try output.appendSlice("\\\\"),
+            '\n' => try output.appendSlice("\\n"),
+            '\r' => try output.appendSlice("\\r"),
+            '\t' => try output.appendSlice("\\t"),
+            else => try output.append(char),
+        }
+    }
+    return output.toOwnedSlice();
+}
+
 fn cmdStub(state: *ChatState, args: []const u8) anyerror!commands.CommandResult {
-    // Remaining stubs — model/effort/persona/agents are implemented in chain 034e.
     _ = args;
-    try state.add(.system, "This command is being implemented. Use /settings to configure via the TUI.");
+    try state.add(.system, "This command is not yet available. Use /settings to configure.");
     return .handled;
 }
 
@@ -1185,12 +1356,12 @@ const command_registry = [_]commands.Command(ChatState){
     .{ .name = "history", .description = "Show recent global history.", .category = .help, .execute = cmdHistory },
     .{ .name = "compact", .description = "Summarize conversation to free context.", .category = .session, .execute = cmdCompact },
     .{ .name = "cancel", .description = "Cancel the current turn.", .category = .session, .execute = cmdCancel },
-    // Phase 2 stubs:
+    // Settings-dependent one-shot commands:
     .{ .name = "settings", .description = "Open settings panel.", .category = .config, .execute = cmdSettings },
-    .{ .name = "model", .description = "Switch model (coming soon).", .category = .model, .execute = cmdStub },
-    .{ .name = "effort", .description = "Set effort (coming soon).", .category = .model, .execute = cmdStub },
-    .{ .name = "persona", .description = "Edit persona (coming soon).", .category = .config, .execute = cmdStub },
-    .{ .name = "agents", .description = "Manage agents (coming soon).", .category = .agent, .execute = cmdStub },
+    .{ .name = "model", .description = "Switch model.", .category = .model, .execute = cmdModel },
+    .{ .name = "effort", .description = "Set effort: low/medium/high/max.", .category = .model, .execute = cmdEffort },
+    .{ .name = "persona", .description = "Edit persona inline.", .category = .config, .execute = cmdPersona },
+    .{ .name = "agents", .description = "List specialist agents.", .category = .agent, .execute = cmdAgents },
 };
 
 const SendJob = struct {

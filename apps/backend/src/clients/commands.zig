@@ -128,12 +128,12 @@ pub const builtin_command_info = [_]CommandInfo{
     .{ .name = "history", .description = "Show recent global message history across all sessions.", .category = .help },
     .{ .name = "compact", .description = "Summarize the conversation to free context window space.", .category = .session },
     .{ .name = "cancel", .description = "Cancel the current turn (same as Ctrl-C during a turn).", .category = .session },
-    // Phase 2 stubs — implemented in 034e:
-    .{ .name = "settings", .description = "Open the in-TUI settings panel (coming soon).", .category = .config },
-    .{ .name = "model", .description = "Switch the active model (coming soon).", .category = .model },
-    .{ .name = "effort", .description = "Set reasoning effort: low, medium, high, max (coming soon).", .category = .model },
-    .{ .name = "persona", .description = "Edit the system persona inline (coming soon).", .category = .config },
-    .{ .name = "agents", .description = "List and manage specialist agent personas (coming soon).", .category = .agent },
+    // Settings-dependent commands:
+    .{ .name = "settings", .description = "Open the in-TUI settings panel.", .category = .config },
+    .{ .name = "model", .description = "Switch the active model.", .category = .model },
+    .{ .name = "effort", .description = "Set reasoning effort: low, medium, high, max.", .category = .model },
+    .{ .name = "persona", .description = "Edit the system persona inline.", .category = .config },
+    .{ .name = "agents", .description = "List specialist agent personas.", .category = .agent },
 };
 
 /// Render the /help output as a string. Groups commands by category.
