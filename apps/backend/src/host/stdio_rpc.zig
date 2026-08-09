@@ -186,7 +186,10 @@ const Server = struct {
     scheduler_thread: ?std.Thread = null,
     buffer_srv: ?buffer_service.Service = null,
     buffer_thread: ?std.Thread = null,
-    buffer_session_id: ?[]const u8 = null,
+    /// Active root session id for the buffer preview callback. Heap-owned
+    /// (duped) because the session record is freed when the request handler
+    /// returns — a borrowed pointer would dangle.
+    buffer_session_id: ?[]u8 = null,
     /// Latest buffer preview text — written by the buffer thread callback,
     /// read by the executor via peekBufferPreview hook. Mutex-guarded swap.
     buffer_preview_mutex: std.Thread.Mutex = .{},
@@ -202,7 +205,9 @@ const Server = struct {
         if (self.buffer_srv) |*bsrv| {
             bsrv.requestStop();
             if (self.buffer_thread) |thread| thread.join();
+            bsrv.deinit();
         }
+        if (self.buffer_session_id) |sid| self.allocator.free(sid);
         if (self.buffer_preview_text) |text| self.allocator.free(text);
         self.runtime.deinit(self.allocator);
     }
@@ -644,7 +649,11 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
     // durable session summary ledger (.var/sessions/summaries.json) — the
     // orchestrator's mandatory pre-turn-end update, not a raw transcript tail.
     if (server.buffer_srv != null and session.parent_session_id == null) {
-        server.buffer_session_id = session.id;
+        // Dupe session.id because session.deinit will free it when the
+        // request handler returns. The buffer preview callback reads
+        // buffer_session_id on a background thread after that point.
+        if (server.buffer_session_id) |old| server.allocator.free(old);
+        server.buffer_session_id = server.allocator.dupe(u8, session.id) catch null;
         server.buffer_srv.?.setSessionId(session.id);
         if (parsed.value.prompt) |prompt| {
             server.buffer_srv.?.setActivePrompt(prompt);

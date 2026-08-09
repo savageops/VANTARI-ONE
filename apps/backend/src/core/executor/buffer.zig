@@ -56,13 +56,18 @@ pub const Service = struct {
     sink: PreviewSink,
     stop_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     last_tick_ms: i64 = 0,
+    /// Mutex guarding active_prompt, active_session_id, and context_text —
+    /// all owned (duped) by the service and read by the background thread.
+    /// Without this lock + dupe, the request handler's defer would free the
+    /// borrowed pointers while the buffer thread still reads them (UAF).
+    state_mutex: std.Thread.Mutex = .{},
     /// Set by the host when a root session is active; null when idle.
-    active_prompt: ?[]const u8 = null,
-    /// The active root session id — the buffer reads its durable summary row
-    /// from the summary ledger each tick for work-state awareness.
-    active_session_id: ?[]const u8 = null,
+    /// Heap-owned by the service (duped on set, freed on replace/clear).
+    active_prompt: ?[]u8 = null,
+    /// The active root session id — heap-owned by the service.
+    active_session_id: ?[]u8 = null,
     /// Latest summary text read from the ledger (owned by the service).
-    context_text: ?[]const u8 = null,
+    context_text: ?[]u8 = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -78,16 +83,31 @@ pub const Service = struct {
         };
     }
 
+    pub fn deinit(self: *Service) void {
+        if (self.active_prompt) |p| self.allocator.free(p);
+        if (self.active_session_id) |s| self.allocator.free(s);
+        if (self.context_text) |c| self.allocator.free(c);
+    }
+
     pub fn requestStop(self: *Service) void {
         self.stop_requested.store(true, .release);
     }
 
+    /// Store a heap-owned copy of the prompt. The caller's slice may be
+    /// freed when the request handler returns — we dupe to survive.
     pub fn setActivePrompt(self: *Service, prompt: ?[]const u8) void {
-        self.active_prompt = prompt;
+        self.state_mutex.lock();
+        defer self.state_mutex.unlock();
+        if (self.active_prompt) |old| self.allocator.free(old);
+        self.active_prompt = if (prompt) |p| self.allocator.dupe(u8, p) catch null else null;
     }
 
+    /// Store a heap-owned copy of the session id. Same lifetime rule.
     pub fn setSessionId(self: *Service, session_id: ?[]const u8) void {
-        self.active_session_id = session_id;
+        self.state_mutex.lock();
+        defer self.state_mutex.unlock();
+        if (self.active_session_id) |old| self.allocator.free(old);
+        self.active_session_id = if (session_id) |s| self.allocator.dupe(u8, s) catch null else null;
     }
 
     pub fn run(self: *Service) void {
@@ -103,7 +123,21 @@ pub const Service = struct {
         defer policy.deinit(self.allocator);
 
         if (!policy.enabled) return;
-        if (self.active_prompt == null) return;
+
+        // Snapshot the active prompt + session id under the lock. The request
+        // handler may call setActivePrompt/setSessionId concurrently, freeing
+        // the previous values — reading without the lock is a data race.
+        var prompt_copy: ?[]u8 = null;
+        defer if (prompt_copy) |p| self.allocator.free(p);
+        var session_copy: ?[]u8 = null;
+        defer if (session_copy) |s| self.allocator.free(s);
+        {
+            self.state_mutex.lock();
+            defer self.state_mutex.unlock();
+            if (self.active_prompt) |p| prompt_copy = self.allocator.dupe(u8, p) catch null;
+            if (self.active_session_id) |s| session_copy = self.allocator.dupe(u8, s) catch null;
+        }
+        if (prompt_copy == null) return;
         if (now_ms - self.last_tick_ms < @as(i64, @intCast(policy.interval_ms))) return;
 
         self.last_tick_ms = now_ms;
@@ -112,23 +146,38 @@ pub const Service = struct {
         // the orchestrator's mandatory pre-turn-end update — never a raw
         // transcript tail. Refreshed per tick so the preview tracks the
         // latest summary without host plumbing.
-        if (self.active_session_id) |sid| {
+        if (session_copy) |sid| {
             var maybe_row = summaries.readSummary(self.allocator, self.parent_config.workspace_root, sid) catch null;
             if (maybe_row) |*row| {
                 defer row.deinit(self.allocator);
-                const fresh = if (self.context_text) |cur| !std.mem.eql(u8, cur, row.summary) else true;
+                const fresh = blk: {
+                    self.state_mutex.lock();
+                    defer self.state_mutex.unlock();
+                    break :blk if (self.context_text) |cur| !std.mem.eql(u8, cur, row.summary) else true;
+                };
                 if (fresh) {
-                    if (self.context_text) |old| self.allocator.free(@constCast(old));
+                    self.state_mutex.lock();
+                    defer self.state_mutex.unlock();
+                    if (self.context_text) |old| self.allocator.free(old);
                     self.context_text = self.allocator.dupe(u8, row.summary) catch null;
                 }
             }
         }
 
-        // Build combined context: prompt + session summary (RECENT WORK STATE)
-        const combined = if (self.context_text) |ctx|
-            std.fmt.allocPrint(self.allocator, "USER REQUEST:\n{s}\n\nRECENT WORK STATE:\n{s}", .{ self.active_prompt.?, ctx }) catch return
+        // Build combined context: prompt + session summary (RECENT WORK STATE).
+        // Read context_text under lock to get a stable snapshot.
+        var ctx_copy: ?[]u8 = null;
+        defer if (ctx_copy) |c| self.allocator.free(c);
+        {
+            self.state_mutex.lock();
+            defer self.state_mutex.unlock();
+            if (self.context_text) |c| ctx_copy = self.allocator.dupe(u8, c) catch null;
+        }
+
+        const combined = if (ctx_copy) |ctx|
+            std.fmt.allocPrint(self.allocator, "USER REQUEST:\n{s}\n\nRECENT WORK STATE:\n{s}", .{ prompt_copy.?, ctx }) catch return
         else
-            std.fmt.allocPrint(self.allocator, "USER REQUEST:\n{s}", .{self.active_prompt.?}) catch return;
+            std.fmt.allocPrint(self.allocator, "USER REQUEST:\n{s}", .{prompt_copy.?}) catch return;
         defer self.allocator.free(combined);
 
         if (runBufferModel(self.allocator, self.parent_config, policy, combined, self.transport)) |text| {
