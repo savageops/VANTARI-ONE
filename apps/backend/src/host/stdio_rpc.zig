@@ -325,7 +325,10 @@ fn onAgentParentEvent(
     timestamp_ms: i64,
 ) anyerror!void {
     const server: *Server = @ptrCast(@alignCast(ctx.?));
-    try server.emitSessionEvent(parent_session_id, event_type, message, "running", timestamp_ms);
+    // Live notification is a read model over the durable event spine
+    // (AGENTS.md §IV). A slow/broken TUI pipe must never corrupt a child
+    // agent delegation turn.
+    server.emitSessionEvent(parent_session_id, event_type, message, "running", timestamp_ms) catch {};
 }
 
 fn runSchedulerService(service: *scheduler.Service) void {
@@ -761,26 +764,26 @@ fn handleSessionCancel(server: *Server, params: ?std.json.Value) ![]u8 {
     if (session.status == .initialized) {
         try store.setSessionStatus(server.allocator, server.config.workspace_root, &session, .cancelled);
         cancellation_requested = true;
-        try server.recordAndEmitSessionEvent(
+        server.recordAndEmitSessionEvent(
             session.id,
             "session_cancelled",
             "Cancellation requested before execution started.",
             types.statusLabel(session.status),
             session.updated_at_ms,
-        );
+        ) catch {};
     } else if (session.status == .running) {
         if (server.runtime.requestCancel(session.id)) {
             cancellation_requested = true;
         } else if (try isStaleUnownedRunningSession(server, &session)) {
             try store.setSessionStatus(server.allocator, server.config.workspace_root, &session, .cancelled);
             cancellation_requested = true;
-            try server.recordAndEmitSessionEvent(
+            server.recordAndEmitSessionEvent(
                 session.id,
                 "session_cancelled",
                 "Cancellation closed a stale running session with no active kernel execution owner.",
                 types.statusLabel(session.status),
                 session.updated_at_ms,
-            );
+            ) catch {};
         }
     }
 
@@ -872,8 +875,11 @@ fn reconcileStaleRunningSession(server: *Server, session: *types.SessionRecord) 
 
     const timestamp_ms = std.time.milliTimestamp();
     const failure_reason = "Session was marked running but no active kernel execution owns it.";
-    try server.recordAndEmitSessionEvent(session.id, "session_failed", failure_reason, "failed", timestamp_ms);
+    // Durable write first — this is the source of truth. The live notification
+    // is a read model (AGENTS.md §IV); a broken TUI pipe must not corrupt the
+    // reconciliation RPC (session/get is polled by the TUI every ~100ms).
     try store.setSessionFailure(server.allocator, server.config.workspace_root, session, failure_reason);
+    server.recordAndEmitSessionEvent(session.id, "session_failed", failure_reason, "failed", timestamp_ms) catch {};
 }
 
 fn isStaleUnownedRunningSession(server: *Server, session: *const types.SessionRecord) !bool {

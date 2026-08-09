@@ -261,7 +261,7 @@ pub fn runPromptWithOptions(
     var requires_child_supervision = false;
     var executed_tool_calls: usize = 0;
     var provider_retries: u8 = 0;
-    const max_provider_retries: u8 = 3;
+    const max_provider_retries: u8 = 4;
 
     // Per-turn scoped arena (roadmap P1-15). Reset after each step to bound
     // memory growth across a long session. The arena scopes ephemeral
@@ -377,6 +377,13 @@ pub fn runPromptWithOptions(
         ) catch |err| {
             // Connection-level failures are genuinely unrecoverable — the
             // server is unreachable. Propagate immediately.
+            //
+            // Note: error.WriteFailed is NOT unrecoverable. On Windows, the
+            // socket writer's drain wraps WSASend; a provider-side connection
+            // reset (WSAECONNRESET/WSAECONNABORTED) surfaces as WriteFailed.
+            // This is a transient transport failure — the provider rate-limited
+            // or reset the connection mid-write. It MUST go through the retry
+            // path below, not brick the session.
             if (err == error.ConnectionRefused or
                 err == error.NetworkUnreachable or
                 err == error.ConnectionTimedOut)
@@ -411,8 +418,13 @@ pub fn runPromptWithOptions(
                 try failSession(allocator, config.workspace_root, options.hooks, &session, diag, run_start_ms);
                 return err;
             }
-            // Brief backoff before retry
-            std.Thread.sleep(@as(u64, @intCast(provider_retries)) * 500 * std.time.ns_per_ms);
+            // Exponential backoff before retry: 1s, 2s, 4s, 8s. A provider
+            // connection reset (WriteFailed from WSASend) needs time to clear
+            // — the provider rate-limits under concurrent connections (buffer
+            // thread + main loop). The old 500ms linear backoff was too
+            // aggressive: all 3 retries hit the same rate-limited state.
+            const backoff_ms: u64 = @as(u64, 1000) << @intCast(provider_retries - 1);
+            std.Thread.sleep(backoff_ms * std.time.ns_per_ms);
             const nudge = try std.fmt.allocPrint(allocator, "Previous request failed ({s}). Please continue with the task.", .{@errorName(err)});
             defer allocator.free(nudge);
             try messages.append(try types.initTextMessage(allocator, .user, nudge));
