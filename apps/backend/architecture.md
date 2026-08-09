@@ -519,25 +519,41 @@ The buffer speculation service consumes the active session's summary row as its 
 
 ### Prompt doctrine
 
+The system prompt is the steering surface of the harness. VAR1 is capable of anything — chatbot, orchestrator, silent worker — but the prompt determines what it *becomes*. The shipped default makes it a senior engineering orchestrator. An operator can replace the entire behavior via `.var/prompts/system.md` without touching code.
+
+The prompt embodies behavior; it does not reveal strategy. Internal mechanics (causal chain, context compiler, event spine, kernel architecture) live in this documentation, never in the prompt the model sees. The prompt plays the card; it does not reveal the card.
+
 The system prompt is assembled in ordered layers by `src/core/prompts/builder.zig`:
 
 ```text
+header + workspace root
+  ↓
+current mode (orchestrator-only / workspace-state — operational, first)
+  ↓
+identity (compiled default or workspace override)
+  ↓
+persona (config: prompts.persona — tone/voice/technical level)
+  ↓
 internal guardrails (kernel-owned, always present)
   ↓
 operator guardrails (config: prompts.guardrails)
   ↓
-system prompt (compiled default or workspace override)
-  ↓
-persona (config: prompts.persona — tone/voice/technical level)
-  ↓
-developer prompt (compiled default or workspace override)
+developer discipline (compiled default or workspace override)
   ↓
 operator context (config: prompts.user_context — custom instructions)
   ↓
-tool contract (catalog + protocols)
+operating core (5 consolidated protocols)
+  ↓
+skill capsules (budgeted, demand-loaded via skill_info)
+  ↓
+memory context (if enabled)
+  ↓
+tool catalog (last for high recency at the action boundary)
 ```
 
-The envelope protocols (tightened to ~40% token reduction) cover: delegation, child prompt, context isolation, continuation, advisor, workspace scaffold, knowledge logging, scheduling, self-tuning, evolution, memory. All conditional layers (persona, guardrails, user_context) are omitted when null — the default config produces the same prompt as the compiled defaults.
+The operating core consolidates 17 legacy protocols into 5 dense, non-overlapping blocks: **Evidence** (never assert without proof, catalog is the API, fail closed), **Delegation** (fan out, never delegate understanding, four-move synthesis, read-parallel/write-serial), **Edit** (surgical slices, file inspection, path protocol, budget awareness), **Continuity** (checkpoint continuation, session summary, interjection, memory), **Evolution** (self-tuning, ticket lifecycle, knowledge logging, scheduling, workspace scaffold). This reduces ~1,000 tokens of duplicates and improves recall: fewer denser rules outperform many overlapping ones.
+
+All conditional layers (persona, guardrails, user_context) are omitted when null — the default config produces the same prompt as the compiled defaults. Skill capsules use the budgeted renderer (`renderPromptCapsulesBudgeted`, 2048-char cap with truncation marker and routing decision tree).
 
 ### Self-tuning doctrine
 

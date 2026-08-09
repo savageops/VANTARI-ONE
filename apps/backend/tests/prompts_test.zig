@@ -25,50 +25,78 @@ test "prompt builder emits ordered guardrails and tool contract" {
     );
     defer std.testing.allocator.free(prompt);
 
+    // Envelope structure — identity-first ordering.
     try std.testing.expect(std.mem.indexOf(u8, prompt, "# VAR1 Prompt Envelope") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "# Current Mode") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "# Identity") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "# Internal Runtime Guardrails") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "# System Prompt") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "# Developer Prompt") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "# Tool Use Contract") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "# Developer Discipline") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "# Operating Core") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "# Skill Routing Contract") != null);
+
+    // Identity — behavioral, not architectural. No internal-mechanic leaks.
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "senior engineering orchestrator") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Delegate ravenously") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Calibrate your confidence") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Meta-reason when stuck") != null);
+
+    // Architecture-leak guard: these terms reveal the strategy, not embody it.
+    // Note: "append-only" legitimately appears in tool descriptions (append_file,
+    // list_processes); "kernel_fallback" is a literal source enum value the model
+    // must recognize. Those are tool/config documentation, not strategy leakage.
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "causal chain") == null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "context compiler") == null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "event spine") == null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "the cockpit") == null);
+
+    // Five consolidated protocols.
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "## Evidence Protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "## Delegation Protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "## Edit Protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "## Continuity Protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "## Evolution Protocol") != null);
+
+    // Delegation protocol — "never delegate understanding" rule + synthesis procedure.
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Never delegate understanding") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "falsify before averaging") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Read-only tracks (research, recon) parallelize freely") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "emit multiple launch_agent calls in a single assistant turn") != null);
+
+    // Continuity protocol — interjection + memory + session summary.
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "USER_STEER_MESSAGE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "messages.jsonl remains transcript truth") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "update_session_summary before your turn ends") != null);
+
+    // Evolution protocol — tickets + knowledge logging + scheduling + self-tuning.
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "VANTARI tunes its own configuration") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, ".var/tickets/") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "A missing knowledge surface is a drift signal") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "durable jobs live under .var/schedules") != null);
+
+    // Edit protocol — tool routing + path + file inspection.
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "native IX expressions such as lit:needle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "all paths are relative to the displayed workspace root") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "write_file may write the complete file") != null);
+
+    // Tool catalog + capsules.
     try std.testing.expect(std.mem.indexOf(u8, prompt, "- list_files:") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "- skill_info:") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "- planning-spec:") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "- insect:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "- dupe-audit:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Call contract: pass one JSON object") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Treat the catalog below as the authoritative executable API") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "native IX expressions such as lit:needle") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Delegation protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "parallel external research") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "required SITREP") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Memory protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "messages.jsonl remains transcript truth") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Advisor protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Slow is smooth, and smooth is fast") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Fan out as wide as work decomposes") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Workspace scaffold protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Knowledge logging protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "A missing knowledge surface is a drift signal") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "every subagent that discovers findings") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Scheduling protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Self-tuning protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "durable jobs live under .var/schedules") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "VANTARI tunes its own configuration") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Evolution protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, ".var/tickets/") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Interjection protocol") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "USER_STEER_MESSAGE") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "write_file may write the complete file") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "8192-byte tool limit") == null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "under 7000 bytes") == null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "all paths are relative to the displayed workspace root") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "operator-visible progress before tool batches") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "not hidden chain-of-thought") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Continue chaining bursts until terminal proof or a named blocker") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Skills are reusable operating protocols") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "wait_agent accepts timeout_ms") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "run-insect-rs.ps1") != null);
+
+    // Continuation contract survives the restructure.
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Continue chaining bursts until terminal proof or a named blocker") != null);
+
+    // Budgeted capsules — routing decision tree is now present.
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Skill Routing Decision Tree") != null);
+
+    // Legacy phrases removed by the rewrite.
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "# Tool Use Contract") == null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "# System Prompt") == null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "# Developer Prompt") == null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Slow is smooth") == null);
 }
 
 test "prompt builder loads project-local system and developer prompt files" {

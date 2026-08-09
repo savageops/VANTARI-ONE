@@ -2,6 +2,16 @@
 
 VAR1 is a deterministic Zig agent-session kernel where prompts compile into session state, provider turns, typed tool spans, context checkpoints, command I/O, and recoverable evidence. It is not a chat wrapper — it is an execution substrate that treats every agent interaction as a state-machine transition through a durable, append-only, cold-start-recoverable pipeline.
 
+## The Thesis: Prompt as Steering Surface
+
+VANTARI drives the AI model. VANTARI is the pilot in the cockpit; the model is the plane. The prompts are what steer the plane.
+
+The harness is capable of anything — chatbot, parallel multi-agent orchestrator, silent background worker, Telegram bot. But the harness does not decide which. **The prompt does.** The system prompt is the ignition: it determines whether VAR1 behaves as a chatty assistant, a ruthless delegating orchestrator, a quiet long-running researcher, or a hybrid that speaks little and fans out wide. Every behavioral dimension — reasoning depth, verbosity, delegation aggressiveness, tool preference, response cadence — is a prompt-level control, not a code-level switch.
+
+This makes VAR1 a **bring-your-own-prompt** system. The shipped default prompt (`builder.zig`) is one opinion — a senior engineering orchestrator that delegates ravenously, verifies obsessively, and synthesizes canonically. An operator can replace it entirely via `.var/prompts/system.md` and the same harness becomes a different product. The kernel guarantees the mechanics (durable state, tool safety, recovery, streaming); the prompt determines the behavior. Refine the prompting and VAR1 does whatever you want, however you want.
+
+The default prompt embodies this philosophy: it makes the model *act* as the orchestrator without ever explaining the machinery underneath. The strategy lives in the behavior, not in the prose.
+
 ## The Pipeline
 
 ```text
