@@ -3,6 +3,7 @@ const VAR1 = @import("VAR1");
 const tui = @import("tui");
 const history = VAR1.core.session_history;
 const commands = @import("commands.zig");
+const settings_view = @import("settings_view.zig");
 
 const protocol = VAR1.core.protocol_types;
 const stdio_rpc = VAR1.host.stdio_rpc;
@@ -162,6 +163,10 @@ const ChatState = struct {
     /// heavyweight model is not actively reasoning. Populated by the buffer
     /// model (draft/buffer layer). When null or empty, the dock collapses.
     buffer_preview: ?[]u8 = null,
+    /// In-TUI settings overlay state. Null when closed. Initialized by the
+    /// /settings command. When non-null and .open, the draw function renders
+    /// the settings overlay instead of the normal transcript+footer.
+    settings_state: ?settings_view.SettingsState = null,
 
     fn deinit(self: *ChatState) void {
         if (self.session_id) |value| self.allocator.free(value);
@@ -174,6 +179,7 @@ const ChatState = struct {
         self.history_entries.deinit(self.allocator);
         if (self.history_draft) |draft| self.allocator.free(draft);
         if (self.buffer_preview) |preview| self.allocator.free(preview);
+        if (self.settings_state) |*ss| ss.deinit();
     }
 
     fn appendHistory(self: *ChatState, prompt: []const u8) !void {
@@ -1153,10 +1159,20 @@ fn cmdCancel(state: *ChatState, _: []const u8) anyerror!commands.CommandResult {
     return .handled;
 }
 
+fn cmdSettings(state: *ChatState, _: []const u8) anyerror!commands.CommandResult {
+    // Open the settings overlay. Initialize state and load the first section.
+    if (state.settings_state == null) {
+        state.settings_state = settings_view.SettingsState.init(state.allocator, state.workspace_root);
+    }
+    state.settings_state.?.open = true;
+    state.settings_state.?.loadSection() catch {};
+    return .handled;
+}
+
 fn cmdStub(state: *ChatState, args: []const u8) anyerror!commands.CommandResult {
-    // Phase 2 stubs — settings/model/effort/persona/agents are implemented in chain 034e.
+    // Remaining stubs — model/effort/persona/agents are implemented in chain 034e.
     _ = args;
-    try state.add(.system, "This command is being implemented. Use /settings to configure via the TUI (coming soon).");
+    try state.add(.system, "This command is being implemented. Use /settings to configure via the TUI.");
     return .handled;
 }
 
@@ -1170,7 +1186,7 @@ const command_registry = [_]commands.Command(ChatState){
     .{ .name = "compact", .description = "Summarize conversation to free context.", .category = .session, .execute = cmdCompact },
     .{ .name = "cancel", .description = "Cancel the current turn.", .category = .session, .execute = cmdCancel },
     // Phase 2 stubs:
-    .{ .name = "settings", .description = "Open settings panel (coming soon).", .category = .config, .execute = cmdStub },
+    .{ .name = "settings", .description = "Open settings panel.", .category = .config, .execute = cmdSettings },
     .{ .name = "model", .description = "Switch model (coming soon).", .category = .model, .execute = cmdStub },
     .{ .name = "effort", .description = "Set effort (coming soon).", .category = .model, .execute = cmdStub },
     .{ .name = "persona", .description = "Edit persona (coming soon).", .category = .config, .execute = cmdStub },
@@ -1216,6 +1232,18 @@ fn runSessionSend(job: *SendJob) void {
         return;
     };
     job.finish(result, null);
+}
+
+/// Extract a printable ASCII character from a key event, or null if the key
+/// is not a simple printable character. Used by the settings edit buffer.
+fn keyToPrintable(key: tui.Key) ?u8 {
+    // tui.Key.text is ?[]const u8 — null for special keys, text for printable.
+    const text = key.text orelse return null;
+    if (text.len == 1) {
+        const c = text[0];
+        if (c >= 0x20 and c < 0x7f) return c;
+    }
+    return null;
 }
 
 pub fn main(allocator: std.mem.Allocator) !void {
@@ -1327,6 +1355,27 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
         const event = loop.nextEvent();
         switch (event) {
             .key_press => |key| {
+                // Settings overlay key routing — when the panel is open, all keys
+                // go to the settings handler except Ctrl-C (force exit).
+                if (state.settings_state) |*ss| {
+                    if (ss.open) {
+                        if (key.matches('c', .{ .ctrl = true })) break;
+                        const consumed = ss.handleKey(key, state.client) catch false;
+                        if (!consumed and ss.editing) {
+                            // Route printable chars to the edit buffer.
+                            const ch = keyToPrintable(key);
+                            if (ch) |c| {
+                                ss.edit_buffer.append(allocator, c) catch {};
+                            } else if (key.matches(tui.Key.backspace, .{})) {
+                                if (ss.edit_buffer.items.len > 0) {
+                                    _ = ss.edit_buffer.pop();
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                }
+
                 if (key.matches('c', .{ .ctrl = true })) break;
                 if (key.matches(tui.Key.page_up, .{})) {
                     state.scrollUp(6);
@@ -1434,6 +1483,16 @@ fn applyMouseScroll(state: *ChatState, mouse: tui.Mouse) bool {
 
 fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !void {
     const root = vx.window();
+
+    // Settings overlay — when open, render full-screen instead of normal layout.
+    if (state.settings_state) |*ss| {
+        if (ss.open) {
+            settings_view.drawSettings(root, ss);
+            try writer.flush();
+            return;
+        }
+    }
+
     root.fill(.{ .style = styles.surface });
 
     const reasoning_body_width = @max(@as(usize, 1), @as(usize, root.width -| 8));
