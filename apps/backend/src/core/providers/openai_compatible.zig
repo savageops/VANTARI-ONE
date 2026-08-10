@@ -220,7 +220,6 @@ fn buildRequestJson(
     effort: []const u8,
     temperature: f64,
 ) ![]u8 {
-    _ = thinking_mode;
     var payload = std.array_list.Managed(u8).init(allocator);
     errdefer payload.deinit();
 
@@ -246,6 +245,20 @@ fn buildRequestJson(
     if (effort.len > 0) {
         try writer.writeAll(",\"effort\":");
         try writeJsonValue(writer, effort);
+    }
+
+    // Thinking mode: z.ai's coding paas endpoint (api.z.ai/api/coding/paas/v4)
+    // expects `enable_thinking` as a TOP-LEVEL boolean, not the DeepSeek nested
+    // `thinking: {type:"enabled"}` convention. Default to ON (empty string or
+    // "on" enables reasoning) — only "off" explicitly disables it. This is
+    // critical for GLM-5.2: without enable_thinking, reasoning_content is
+    // silently off and the model never emits reasoning_delta events.
+    // Reference: prime-agent salvage map P0 finding (openai-completions.ts:564-565).
+    const thinking_disabled = std.mem.eql(u8, thinking_mode, "off");
+    if (!thinking_disabled) {
+        try writer.writeAll(",\"enable_thinking\":true");
+    } else {
+        try writer.writeAll(",\"enable_thinking\":false");
     }
 
     if (stream) try writer.writeAll(",\"stream\":true");
