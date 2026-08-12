@@ -336,7 +336,7 @@ Every session directory contains:
 - `events.jsonl`
 - `output.txt`
 
-`messages.jsonl` is the complete append-only transcript. One process-local per-session ledger state serializes user, assistant, assistant-tool-call, tool-result, and idempotent convergence appends. It initializes sequence from the last valid bounded tail row instead of reparsing transcript history; append failure invalidates the cached cursor before retry. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested. `events.jsonl` assigns the sole durable render identity. Live notifications carry that stored sequence after append; the tracked TUI requests `session/get { after_seq, events_only }` only when it detects a gap and once after turn completion.
+`messages.jsonl` is the complete append-only transcript. One process-local per-session ledger state serializes user, assistant, assistant-tool-call, tool-result, and idempotent convergence appends. It initializes sequence from the last valid bounded tail row instead of reparsing transcript history; append failure invalidates the cached cursor before retry. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested. `events.jsonl` assigns the sole durable render identity. Live notifications carry that stored sequence after append; the tracked TUI requests `session/get { after_seq, events_only }` only when it detects a gap and once after turn completion. `shared/jsonl.zig:PrefixReader` is the one LF-framed read boundary for events, messages, context, intents, and summaries. It accepts a leading BOM, rejects invalid UTF-8/JSON/typed schema and non-increasing sequence rows, and ends every projection at the same valid prefix. `fsutil.appendJsonlRecord` validates the bounded current tail through that owner and refuses poison without truncating or appending behind it.
 
 `$VANTARI_HOME/config.json` is the canonical non-secret policy file. Its typed sections own runtime limits, wire API selection, role routing, editable agent definitions, context policy, prompt paths, and supported environment-style overrides. Built-in agent rows may tune persona/condition/route/budgets or be disabled; custom ids must inherit a compiled capability floor. `$VANTARI_HOME/auth.json` is the sibling credential/provider ledger. API keys, OAuth tokens, account identity, and active-provider state never move into config output. Nested/AppData auth paths are one-time migration inputs; `settings.toml` is no longer a runtime reader. The Windows installer preserves valid config byte-for-byte and backs up plus materializes the current schema only when the retained file fails validation.
 
@@ -475,7 +475,7 @@ The current validation lane should always prove these slices together:
 - derivative memory rejects transcript replay while citing source sequence ranges
 - heartbeat/evaluator evidence appends redacted non-mutating events
 - auto and provider-overflow compaction write observable checkpoint/event records
-- session JSONL ledgers tolerate malformed and partial suffix rows without rewriting append-only history
+- session JSONL projections stop at one typed valid-prefix boundary, and append refuses malformed or partial current suffix rows without rewriting append-only history
 - context reconstruction reads `session.json`, latest valid `context.jsonl` checkpoint, and `messages.jsonl` through `core/context/builder.zig`
 - explicit prompt-layer configuration fails closed when the configured file is missing or empty
 - the runtime-owned burst/checkpoint/continuation contract survives project prompt overrides
@@ -495,7 +495,7 @@ Latest local Windows validation on 2026-08-12:
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Built and installed SHA-256 both equal
-  `23885BD546F6A663F4DC90F774A153FC0815277BD6F43FE6DA7872D9681E00EC`.
+  `86724BD0346E6B6079BFBA2DD64A2559C359DAED7DA9C7B5D69B98705983C344`.
 - Installed settings transport flipped `runtime.full_access_mode` in an isolated
   workspace, removed all generated state, preserved the live root, and left
   zero VANTARI process.
@@ -616,8 +616,9 @@ Every session — root orchestrator, subagents, past sessions — appends a
 ```
 
 Ownership lives in `src/core/sessions/summaries.zig`: one host-process mutex
-serializes sequence and turn-count allocation, one shared JSONL append primitive
-isolates torn suffixes, and readers select the greatest sequence per session.
+serializes sequence and turn-count allocation, the shared JSONL writer refuses a
+poisoned tail, and the shared prefix reader selects the greatest valid sequence
+per session before the first integrity defect.
 The former keyed `summaries.json` v1 object is imported once only when the v2
 ledger does not exist; it remains an immutable rollback input and is never a
 parallel runtime reader. The executor loop binds `execution_context.session_id`,
@@ -642,6 +643,11 @@ intended separation and are tracked for consolidation.
 ### Prompt doctrine
 
 The system prompt is the steering surface of the harness. VAR1 is capable of anything — chatbot, orchestrator, silent worker — but the prompt determines what it *becomes*. The shipped default makes it a senior engineering orchestrator. An operator can replace the entire behavior via `.var/prompts/system.md` without touching code.
+
+The accepted next profile layer names `orchestrate`, `build`, `align`, and
+`plan`. Roadmap move 43 assigns Shift+Tab cycling and moves 65–66 assign the
+profile prompts and behavior proof. This layer is not shipped yet. It must
+change provider-visible method without changing executor or tool capability.
 
 The prompt embodies behavior; it does not reveal strategy. Internal mechanics (causal chain, context compiler, event spine, kernel architecture) live in this documentation, never in the prompt the model sees. The prompt plays the card; it does not reveal the card.
 

@@ -17,7 +17,7 @@ version: 1.1.0
 | TUI | `apps/backend/src/clients/tui_chat.zig` and `apps/backend/README.md` | Terminal layout, activity rows, footer metadata, streaming, or input work |
 | Docs and records | `.docs/index.md`, `.docs/technical_summary.md`, `.docs/todo/AGENTS.md`, `.docs/changelog/AGENTS.md` | Documentation, planning, changelog, or handoff work |
 | References | `.refs/index.md` | Research, competitor harvest, or reference implementation work |
-| Active roadmap doctrine | `AGENTS.d/extractions/2026-08-12-prompt-led-autonomy.md` and `AGENTS.d/extractions/2026-08-12-subtractive-capability.md` | Every roadmap 24 decision until each extraction is graduated or retired |
+| Active roadmap doctrine | `AGENTS.d/extractions/2026-08-12-prompt-led-autonomy.md`, `AGENTS.d/extractions/2026-08-12-subtractive-capability.md`, `AGENTS.d/extractions/2026-08-12-sequence-addressed-agent-mailbox.md`, and `AGENTS.d/extractions/2026-08-12-prompt-mode-profiles.md` | Every roadmap 24 decision until each extraction is graduated or retired |
 
 ## Loading rule
 

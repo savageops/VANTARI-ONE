@@ -380,7 +380,7 @@ Model discovery normalizes the common LM Studio, vLLM, and llama.cpp response sh
 
 ### Recovery and Process Supervision
 
-Recovery is derived from persisted evidence. JSONL readers retain a valid prefix across BOMs, malformed trailing rows, and duplicate sequence IDs. Session reads reconcile stale `running` state when no execution owner remains. Provider overflow writes a checkpoint and rebuilds context from storage before one bounded retry. Command execution owns process spawn, pipe draining, output ceilings, timeout, cancellation, and termination as one state machine.
+Recovery is derived from persisted evidence. One LF-framed JSONL reader retains the same valid prefix across BOMs, invalid UTF-8, malformed or torn rows, invalid typed schemas, and duplicate or regressing sequence IDs. Append validates the bounded current tail and refuses to write behind poison without truncating evidence. Session reads reconcile stale `running` state when no execution owner remains. Provider overflow writes a checkpoint and rebuilds context from storage before one bounded retry. Command execution owns process spawn, pipe draining, output ceilings, timeout, cancellation, and termination as one state machine.
 
 The invariant is cold-start legibility: after an interrupted process, the next client should be able to explain what completed, what did not, and which transition made that conclusion durable.
 
@@ -553,7 +553,7 @@ The access layer enforces:
 | Empty configured prompt file | Error, not silent fallback |
 | Unknown `[context]` config key | Rejected, not ignored |
 | Crash-interrupted tool topology | Deterministic provider-window repair; transcript remains append-only |
-| Malformed JSONL suffix | Valid prefix retained; corruption surfaced as typed evidence |
+| Malformed JSONL suffix | Valid prefix retained; append refuses to cross the suffix and leaves bytes unchanged. Operator-facing corruption events are not yet projected. |
 | Command output payload exceeds limit | `ToolPayloadExceeded` with repair hints |
 | External search binary absent | Tool reported unavailable at startup, not at invocation |
 | Bridge audit write failure | Action aborted |
@@ -763,7 +763,7 @@ The result is a native runtime with explicit allocation, process, and protocol o
 
 The session store uses the same durability model as database write-ahead logs:
 
-- `messages.jsonl` is the **immutable transcript** — it is never edited, only appended. Crash-interrupted partial rows are tolerated on re-read without rewriting history.
+- `messages.jsonl` is the **immutable transcript** — it is never edited, only appended. One shared reader stops at the first invalid row, and the writer refuses to append behind a poisoned tail without rewriting history.
 - `context.jsonl` is the **checkpoint file** — structured summaries with sequence range coverage, used by the context builder to create model-visible windows without mutating the transcript.
 - `events.jsonl` is the **audit trail** — every state transition, tool lifecycle event, and bridge action has a writer-assigned monotonic sequence. Live `session/event` notifications are emitted only after persistence and carry that exact sequence.
 

@@ -14,12 +14,12 @@ input -> append-only transcript -> context compiler -> provider turn
 
 Every retained subsystem must reduce ambiguity at the call site while increasing guarantees in the core. If a feature cannot identify its owner, state machine, failure class, and recovery evidence, it is not a feature yet.
 
-Roadmap 24 also loads the applied prompt-led-autonomy and subtractive-capability
-extractions in `AGENTS.d/extractions/`. The model and prompt envelope own
-behavioral decisions; the kernel owns capability truth, durability, budgets,
-evidence, recovery, and explicit irreversible-action gates. Evaluate every
-roadmap item, but add code only when consolidation or deletion cannot close the
-canonical consumer path.
+Roadmap 24 loads the applied prompt-led-autonomy, subtractive-capability,
+sequence-addressed-agent-mailbox, and prompt-mode-profile extractions in
+`AGENTS.d/extractions/`. The model and prompt envelope own behavioral decisions;
+the kernel owns capability truth, durability, budgets, evidence, recovery, and
+explicit irreversible-action gates. Evaluate every roadmap item, but add code
+only when consolidation or deletion cannot close the canonical consumer path.
 
 ## I. Runtime Ownership
 
@@ -63,7 +63,8 @@ Canonical session layout:
 - Manual `session/compact` is the only live compaction writer. Auto/background compaction requires proven token accounting, cancellation behavior, idempotent range marks, and cold-start recovery.
 - Compaction is entry-aware. Checkpoints mark `source_seq_start`, `source_seq_end`, `first_kept_seq`, compacted entry count, and `aggressiveness_milli`.
 - Bounded compaction advances over stable JSONL entries. Higher aggressiveness may recompact an already summarized range because the full transcript remains source truth.
-- JSONL readers must preserve valid prefix state across poisoned suffixes, torn writes, BOMs, duplicated sequence IDs, and malformed trailing rows.
+- One shared LF-framed JSONL prefix reader owns BOM handling, strict UTF-8/JSON/schema admission, and monotonic sequence checks. Every projection stops at the first invalid row and preserves the prior valid prefix.
+- JSONL append refuses a poisoned or torn current suffix before writing. Do not silently skip forward, auto-truncate evidence, or add CRC/quarantine sidecars without a measured corruption class the shared owner cannot express.
 
 ## III. Context Compiler Contract
 

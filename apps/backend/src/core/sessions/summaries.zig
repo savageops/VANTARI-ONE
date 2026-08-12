@@ -20,6 +20,7 @@
 const std = @import("std");
 
 const fsutil = @import("../../shared/fsutil.zig");
+const jsonl = @import("../../shared/jsonl.zig");
 
 pub const schema_version = "var1.session_summary.v2";
 pub const max_summary_words: usize = 100;
@@ -164,9 +165,9 @@ pub fn upsertSummary(
     );
 }
 
-/// Parse the append-only ledger into one latest row per session, sorted newest
-/// first. Malformed lines are isolated; valid rows before or after them remain
-/// readable. Caller frees every row and the returned slice.
+/// Parse the append-only ledger's valid prefix into one latest row per session,
+/// sorted newest first. The first malformed or out-of-order row is the shared
+/// recovery boundary. Caller frees every row and the returned slice.
 pub fn listSummaries(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
@@ -217,19 +218,38 @@ fn loadProjectionLocked(allocator: std.mem.Allocator, path: []const u8) !LedgerP
         latest.deinit(allocator);
     }
 
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |raw_line| {
-        var line = std.mem.trim(u8, raw_line, " \t\r");
-        if (std.mem.startsWith(u8, line, "\xEF\xBB\xBF")) line = std.mem.trim(u8, line[3..], " \t\r");
-        if (line.len == 0) continue;
-
-        var parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch continue;
+    var reader = jsonl.PrefixReader.init(allocator, content);
+    while (try reader.next()) |line| {
+        var parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            reader.reject(.invalid_schema);
+            break;
+        };
         defer parsed.deinit();
-        if (parsed.value != .object) continue;
-        const session_value = parsed.value.object.get("session_id") orelse continue;
-        if (session_value != .string or session_value.string.len == 0) continue;
+        if (parsed.value != .object) {
+            reader.reject(.invalid_schema);
+            break;
+        }
+        const session_value = parsed.value.object.get("session_id") orelse {
+            reader.reject(.invalid_schema);
+            break;
+        };
+        if (session_value != .string or session_value.string.len == 0) {
+            reader.reject(.invalid_schema);
+            break;
+        }
 
-        var row = rowFromObject(allocator, session_value.string, parsed.value.object) catch continue;
+        var row = rowFromObject(allocator, session_value.string, parsed.value.object) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            reader.reject(.invalid_schema);
+            break;
+        };
+        if (row.seq == 0) {
+            reader.accept();
+        } else if (!reader.acceptSequence(row.seq)) {
+            row.deinit(allocator);
+            break;
+        }
         if (latest.get(row.session_id)) |existing| {
             if (row.seq <= existing.seq) {
                 row.deinit(allocator);
@@ -301,9 +321,8 @@ const AppendState = struct {
     turn_count: usize = 0,
 };
 
-/// Read only as far backward as needed to find the last sequence and this
-/// session's latest revision. Torn trailing rows are skipped. This keeps the
-/// append path independent of latest-row projection allocation.
+/// Read the same valid prefix used by projections without allocating projected
+/// rows. Refuse mutation when the ledger already has a poisoned boundary.
 fn readAppendStateLocked(
     allocator: std.mem.Allocator,
     path: []const u8,
@@ -316,33 +335,34 @@ fn readAppendStateLocked(
     defer allocator.free(content);
 
     var state = AppendState{};
-    var found_session = false;
-    var end = content.len;
-    while (end > 0) {
-        while (end > 0 and (content[end - 1] == '\n' or content[end - 1] == '\r')) : (end -= 1) {}
-        if (end == 0) break;
-        var start = end;
-        while (start > 0 and content[start - 1] != '\n') : (start -= 1) {}
-
-        var parsed = std.json.parseFromSlice(std.json.Value, allocator, content[start..end], .{}) catch {
-            end = if (start == 0) 0 else start - 1;
-            continue;
+    var reader = jsonl.PrefixReader.init(allocator, content);
+    while (try reader.next()) |line| {
+        var parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            reader.reject(.invalid_schema);
+            break;
         };
         defer parsed.deinit();
-        if (parsed.value == .object) {
-            if (state.max_seq == 0) state.max_seq = uintField(parsed.value.object, "seq", 0);
-            if (!found_session) {
-                if (parsed.value.object.get("session_id")) |value| {
-                    if (value == .string and std.mem.eql(u8, value.string, session_id)) {
-                        state.turn_count = @intCast(uintField(parsed.value.object, "turn_count", 0));
-                        found_session = true;
-                    }
-                }
+        if (parsed.value != .object) {
+            reader.reject(.invalid_schema);
+            break;
+        }
+
+        const seq = uintField(parsed.value.object, "seq", 0);
+        if (seq == 0) {
+            reader.accept();
+        } else if (!reader.acceptSequence(seq)) {
+            break;
+        }
+        if (seq > 0) state.max_seq = seq;
+
+        if (parsed.value.object.get("session_id")) |value| {
+            if (value == .string and std.mem.eql(u8, value.string, session_id)) {
+                state.turn_count = @intCast(uintField(parsed.value.object, "turn_count", 0));
             }
         }
-        if (state.max_seq > 0 and found_session) break;
-        end = if (start == 0) 0 else start - 1;
     }
+    if (reader.issue != null) return error.PoisonedJsonlSuffix;
     return state;
 }
 
@@ -469,15 +489,32 @@ fn rowFromObject(
     session_id: []const u8,
     obj: std.json.ObjectMap,
 ) !SummaryRow {
+    const owned_session_id = try allocator.dupe(u8, session_id);
+    errdefer allocator.free(owned_session_id);
+    const parent_session_id = try dupField(allocator, obj, "parent_session_id");
+    errdefer allocator.free(parent_session_id);
+    const title = try dupField(allocator, obj, "title");
+    errdefer allocator.free(title);
+    const topic = try dupField(allocator, obj, "topic");
+    errdefer allocator.free(topic);
+    const summary = try dupField(allocator, obj, "summary");
+    errdefer allocator.free(summary);
+    const status = try dupField(allocator, obj, "status");
+    errdefer allocator.free(status);
+    const workspace_root = try dupField(allocator, obj, "workspace_root");
+    errdefer allocator.free(workspace_root);
+    const source = try dupField(allocator, obj, "source");
+    errdefer allocator.free(source);
+
     return .{
-        .session_id = try allocator.dupe(u8, session_id),
-        .parent_session_id = try dupField(allocator, obj, "parent_session_id"),
-        .title = try dupField(allocator, obj, "title"),
-        .topic = try dupField(allocator, obj, "topic"),
-        .summary = try dupField(allocator, obj, "summary"),
-        .status = try dupField(allocator, obj, "status"),
-        .workspace_root = try dupField(allocator, obj, "workspace_root"),
-        .source = try dupField(allocator, obj, "source"),
+        .session_id = owned_session_id,
+        .parent_session_id = parent_session_id,
+        .title = title,
+        .topic = topic,
+        .summary = summary,
+        .status = status,
+        .workspace_root = workspace_root,
+        .source = source,
         .seq = uintField(obj, "seq", 0),
         .updated_at_ms = intField(obj, "updated_at_ms", 0),
         .turn_count = @intCast(uintField(obj, "turn_count", 0)),
@@ -691,7 +728,7 @@ test "legacy keyed summary object imports once into sequenced JSONL" {
     try std.testing.expect(fsutil.fileExists(legacy_path));
 }
 
-test "summary append isolates a poisoned suffix and preserves later rows" {
+test "summary append rejects a poisoned suffix and preserves the valid prefix" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -702,16 +739,45 @@ test "summary append isolates a poisoned suffix and preserves later rows" {
     const path = try summariesFilePath(allocator, workspace);
     defer allocator.free(path);
     try fsutil.appendText(path, "{\"schema\":\"var1.session_summary.v2\"");
-    _ = try upsertSummary(allocator, workspace, "after-poison", "", "After", "", "Valid suffix", "completed", "agent", 20);
+    try std.testing.expectError(error.PoisonedJsonlSuffix, upsertSummary(allocator, workspace, "after-poison", "", "After", "", "Hidden suffix", "completed", "agent", 20));
 
     const rows = try listSummaries(allocator, workspace);
     defer {
         for (rows) |*row| row.deinit(allocator);
         allocator.free(rows);
     }
-    try std.testing.expectEqual(@as(usize, 2), rows.len);
-    try std.testing.expectEqualStrings("after-poison", rows[0].session_id);
-    try std.testing.expectEqualStrings("before-poison", rows[1].session_id);
+    try std.testing.expectEqual(@as(usize, 1), rows.len);
+    try std.testing.expectEqualStrings("before-poison", rows[0].session_id);
+}
+
+test "summary projections and append share the duplicate sequence boundary" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    const path = try summariesFilePath(allocator, workspace);
+    defer allocator.free(path);
+    try fsutil.writeText(
+        path,
+        "{\"schema\":\"var1.session_summary.v2\",\"session_id\":\"prefix\",\"summary\":\"visible\",\"seq\":1,\"updated_at_ms\":1,\"turn_count\":1}\n" ++
+            "{\"schema\":\"var1.session_summary.v2\",\"session_id\":\"duplicate\",\"summary\":\"hidden duplicate\",\"seq\":1,\"updated_at_ms\":2,\"turn_count\":1}\n" ++
+            "{\"schema\":\"var1.session_summary.v2\",\"session_id\":\"suffix\",\"summary\":\"hidden suffix\",\"seq\":2,\"updated_at_ms\":3,\"turn_count\":1}\n",
+    );
+
+    const rows = try listSummaries(allocator, workspace);
+    defer {
+        for (rows) |*row| row.deinit(allocator);
+        allocator.free(rows);
+    }
+    try std.testing.expectEqual(@as(usize, 1), rows.len);
+    try std.testing.expectEqualStrings("prefix", rows[0].session_id);
+
+    try std.testing.expectError(
+        error.PoisonedJsonlSuffix,
+        upsertSummary(allocator, workspace, "new", "", "New", "", "must not append", "completed", "agent", 4),
+    );
 }
 
 test "100 concurrent summary upserts retain every latest row and sequence" {

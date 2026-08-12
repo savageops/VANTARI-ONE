@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const jsonl = @import("jsonl.zig");
 
 pub const max_text_file_bytes: usize = 64 * 1024 * 1024;
 
@@ -71,6 +72,7 @@ pub fn appendJsonlRecord(path: []const u8, record: []const u8, sync: bool) !void
     defer file.close();
 
     var end_position = try file.getEndPos();
+    try requireValidJsonlTail(&file, end_position);
     if (end_position > 0) {
         var tail: [1]u8 = undefined;
         if (try file.preadAll(tail[0..], end_position - 1) == 1 and tail[0] != '\n') {
@@ -83,6 +85,37 @@ pub fn appendJsonlRecord(path: []const u8, record: []const u8, sync: bool) !void
     if (sync) try file.sync();
 }
 
+/// Validate a bounded suffix ending on the current tail record. Healthy files
+/// read one small window; a long final record expands only to its LF boundary.
+fn requireValidJsonlTail(file: *std.fs.File, end_position: u64) !void {
+    if (end_position == 0) return;
+
+    var window_bytes: u64 = @min(end_position, 4 * 1024);
+    while (true) {
+        const start_position = end_position - window_bytes;
+        const tail_len = std.math.cast(usize, window_bytes) orelse return error.JsonlTailTooLarge;
+        const tail = try std.heap.page_allocator.alloc(u8, tail_len);
+        defer std.heap.page_allocator.free(tail);
+        const read_count = try file.preadAll(tail, start_position);
+        var first_complete: usize = 0;
+        if (start_position > 0) {
+            first_complete = if (std.mem.indexOfScalar(u8, tail[0..read_count], '\n')) |boundary|
+                boundary + 1
+            else if (window_bytes == end_position or window_bytes >= max_text_file_bytes)
+                return error.JsonlTailTooLarge
+            else {
+                window_bytes = @min(end_position, window_bytes * 2);
+                continue;
+            };
+        }
+
+        var reader = jsonl.PrefixReader.init(std.heap.page_allocator, tail[first_complete..read_count]);
+        while (try reader.next()) |_| reader.accept();
+        if (reader.issue != null) return error.PoisonedJsonlSuffix;
+        return;
+    }
+}
+
 pub fn readTextAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return std.fs.cwd().readFileAlloc(allocator, path, max_text_file_bytes);
 }
@@ -92,7 +125,7 @@ pub fn moveFile(old_path: []const u8, new_path: []const u8) !void {
     try std.fs.cwd().rename(old_path, new_path);
 }
 
-test "appendJsonlRecord isolates a torn suffix and terminates each record" {
+test "appendJsonlRecord rejects a torn suffix without hiding later records" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -100,12 +133,11 @@ test "appendJsonlRecord isolates a torn suffix and terminates each record" {
     defer allocator.free(path);
 
     try appendText(path, "torn");
-    try appendJsonlRecord(path, "{\"seq\":1}", false);
-    try appendJsonlRecord(path, "{\"seq\":2}\n", true);
+    try std.testing.expectError(error.PoisonedJsonlSuffix, appendJsonlRecord(path, "{\"seq\":1}", false));
 
     const content = try readTextAlloc(allocator, path);
     defer allocator.free(content);
-    try std.testing.expectEqualStrings("torn\n{\"seq\":1}\n{\"seq\":2}\n", content);
+    try std.testing.expectEqualStrings("torn", content);
 }
 
 pub fn resolveAbsolute(allocator: std.mem.Allocator, path: []const u8) ![]u8 {

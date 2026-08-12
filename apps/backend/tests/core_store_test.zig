@@ -642,9 +642,7 @@ test "event readers return valid prefix before a corrupted line" {
 
     const latest = try VAR1.core.session_store.readLatestEvent(std.testing.allocator, workspace_root, session.id);
     defer if (latest) |event| event.deinit(std.testing.allocator);
-    // readLatestEvent scans backward, so it skips the poison and finds the valid line.
-    try std.testing.expect(latest != null);
-    try std.testing.expectEqualStrings("assistant_response", latest.?.event_type);
+    try std.testing.expect(latest == null);
 
     // readEvents scans forward and stops at the first corrupted line.
     // The corrupted line is first, so the valid prefix is empty.
@@ -653,7 +651,7 @@ test "event readers return valid prefix before a corrupted line" {
     try std.testing.expectEqual(@as(usize, 0), events.len);
 }
 
-test "store appends lifecycle events after an interrupted partial event row" {
+test "store rejects lifecycle append after an interrupted partial event row" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -667,26 +665,22 @@ test "store appends lifecycle events after an interrupted partial event row" {
     defer std.testing.allocator.free(events_path);
 
     try VAR1.shared.fsutil.appendText(events_path, "{\"event_type\":\"partial\"");
-    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
+    try std.testing.expectError(error.PoisonedJsonlSuffix, VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
         .event_type = "session_recovered",
-        .message = "Recovered after interrupted event write.",
+        .message = "Must not hide behind an interrupted event write.",
         .timestamp_ms = 456,
-    });
+    }));
 
     const raw_events = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, events_path);
     defer std.testing.allocator.free(raw_events);
-    try std.testing.expect(std.mem.indexOf(u8, raw_events, "{\"event_type\":\"partial\"\n{\"event_type\":\"session_recovered\"") != null);
+    try std.testing.expectEqualStrings("{\"event_type\":\"partial\"", raw_events);
 
     const latest = try VAR1.core.session_store.readLatestEvent(std.testing.allocator, workspace_root, session.id);
     defer if (latest) |event| event.deinit(std.testing.allocator);
-    try std.testing.expect(latest != null);
-    try std.testing.expectEqualStrings("session_recovered", latest.?.event_type);
+    try std.testing.expect(latest == null);
 
     const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
-    // readEvents scans forward and stops at the partial line (the first line),
-    // so the valid prefix is empty. The recovery evidence is visible via
-    // readLatestEvent, which scans backward and skips the partial.
     try std.testing.expectEqual(@as(usize, 0), events.len);
 }
 
@@ -796,7 +790,7 @@ test "store seeds and appends canonical session messages on the same session" {
     try std.testing.expectEqualStrings("Follow-up answer", messages[3].content);
 }
 
-test "store preserves append-only message ledger across corrupted and partial rows" {
+test "store preserves message prefix and rejects append behind poison" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -817,20 +811,19 @@ test "store preserves append-only message ledger across corrupted and partial ro
         "{\"id\":\"msg-99\",\"seq\":99,\"role\":\"user\",\"content\":\"poison\",\"timestamp_ms\":99\n" ++
             "{\"id\":\"msg-2\"",
     );
+    const poisoned = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, messages_path);
+    defer std.testing.allocator.free(poisoned);
 
-    try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .assistant, "Recovered append", 200);
+    try std.testing.expectError(error.PoisonedJsonlSuffix, VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .assistant, "Hidden append", 200));
 
     const after = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, messages_path);
     defer std.testing.allocator.free(after);
     try std.testing.expect(std.mem.startsWith(u8, after, before));
-    try std.testing.expect(std.mem.indexOf(u8, after, "{\"id\":\"msg-2\"\n{\"id\":\"msg-2\",\"seq\":2") != null);
+    try std.testing.expectEqualSlices(u8, poisoned, after);
 
     const messages = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, session.id);
     defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, messages);
 
-    // readSessionMessages scans forward and stops at the first poisoned line.
-    // The valid prefix is only the initial message (msg-1). The poison row and
-    // the recovered append exist on disk but are past the poison boundary.
     try std.testing.expectEqual(@as(usize, 1), messages.len);
     try std.testing.expectEqualStrings("msg-1", messages[0].id);
     try std.testing.expectEqual(@as(u64, 1), messages[0].seq);
@@ -894,7 +887,7 @@ test "store appends context checkpoints and reads the latest valid entry" {
     try std.testing.expectEqualStrings("Latest summary.", latest.?.summary);
 }
 
-test "store appends checkpoints after a partial context row without poisoning latest valid checkpoint" {
+test "store rejects checkpoint append after a partial context row" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -914,21 +907,23 @@ test "store appends checkpoints after a partial context row without poisoning la
     defer std.testing.allocator.free(before);
 
     try VAR1.shared.fsutil.appendText(context_path, "{\"id\":\"ctx-partial\"");
+    const poisoned = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, context_path);
+    defer std.testing.allocator.free(poisoned);
 
     var second = try makeContextCheckpoint(std.testing.allocator, "ctx-2", 4, 5, "Recovered summary.");
     defer second.deinit(std.testing.allocator);
-    try VAR1.core.session_store.appendContextCheckpoint(std.testing.allocator, workspace_root, session.id, second);
+    try std.testing.expectError(error.PoisonedJsonlSuffix, VAR1.core.session_store.appendContextCheckpoint(std.testing.allocator, workspace_root, session.id, second));
 
     const after = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, context_path);
     defer std.testing.allocator.free(after);
     try std.testing.expect(std.mem.startsWith(u8, after, before));
-    try std.testing.expect(std.mem.indexOf(u8, after, "{\"id\":\"ctx-partial\"\n{\"id\":\"ctx-2\"") != null);
+    try std.testing.expectEqualSlices(u8, poisoned, after);
 
     const latest = try VAR1.core.session_store.readLatestContextCheckpoint(std.testing.allocator, workspace_root, session.id);
     defer if (latest) |value| value.deinit(std.testing.allocator);
     try std.testing.expect(latest != null);
-    try std.testing.expectEqualStrings("ctx-2", latest.?.id);
-    try std.testing.expectEqualStrings("Recovered summary.", latest.?.summary);
+    try std.testing.expectEqualStrings("ctx-1", latest.?.id);
+    try std.testing.expectEqualStrings("Older summary.", latest.?.summary);
 }
 
 test "context builder emits latest summary plus recent raw transcript" {
@@ -1761,7 +1756,7 @@ test "session message writers serialize 100 concurrent appends per session" {
     for (seen_sequences[1..]) |seen| try std.testing.expect(seen);
 }
 
-test "message sequence initializes from the valid tail after a poisoned prefix" {
+test "message append rejects a valid-looking tail behind a poisoned prefix" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -1776,22 +1771,18 @@ test "message sequence initializes from the valid tail after a poisoned prefix" 
     try seeded.appendSlice("{\"id\":\"msg-900\",\"seq\":900,\"role\":\"user\",\"content\":\"seed\",\"timestamp_ms\":900}\n");
     try VAR1.shared.fsutil.writeText(messages_path, seeded.items);
 
-    try VAR1.core.session_store.appendSessionMessage(
+    try std.testing.expectError(error.PoisonedJsonlSuffix, VAR1.core.session_store.appendSessionMessage(
         std.testing.allocator,
         workspace_root,
         "message-tail",
         .assistant,
         "tail append",
         901,
-    );
+    ));
 
     const raw = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, messages_path);
     defer std.testing.allocator.free(raw);
-    try std.testing.expect(std.mem.endsWith(
-        u8,
-        raw,
-        "{\"id\":\"msg-901\",\"seq\":901,\"role\":\"assistant\",\"content\":\"tail append\",\"timestamp_ms\":901}\n",
-    ));
+    try std.testing.expectEqualSlices(u8, seeded.items, raw);
 }
 
 test "event seq survives cold start and continues monotonically" {
@@ -1835,7 +1826,7 @@ test "event seq survives cold start and continues monotonically" {
     try std.testing.expectEqual(@as(u64, 3), events_after[2].seq);
 }
 
-test "event seq continues correctly after a torn write" {
+test "event append rejects a torn write and keeps latest in the valid prefix" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -1857,13 +1848,11 @@ test "event seq continues correctly after a torn write" {
     defer std.testing.allocator.free(events_path);
     try VAR1.shared.fsutil.appendText(events_path, "{\"event_type\":\"partial\"");
 
-    // Append another event. The tail-scan must skip the partial line and
-    // find seq=1 from the valid event, so the new event gets seq=2.
-    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
+    try std.testing.expectError(error.PoisonedJsonlSuffix, VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
         .event_type = "session_recovered",
-        .message = "after torn write",
+        .message = "must not hide behind torn write",
         .timestamp_ms = 200,
-    });
+    }));
 
     const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
@@ -1873,13 +1862,11 @@ test "event seq continues correctly after a torn write" {
     try std.testing.expectEqual(@as(usize, 1), events.len);
     try std.testing.expectEqual(@as(u64, 1), events[0].seq);
 
-    // But readLatestEvent scans backward, skips the partial, and returns the
-    // recovered event with seq=2.
     const latest = try VAR1.core.session_store.readLatestEvent(std.testing.allocator, workspace_root, session.id);
     defer if (latest) |event| event.deinit(std.testing.allocator);
     try std.testing.expect(latest != null);
-    try std.testing.expectEqualStrings("session_recovered", latest.?.event_type);
-    try std.testing.expectEqual(@as(u64, 2), latest.?.seq);
+    try std.testing.expectEqualStrings("session_started", latest.?.event_type);
+    try std.testing.expectEqual(@as(u64, 1), latest.?.seq);
 }
 
 test "readEvents stops at poisoned suffix and returns valid prefix" {
@@ -2029,6 +2016,129 @@ test "readEvents stops at invalid UTF-8 bytes and returns valid prefix" {
     // acts as a poisoned boundary.
     try std.testing.expectEqual(@as(usize, 1), events.len);
     try std.testing.expectEqualStrings("session_started", events[0].event_type);
+}
+
+test "event projections stop at the same duplicate sequence boundary" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "duplicate event seq");
+    defer session.deinit(std.testing.allocator);
+
+    const events_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", session.id, "events.jsonl" });
+    defer std.testing.allocator.free(events_path);
+    try VAR1.shared.fsutil.writeText(
+        events_path,
+        "{\"event_type\":\"session_started\",\"message\":\"prefix\",\"timestamp_ms\":1,\"seq\":1}\n" ++
+            "{\"event_type\":\"assistant_delta\",\"message\":\"duplicate\",\"timestamp_ms\":2,\"seq\":1}\n" ++
+            "{\"event_type\":\"turn_finished\",\"message\":\"hidden\",\"timestamp_ms\":3,\"seq\":2}\n",
+    );
+
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
+    try std.testing.expectEqual(@as(usize, 1), events.len);
+    try std.testing.expectEqualStrings("prefix", events[0].message);
+
+    const latest = try VAR1.core.session_store.readLatestEvent(std.testing.allocator, workspace_root, session.id);
+    defer if (latest) |event| event.deinit(std.testing.allocator);
+    try std.testing.expect(latest != null);
+    try std.testing.expectEqual(@as(u64, 1), latest.?.seq);
+    try std.testing.expectEqualStrings("prefix", latest.?.message);
+
+    const suffix = try VAR1.core.session_store.readEventsAfterSeq(std.testing.allocator, workspace_root, session.id, 0);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, suffix);
+    try std.testing.expectEqual(@as(usize, 1), suffix.len);
+    try std.testing.expectEqualStrings("prefix", suffix[0].message);
+}
+
+test "message projection stops at a duplicate sequence boundary" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "duplicate message seq");
+    defer session.deinit(std.testing.allocator);
+
+    const messages_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", session.id, "messages.jsonl" });
+    defer std.testing.allocator.free(messages_path);
+    try VAR1.shared.fsutil.writeText(
+        messages_path,
+        "{\"id\":\"msg-1\",\"seq\":1,\"role\":\"user\",\"content\":\"prefix\",\"timestamp_ms\":1}\n" ++
+            "{\"id\":\"msg-duplicate\",\"seq\":1,\"role\":\"assistant\",\"content\":\"duplicate\",\"timestamp_ms\":2}\n" ++
+            "{\"id\":\"msg-2\",\"seq\":2,\"role\":\"assistant\",\"content\":\"hidden\",\"timestamp_ms\":3}\n",
+    );
+
+    const messages = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, session.id);
+    defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, messages);
+    try std.testing.expectEqual(@as(usize, 1), messages.len);
+    try std.testing.expectEqualStrings("msg-1", messages[0].id);
+    try std.testing.expectEqualStrings("prefix", messages[0].content);
+}
+
+test "context projections share BOM and poisoned prefix handling" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "context poison");
+    defer session.deinit(std.testing.allocator);
+
+    const context_path = try VAR1.core.session_store.contextFilePath(std.testing.allocator, workspace_root, session.id);
+    defer std.testing.allocator.free(context_path);
+    try VAR1.shared.fsutil.writeText(
+        context_path,
+        "\xEF\xBB\xBF" ++
+            "{\"id\":\"cp-1\",\"type\":\"summary_checkpoint\",\"created_at_ms\":1,\"source_seq_start\":1,\"source_seq_end\":1,\"first_kept_seq\":1,\"trigger\":\"manual\",\"summary\":\"prefix\"}\n" ++
+            "{malformed}\n" ++
+            "{\"id\":\"cp-2\",\"type\":\"summary_checkpoint\",\"created_at_ms\":2,\"source_seq_start\":2,\"source_seq_end\":2,\"first_kept_seq\":2,\"trigger\":\"manual\",\"summary\":\"hidden\"}\n",
+    );
+
+    const checkpoints = try VAR1.core.session_store.readAllContextCheckpoints(std.testing.allocator, workspace_root, session.id);
+    defer {
+        for (checkpoints) |checkpoint| checkpoint.deinit(std.testing.allocator);
+        std.testing.allocator.free(checkpoints);
+    }
+    try std.testing.expectEqual(@as(usize, 1), checkpoints.len);
+    try std.testing.expectEqualStrings("cp-1", checkpoints[0].id);
+
+    const latest = try VAR1.core.session_store.readLatestContextCheckpoint(std.testing.allocator, workspace_root, session.id);
+    defer if (latest) |checkpoint| checkpoint.deinit(std.testing.allocator);
+    try std.testing.expect(latest != null);
+    try std.testing.expectEqualStrings("cp-1", latest.?.id);
+}
+
+test "session ledger append rejects a torn suffix without hiding a new row" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "reject torn append");
+    defer session.deinit(std.testing.allocator);
+
+    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
+        .event_type = "session_started",
+        .message = "prefix",
+        .timestamp_ms = 1,
+    });
+    const events_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", session.id, "events.jsonl" });
+    defer std.testing.allocator.free(events_path);
+    try VAR1.shared.fsutil.appendText(events_path, "{\"event_type\":\"torn\"");
+    const poisoned = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, events_path);
+    defer std.testing.allocator.free(poisoned);
+
+    try std.testing.expectError(error.PoisonedJsonlSuffix, VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
+        .event_type = "turn_finished",
+        .message = "must not hide behind poison",
+        .timestamp_ms = 2,
+    }));
+    const after = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, events_path);
+    defer std.testing.allocator.free(after);
+    try std.testing.expectEqualSlices(u8, poisoned, after);
 }
 
 test "readSessionMessages stops at invalid UTF-8 bytes and returns valid prefix" {
@@ -3463,56 +3573,6 @@ test "stdout and stderr bytes survive canonical event ledger round-trip" {
     try std.testing.expect(std.mem.indexOf(u8, raw, "AIDigKj/") != null);
     try std.testing.expect(std.mem.indexOf(u8, raw, "/wE=") != null);
     try std.testing.expect(std.mem.indexOf(u8, raw, "bytes_b64") == null);
-}
-
-// =============================================================================
-// P0-12c: CRC per-line checksums
-// =============================================================================
-
-test "computeLineCrc32 produces deterministic hash for JSON content" {
-    const line = "{\"event_type\":\"test\",\"message\":\"hello\"}";
-    const crc = VAR1.core.session_store.computeLineCrc32(line);
-    // Same input must produce same CRC.
-    try std.testing.expectEqual(crc, VAR1.core.session_store.computeLineCrc32(line));
-    // Different input must produce different CRC.
-    const different = "{\"event_type\":\"test\",\"message\":\"world\"}";
-    try std.testing.expect(crc != VAR1.core.session_store.computeLineCrc32(different));
-}
-
-test "verifyLineCrc32 returns null for legacy entries without crc32 field" {
-    const line = "{\"event_type\":\"test\",\"message\":\"no crc here\"}";
-    const result = VAR1.core.session_store.verifyLineCrc32(line);
-    try std.testing.expect(result == null);
-}
-
-test "verifyLineCrc32 returns true for valid checksum and false for tampered" {
-    // Build a line with a valid CRC. The CRC is computed over the content
-    // WITHOUT the crc32 field and WITHOUT the closing brace (which is where
-    // the crc32 field is inserted).
-    const content_without_brace = "{\"event_type\":\"test\",\"message\":\"verify me\"";
-    const crc = VAR1.core.session_store.computeLineCrc32(content_without_brace);
-    const line_with_crc = try std.fmt.allocPrint(
-        std.testing.allocator,
-        "{s},\"crc32\":\"{x}\"}}",
-        .{ content_without_brace, crc },
-    );
-    defer std.testing.allocator.free(line_with_crc);
-
-    // Valid CRC must verify true.
-    const valid = VAR1.core.session_store.verifyLineCrc32(line_with_crc);
-    try std.testing.expect(valid != null);
-    try std.testing.expect(valid.?);
-
-    // Tampered line (different content, same CRC) must verify false.
-    const tampered = try std.fmt.allocPrint(
-        std.testing.allocator,
-        "{{\"event_type\":\"test\",\"message\":\"TAMPERED\",\"crc32\":\"{x}\"}}",
-        .{crc},
-    );
-    defer std.testing.allocator.free(tampered);
-    const invalid = VAR1.core.session_store.verifyLineCrc32(tampered);
-    try std.testing.expect(invalid != null);
-    try std.testing.expect(!invalid.?);
 }
 
 // =============================================================================

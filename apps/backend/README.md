@@ -307,7 +307,7 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Message transcript writer | **Source and installed proven** | One per-session owner serializes every message role and initializes sequence from a bounded valid tail. Multi-process writer ownership remains coupled to the persistent-host work. |
 | Child branch/convergence | **In-process proven** | Fixed-pool convergence works while the kernel lives; process restart marks running receipts stale instead of resuming a worker. |
 | Write-intent ledger | **Frontier scaffold** | Reserve/commit helpers and tests exist; write-capable tools do not call them on the canonical mutation path. |
-| Byte-level session integrity | **Partial** | Readers salvage valid prefixes and malformed tails; the complete invalid-UTF-8 and duplicate-sequence contract remains a promotion target. |
+| Byte-level session integrity | **Source and installed proven** | One LF-only reader owns BOM, invalid-UTF-8, JSON/schema, duplicate, and non-monotonic boundaries across event/message/context/intent/summary projections. Append refuses a poisoned current tail without rewriting it; operator-facing corruption events remain a later diagnostics decision. |
 | Context compiler | **Shipped source path** | One builder compiles transcript plus checkpoint state and validates tool topology before provider dispatch. |
 | Compaction | **Manual writer shipped** | Entry-aware checkpoints exist; autonomous/background compaction remains gated. |
 | TTSR stream rules | **Detection only** | The callback records an abort request, but current provider streaming completes before correction and retry. |

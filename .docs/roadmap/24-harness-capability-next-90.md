@@ -6,7 +6,7 @@ updated: 2026-08-12
 owner: .docs/roadmap/24-harness-capability-next-90.md
 source: ../research/2026-08-12-full-harness-sitrep.md
 exit_criteria: All P0 moves are proven through the installed Windows owner path; later moves advance only when their dependency band is green.
-governing_doctrine: AGENTS.d/extractions/2026-08-12-prompt-led-autonomy.md, AGENTS.d/extractions/2026-08-12-subtractive-capability.md, AGENTS.d/extractions/2026-08-12-sequence-addressed-agent-mailbox.md
+governing_doctrine: AGENTS.d/extractions/2026-08-12-prompt-led-autonomy.md, AGENTS.d/extractions/2026-08-12-subtractive-capability.md, AGENTS.d/extractions/2026-08-12-sequence-addressed-agent-mailbox.md, AGENTS.d/extractions/2026-08-12-prompt-mode-profiles.md
 ---
 
 # Harness capability — next 90 moves
@@ -62,8 +62,9 @@ advance the queue until the real installed consumer path proves it.
 | 14 | consolidate | closed | `var1.session_event_notification.v1` carries the exact stored `seq`; every live producer persists before emission. Two identical same-millisecond source events retained distinct envelope sequences, the 1,932-test graph and ReleaseFast 9/9 pass, and installed `session/send` emitted four unique monotonic notifications ending on the same stored `turn_finished` sequence. |
 | 15 | delete/consolidate | closed | The tracked TUI advances only by exact `events.jsonl` sequence; the 512-entry timestamp/type/text cache and periodic full-event reconciliation are deleted. Identical events at one timestamp render twice, replay renders neither twice, sequence gaps fetch only the durable suffix, the 1,934-test graph and ReleaseFast 9/9 pass, and the installed binary returns exactly sequences 2–4 after `after_seq=1`. |
 | 16 | delete/consolidate | closed | One typed serializer owns raw command-byte encoding; the hand-rendered output JSON and unused top-level `bytes_b64` path are deleted. The 1,936-test graph and ReleaseFast 9/9 pass. Installed replay returned contiguous event sequences 2–12, reconstructed stdout `0080E280A8FF` and capped stderr `FF010080E280A8FE`, decoded the ledger as strict UTF-8, and left zero processes. No spill-file subsystem was added. |
+| 17 | delete/consolidate | closed | One shared LF-only `PrefixReader` now owns BOM, UTF-8, JSON/schema, and strictly increasing sequence boundaries for events, messages, context, intents, and summaries; append refuses a poisoned current suffix without rewriting bytes. The graph passes 19/19 and 1,944/1,944; ReleaseFast and installed SHA-256 equal `86724BD0346E6B6079BFBA2DD64A2559C359DAED7DA9C7B5D69B98705983C344`. Installed `session/get` returned one-row event/message prefixes before duplicate/torn rows, and cancellation could not append behind poison. A full live-root audit found and reversibly quarantined 877 legacy test-fixture sessions, then verified 29,937 ledgers / 1,417,061 rows / 235,074,120 bytes with zero integrity defects. CRC, sidecars, auto-truncation, and a repair daemon were deleted from the design. |
 | 31 | delete/consolidate | closed | Retired prompt leak and brittle prose assertions removed; broad graph green. |
-| 38 | consolidate | closed | ReleaseFast and `%LOCALAPPDATA%/Vantari/bin/vantari.exe` share SHA-256 `23885BD546F6A663F4DC90F774A153FC0815277BD6F43FE6DA7872D9681E00EC`; installer and isolated installed smokes exit cleanly. |
+| 38 | consolidate | closed | Latest ReleaseFast and `%LOCALAPPDATA%/Vantari/bin/vantari.exe` share SHA-256 `86724BD0346E6B6079BFBA2DD64A2559C359DAED7DA9C7B5D69B98705983C344`; installer and isolated installed smokes exit cleanly. Historical replacement hashes remain in the changelog. |
 
 ## Competitive basis
 
@@ -151,9 +152,9 @@ advance the queue until the real installed consumer path proves it.
 | # | Next move | Owner and terminal proof |
 |---:|---|---|
 | 41 | Render the footer and agent rows only from sequence-bearing events and canonical summaries. | `clients/tui_chat.zig`; replay equals live view. |
-| 42 | Make the composer slightly lighter than transcript background and lighter than its metadata row using design tokens. | TUI theme/tokens; narrow and wide visual snapshots. |
-| 43 | Remove persistent `Esc cancel` copy; expose cancellation only when interaction makes it relevant. | composer/footer; no wasted steady-state width. |
-| 44 | Keep one compact row for status, model, effort, context used/capacity/percent, and remaining context. | footer; graceful truncation without wrap. |
+| 42 | Make the composer slightly lighter than transcript background and lighter than its metadata row using design tokens; remove persistent `Esc cancel` copy and expose cancellation only when relevant. | TUI theme/composer; narrow and wide snapshots with no wasted steady-state width. |
+| 43 | Let Shift+Tab cycle session-scoped `orchestrate`, `build`, `align`, and `plan` prompt profiles; default to `orchestrate` and apply the selected hot-loaded layer on the next turn. | TUI plus prompt builder; provider-visible prompt capture proves method changes without executor or capability branches. |
+| 44 | Keep one compact row for status, active prompt mode, model, effort, context used/capacity/percent, and remaining context. | footer; graceful truncation without wrap. |
 | 45 | Add active/max agents, nonzero queue, and known session cost only when those values carry signal. | footer read model; no status forest. |
 | 46 | Render context as unknown after compaction or incomplete provider accounting instead of fabricated precision. | context telemetry; explicit unknown state snapshot. |
 | 47 | Render the group row as `Agents completed/total`; remove `waiting on N` filler. | child-group projection; all lifecycle snapshots. |
@@ -184,8 +185,8 @@ advance the queue until the real installed consumer path proves it.
 | 62 | Complete write-intent reserve, effect commit, and abandoned-intent reconciliation through real write tools. | tool runtime; cold start resolves every nonterminal intent. |
 | 63 | Wire ticket, quota, and scheduler policy keys into the one state machine or delete the dead keys and docs. | config/tickets/scheduler; no decorative control. |
 | 64 | Make tickets the only work lifecycle; keep summaries, plans, research, and changelog as ticket-linked artifacts. | prompts/tools/work state; remove `todo_slice` and `session_record` lifecycle duplication. |
-| 65 | Keep behavior in hot-loaded system/developer/persona/guardrail/context layers and native tool schemas as API truth; include collaboration cadence, challenge posture, wake posture, and nesting there; demand-load examples, availability detail, and skills. | prompt builder/registry; no duplicate behavioral policy or full catalog. |
-| 66 | Add prompt-token budgets and behavior-profile tests by provider, tool set, and skill route. | context compiler tests; terse/detailed, solo/orchestrated, conservative/aggressive, and update-cadence profiles change behavior without executor branches. |
+| 65 | Keep behavior in hot-loaded system/developer/persona/guardrail/context/profile layers and native tool schemas as API truth; define `orchestrate`, `build`, `align`, and `plan` there, including collaboration cadence, challenge/wake posture, nesting, question method, and ticket-planning posture; demand-load examples, availability detail, and skills. | prompt builder/registry; no duplicate behavioral policy, executor mode branch, or full catalog. |
+| 66 | Add prompt-token budgets and behavior-profile tests by provider, tool set, skill route, and active mode. | context compiler tests; named modes plus terse/detailed, solo/orchestrated, conservative/aggressive, and update-cadence profiles change behavior without executor branches. |
 | 67 | Add stable message IDs and explicit compaction source/kept sequence ranges before automatic compaction. | sessions/context ledgers; checkpoint identity survives edits and replay. |
 | 68 | Separate exact, estimated, and unknown token accounting; expose capacity and remaining only at the proven precision. | provider usage/context telemetry; no false number. |
 | 69 | Emit typed context-compile diagnostics and rebuild overflow recovery only through the compiler. | `core/context`; no in-memory duplicate tool batches. |
@@ -223,7 +224,7 @@ advance the queue until the real installed consumer path proves it.
 
 ## Immediate frontier
 
-Start at move 1. Moves 1-20 are the non-negotiable integrity floor. Moves 21-30
+Start at move 18. Moves 1-20 are the non-negotiable integrity floor. Moves 21-30
 turn the current in-process pool into the persistent system the operator asked
 for. Do not spend implementation time on PLUG, context sharding, or autonomous
 repair while either band remains red.

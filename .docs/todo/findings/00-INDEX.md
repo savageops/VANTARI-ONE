@@ -8,7 +8,7 @@ source: ../../research/2026-08-12-full-harness-sitrep.md
 
 # Harness readiness findings
 
-This ledger converts the full-harness SITREP into executable work. Closed work now owns request lifetime, test roots, summary writes, per-session message sequencing, exact event sequence transport, and exact shipped-TUI replay. The remaining convergent root cause is process-local ownership presented as durable ownership: agent workers, scheduler leadership, and multi-process writer authority still lose exact ownership at a process boundary; shared byte-integrity recovery remains incomplete.
+This ledger converts the full-harness SITREP into executable work. Closed work now owns request lifetime, test roots, summary writes, per-session message sequencing, exact event sequence transport, exact shipped-TUI replay, and one shared valid-prefix ledger contract. The remaining convergent root cause is process-local ownership presented as durable ownership: agent workers, scheduler leadership, and multi-process writer authority still lose exact ownership at a process boundary; the ledger finding remains open only for the 100-way adversarial mesh.
 
 [`../../roadmap/24-harness-capability-next-90.md`](../../roadmap/24-harness-capability-next-90.md) expands this ledger into the current 90-move execution order. This findings index remains the immediate P0/P1/P2 authority; roadmap 24 sequences the downstream capability and friction-removal work behind it.
 
@@ -19,7 +19,7 @@ Execute one item at a time in priority and numeric order. Do not start PLUG, TUI
 | 10 | P0 | [Kernel lifetime and RPC admission](10-kernel-lifetime-and-rpc-admission.md) | host/stdio client and server | closed 2026-08-12 |
 | 11 | P0 | [Persistent agent worker and scheduler arbitration](11-persistent-agent-worker-and-scheduler-arbitration.md) | agents, scheduler, host | pending |
 | 12 | P0 | [Test isolation and runtime hygiene](12-test-isolation-and-runtime-hygiene.md) | build/test root, install/state hygiene | closed 2026-08-12 |
-| 13 | P0 | [Concurrent ledgers and replay identity](13-concurrent-ledgers-and-replay-identity.md) | sessions, protocol, TUI cursor | pending |
+| 13 | P0 | [Concurrent ledgers and replay identity](13-concurrent-ledgers-and-replay-identity.md) | sessions, protocol, TUI cursor | pending — move 20 only |
 | 20 | P1 | [Tool capability truth](20-tool-capability-truth.md) | eval, DAP, TTSR, search, capability probes | pending |
 | 21 | P1 | [Work-state and prompt consolidation](21-work-state-and-prompt-consolidation.md) | tickets, workspace tools, prompt builder | pending |
 | 22 | P1 | [Documentation and WIP truth](22-documentation-and-wip-truth.md) | project records, public docs, 021/035/036/PLUG | pending |

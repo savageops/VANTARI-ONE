@@ -36,6 +36,12 @@ minimum matrix covers terse/detailed, solo/orchestrated,
 conservative/aggressive, and low/high update cadence. Runtime logic is valid
 only when prompting cannot enforce the capability boundary.
 
+The accepted prompt-mode contract names `orchestrate`, `build`, `align`, and
+`plan`, with `orchestrate` as the default. Shift+Tab cycling and provider-visible
+profile proof are assigned to roadmap moves 43 and 65–66; they are not shipped
+in the current TUI. A mode changes one hot-loaded prompt layer, not executor or
+tool capability.
+
 ## Durable execution
 
 ```text
@@ -54,6 +60,13 @@ the bounded summary ledger used by session navigation and child-agent activity.
 Each update appends one stable sequence; readers project the greatest sequence
 per session. One host-process mutex owns mutation, and the former keyed v1
 object is a one-time migration input only.
+
+`shared/jsonl.zig:PrefixReader` owns one LF-framed valid-prefix boundary for
+events, messages, context checkpoints, write intents, and summaries. It handles
+a leading BOM, validates UTF-8 and JSON before typed schema parsing, rejects
+duplicate or non-monotonic sequences, and stops every projection at the first
+defect. `fsutil.appendJsonlRecord` checks the current bounded tail through the
+same owner and refuses poison without truncating or appending behind it.
 
 ## Buffered ticket execution
 
@@ -104,7 +117,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,936/1,936 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,944/1,944 tests with zero skips.
   Its 224-test host lane executes the formerly dormant stdio client/server and
   shared process-tree tests; the backend TUI lane passes 59/59.
 - Parent-shell production-home probes kept 99,960 files, 693,051,144 bytes,
@@ -126,6 +139,14 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   `67CAC4665502DE0ABEC1FA59783DDE09F792DF6BE684CEBBEBBC24868FFA7B2F`
   plus rollback are retained. `zigw.ps1` and `zigw.sh` now isolate direct
   `zig test` invocations as well as the build graph.
+- A full production-ledger audit then found 877 older initialized
+  `context.jsonl` poison fixtures with no retained parent, continuation,
+  summary, or changelog ownership. Whole-session quarantine and rollback live at
+  `C:\Users\Savage\.vantari-quarantine\2026-08-12-legacy-context-poison-fixtures`;
+  manifest SHA-256 is
+  `43FCC3A9530D204B77FF9B37D4534909563628A9EFA2F396F90FDC927811A9BC`.
+  The repaired root reads 29,937 ledgers / 1,417,061 rows / 235,074,120 bytes
+  with zero UTF-8, JSON, duplicate-sequence, or ordering defects.
 - `Server` owns one bounded four-worker/32-request executor. Local RPC calls use
   method deadlines and discard late responses. One shared Windows Job Object
   owns child trees; graceful exit, forced termination, and reader drain are
@@ -151,8 +172,13 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   serializer. The hand-rendered JSON and unused top-level `bytes_b64` projection
   are deleted. Source replay preserves NUL, invalid UTF-8, U+2028 bytes, and 0xFF;
   no payload-file subsystem was added under the existing 64 KiB stream cap.
+- Event latest/all/suffix, message, context, intent, and summary projections now
+  share one typed valid-prefix reader. Installed replay stopped before duplicate
+  and torn rows, and append refusal preserved the poisoned 107-byte ledger
+  exactly. No CRC fields, sidecar quarantine ledger, auto-truncation path, or
+  repair daemon was added.
 - Built and installed ReleaseFast SHA-256 both equal
-  `23885BD546F6A663F4DC90F774A153FC0815277BD6F43FE6DA7872D9681E00EC`.
+  `86724BD0346E6B6079BFBA2DD64A2559C359DAED7DA9C7B5D69B98705983C344`.
 - Installed `session/send` against a disposable local provider imported all
   1,176 legacy summary rows, appended one terminal v2 row, retained 1,177
   unique sequences, wrote contiguous unique `user,assistant,tool,assistant`
@@ -164,9 +190,9 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - The installed settings smoke flips `runtime.full_access_mode` to `true` in a
   disposable workspace, receives `var1.config_set.v1` in 5 ms, removes the
   isolated runtime, preserves the complete live root, and leaves zero process.
-- Moves 5–16 and finding 10 are closed. Finding 13 is narrowed to shared
-  byte-integrity and adversarial burst work; persistent agent execution and
-  inter-process scheduler arbitration remain P0.
+- Moves 5–17 and finding 10 are closed. Finding 13 is narrowed to move 20's
+  adversarial burst mesh; persistent agent execution and inter-process scheduler
+  arbitration remain P0.
 - The hive direction is assigned to moves 21–30 and finding 11. The target is
   one durable direct/group/parent mailbox over session/event ownership,
   selective summary/artifact awareness, and nested normal sessions. No general

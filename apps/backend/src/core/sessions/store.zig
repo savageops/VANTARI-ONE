@@ -1,5 +1,6 @@
 const std = @import("std");
 const fsutil = @import("../../shared/fsutil.zig");
+const jsonl_reader = @import("../../shared/jsonl.zig");
 const types = @import("../../shared/types.zig");
 
 /// Batched durability gate. Per-append `file.sync()` on Windows is
@@ -61,45 +62,6 @@ fn syncLedgerPath(path: []const u8) void {
     ledger_sync_mutex.lock();
     defer ledger_sync_mutex.unlock();
     last_ledger_sync_ms = std.time.milliTimestamp();
-}
-
-/// Strip a leading UTF-8 BOM (\xEF\xBB\xBF) from a byte slice.  Some editors
-/// and Windows tools prepend a BOM to JSONL files; without stripping, the first
-/// line's JSON parse silently fails and the first record is lost.
-fn stripUtf8Bom(content: []const u8) []const u8 {
-    const bom = "\xEF\xBB\xBF";
-    if (std.mem.startsWith(u8, content, bom)) return content[bom.len..];
-    return content;
-}
-
-/// Compute a CRC32 checksum for a JSONL line, to be embedded as a `"crc32"`
-/// field for tamper detection (roadmap P0-12c). The CRC is computed over the
-/// line content excluding the crc32 field itself. The caller appends the
-/// result as `,"crc32":"{hex}"` before the closing `}`.
-pub fn computeLineCrc32(line: []const u8) u32 {
-    return std.hash.Crc32.hash(line);
-}
-
-/// Verify a JSONL line's CRC32 field against its content. Returns true if the
-/// CRC matches, false if it doesn't (tamper/corruption), or null if no CRC32
-/// field is present (legacy entry — skip verification).
-pub fn verifyLineCrc32(line: []const u8) ?bool {
-    // Find the crc32 field in the line.
-    const marker = "\"crc32\":\"";
-    const crc_start = std.mem.indexOf(u8, line, marker) orelse return null;
-    const value_start = crc_start + marker.len;
-    const value_end = std.mem.indexOf(u8, line[value_start..], "\"") orelse return null;
-
-    // The content to verify is everything before the `,"crc32":"..."` field.
-    // We strip back to the comma before crc32.
-    const content_end = if (crc_start > 0 and line[crc_start - 1] == ',')
-        crc_start - 1
-    else
-        crc_start;
-
-    const expected_crc = std.fmt.parseInt(u32, line[value_start .. value_start + value_end], 16) catch return false;
-    const actual_crc = computeLineCrc32(line[0..content_end]);
-    return actual_crc == expected_crc;
 }
 
 pub const InitSessionOptions = struct {
@@ -306,7 +268,7 @@ pub fn readSessionRecord(
 
     const raw_content = try fsutil.readTextAlloc(allocator, session_path);
     defer allocator.free(raw_content);
-    const content = stripUtf8Bom(raw_content);
+    const content = jsonl_reader.stripBom(raw_content);
 
     var parsed = try std.json.parseFromSlice(ParsedSessionRecord, allocator, content, .{
         .ignore_unknown_fields = true,
@@ -628,6 +590,27 @@ fn sessionLedgerState(workspace_root: []const u8, session_id: []const u8) !*Sess
     return state;
 }
 
+fn cloneParsedSessionEvent(allocator: std.mem.Allocator, parsed: ParsedSessionEvent) !types.SessionEvent {
+    const event_type = try allocator.dupe(u8, parsed.event_type);
+    errdefer allocator.free(event_type);
+    const message = try allocator.dupe(u8, parsed.message);
+    errdefer allocator.free(message);
+    return .{
+        .event_type = event_type,
+        .message = message,
+        .timestamp_ms = parsed.timestamp_ms,
+        .seq = parsed.seq,
+    };
+}
+
+fn acceptEventSequence(reader: *jsonl_reader.PrefixReader, sequence: u64) bool {
+    if (sequence == 0) {
+        reader.accept();
+        return true;
+    }
+    return reader.acceptSequence(sequence);
+}
+
 pub fn readLatestEvent(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
@@ -638,41 +621,28 @@ pub fn readLatestEvent(
 
     if (!fsutil.fileExists(events_path)) return null;
 
-    const raw_content = try fsutil.readTextAlloc(allocator, events_path);
-    defer allocator.free(raw_content);
-    const content = stripUtf8Bom(raw_content);
+    const content = try fsutil.readTextAlloc(allocator, events_path);
+    defer allocator.free(content);
 
-    var end = content.len;
-    while (end > 0) {
-        while (end > 0 and (content[end - 1] == '\n' or content[end - 1] == '\r')) : (end -= 1) {}
-        if (end == 0) break;
-
-        var start = end;
-        while (start > 0 and content[start - 1] != '\n') : (start -= 1) {}
-
-        const slice = content[start..end];
-        if (!std.unicode.utf8ValidateSlice(slice)) {
-            end = if (start == 0) 0 else start - 1;
-            continue;
-        }
-
-        var parsed = std.json.parseFromSlice(ParsedSessionEvent, allocator, slice, .{
+    var reader = jsonl_reader.PrefixReader.init(allocator, content);
+    var latest: ?types.SessionEvent = null;
+    errdefer if (latest) |event| event.deinit(allocator);
+    while (try reader.next()) |line| {
+        var parsed = std.json.parseFromSlice(ParsedSessionEvent, allocator, line, .{
             .ignore_unknown_fields = true,
-        }) catch {
-            end = if (start == 0) 0 else start - 1;
-            continue;
+        }) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            reader.reject(.invalid_schema);
+            break;
         };
         defer parsed.deinit();
+        if (!acceptEventSequence(&reader, parsed.value.seq)) break;
 
-        return .{
-            .event_type = try allocator.dupe(u8, parsed.value.event_type),
-            .message = try allocator.dupe(u8, parsed.value.message),
-            .timestamp_ms = parsed.value.timestamp_ms,
-            .seq = parsed.value.seq,
-        };
+        const next = try cloneParsedSessionEvent(allocator, parsed.value);
+        if (latest) |event| event.deinit(allocator);
+        latest = next;
     }
-
-    return null;
+    return latest;
 }
 
 pub fn readEvents(
@@ -685,9 +655,8 @@ pub fn readEvents(
 
     if (!fsutil.fileExists(events_path)) return allocator.alloc(types.SessionEvent, 0);
 
-    const raw_content = try fsutil.readTextAlloc(allocator, events_path);
-    defer allocator.free(raw_content);
-    const content = stripUtf8Bom(raw_content);
+    const content = try fsutil.readTextAlloc(allocator, events_path);
+    defer allocator.free(content);
 
     var events = std.array_list.Managed(types.SessionEvent).init(allocator);
     errdefer {
@@ -695,32 +664,26 @@ pub fn readEvents(
         events.deinit();
     }
 
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |raw_line| {
-        const line = std.mem.trim(u8, raw_line, " \r");
-        if (line.len == 0) continue;
-        if (!std.unicode.utf8ValidateSlice(line)) break; // Invalid UTF-8 — poisoned line.
-
+    var reader = jsonl_reader.PrefixReader.init(allocator, content);
+    while (try reader.next()) |line| {
         var parsed = std.json.parseFromSlice(ParsedSessionEvent, allocator, line, .{
             .ignore_unknown_fields = true,
-        }) catch break; // Stop at first poisoned line; return valid prefix.
+        }) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            reader.reject(.invalid_schema);
+            break;
+        };
         defer parsed.deinit();
-
-        try events.append(.{
-            .event_type = try allocator.dupe(u8, parsed.value.event_type),
-            .message = try allocator.dupe(u8, parsed.value.message),
-            .timestamp_ms = parsed.value.timestamp_ms,
-            .seq = parsed.value.seq,
-        });
+        if (!acceptEventSequence(&reader, parsed.value.seq)) break;
+        try events.append(try cloneParsedSessionEvent(allocator, parsed.value));
     }
 
     return events.toOwnedSlice();
 }
 
 /// Read only events with seq > after_seq for demand-driven client catch-up.
-/// The current text owner reads the file bytes once, then parses backward only
-/// through the new suffix. Parsing is O(k); file I/O remains O(n) until a
-/// measured index or seekable frame owner replaces `readTextAlloc`.
+/// Validate the same forward prefix as every other projection; file I/O and
+/// parsing remain O(n) until a measured index justifies another durable owner.
 pub fn readEventsAfterSeq(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
@@ -732,61 +695,28 @@ pub fn readEventsAfterSeq(
 
     if (!fsutil.fileExists(events_path)) return allocator.alloc(types.SessionEvent, 0);
 
-    const raw_content = try fsutil.readTextAlloc(allocator, events_path);
-    defer allocator.free(raw_content);
-    const content = stripUtf8Bom(raw_content);
+    const content = try fsutil.readTextAlloc(allocator, events_path);
+    defer allocator.free(content);
 
-    // Scan backward from the end, collecting events with seq > after_seq.
-    // Stop when we hit an event with seq <= after_seq (we've reached the
-    // already-seen prefix). The collected events are in reverse order,
-    // so we reverse them before returning.
     var collected = std.array_list.Managed(types.SessionEvent).init(allocator);
     errdefer {
         for (collected.items) |event| event.deinit(allocator);
         collected.deinit();
     }
 
-    var end = content.len;
-    while (end > 0) {
-        // Skip trailing newlines.
-        while (end > 0 and (content[end - 1] == '\n' or content[end - 1] == '\r')) : (end -= 1) {}
-        if (end == 0) break;
-
-        // Find the start of this line.
-        var start = end;
-        while (start > 0 and content[start - 1] != '\n') : (start -= 1) {}
-
-        const line = std.mem.trim(u8, content[start..end], " \r");
-        if (line.len == 0) {
-            end = if (start == 0) 0 else start - 1;
-            continue;
-        }
-        if (!std.unicode.utf8ValidateSlice(line)) break;
-
+    var reader = jsonl_reader.PrefixReader.init(allocator, content);
+    while (try reader.next()) |line| {
         var parsed = std.json.parseFromSlice(ParsedSessionEvent, allocator, line, .{
             .ignore_unknown_fields = true,
-        }) catch {
-            end = if (start == 0) 0 else start - 1;
-            continue;
+        }) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            reader.reject(.invalid_schema);
+            break;
         };
         defer parsed.deinit();
-
-        // If this event is at or before after_seq, we've reached the
-        // already-seen prefix — stop scanning.
-        if (parsed.value.seq <= after_seq) break;
-
-        try collected.append(.{
-            .event_type = try allocator.dupe(u8, parsed.value.event_type),
-            .message = try allocator.dupe(u8, parsed.value.message),
-            .timestamp_ms = parsed.value.timestamp_ms,
-            .seq = parsed.value.seq,
-        });
-
-        end = if (start == 0) 0 else start - 1;
+        if (!acceptEventSequence(&reader, parsed.value.seq)) break;
+        if (parsed.value.seq > after_seq) try collected.append(try cloneParsedSessionEvent(allocator, parsed.value));
     }
-
-    // Reverse the collected events into chronological order.
-    std.mem.reverse(types.SessionEvent, collected.items);
 
     return collected.toOwnedSlice();
 }
@@ -1067,6 +997,40 @@ fn checkpointIdAlloc(allocator: std.mem.Allocator) ![]u8 {
     return std.fmt.allocPrint(allocator, "checkpoint-{d}-{x}", .{ now, nonce });
 }
 
+fn cloneParsedContextCheckpoint(allocator: std.mem.Allocator, parsed: ParsedContextCheckpoint) !types.ContextCheckpoint {
+    const id = try allocator.dupe(u8, parsed.id);
+    errdefer allocator.free(id);
+    const entry_type = try allocator.dupe(u8, parsed.type);
+    errdefer allocator.free(entry_type);
+    const trigger = try allocator.dupe(u8, parsed.trigger);
+    errdefer allocator.free(trigger);
+    const summary = try allocator.dupe(u8, parsed.summary);
+    errdefer allocator.free(summary);
+    const parent_checkpoint_id = if (parsed.parent_checkpoint_id) |value|
+        try allocator.dupe(u8, value)
+    else
+        null;
+    errdefer if (parent_checkpoint_id) |value| allocator.free(value);
+
+    return .{
+        .id = id,
+        .entry_type = entry_type,
+        .created_at_ms = parsed.created_at_ms,
+        .source_seq_start = parsed.source_seq_start,
+        .source_seq_end = parsed.source_seq_end,
+        .first_kept_seq = parsed.first_kept_seq,
+        .tokens_before_estimate = parsed.tokens_before_estimate,
+        .tokens_after_estimate = parsed.tokens_after_estimate,
+        .aggressiveness_milli = parsed.aggressiveness_milli,
+        .compacted_entry_count = parsed.compacted_entry_count,
+        .trigger = trigger,
+        .summary = summary,
+        .parent_checkpoint_id = parent_checkpoint_id,
+        .branch_seq = parsed.branch_seq,
+        .branch_status = if (parsed.branch_status) |value| types.ShardStatus.parse(value) else null,
+    };
+}
+
 pub fn readLatestContextCheckpoint(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
@@ -1077,50 +1041,28 @@ pub fn readLatestContextCheckpoint(
 
     if (!fsutil.fileExists(context_path)) return null;
 
-    const raw_content = try fsutil.readTextAlloc(allocator, context_path);
-    defer allocator.free(raw_content);
-    const content = stripUtf8Bom(raw_content);
+    const content = try fsutil.readTextAlloc(allocator, context_path);
+    defer allocator.free(content);
 
-    var end = content.len;
-    while (end > 0) {
-        while (end > 0 and (content[end - 1] == '\n' or content[end - 1] == '\r')) : (end -= 1) {}
-        if (end == 0) break;
+    var reader = jsonl_reader.PrefixReader.init(allocator, content);
+    var latest: ?types.ContextCheckpoint = null;
+    errdefer if (latest) |checkpoint| checkpoint.deinit(allocator);
+    while (try reader.next()) |line| {
+        var parsed = std.json.parseFromSlice(ParsedContextCheckpoint, allocator, line, .{
+            .ignore_unknown_fields = true,
+        }) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            reader.reject(.invalid_schema);
+            break;
+        };
+        defer parsed.deinit();
+        reader.accept();
 
-        var start = end;
-        while (start > 0 and content[start - 1] != '\n') : (start -= 1) {}
-
-        const line = std.mem.trim(u8, content[start..end], " \r");
-        if (line.len > 0 and std.unicode.utf8ValidateSlice(line)) {
-            var parsed = std.json.parseFromSlice(ParsedContextCheckpoint, allocator, line, .{
-                .ignore_unknown_fields = true,
-            }) catch {
-                end = if (start == 0) 0 else start - 1;
-                continue;
-            };
-            defer parsed.deinit();
-
-            return .{
-                .id = try allocator.dupe(u8, parsed.value.id),
-                .entry_type = try allocator.dupe(u8, parsed.value.type),
-                .created_at_ms = parsed.value.created_at_ms,
-                .source_seq_start = parsed.value.source_seq_start,
-                .source_seq_end = parsed.value.source_seq_end,
-                .first_kept_seq = parsed.value.first_kept_seq,
-                .tokens_before_estimate = parsed.value.tokens_before_estimate,
-                .tokens_after_estimate = parsed.value.tokens_after_estimate,
-                .aggressiveness_milli = parsed.value.aggressiveness_milli,
-                .compacted_entry_count = parsed.value.compacted_entry_count,
-                .trigger = try allocator.dupe(u8, parsed.value.trigger),
-                .summary = try allocator.dupe(u8, parsed.value.summary),
-                .parent_checkpoint_id = if (parsed.value.parent_checkpoint_id) |pid| try allocator.dupe(u8, pid) else null,
-                .branch_seq = parsed.value.branch_seq,
-            };
-        }
-
-        end = if (start == 0) 0 else start - 1;
+        const next = try cloneParsedContextCheckpoint(allocator, parsed.value);
+        if (latest) |checkpoint| checkpoint.deinit(allocator);
+        latest = next;
     }
-
-    return null;
+    return latest;
 }
 
 /// Read all context checkpoints from context.jsonl in forward order.
@@ -1136,9 +1078,8 @@ pub fn readAllContextCheckpoints(
 
     if (!fsutil.fileExists(context_path)) return allocator.alloc(types.ContextCheckpoint, 0);
 
-    const raw_content = try fsutil.readTextAlloc(allocator, context_path);
-    defer allocator.free(raw_content);
-    const content = stripUtf8Bom(raw_content);
+    const content = try fsutil.readTextAlloc(allocator, context_path);
+    defer allocator.free(content);
 
     var checkpoints = std.array_list.Managed(types.ContextCheckpoint).init(allocator);
     errdefer {
@@ -1146,34 +1087,18 @@ pub fn readAllContextCheckpoints(
         checkpoints.deinit();
     }
 
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |raw_line| {
-        const line = std.mem.trim(u8, raw_line, " \r");
-        if (line.len == 0) continue;
-        if (!std.unicode.utf8ValidateSlice(line)) break;
-
+    var reader = jsonl_reader.PrefixReader.init(allocator, content);
+    while (try reader.next()) |line| {
         var parsed = std.json.parseFromSlice(ParsedContextCheckpoint, allocator, line, .{
             .ignore_unknown_fields = true,
-        }) catch break;
+        }) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            reader.reject(.invalid_schema);
+            break;
+        };
         defer parsed.deinit();
-
-        try checkpoints.append(.{
-            .id = try allocator.dupe(u8, parsed.value.id),
-            .entry_type = try allocator.dupe(u8, parsed.value.type),
-            .created_at_ms = parsed.value.created_at_ms,
-            .source_seq_start = parsed.value.source_seq_start,
-            .source_seq_end = parsed.value.source_seq_end,
-            .first_kept_seq = parsed.value.first_kept_seq,
-            .tokens_before_estimate = parsed.value.tokens_before_estimate,
-            .tokens_after_estimate = parsed.value.tokens_after_estimate,
-            .aggressiveness_milli = parsed.value.aggressiveness_milli,
-            .compacted_entry_count = parsed.value.compacted_entry_count,
-            .trigger = try allocator.dupe(u8, parsed.value.trigger),
-            .summary = try allocator.dupe(u8, parsed.value.summary),
-            .parent_checkpoint_id = if (parsed.value.parent_checkpoint_id) |pid| try allocator.dupe(u8, pid) else null,
-            .branch_seq = parsed.value.branch_seq,
-            .branch_status = if (parsed.value.branch_status) |bs| types.ShardStatus.parse(bs) else null,
-        });
+        reader.accept();
+        try checkpoints.append(try cloneParsedContextCheckpoint(allocator, parsed.value));
     }
 
     return checkpoints.toOwnedSlice();
@@ -1263,9 +1188,8 @@ fn readSessionMessagesFromPath(
     allocator: std.mem.Allocator,
     messages_path: []const u8,
 ) ![]types.SessionMessage {
-    const raw_content = try fsutil.readTextAlloc(allocator, messages_path);
-    defer allocator.free(raw_content);
-    const content = stripUtf8Bom(raw_content);
+    const content = try fsutil.readTextAlloc(allocator, messages_path);
+    defer allocator.free(content);
 
     var messages = std.array_list.Managed(types.SessionMessage).init(allocator);
     errdefer {
@@ -1273,18 +1197,27 @@ fn readSessionMessagesFromPath(
         messages.deinit();
     }
 
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |raw_line| {
-        const line = std.mem.trim(u8, raw_line, " \r");
-        if (line.len == 0) continue;
-        if (!std.unicode.utf8ValidateSlice(line)) break; // Invalid UTF-8 — poisoned line.
-
+    var reader = jsonl_reader.PrefixReader.init(allocator, content);
+    while (try reader.next()) |line| {
         var parsed = std.json.parseFromSlice(ParsedSessionMessage, allocator, line, .{
             .ignore_unknown_fields = true,
-        }) catch break; // Stop at first poisoned line; return valid prefix.
+        }) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            reader.reject(.invalid_schema);
+            break;
+        };
         defer parsed.deinit();
 
-        try messages.append(try cloneParsedSessionMessage(allocator, parsed.value));
+        var message = cloneParsedSessionMessage(allocator, parsed.value) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            reader.reject(.invalid_schema);
+            break;
+        };
+        if (!reader.acceptSequence(parsed.value.seq)) {
+            message.deinit(allocator);
+            break;
+        }
+        try messages.append(message);
     }
 
     return messages.toOwnedSlice();
@@ -1503,9 +1436,8 @@ pub fn readWriteIntents(
     defer allocator.free(path);
     if (!fsutil.fileExists(path)) return allocator.alloc(IntentEntry, 0);
 
-    const raw_content = try fsutil.readTextAlloc(allocator, path);
-    defer allocator.free(raw_content);
-    const content = stripUtf8Bom(raw_content);
+    const content = try fsutil.readTextAlloc(allocator, path);
+    defer allocator.free(content);
 
     var entries = std.array_list.Managed(IntentEntry).init(allocator);
     errdefer {
@@ -1513,16 +1445,17 @@ pub fn readWriteIntents(
         entries.deinit();
     }
 
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |raw_line| {
-        const line = std.mem.trim(u8, raw_line, " \r");
-        if (line.len == 0) continue;
-        if (!std.unicode.utf8ValidateSlice(line)) break;
-
+    var reader = jsonl_reader.PrefixReader.init(allocator, content);
+    while (try reader.next()) |line| {
         var parsed = std.json.parseFromSlice(ParsedIntentEntry, allocator, line, .{
             .ignore_unknown_fields = true,
-        }) catch break;
+        }) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            reader.reject(.invalid_schema);
+            break;
+        };
         defer parsed.deinit();
+        reader.accept();
 
         try entries.append(.{
             .id = try allocator.dupe(u8, parsed.value.id),
@@ -1635,7 +1568,7 @@ fn nextLedgerSeq(
             line_end = if (line_start == first_complete) first_complete else line_start - 1;
             if (raw_line.len == 0 or !std.unicode.utf8ValidateSlice(raw_line)) continue;
 
-            var parsed = std.json.parseFromSlice(ParsedLedgerSequence, allocator, stripUtf8Bom(raw_line), .{
+            var parsed = std.json.parseFromSlice(ParsedLedgerSequence, allocator, jsonl_reader.stripBom(raw_line), .{
                 .ignore_unknown_fields = true,
             }) catch continue;
             defer parsed.deinit();

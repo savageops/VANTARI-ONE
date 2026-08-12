@@ -1,5 +1,46 @@
 # Execution Log
 
+## 2026-08-12 - Shared JSONL valid-prefix contract
+
+**Outcome:** Closed move 17 by consolidating event, message, context, intent, and
+summary readers on one LF-framed valid-prefix owner and deleting the planned
+CRC/sidecar/repair architecture.
+
+- `shared/jsonl.zig:PrefixReader` accepts one leading BOM, validates UTF-8 and
+  JSON before typed schema parsing, requires strictly increasing sequences, and
+  stops every projection at the first defect while retaining the prior prefix.
+- `fsutil.appendJsonlRecord` validates the bounded current tail through the same
+  reader. Complete unterminated JSON receives LF; torn or poisoned JSON returns
+  `PoisonedJsonlSuffix` before bytes change.
+- Event latest/all/`after_seq`, session message, context checkpoint, write-intent,
+  and summary readers now share the owner. Backward-skip and `catch continue`
+  paths are removed. Hollow CRC helpers/tests are deleted.
+- Harvested ordered valid-prefix pressure from OpenAI Codex, pi, SQLite, etcd,
+  NATS, and Kafka. VANTARI retains strict forward recovery and rejects silent
+  continuation, automatic truncation, sidecar status, and checksum schema until
+  measured evidence justifies them.
+- The graph passes 19/19 and 1,944/1,944; ReleaseFast passes 9/9. The packaged
+  GGUF audit inspected 124 segments, found three adjacent test-setup candidates,
+  zero exact pairs, and no duplicate production owner.
+- Installed `kernel-stdio` replay returned one event/message before duplicate
+  rows and one event before a torn suffix. `session/cancel` reached the append
+  path but could not write behind poison; the file remained 107 bytes with
+  SHA-256 `299360B1639A9698C8A87399771AD88BA2299B27823BC4574EDAB1347632E7DC`.
+- Source and installed SHA-256 match
+  `86724BD0346E6B6079BFBA2DD64A2559C359DAED7DA9C7B5D69B98705983C344`;
+  backup:
+  `C:\Users\Savage\AppData\Local\Vantari\bin\vantari.exe.20260812-190206.bak`.
+  The isolated runtime was removed and zero VANTARI process remained.
+- A full live-root audit found 877 older initialized context-poison test fixtures
+  and no retained parent/continuation/summary/changelog ownership. They are held
+  reversibly at
+  `C:\Users\Savage\.vantari-quarantine\2026-08-12-legacy-context-poison-fixtures`;
+  manifest SHA-256 is
+  `43FCC3A9530D204B77FF9B37D4534909563628A9EFA2F396F90FDC927811A9BC`.
+  The repaired 29,937-ledger / 1,417,061-row scan has zero integrity defects.
+- Next owner: move 18, bind cancellation to an observed turn/event generation so
+  stale cancellation cannot terminate newer work.
+
 ## 2026-08-12 - Binary-safe command output envelope
 
 **Outcome:** Closed move 16 with one durable typed serializer for arbitrary

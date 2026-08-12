@@ -26,6 +26,9 @@ also existed unignored at apps/backend outside the canonical .var owner.
 - Ignored `apps/backend/auth.json` contains credential-shaped provider fields.
 - Follow-up direct-test incident: 21 exact shutdown-probe sessions, 84 files, and
   19,401 bytes; zero summary/changelog projection hits and unchanged config/auth.
+- Move 17's full live-root audit found 877 older initialized test-fixture
+  sessions with one of four known malformed `context.jsonl` suffixes. None had
+  retained parent/continuation links, summary keys, or changelog rows.
 
 ## Required mechanism
 
@@ -74,6 +77,13 @@ For this incident: wait for the exact installed process pair to exit, snapshot C
   `C:\Users\Savage\.vantari-quarantine\2026-08-12-host-shutdown-stress-incident`
   with matching payload digest, manifest, and rollback. A direct rerun kept the
   live root at 99,960 files / 693,051,144 bytes with config/auth unchanged.
+- Integrity follow-up: all 877 legacy context-poison fixtures are held under
+  `C:\Users\Savage\.vantari-quarantine\2026-08-12-legacy-context-poison-fixtures`
+  with whole-session payloads, repair/rollback scripts, and manifest SHA-256
+  `43FCC3A9530D204B77FF9B37D4534909563628A9EFA2F396F90FDC927811A9BC`.
+  Per-tree rehash and rollback syntax both report zero errors. The post-repair
+  scan covers 29,937 ledgers, 1,417,061 rows, and 235,074,120 bytes with zero
+  UTF-8, JSON, duplicate-sequence, or non-monotonic-sequence defects.
 
 No generated fixture was merged into operator state. This finding is closed.
 

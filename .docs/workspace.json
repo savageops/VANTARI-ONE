@@ -32,7 +32,8 @@
     "group_row": "Agents completed/total",
     "child_row": "agent name plus bounded canonical turn summary",
     "tool_phase": "typed state marker only; not the child row label",
-    "persistent_cancel_hint": false
+    "persistent_cancel_hint": false,
+    "prompt_mode_cycle": "roadmap 43: orchestrate -> build -> align -> plan; not yet shipped"
   },
   "access_boundary": {
     "config_key": "runtime.full_access_mode",
@@ -47,17 +48,19 @@
     "release_fast": "9/9 steps succeeded",
     "focused_tui": "59/59 passed; 0 skipped",
     "host_lifecycle": "224/224 passed; atomic admission, session-keyed buffer projection, cancellation-before-join shutdown, deadlines, and Job Object ownership",
-    "isolated_broad": "19/19 steps; 1936/1936 passed; 0 skipped",
+    "isolated_broad": "19/19 steps; 1944/1944 passed; 0 skipped",
     "test_runtime_isolation": "six build artifacts plus direct zig test receive generated VANTARI_HOME and VANTARI_TEST_ROOT; direct proof kept 99960 files and 693051144 bytes unchanged",
     "installed_binary": "C:/Users/Savage/AppData/Local/Vantari/bin/vantari.exe",
     "install_script": "apps/backend/scripts/install_windows.ps1",
-    "built_sha256": "23885BD546F6A663F4DC90F774A153FC0815277BD6F43FE6DA7872D9681E00EC",
-    "installed_sha256": "23885BD546F6A663F4DC90F774A153FC0815277BD6F43FE6DA7872D9681E00EC",
+    "built_sha256": "86724BD0346E6B6079BFBA2DD64A2559C359DAED7DA9C7B5D69B98705983C344",
+    "installed_sha256": "86724BD0346E6B6079BFBA2DD64A2559C359DAED7DA9C7B5D69B98705983C344",
     "installed_hash_matches": true,
     "installed_settings_smoke": "initialize ok; config/set var1.config_set.v1 in 5 ms; isolated runtime removed; live root unchanged; zero processes",
     "host_shutdown": "blocked provider request observed cancellation before join, persisted exactly one session_cancelled event, returned cancelled, and passed 20 repeat runs",
-    "summary_ledger": "summaries.jsonl v2; stable seq; latest-row projection; v1 import; poisoned suffix continuation; 100/100 concurrent rows retained; dupe audit zero pairs",
-    "message_ledger": "one process-local per-session append owner; every message role; 100/100 concurrent rows unique and monotonic; bounded valid-tail initialization; 37-segment dupe audit zero pairs",
+    "summary_ledger": "summaries.jsonl v2; stable seq; latest-row projection; v1 import; shared valid-prefix reader; poisoned-tail append refusal; 100/100 concurrent rows retained",
+    "message_ledger": "one process-local per-session append owner; every message role; 100/100 concurrent rows unique and monotonic; bounded valid-tail initialization; poisoned-tail append refusal",
+    "jsonl_integrity": "one LF-only PrefixReader covers events, messages, context, intents, and summaries; BOM, UTF-8, JSON/schema, duplicate, and non-monotonic boundaries stop at the same valid prefix; installed replay and append refusal pass; 124-segment GGUF audit has zero exact pairs",
+    "production_ledger_repair": "877 legacy initialized context-poison fixtures quarantined reversibly at C:/Users/Savage/.vantari-quarantine/2026-08-12-legacy-context-poison-fixtures; manifest SHA-256 43FCC3A9530D204B77FF9B37D4534909563628A9EFA2F396F90FDC927811A9BC; post-repair 29937 ledgers / 1417061 rows / 235074120 bytes have zero integrity defects",
     "event_notification_transport": "var1.session_event_notification.v1 persists before emission and carries exact stored seq; identical same-millisecond source events retained seq 1 and 2; raw command bytes use the sole typed ToolOutputDelta chunk_b64 envelope",
     "event_client_replay": "tracked TUI uses exact events.jsonl seq, renders identical same-millisecond events once each, suppresses exact replay, repairs gaps with session/get events_only suffix, and performs one terminal suffix check",
     "installed_summary_migration": "disposable VANTARI_HOME imported 1176/1176 legacy rows, appended one terminal summary through session/send, retained 1177 unique summary sequences, wrote four contiguous unique user/assistant/tool/assistant message rows, emitted 12 unique monotonic event notifications, returned contiguous event seq 2-12 after after_seq 1, reconstructed stdout 0080E280A8FF and capped stderr FF010080E280A8FE from two typed deltas, ended on stored turn_finished seq 12, preserved live legacy SHA-256 5D3FF92999B433FF90CA65D1C68A9A960AB24F11979893360DB58710C41BBF1B, and left zero processes",
@@ -70,7 +73,7 @@
     "PLUG": "parent and PLUGa-h pending; unstarted"
   },
   "residuals": [
-    "Both test-isolation incidents and legacy backend owners are repaired reversibly; quarantine/archive manifests and rollback paths remain retained evidence.",
+    "Both test-isolation incidents, 877 older context-poison fixtures, and legacy backend owners are repaired reversibly; quarantine/archive manifests and rollback paths remain retained evidence.",
     "Agent execution is process-local, scheduler leader acquisition is not inter-process atomic, and no durable direct/group/parent mailbox or unread cursor is shipped.",
     "The tracked TUI consumes exact stored event seq; the HTTP bridge keeps a compatibility transport SSE id for ignored browser prototypes, and multi-process writer ownership remains coupled to persistent-host arbitration.",
     "Autonomous repair remains a gated evidence workflow, not an implicit background mutator."
