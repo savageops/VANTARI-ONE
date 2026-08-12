@@ -40,6 +40,7 @@ only when consolidation or deletion cannot close the canonical consumer path.
 - `apps/backend/src/core/tickets/` is the canonical ticket ledger and queue projection. `assigned` admits work; it does not launch a child session.
 - `apps/backend/src/core/scheduler/` claims assigned tickets only when `apps/backend/src/core/agents/supervisor.zig` reports fixed-pool capacity, then routes through `core/agents/service.zig`. Do not add a second worker registry or direct assignment launcher.
 - `apps/backend/src/shared/process_lock.zig` owns crash-released inter-process exclusion. A scheduler tick holds `.var/schedules/lease.lock`, publishes and reads back one nonzero generation in `lease.json`, and releases only after scheduled-job and ticket mutations finish. Do not restore read/check/write leadership or add a scheduler-local lock primitive.
+- `apps/backend/src/core/tickets/index.zig` serializes every ticket projection and mutation through `.var/tickets/ledger.lock`. One claim row commits revision, worker generation, lease, attempt, capability hash, and deterministic child-session identity before session materialization. Do not create a child before the winning claim append or add a second admission ledger.
 - `.docs/index.md`, `.docs/technical_summary.md`, `.docs/workspace.json`, and `.refs/index.md` are the current project-record indexes. Keep them aligned with shipped runtime truth.
 
 ## II. Session Storage Contract
@@ -154,6 +155,7 @@ Sub-agents are normal VAR1 sessions launched by a parent and supervised through 
 - Do not delegate the immediate edit or decision if the parent needs that result before its next local action.
 - Child lifecycle state is append-only session/event evidence. Parent supervision must preserve heartbeat, terminal status, failure class, and resume-safe reconciliation.
 - Ticket assignment, scheduler claims, leases, heartbeat, stale-owner requeue, terminal reconciliation, and repair gating remain one typed queue-to-agent state machine; health fields are a read projection only.
+- Ticket assignment remains side-effect-free. A winning process-serialized claim reserves one deterministic child identity; only that winner may materialize and submit the child through the existing `AgentService`/`Supervisor` path.
 - Agent collaboration uses one sequence-addressed mailbox through the existing session/event owners. Permit direct-session, parent, and current-group targets; do not add a generic topic broker, shared global transcript, or second teammate runtime.
 - Mailbox messages carry bounded information and references. Tickets remain the only work lifecycle: a message never silently assigns, claims, or launches work.
 - Let the prompt envelope choose communication density, challenge posture, wake intent, and nested delegation. The kernel validates sender/recipient scope, capacity, depth, contact budget, ordering, delivery, replay, and acknowledgement.

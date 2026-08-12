@@ -1943,3 +1943,52 @@ reconciliation, mailbox delivery, and installed replacement remain later gates.
 
 **Next todo:** move 24 — serialize ticket claim plus lease issuance so one
 ticket revision creates one child session under contention.
+
+## 2026-08-13 - Roadmap move 24 ticket admission serialized
+
+**Changed:**
+
+- `core/tickets/index.zig` now acquires `.var/tickets/ledger.lock` through the
+  shared crash-released process-lock owner for every projection and mutation.
+  Claim read, revision validation, and append are one process-serialized
+  transition.
+- The claim row commits worker id, nonzero generation, lease token/expiry,
+  attempt, selected agent/capability hash, and deterministic child-session id.
+- `core/agents/service.zig` derives the child id from the durable claim key,
+  appends the claim before session materialization, and permits only the append
+  winner to create and submit the child through the existing Supervisor.
+- Synthetic ticket coordinators also use one deterministic identity. No database,
+  transaction coordinator, worker registry, queue, or execution pool was added.
+- `core/sessions/store.zig` accepts an internal explicit session id only after a
+  path-safe validation and refuses overwrite with `SessionAlreadyExists`.
+- `prove-scheduler-leadership.ps1` now pressures one due job and one assigned
+  ticket across two complete kernels in the existing proof lane.
+
+**Proof:**
+
+- Canonical graph: 19/19 steps, 1,976/1,976 tests.
+- ReleaseFast: 9/9; source SHA-256
+  `DF57FB34112E0D1125D50620995EDF2683711D546B359226F504D2C4A03C6C00`.
+- Native evidence root
+  `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1` records two
+  kernels, one schedule attempt, one ticket claim, one matching deterministic
+  child session, shared generation `1804748275523875660`, committed lease, empty
+  stderr, graceful EOF shutdown, and zero proof-owned survivors.
+- GGUF duplicate-owner audit: four runtime owners, 76 segments, zero candidate
+  pairs, zero exact duplicate candidates.
+- Installed SHA-256 remains
+  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
+  operator-owned PIDs 12028 and 14452 remain untouched.
+
+**Competitive harvest:** Flue contributes deterministic parent/task child
+identity. Oh My Pi contributes crash-released process exclusion. Codex, Eve, pi,
+NullClaw, and KrillClaw confirm that in-process task ownership alone does not
+close VANTARI's cross-process append race. VANTARI composes the two useful
+invariants into existing ticket/session owners.
+
+**Boundary:** Move 24 is closed in source. Move 25 owns assignment's
+side-effect-free queue-admission proof. Owner-crash reconciliation, durable agent
+mail, and installed replacement remain later gates.
+
+**Next todo:** move 25 — prove every assignment caller mutates only the ticket
+ledger and starts no session, provider turn, or Supervisor task.

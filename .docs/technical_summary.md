@@ -100,7 +100,7 @@ does not yet make a running child turn resume exactly once after owner death.
 log_ticket create/transition
   -> durable ticket ledger
   -> assigned queue admission
-  -> scheduler lease and claim
+  -> process-serialized scheduler claim + lease + child identity
   -> AgentService route validation
   -> Supervisor fixed-pool slot
   -> child session and typed evidence
@@ -113,9 +113,11 @@ existing `AgentService` and `Supervisor` owners. There is no second worker
 registry or background status bus. The fixed pool now lives in one persistent
 owner tree and survives TUI/CLI exit. Scheduler leadership now holds one
 crash-released OS lock through the full tick and reads back a random nonzero
-generation before dispatch. Owner-process death still stops the pool, cold
-recovery marks running receipts stale, and ticket claim plus lease issuance is
-not yet one serialized transition. Chain 036 therefore remains pending.
+generation before dispatch. Ticket mutation holds `.var/tickets/ledger.lock`
+across projection, validation, and append; one claim row commits generation,
+lease, attempt, capability, and deterministic child identity before the child
+exists. Owner-process death still stops the pool and cold recovery marks running
+receipts stale. Chain 036 therefore remains pending.
 
 ## TUI projection contract
 
@@ -145,7 +147,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,973/1,973 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,976/1,976 tests with zero skips.
   Its host lane executes the stdio child, owner state/client, shared process
   lock, bridge, and process-tree contracts; the integration lane includes
   exact owner route, lease, stalled-loopback deadline, and explicit-workspace
@@ -153,11 +155,12 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   TUI lane passes 61/61.
 - A barrier-synchronized leadership race returns one guard and one
   `LeaseUnavailable`. Native proof root
-  `.zig-cache/owner-proofs/e421ccb28240402ead1fbcbcb3903335` starts two
-  complete source `kernel-stdio` processes against one due job and retains one
-  attempt ID, one reserved row, one completed row, one nonzero generation, and
-  zero proof-owned processes. The 34-segment GGUF owner audit reports zero
-  candidate and exact pairs.
+  `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1` starts two
+  complete source `kernel-stdio` processes against one due job and one assigned
+  ticket. It retains one attempt ID, one ticket claim, one matching deterministic
+  child session, one shared nonzero generation, and zero proof-owned processes.
+  The move-24 76-segment GGUF audit reports zero candidate and exact pairs across
+  ticket, agent-service, session-store, and shared-lock owners.
 - Parent-shell production-home probes kept 99,960 files, 693,051,144 bytes,
   config/auth hashes, and process inventory unchanged across graph and direct
   proof.
@@ -240,7 +243,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - The last installed-proven move-19 artifact remains SHA-256
   `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
   Current source ReleaseFast is
-  `06521D7CCA11F9084F79470340805EC1BE4D8E4B8BF4BBE62A5BBD9621AD24AE`.
+  `DF57FB34112E0D1125D50620995EDF2683711D546B359226F504D2C4A03C6C00`.
   Replacement is blocked while operator-owned installed PIDs 12028 and 14452
   remain active; source/installed equality is not claimed.
 - Installed `session/send` against a disposable local provider imported all
@@ -259,12 +262,13 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
   returned `requested` and exited with zero process. Its legacy terminal name is
   retained only as historical proof; move 19 removed that writer.
-- Moves 5–20, 22, and 23 plus findings 10 and 13 are closed. Move 21 is source-complete
+- Moves 5–20 and 22–24 plus findings 10 and 13 are closed. Move 21 is source-complete
   and awaits the installed replacement gate. Six synchronized 100-way probes cover
   admission, summary, message, event, tracked-TUI replay, and shutdown. The
-  latest canonical graph passes 1,973/1,973. Mid-turn owner-crash recovery and
-  serialized ticket claim/lease issuance remain P0.
-- The hive direction is assigned to moves 24–30 and finding 11. The target is
+  latest canonical graph passes 1,976/1,976. The native two-kernel admission
+  proof retains one schedule attempt, one ticket claim, and one matching child
+  session under one nonzero generation; mid-turn owner-crash recovery remains P0.
+- The hive direction is assigned to moves 25–30 and finding 11. The target is
   one durable direct/group/parent mailbox over session/event ownership,
   selective summary/artifact awareness, and nested normal sessions. No general
   mailbox, restart-safe unread cursor, or peer wake path is shipped yet.

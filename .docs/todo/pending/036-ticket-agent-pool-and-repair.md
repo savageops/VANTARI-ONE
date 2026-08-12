@@ -241,8 +241,13 @@ Every row above compounds the parent ratchet.
 
 [`../findings/11-persistent-agent-worker-and-scheduler-arbitration.md`](../findings/11-persistent-agent-worker-and-scheduler-arbitration.md)
 
-Move 24 is the next executable slice: serialize ticket claim plus lease issuance
-without changing assignment's side-effect-free queue semantics.
+Move 24 is closed in source. One shared ticket-ledger process lock now serializes
+projection, revision validation, and append; the winning row commits lease,
+generation, capability, attempt, and deterministic child identity before one
+child is materialized. The two-kernel proof at
+`.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1` records one claim
+and one matching child. Move 25 is next: preserve and pressure-test assignment as
+side-effect-free queue admission across every caller and projection.
 
 ## Stop Condition
 

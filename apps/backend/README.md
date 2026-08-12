@@ -93,7 +93,6 @@ VAR1 maintains a structured workspace knowledge surface under `.var/`:
   sessions/     ← canonical session storage
   schedules/    ← durable scheduler jobs
   docs/         ← runtime contract documentation
-  plans/        ← knowledge_artifact surface
 ```
 
 Every subagent that discovers findings **must persist them** to the appropriate surface before returning its SITREP. The orchestrator holds only the artifact index — paths, titles, summaries — never the full payloads.
@@ -106,15 +105,18 @@ All todos, tasks, and work items are tracked as tickets with a full lifecycle:
 unassigned → assigned → in_progress → blocked → completed → closed
 ```
 
-The `log_ticket` tool supports `create`, `transition` (with reason), and `list`. Every non-trivial task gets a ticket before work starts. Transitions are durable records in `.var/tickets/tickets.jsonl` with schema `var1.ticket_transition.v1`. Long tasks must have ticket tracking for accuracy, recovery, and audit.
+The `log_ticket` tool supports `create`, `transition` (with reason), and `list`. Every non-trivial task gets a ticket before work starts. Mutations are durable records in `.var/tickets/tickets.jsonl` with schema `var1.ticket_event.v2`. Long tasks must have ticket tracking for accuracy, recovery, and audit.
 
 Assignment is queue admission. It does not launch an agent directly. The scheduler claims assigned tickets only when the configured capacity has a free slot, then calls the existing `AgentService` and fixed-pool `Supervisor` path. Heartbeats, leases, stale-owner requeue, terminal reconciliation, and repair evidence remain durable scheduler/ticket state. `tickets.proactive_workpool` is opt-in; the default is a configured pool waiting for explicit assignment.
 
 Scheduler leadership is inter-process exclusive in source. One shared OS-owned
 lock spans the full tick; `lease.json` carries a random nonzero generation that
 is read back before dispatch. The native Windows proof starts two complete
-`kernel-stdio` processes against one due job and records one unique attempt.
-Ticket claim plus lease issuance remains the next serialized transition.
+`kernel-stdio` processes against one due job and one assigned ticket. It records
+one unique schedule attempt, one ticket claim, and one deterministic child
+session. `.var/tickets/ledger.lock` serializes ticket read/validate/append across
+processes; the claim row commits worker generation, lease, attempt, capability,
+and child identity before `AgentService` materializes or submits the child.
 
 ### Interjection Protocol (Speak While Working)
 

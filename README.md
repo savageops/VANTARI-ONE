@@ -244,9 +244,11 @@ The scheduler claims assigned work only when the configured agent pool has
 capacity, then routes the ticket through the existing AgentService and
 Supervisor owners. Two source-built kernels now contend through one
 crash-released scheduler lock and a persisted generation fence; the native
-two-kernel proof produces one winner and one attempt. Exactly-once recovery
-after execution-owner death and serialized ticket claim/lease issuance remain
-open; see the current full-harness SITREP before treating active work as
+two-kernel proof produces one winner and one attempt. The same proof now seeds
+one assigned ticket and observes one process-serialized claim containing the
+worker generation, lease, capability, and deterministic child identity, followed
+by exactly one child session. Exactly-once recovery after execution-owner death
+remains open; see the current full-harness SITREP before treating active work as
 crash-resumable.
 
 The TUI keeps this mechanic legible without adding a status forest: the footer shows pool and queue pressure when non-zero; the activity group shows `Agents completed/total`; each keyed child row ends with a bounded turn summary sourced from the child session summary ledger. Tool lifecycle names remain typed event metadata, not the visible child summary. The persistent footer omits `Esc cancel`.

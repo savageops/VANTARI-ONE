@@ -3,7 +3,7 @@ type: architecture-decision
 id: roadmap-21-persistent-execution-owner
 status: in_progress
 source_state: complete
-updated: 2026-08-12
+updated: 2026-08-13
 owners:
   - apps/backend/src/host/http_bridge.zig
   - apps/backend/src/host/owner_client.zig
@@ -107,14 +107,14 @@ Historical observation: scheduler leadership was read/check/write and could not
 exclude a second process. Move 23 replaced it with the shared crash-released
 process lock plus a read-back nonzero generation fence.
 
-Impact: scheduler leadership is now process-exclusive in source. Reconnect must
-still not be treated as exactly-once ticket execution until move 24 serializes
-ticket claim plus lease issuance and move 29 reconciles owner death.
+Impact: scheduler leadership and ticket admission are now process-exclusive in
+source. Reconnect must still not be treated as exactly-once ticket execution
+until move 29 reconciles owner death.
 
 Confidence: high.
 
-Action: move 21 establishes one owner tree; move 23 closes scheduler leadership;
-moves 24 and 29 close ticket arbitration and recovery before move 30 promotion.
+Action: move 21 establishes one owner tree; moves 23 and 24 close scheduler and
+ticket arbitration; move 29 closes recovery before move 30 promotion.
 
 ## Competitor harvest
 
@@ -217,7 +217,7 @@ Do not implement detach/restart policy until this path passes.
 | Stale state or PID reuse | Never trust PID alone; require matching workspace, generation, protocol, and live health. |
 | Exact data redacted | Separate owner-only exact routes from browser routes. |
 | Detached connection thread outlives bridge | `OwnerLifecycle` admits at most 64 connections, counts every detached job, rejects work after stop, wakes accept, and drains to zero before bridge deinit. |
-| Owner dies mid-turn | Existing session/event ledgers retain causality; move 23 supplies exclusive scheduler leadership, while moves 24 and 29 add ticket claim serialization and reconciliation. |
+| Owner dies mid-turn | Existing session/event ledgers retain causality; move 23 supplies exclusive scheduler leadership, move 24 supplies serialized claim/child identity, and move 29 adds reconciliation. |
 | New client binary speaks to old owner | Protocol/version and executable identity mismatch returns a typed restart-required result; never silently mix. |
 | Installed binary locked by active operator pair | Build and prove in an isolated workspace; do not replace or terminate operator-owned processes. Promote installed proof only after their natural exit. |
 
@@ -253,9 +253,9 @@ Do not implement detach/restart policy until this path passes.
 | Duplicate-start pressure | passed | `prove-owner-lifecycle.ps1` reports 20/20 clients against one first owner/kernel; foreground `serve` rejects a duplicate with `code=AlreadyRunning`. Final lifecycle root: `.zig-cache/owner-proofs/a9035dcbf5e945c7942a46885c896458`. |
 | Stale-owner recovery | passed for owner lifecycle | Graceful stop and forced owner death each produce one new generation. Forced crash leaves the owner and Job-owned kernel at zero before recovery. Running-turn exactly-once reconciliation remains move 29. |
 | Shutdown cleanup | passed | Connection jobs drain, child stdin closes, Job cleanup completes, and the lifecycle tracer reports `final_zero_processes: true`. |
-| Canonical graph | passed | Pinned Zig 0.15.1: current graph 19/19 steps and 1,973/1,973 tests, including stalled-owner socket-deadline, explicit-workspace precedence, retired-launcher, owner-submission, shared process-lock, and scheduler-race falsifiers; final ReleaseFast 9/9. |
+| Canonical graph | passed | Pinned Zig 0.15.1: current graph 19/19 steps and 1,976/1,976 tests, including stalled-owner socket-deadline, explicit-workspace precedence, retired-launcher, owner-submission, shared process-lock, scheduler race, ticket-ledger exclusion, and deterministic-session falsifiers; final ReleaseFast 9/9. |
 | Duplicate ownership | passed | GGUF audit inspected 110 segments across nine owner-adjacent files: two import/declaration adjacency candidates, zero exact duplicates, and no second lifecycle, workspace, transport, or process-tree owner. |
-| Source artifact | passed | Current `zig-out/bin/vantari.exe` SHA-256 is `06521D7CCA11F9084F79470340805EC1BE4D8E4B8BF4BBE62A5BBD9621AD24AE`; hidden-owner tracer root `.zig-cache/owner-proofs/9de64f4dbfe9483684875605ad39de10` remains the owner-path proof, and scheduler root `.zig-cache/owner-proofs/e421ccb28240402ead1fbcbcb3903335` proves the current two-kernel leadership slice. |
+| Source artifact | passed | Current `zig-out/bin/vantari.exe` SHA-256 is `DF57FB34112E0D1125D50620995EDF2683711D546B359226F504D2C4A03C6C00`; hidden-owner tracer root `.zig-cache/owner-proofs/9de64f4dbfe9483684875605ad39de10` remains the owner-path proof, and scheduler/ticket root `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1` proves the current two-kernel admission slice. |
 | Installed Windows proof | blocked | Installed SHA-256 remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`. Operator-owned installed TUI PID 12028 and kernel PID 14452 remain active; replacement is move 38 after natural exit. |
 
 ## Rollback

@@ -1,11 +1,22 @@
 const std = @import("std");
 
 const fsutil = @import("../../shared/fsutil.zig");
+const process_lock = @import("../../shared/process_lock.zig");
 
-/// Ticket ledger mutations are serialized inside one VANTARI process. The
-/// scheduler, tool runtime, and supervisor all live in that process; keeping
-/// the lock at the ledger owner prevents a read/validate/append claim split.
+/// Keep thread and process serialization at the ledger owner. One claim event
+/// commits worker generation, lease, and child-session identity together.
 var ledger_mutex: std.Thread.Mutex = .{};
+const ledger_lock_timeout_ms: usize = if (@import("builtin").is_test) 50 else 2000;
+
+const LedgerGuard = struct {
+    lock: process_lock.FileLock,
+
+    fn deinit(self: *LedgerGuard) void {
+        self.lock.deinit();
+        ledger_mutex.unlock();
+        self.* = undefined;
+    }
+};
 
 pub const Error = error{
     InvalidArguments,
@@ -287,9 +298,21 @@ pub const TicketStore = struct {
         return fsutil.join(self.allocator, &.{ self.workspace_root, ".var", "tickets", "tickets.jsonl" });
     }
 
-    pub fn readProjection(self: *const TicketStore) !TicketProjection {
+    pub fn ledgerLockPath(self: *const TicketStore) ![]u8 {
+        return fsutil.join(self.allocator, &.{ self.workspace_root, ".var", "tickets", "ledger.lock" });
+    }
+
+    fn acquireLedgerGuard(self: *const TicketStore) !LedgerGuard {
         ledger_mutex.lock();
-        defer ledger_mutex.unlock();
+        errdefer ledger_mutex.unlock();
+        const path = try self.ledgerLockPath();
+        defer self.allocator.free(path);
+        return .{ .lock = try process_lock.acquire(path, ledger_lock_timeout_ms) };
+    }
+
+    pub fn readProjection(self: *const TicketStore) !TicketProjection {
+        var guard = try self.acquireLedgerGuard();
+        defer guard.deinit();
         return self.readProjectionLocked();
     }
 
@@ -318,8 +341,8 @@ pub const TicketStore = struct {
         if (input.title.len == 0 or input.description.len == 0 or input.category.len == 0 or input.severity.len == 0) return Error.InvalidArguments;
         if (input.status != .unassigned and input.status != .assigned) return Error.InvalidInitialStatus;
 
-        ledger_mutex.lock();
-        defer ledger_mutex.unlock();
+        var guard = try self.acquireLedgerGuard();
+        defer guard.deinit();
 
         if (input.idempotency_key.len > 0) {
             if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
@@ -361,8 +384,8 @@ pub const TicketStore = struct {
     pub fn transition(self: *const TicketStore, input: TransitionInput) !MutationReceipt {
         if (input.ticket_id.len == 0 or input.reason.len == 0) return Error.InvalidArguments;
 
-        ledger_mutex.lock();
-        defer ledger_mutex.unlock();
+        var guard = try self.acquireLedgerGuard();
+        defer guard.deinit();
 
         if (input.idempotency_key.len > 0) {
             if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
@@ -399,8 +422,8 @@ pub const TicketStore = struct {
     pub fn claim(self: *const TicketStore, input: ClaimInput) !ClaimReceipt {
         if (input.ticket_id.len == 0 or input.worker_id.len == 0 or input.lease_token.len == 0 or input.session_id.len == 0 or input.agent_hint.len == 0 or input.capability_hash.len == 0 or input.idempotency_key.len == 0 or input.lease_expires_at_ms <= input.claimed_at_ms) return Error.InvalidClaim;
 
-        ledger_mutex.lock();
-        defer ledger_mutex.unlock();
+        var guard = try self.acquireLedgerGuard();
+        defer guard.deinit();
 
         if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
             defer self.allocator.free(existing);
@@ -442,8 +465,8 @@ pub const TicketStore = struct {
     pub fn renewClaim(self: *const TicketStore, input: RenewInput) !MutationReceipt {
         if (input.ticket_id.len == 0 or input.worker_id.len == 0 or input.lease_token.len == 0 or input.session_id.len == 0 or input.idempotency_key.len == 0 or input.lease_expires_at_ms <= input.renewed_at_ms) return Error.InvalidRenewal;
 
-        ledger_mutex.lock();
-        defer ledger_mutex.unlock();
+        var guard = try self.acquireLedgerGuard();
+        defer guard.deinit();
 
         if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
             defer self.allocator.free(existing);
@@ -488,8 +511,8 @@ pub const TicketStore = struct {
     pub fn requeueExpired(self: *const TicketStore, input: RequeueInput) !MutationReceipt {
         if (input.ticket_id.len == 0 or input.reason.len == 0 or input.failure_class.len == 0 or input.idempotency_key.len == 0) return Error.InvalidArguments;
 
-        ledger_mutex.lock();
-        defer ledger_mutex.unlock();
+        var guard = try self.acquireLedgerGuard();
+        defer guard.deinit();
 
         if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
             defer self.allocator.free(existing);
@@ -527,8 +550,8 @@ pub const TicketStore = struct {
     pub fn complete(self: *const TicketStore, input: CompleteInput) !MutationReceipt {
         if (input.ticket_id.len == 0 or input.session_id.len == 0 or input.lease_token.len == 0 or input.terminal_receipt.len == 0 or input.idempotency_key.len == 0) return Error.InvalidTerminalEvidence;
 
-        ledger_mutex.lock();
-        defer ledger_mutex.unlock();
+        var guard = try self.acquireLedgerGuard();
+        defer guard.deinit();
 
         if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
             defer self.allocator.free(existing);
@@ -565,8 +588,8 @@ pub const TicketStore = struct {
     pub fn close(self: *const TicketStore, input: CloseInput) !MutationReceipt {
         if (input.ticket_id.len == 0 or input.idempotency_key.len == 0) return Error.InvalidTerminalEvidence;
 
-        ledger_mutex.lock();
-        defer ledger_mutex.unlock();
+        var guard = try self.acquireLedgerGuard();
+        defer guard.deinit();
 
         if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
             defer self.allocator.free(existing);
@@ -1107,4 +1130,23 @@ test "ticket claim heartbeat renews the matching live lease and replays idempote
     try std.testing.expectEqual(@as(i64, 1400), ticket.lease_expires_at_ms);
     try std.testing.expectEqual(@as(u64, 4), ticket.revision);
     try std.testing.expectEqual(@as(usize, 4), projection.valid_events);
+}
+
+test "ticket ledger rejects a second process lock owner" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+    const store = TicketStore.init(allocator, workspace);
+    const lock_path = try store.ledgerLockPath();
+    defer allocator.free(lock_path);
+
+    var external_owner = try process_lock.acquire(lock_path, 0);
+    try std.testing.expectError(error.LockUnavailable, store.readProjection());
+    external_owner.deinit();
+
+    var projection = try store.readProjection();
+    defer projection.deinit();
+    try std.testing.expectEqual(@as(usize, 0), projection.valid_events);
 }

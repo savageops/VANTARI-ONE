@@ -365,8 +365,8 @@ fn resolveTicketAgent(
 }
 
 /// Launch one already-scheduled ticket through the existing route/session and
-/// Supervisor owners. The ticket claim is written only after the child session
-/// receipt exists and before the task enters the fixed pool.
+/// Supervisor owners. The serialized claim commits lease and deterministic
+/// child identity before any child session can be materialized or submitted.
 fn launchTicket(
     service: *Service,
     allocator: std.mem.Allocator,
@@ -408,23 +408,14 @@ fn launchTicket(
     defer allocator.free(shared_context);
     const child_prompt = try renderChildPrompt(allocator, shared_context, request.description, spec, "{}");
     defer allocator.free(child_prompt);
+    const child_session_id = try ticketSessionId(allocator, "child", request.idempotency_key);
+    defer allocator.free(child_session_id);
 
     const parent_session_id: []const u8 = if (request.source_session_id.len > 0) blk: {
         var parent = store.readSessionRecord(allocator, service.config.workspace_root, request.source_session_id) catch return Error.MissingParentSession;
         parent.deinit(allocator);
         break :blk request.source_session_id;
-    } else blk: {
-        const coordinator_prompt = try std.fmt.allocPrint(allocator, "Ticket coordinator for {s}: {s}", .{ request.ticket_id, request.title });
-        defer allocator.free(coordinator_prompt);
-        var coordinator = try store.initSessionWithOptions(allocator, service.config.workspace_root, coordinator_prompt, .{
-            .status = .initialized,
-            .display_name = display_name,
-            .agent_profile = "root",
-        });
-        const coordinator_id = try allocator.dupe(u8, coordinator.id);
-        coordinator.deinit(allocator);
-        break :blk coordinator_id;
-    };
+    } else try ticketSessionId(allocator, "coordinator", request.ticket_id);
     const owns_synthetic_parent = request.source_session_id.len == 0;
     defer if (owns_synthetic_parent) allocator.free(parent_session_id);
 
@@ -464,16 +455,9 @@ fn launchTicket(
         .output_schema_hash = output_schema_hash[0..],
         .created_at_ms = created_at_ms,
     };
-    var child_session = try store.initSessionWithExecutionReceipt(allocator, service.config.workspace_root, child_prompt, .{
-        .status = .initialized,
-        .parent_session_id = parent_session_id,
-        .display_name = display_name,
-        .agent_profile = route.capability_profile_id,
-    }, &execution_receipt);
-    defer child_session.deinit(allocator);
 
     const ticket_store = tickets.TicketStore.init(allocator, service.config.workspace_root);
-    var claim = ticket_store.claim(.{
+    var claim = try ticket_store.claim(.{
         .ticket_id = request.ticket_id,
         .expected_revision = request.expected_revision,
         .worker_id = request.worker_id,
@@ -481,20 +465,39 @@ fn launchTicket(
         .lease_token = request.lease_token,
         .lease_expires_at_ms = request.lease_expires_at_ms,
         .attempt = request.attempt,
-        .session_id = child_session.id,
+        .session_id = child_session_id,
         .agent_hint = spec.id,
         .capability_hash = capability_hash[0..],
         .idempotency_key = request.idempotency_key,
         .claimed_at_ms = created_at_ms,
-    }) catch |err| {
-        markSessionAdmissionFailed(service.config.workspace_root, child_session.id, @errorName(err));
-        return err;
-    };
+    });
     defer claim.deinit(allocator);
-    if (!claim.appended) {
-        markSessionAdmissionFailed(service.config.workspace_root, child_session.id, "TicketClaimReplay");
-        return Error.TicketClaimReplay;
+    if (!claim.appended or !std.mem.eql(u8, claim.session_id, child_session_id)) return Error.TicketClaimReplay;
+
+    if (owns_synthetic_parent) {
+        const coordinator_prompt = try std.fmt.allocPrint(allocator, "Ticket coordinator for {s}: {s}", .{ request.ticket_id, request.title });
+        defer allocator.free(coordinator_prompt);
+        var coordinator = store.readSessionRecord(allocator, service.config.workspace_root, parent_session_id) catch |err| switch (err) {
+            error.FileNotFound => try store.initSessionWithOptions(allocator, service.config.workspace_root, coordinator_prompt, .{
+                .session_id = parent_session_id,
+                .status = .initialized,
+                .display_name = display_name,
+                .agent_profile = "root",
+            }),
+            else => return err,
+        };
+        coordinator.deinit(allocator);
     }
+
+    var child_session = try store.initSessionWithExecutionReceipt(allocator, service.config.workspace_root, child_prompt, .{
+        .session_id = child_session_id,
+        .status = .initialized,
+        .parent_session_id = parent_session_id,
+        .display_name = display_name,
+        .agent_profile = route.capability_profile_id,
+    }, &execution_receipt);
+    defer child_session.deinit(allocator);
+    errdefer |err| markSessionAdmissionFailed(service.config.workspace_root, child_session.id, @errorName(err));
 
     const claim_message = try std.fmt.allocPrint(allocator, "Ticket {s} claimed by {s}; group={s} task={s}", .{ request.ticket_id, spec.id, group_id, task_id });
     defer allocator.free(claim_message);
@@ -531,15 +534,12 @@ fn launchTicket(
     var submitted = false;
     defer if (!submitted) service.supervisor.destroyPreparedTask(prepared_task);
 
-    service.supervisor.submitTicketGroup(.{
+    try service.supervisor.submitTicketGroup(.{
         .id = group_id,
         .parent_session_id = parent_session_id,
         .workspace_root = service.config.workspace_root,
         .shared_context = shared_context,
-    }, prepared_task) catch |err| {
-        markAdmissionFailed(prepared_task, @errorName(err));
-        return err;
-    };
+    }, prepared_task);
     submitted = true;
 
     return .{
@@ -1474,6 +1474,11 @@ fn hasText(value: []const u8) bool {
     return std.mem.trim(u8, value, " \t\r\n").len > 0;
 }
 
+fn ticketSessionId(allocator: std.mem.Allocator, role: []const u8, identity: []const u8) ![]u8 {
+    const digest = agent_spec.contentHash(identity);
+    return std.fmt.allocPrint(allocator, "session-ticket-{s}-{s}", .{ role, digest[0..24] });
+}
+
 fn newGroupId(allocator: std.mem.Allocator) ![]u8 {
     return std.fmt.allocPrint(allocator, "group-{d}-{x}", .{
         std.time.milliTimestamp(),
@@ -1544,4 +1549,18 @@ test "ticket launch rejects incomplete admission before capacity or session work
     request.agent_hint = "recon";
     request.idempotency_key = "";
     try std.testing.expectError(Error.InvalidBatch, launchTicket(&service, std.testing.allocator, request));
+}
+
+test "ticket child identity is stable per claim" {
+    const allocator = std.testing.allocator;
+    const first = try ticketSessionId(allocator, "child", "ticket-claim:abc:2:1");
+    defer allocator.free(first);
+    const replay = try ticketSessionId(allocator, "child", "ticket-claim:abc:2:1");
+    defer allocator.free(replay);
+    const next_attempt = try ticketSessionId(allocator, "child", "ticket-claim:abc:4:2");
+    defer allocator.free(next_attempt);
+
+    try std.testing.expectEqualStrings(first, replay);
+    try std.testing.expect(!std.mem.eql(u8, first, next_attempt));
+    try std.testing.expect(std.mem.startsWith(u8, first, "session-ticket-child-"));
 }

@@ -66,6 +66,9 @@ fn syncLedgerPath(path: []const u8) void {
 }
 
 pub const InitSessionOptions = struct {
+    /// Internal deterministic identity for durable admission protocols. Normal
+    /// interactive sessions leave this null and retain random collision safety.
+    session_id: ?[]const u8 = null,
     status: types.SessionStatus = .initialized,
     parent_session_id: ?[]const u8 = null,
     continued_from_session_id: ?[]const u8 = null,
@@ -255,9 +258,18 @@ fn initSessionRecord(
     try ensureStoreReady(allocator, workspace_root);
 
     const now = std.time.milliTimestamp();
-    const nonce = std.crypto.random.int(u64);
-    const id = try std.fmt.allocPrint(allocator, "session-{d}-{x}", .{ now, nonce });
+    const id = if (options.session_id) |explicit_id| blk: {
+        try validateExplicitSessionId(explicit_id);
+        break :blk try allocator.dupe(u8, explicit_id);
+    } else blk: {
+        const nonce = std.crypto.random.int(u64);
+        break :blk try std.fmt.allocPrint(allocator, "session-{d}-{x}", .{ now, nonce });
+    };
     errdefer allocator.free(id);
+
+    const session_path = try sessionFilePath(allocator, workspace_root, id);
+    defer allocator.free(session_path);
+    if (fsutil.fileExists(session_path)) return error.SessionAlreadyExists;
 
     const prompt_copy = try allocator.dupe(u8, prompt);
     errdefer allocator.free(prompt_copy);
@@ -295,6 +307,14 @@ fn initSessionRecord(
     defer allocator.free(memories_path);
     if (!fsutil.fileExists(memories_path)) try fsutil.writeText(memories_path, "");
     return session;
+}
+
+fn validateExplicitSessionId(session_id: []const u8) !void {
+    if (session_id.len <= "session-".len or session_id.len > 128 or
+        !std.mem.startsWith(u8, session_id, "session-")) return error.InvalidSessionId;
+    for (session_id) |byte| {
+        if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_') return error.InvalidSessionId;
+    }
 }
 
 pub fn readSessionRecord(
@@ -1792,4 +1812,24 @@ fn nextSequence(sequence: u64) !u64 {
 
 fn sessionMessageId(allocator: std.mem.Allocator, seq: u64) ![]u8 {
     return std.fmt.allocPrint(allocator, "msg-{d}", .{seq});
+}
+
+test "explicit session identity is single-use and path safe" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var session = try initSessionWithOptions(allocator, workspace, "ticket child", .{
+        .session_id = "session-ticket-child-0123456789abcdef",
+    });
+    defer session.deinit(allocator);
+    try std.testing.expectEqualStrings("session-ticket-child-0123456789abcdef", session.id);
+    try std.testing.expectError(error.SessionAlreadyExists, initSessionWithOptions(allocator, workspace, "duplicate", .{
+        .session_id = "session-ticket-child-0123456789abcdef",
+    }));
+    try std.testing.expectError(error.InvalidSessionId, initSessionWithOptions(allocator, workspace, "escape", .{
+        .session_id = "session-../escape",
+    }));
 }

@@ -42,8 +42,10 @@ Rules:
 - Use typed tools and advertised availability. search_files requires iex.
 - runtime.full_access_mode is false by default and never relocates .var.
 - Scheduler leadership is process-exclusive and generation-fenced in source.
-- Do not infer exactly-once owner-crash recovery, serialized ticket claim/lease
-  issuance, or durable agent messaging until their roadmap gates close.
+- Ticket claim, worker generation, lease, capability, and deterministic child
+  identity commit in one process-serialized ticket row before child creation.
+- Do not infer exactly-once owner-crash recovery or durable agent messaging until
+  their roadmap gates close.
 
 Commands from apps/backend:
 scripts/zigw.ps1 build test --summary all

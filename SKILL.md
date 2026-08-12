@@ -55,9 +55,10 @@ requires source/installed SHA-256 equality and the installed consumer path.
 - Browser routes are redacted prototypes. Owner routes are loopback-only and
   token/generation gated.
 - Scheduler leadership is source-proven with one crash-released lock and
-  generation fence across two kernels. Mid-turn owner-crash reconciliation,
-  serialized ticket claim/lease issuance, and durable agent mailboxes remain
-  roadmap work. Do not infer them from the leadership proof.
+  generation fence across two kernels. Ticket claim, lease, capability, and
+  deterministic child identity now commit in one process-serialized row before
+  child materialization. Mid-turn owner-crash reconciliation and durable agent
+  mailboxes remain roadmap work. Do not infer them from admission proof.
 
 Read `README.md`, `apps/backend/architecture.md`, and
 `.docs/roadmap/24-harness-capability-next-90.md` for deeper contracts.
