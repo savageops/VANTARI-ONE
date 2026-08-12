@@ -22,9 +22,9 @@ This document describes both current owners and target invariants. The
 [2026-08-12 full-harness SITREP](../../.docs/research/2026-08-12-full-harness-sitrep.md)
 is the current promotion boundary. Source-built TUI and CLI clients now attach
 to one persistent workspace owner, so the fixed pool survives presentation
-exit. Owner-process crash still loses in-memory worker state, scheduler lease
-acquisition is not inter-process atomic, and exactly-once resume/requeue is not
-yet shipped.
+exit. Scheduler leadership is now inter-process exclusive and generation-fenced
+in source. Owner-process crash still loses in-memory worker state, and
+exactly-once resume/requeue is not yet shipped.
 Exact stored event sequence transport, shipped-TUI replay, generation-bound
 interactive cancellation, host request ownership, same-session admission,
 buffer projection, shutdown cancellation, test-root isolation, append-only
@@ -119,6 +119,13 @@ and executor consumers receive owned exact-session copies.
 ## Ticket and buffered agent execution
 
 Ticket assignment is a durable queue transition, not a child-session launch. `core/tickets/index.zig` owns ticket records, queue projection, claim/lease state, heartbeat evidence, stale-owner repair, and terminal transitions. `core/scheduler/service.zig` claims assigned work only when the configured pool has capacity, then routes the ticket through the existing `core/agents/service.zig` and `core/agents/supervisor.zig` owners.
+
+`core/scheduler/store.zig` acquires the shared
+`shared/process_lock.zig` primitive before reading leadership state and holds it
+through the full tick. `lease.json` is the durable projection, not the mutex: it
+carries the exact random nonzero worker generation and is read back before any
+dispatch. An expired projection permits failover only after the prior OS lock is
+released. Two independently started kernels therefore yield one active leader.
 
 ```text
 log_ticket transition(assigned)
@@ -375,7 +382,8 @@ Every session directory contains:
 The project-local execution owner keeps this sole service/pool/scheduler
 composition alive across TUI and CLI detach. It does not make in-memory child
 work crash-resumable: owner death still requires the generation-fenced
-reconciliation assigned to moves 23–30.
+reconciliation assigned to moves 24–30. Move 23 closes scheduler leadership;
+ticket claim/lease serialization remains move 24.
 
 `core/executor/loop.zig` parks a waiting parent on the supervisor condition without a provider call. The first unconsumed terminal child wakes the parent; the service appends that child's convergence record exactly once, rebuilds through the context compiler, and permits the next routing/synthesis turn while unfinished siblings remain supervised. A parent cannot emit terminal output while any owned child remains active. Full specialists execute as ordinary isolated VAR1 child sessions. Tool-free `model_task` specialists use one provider turn and validate their supplied output schema without acquiring a second transcript or tool runtime.
 
@@ -517,19 +525,26 @@ The current validation lane should always prove these slices together:
 - health preflights stale local `VAR1.exe` process diagnostics before build/test gates
 - the HTTP bridge exists; no tracked browser client exists in this checkout
 
-Latest local Windows validation on 2026-08-12:
+Latest local Windows validation on 2026-08-13:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Isolated broad test graph -> 19/19 steps and 1958/1958 tests passed.
+- Isolated broad test graph -> 19/19 steps and 1973/1973 tests passed.
 - Focused backend TUI -> 61/61 passed.
-- Host lifecycle -> 238/238 passed, including atomic same-session admission,
+- Host lifecycle lane passes, including atomic same-session admission,
   session-keyed buffer state, exact-generation cancellation,
   cancellation-before-join shutdown, RPC deadlines, late-response retirement,
-  and Windows Job Object ownership.
+  shared process-lock exclusion, and Windows Job Object ownership.
+- Two complete source `kernel-stdio` processes contending for one due job
+  produced one unique attempt, one nonzero generation, and zero proof-owned
+  survivors. Evidence root:
+  `.zig-cache/owner-proofs/e421ccb28240402ead1fbcbcb3903335`.
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
-- Built and installed SHA-256 both equal
-  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
+- Current source SHA-256 is
+  `06521D7CCA11F9084F79470340805EC1BE4D8E4B8BF4BBE62A5BBD9621AD24AE`.
+  Installed move-19 SHA-256 remains
+  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
+  replacement waits for operator-owned PIDs 12028/14452 to exit naturally.
 - Installed settings transport flipped `runtime.full_access_mode` in an isolated
   workspace, removed all generated state, preserved the live root, and left
   zero VANTARI process.

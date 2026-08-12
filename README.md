@@ -242,9 +242,12 @@ consumer proof and is therefore not part of the release surface.
 Ticket assignment is queue admission, not an immediate child-session launch.
 The scheduler claims assigned work only when the configured agent pool has
 capacity, then routes the ticket through the existing AgentService and
-Supervisor owners. This source path is implemented, but process-surviving agent
-execution and inter-process lease arbitration remain open readiness findings;
-see the current full-harness SITREP before treating the pool as durable.
+Supervisor owners. Two source-built kernels now contend through one
+crash-released scheduler lock and a persisted generation fence; the native
+two-kernel proof produces one winner and one attempt. Exactly-once recovery
+after execution-owner death and serialized ticket claim/lease issuance remain
+open; see the current full-harness SITREP before treating active work as
+crash-resumable.
 
 The TUI keeps this mechanic legible without adding a status forest: the footer shows pool and queue pressure when non-zero; the activity group shows `Agents completed/total`; each keyed child row ends with a bounded turn summary sourced from the child session summary ledger. Tool lifecycle names remain typed event metadata, not the visible child summary. The persistent footer omits `Esc cancel`.
 
@@ -395,14 +398,15 @@ Presentation lifetime is separate from execution lifetime. TUI and CLI clients
 validate `.var/runtime/execution-owner.json` through a live generation handshake;
 concurrent starts converge through one workspace lease. Graceful owner shutdown
 drains accepted connections before closing the child Job Object. A stale or
-crashed owner is rejected and replaced once by the next client. Scheduler claim
-fencing and mid-turn owner-crash reconciliation remain explicit roadmap gates.
+crashed owner is rejected and replaced once by the next client. Scheduler
+leadership is process-exclusive and generation-fenced in source; mid-turn
+owner-crash reconciliation remains an explicit roadmap gate.
 
 The invariant is cold-start legibility: after an interrupted process, the next client should be able to explain what completed, what did not, and which transition made that conclusion durable.
 
 ### Durable Scheduling
 
-Schedules are kernel records, not wrappers around OS cron. The scheduler persists job state, due-time and misfire policy, leases, execution attempts, and reconciliation evidence. A host supervisor advances due jobs through the same session primitive used by manual execution; `schedule_job` and the schedule RPCs are control surfaces over that owner.
+Schedules are kernel records, not wrappers around OS cron. The scheduler persists job state, due-time and misfire policy, a nonzero owner generation, execution attempts, and reconciliation evidence. One OS-owned lock spans each tick, so independent kernels cannot both dispatch an expired due row. A host supervisor advances due jobs through the same session primitive used by manual execution; `schedule_job` and the schedule RPCs are control surfaces over that owner.
 
 <br/>
 
@@ -751,7 +755,7 @@ Every tool call, context window, and model interaction is recorded in structured
 | Native skill routing with on-demand capsule retrieval | **Shipped** |
 | Wire-protocol routing — Chat Completions, Responses, Anthropic Messages | **Shipped** |
 | Provider model discovery and local context-window detection | **Shipped** |
-| Durable scheduler records and attempts | **Source present; inter-process lease claim pending** |
+| Durable scheduler records and attempts | **Source proven; two-kernel leadership gate passed** |
 | Buffered ticket admission and fixed in-process agent capacity | **Source present; process-survival proof pending** |
 | Plugin runtime with typed socket execution | **In progress** |
 | Provider fallback chains | Planned |

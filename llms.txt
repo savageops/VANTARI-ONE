@@ -41,8 +41,9 @@ Rules:
   checkpoint ledger, not a transcript.
 - Use typed tools and advertised availability. search_files requires iex.
 - runtime.full_access_mode is false by default and never relocates .var.
-- Do not infer exactly-once owner-crash recovery, atomic inter-process scheduler
-  claims, or durable agent messaging until their roadmap gates close.
+- Scheduler leadership is process-exclusive and generation-fenced in source.
+- Do not infer exactly-once owner-crash recovery, serialized ticket claim/lease
+  issuance, or durable agent messaging until their roadmap gates close.
 
 Commands from apps/backend:
 scripts/zigw.ps1 build test --summary all

@@ -39,6 +39,7 @@ only when consolidation or deletion cannot close the canonical consumer path.
 - Owner RPC/event/shutdown routes remain loopback-only, token-gated, generation-bound, and exact. Browser routes remain separately token-gated and redacted. A presentation client exit must not change owner lifetime.
 - `apps/backend/src/core/tickets/` is the canonical ticket ledger and queue projection. `assigned` admits work; it does not launch a child session.
 - `apps/backend/src/core/scheduler/` claims assigned tickets only when `apps/backend/src/core/agents/supervisor.zig` reports fixed-pool capacity, then routes through `core/agents/service.zig`. Do not add a second worker registry or direct assignment launcher.
+- `apps/backend/src/shared/process_lock.zig` owns crash-released inter-process exclusion. A scheduler tick holds `.var/schedules/lease.lock`, publishes and reads back one nonzero generation in `lease.json`, and releases only after scheduled-job and ticket mutations finish. Do not restore read/check/write leadership or add a scheduler-local lock primitive.
 - `.docs/index.md`, `.docs/technical_summary.md`, `.docs/workspace.json`, and `.refs/index.md` are the current project-record indexes. Keep them aligned with shipped runtime truth.
 
 ## II. Session Storage Contract

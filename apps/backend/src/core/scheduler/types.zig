@@ -114,6 +114,7 @@ pub const ScheduleAttempt = struct {
 
 pub const SchedulerLease = struct {
     owner_id: []u8,
+    generation: u64,
     acquired_at_ms: i64,
     expires_at_ms: i64,
 

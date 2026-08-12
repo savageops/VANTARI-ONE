@@ -54,9 +54,10 @@ requires source/installed SHA-256 equality and the installed consumer path.
 - `search_files` requires `iex`. Do not hide an `rg`, `grep`, or `sed` fallback.
 - Browser routes are redacted prototypes. Owner routes are loopback-only and
   token/generation gated.
-- Mid-turn owner-crash reconciliation, inter-process scheduler/ticket claims,
-  and durable agent mailboxes remain roadmap work. Do not claim them from the
-  persistent presentation-detach proof.
+- Scheduler leadership is source-proven with one crash-released lock and
+  generation fence across two kernels. Mid-turn owner-crash reconciliation,
+  serialized ticket claim/lease issuance, and durable agent mailboxes remain
+  roadmap work. Do not infer them from the leadership proof.
 
 Read `README.md`, `apps/backend/architecture.md`, and
 `.docs/roadmap/24-harness-capability-next-90.md` for deeper contracts.

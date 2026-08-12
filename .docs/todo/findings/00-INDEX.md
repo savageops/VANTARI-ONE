@@ -2,7 +2,7 @@
 type: findings-index
 id: harness-readiness-findings
 status: live
-updated: 2026-08-12
+updated: 2026-08-13
 source: ../../research/2026-08-12-full-harness-sitrep.md
 ---
 
@@ -13,8 +13,9 @@ owns request lifetime, test roots, summary/message sequencing, exact event
 transport and TUI replay, one valid-prefix ledger contract, and generation-bound
 cancellation. Move 21 is source-complete: one project-local execution owner now
 survives presentation detach and excludes duplicate starts. Finding 11 remains
-open for owner-crash reconciliation, inter-process scheduler/ticket claims,
+open for owner-crash reconciliation, serialized ticket claim/lease issuance,
 durable agent messaging, installed proof, and multi-process writer authority.
+Move 23 closes scheduler leadership.
 
 [`../../roadmap/24-harness-capability-next-90.md`](../../roadmap/24-harness-capability-next-90.md) expands this ledger into the current 90-move execution order. This findings index remains the immediate P0/P1/P2 authority; roadmap 24 sequences the downstream capability and friction-removal work behind it.
 
@@ -23,7 +24,7 @@ Execute one item at a time in priority and numeric order. Do not start PLUG, TUI
 | Order | Priority | Finding | Owner surface | Status |
 |---|---|---|---|---|
 | 10 | P0 | [Kernel lifetime and RPC admission](10-kernel-lifetime-and-rpc-admission.md) | host/stdio client and server | closed 2026-08-12 |
-| 11 | P0 | [Persistent agent worker and scheduler arbitration](11-persistent-agent-worker-and-scheduler-arbitration.md) | agents, scheduler, host | move 21 source-complete; pending moves 22–30 |
+| 11 | P0 | [Persistent agent worker and scheduler arbitration](11-persistent-agent-worker-and-scheduler-arbitration.md) | agents, scheduler, host | moves 21–23 source-complete/closed; pending moves 24–30 |
 | 12 | P0 | [Test isolation and runtime hygiene](12-test-isolation-and-runtime-hygiene.md) | build/test root, install/state hygiene | closed 2026-08-12 |
 | 13 | P0 | [Concurrent ledgers and replay identity](13-concurrent-ledgers-and-replay-identity.md) | sessions, protocol, TUI cursor | closed 2026-08-12 |
 | 20 | P1 | [Tool capability truth](20-tool-capability-truth.md) | eval, DAP, TTSR, search, capability probes | pending |

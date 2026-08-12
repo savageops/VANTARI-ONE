@@ -2,7 +2,7 @@
 type: technical-summary
 id: docs/technical-summary
 status: current
-updated: 2026-08-12
+updated: 2026-08-13
 owner: apps/backend/src
 ---
 
@@ -111,9 +111,11 @@ Assignment is queue admission. It does not launch a child session directly.
 The scheduler claims only when configured capacity is available, then uses the
 existing `AgentService` and `Supervisor` owners. There is no second worker
 registry or background status bus. The fixed pool now lives in one persistent
-owner tree and survives TUI/CLI exit. Owner-process death still stops that pool,
-cold recovery marks running receipts stale, and scheduler leader acquisition is
-not an inter-process compare-and-swap. Chain 036 therefore remains pending.
+owner tree and survives TUI/CLI exit. Scheduler leadership now holds one
+crash-released OS lock through the full tick and reads back a random nonzero
+generation before dispatch. Owner-process death still stops the pool, cold
+recovery marks running receipts stale, and ticket claim plus lease issuance is
+not yet one serialized transition. Chain 036 therefore remains pending.
 
 ## TUI projection contract
 
@@ -143,12 +145,19 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,970/1,970 tests with zero skips.
-  Its 239-test host lane executes the stdio child, owner state/client, bridge,
-  and shared process-tree contracts; the 1,510-test integration lane includes
+- The complete graph passes 19/19 steps and 1,973/1,973 tests with zero skips.
+  Its host lane executes the stdio child, owner state/client, shared process
+  lock, bridge, and process-tree contracts; the integration lane includes
   exact owner route, lease, stalled-loopback deadline, and explicit-workspace
   precedence probes. The backend
   TUI lane passes 61/61.
+- A barrier-synchronized leadership race returns one guard and one
+  `LeaseUnavailable`. Native proof root
+  `.zig-cache/owner-proofs/e421ccb28240402ead1fbcbcb3903335` starts two
+  complete source `kernel-stdio` processes against one due job and retains one
+  attempt ID, one reserved row, one completed row, one nonzero generation, and
+  zero proof-owned processes. The 34-segment GGUF owner audit reports zero
+  candidate and exact pairs.
 - Parent-shell production-home probes kept 99,960 files, 693,051,144 bytes,
   config/auth hashes, and process inventory unchanged across graph and direct
   proof.
@@ -231,7 +240,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - The last installed-proven move-19 artifact remains SHA-256
   `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
   Current source ReleaseFast is
-  `899B9F340C4151A8E2D7EFD26F5778312F1EE82C93C8E0804DC36F954B9B9CA2`.
+  `06521D7CCA11F9084F79470340805EC1BE4D8E4B8BF4BBE62A5BBD9621AD24AE`.
   Replacement is blocked while operator-owned installed PIDs 12028 and 14452
   remain active; source/installed equality is not claimed.
 - Installed `session/send` against a disposable local provider imported all
@@ -250,12 +259,12 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
   returned `requested` and exited with zero process. Its legacy terminal name is
   retained only as historical proof; move 19 removed that writer.
-- Moves 5–20 and 22 plus findings 10 and 13 are closed. Move 21 is source-complete
+- Moves 5–20, 22, and 23 plus findings 10 and 13 are closed. Move 21 is source-complete
   and awaits the installed replacement gate. Six synchronized 100-way probes cover
   admission, summary, message, event, tracked-TUI replay, and shutdown. The
-  latest canonical graph passes 1,970/1,970. Mid-turn owner-crash recovery and
-  inter-process scheduler arbitration remain P0.
-- The hive direction is assigned to moves 23–30 and finding 11. The target is
+  latest canonical graph passes 1,973/1,973. Mid-turn owner-crash recovery and
+  serialized ticket claim/lease issuance remain P0.
+- The hive direction is assigned to moves 24–30 and finding 11. The target is
   one durable direct/group/parent mailbox over session/event ownership,
   selective summary/artifact awareness, and nested normal sessions. No general
   mailbox, restart-safe unread cursor, or peer wake path is shipped yet.

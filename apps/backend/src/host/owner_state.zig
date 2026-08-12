@@ -1,14 +1,13 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const fsutil = @import("../shared/fsutil.zig");
+const process_lock = @import("../shared/process_lock.zig");
 
 pub const schema_version = "var1.execution_owner.v1";
 pub const protocol_version = "var1.owner_http.v1";
 pub const state_filename = "execution-owner.json";
 pub const start_lock_filename = "execution-owner-start.lock";
 pub const lease_filename = "execution-owner-lease.lock";
-
-const lock_retry_ns = 10 * std.time.ns_per_ms;
 
 pub const Projection = struct {
     type: []const u8 = schema_version,
@@ -57,15 +56,7 @@ pub fn leasePath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8
     return fsutil.join(allocator, &.{ workspace_root, ".var", "runtime", lease_filename });
 }
 
-pub const FileLock = struct {
-    file: std.fs.File,
-
-    pub fn deinit(self: *FileLock) void {
-        self.file.unlock();
-        self.file.close();
-        self.* = undefined;
-    }
-};
+pub const FileLock = process_lock.FileLock;
 
 pub fn acquireStartLock(
     allocator: std.mem.Allocator,
@@ -98,49 +89,10 @@ pub fn ownerLeaseAvailable(allocator: std.mem.Allocator, workspace_root: []const
 }
 
 fn acquireFileLock(path: []const u8, timeout_ms: usize) !FileLock {
-    try fsutil.ensureParent(path);
-    var file = try std.fs.cwd().createFile(path, .{
-        .read = true,
-        .truncate = false,
-    });
-    errdefer file.close();
-
-    var timer = try std.time.Timer.start();
-    const timeout_ns = std.math.mul(u64, @intCast(timeout_ms), std.time.ns_per_ms) catch std.math.maxInt(u64);
-    while (!try tryExclusiveLock(file)) {
-        if (timer.read() >= timeout_ns) return error.OwnerLockUnavailable;
-        std.Thread.sleep(lock_retry_ns);
-    }
-    return .{ .file = file };
-}
-
-/// Zig 0.15.1's Windows `File.tryLock` has a malformed `.none` return arm.
-/// Keep the same one-byte, crash-released file-lock contract while calling the
-/// underlying Windows primitive directly. Other platforms retain stdlib flock.
-fn tryExclusiveLock(file: std.fs.File) !bool {
-    if (builtin.os.tag == .windows) {
-        const windows = std.os.windows;
-        const range_off: windows.LARGE_INTEGER = 0;
-        const range_len: windows.LARGE_INTEGER = 1;
-        var io_status_block: windows.IO_STATUS_BLOCK = undefined;
-        windows.LockFile(
-            file.handle,
-            null,
-            null,
-            null,
-            &io_status_block,
-            &range_off,
-            &range_len,
-            null,
-            windows.TRUE,
-            windows.TRUE,
-        ) catch |err| switch (err) {
-            error.WouldBlock => return false,
-            else => return err,
-        };
-        return true;
-    }
-    return file.tryLock(.exclusive);
+    return process_lock.acquire(path, timeout_ms) catch |err| switch (err) {
+        error.LockUnavailable => error.OwnerLockUnavailable,
+        else => err,
+    };
 }
 
 /// Atomically publish a ready execution owner. Call only after the listener and

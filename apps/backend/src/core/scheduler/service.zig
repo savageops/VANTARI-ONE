@@ -31,7 +31,7 @@ pub const Service = struct {
     transport: provider.Transport,
     owner_id: []u8,
     agent_service: ?tools.AgentService = null,
-    worker_generation: u64 = 1,
+    worker_generation: u64,
     stop_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(
@@ -48,12 +48,15 @@ pub const Service = struct {
         transport: provider.Transport,
         agent_service: ?tools.AgentService,
     ) !Service {
+        var worker_generation = std.crypto.random.int(u64);
+        if (worker_generation == 0) worker_generation = 1;
         return .{
             .allocator = allocator,
             .config = config,
             .transport = transport,
             .owner_id = try std.fmt.allocPrint(allocator, "scheduler-{d}-{x}", .{ std.time.milliTimestamp(), std.crypto.random.int(u64) }),
             .agent_service = agent_service,
+            .worker_generation = worker_generation,
         };
     }
 
@@ -74,7 +77,7 @@ pub const Service = struct {
 
     pub fn tick(self: *Service) !TickResult {
         const now = std.time.milliTimestamp();
-        const lease = scheduler.tryAcquireLease(self.allocator, self.config.workspace_root, self.owner_id, now, 5000) catch |err| switch (err) {
+        var lease = scheduler.tryAcquireLease(self.allocator, self.config.workspace_root, self.owner_id, self.worker_generation, now, 5000) catch |err| switch (err) {
             scheduler.store.Error.LeaseUnavailable => return .{},
             else => return err,
         };
@@ -532,6 +535,7 @@ fn claimTicketForTest(
     lease_token: []const u8,
     lease_expires_at_ms: i64,
     attempt: u32,
+    worker_generation: u64,
 ) !void {
     var projection = try store.readProjection();
     defer projection.deinit();
@@ -542,7 +546,7 @@ fn claimTicketForTest(
         .ticket_id = ticket_id,
         .expected_revision = ticket.revision,
         .worker_id = worker_id,
-        .worker_generation = 1,
+        .worker_generation = worker_generation,
         .lease_token = lease_token,
         .lease_expires_at_ms = lease_expires_at_ms,
         .attempt = attempt,
@@ -655,7 +659,7 @@ test "scheduler dispatches oldest assigned ticket through the typed agent servic
     try std.testing.expect(ticket.claim_complete);
     try std.testing.expectEqualStrings("fake-session", ticket.active_session_id);
     try std.testing.expectEqualStrings(service.owner_id, ticket.worker_id);
-    try std.testing.expectEqual(@as(u64, 1), ticket.worker_generation);
+    try std.testing.expectEqual(service.worker_generation, ticket.worker_generation);
     try std.testing.expectEqual(@as(u32, 1), ticket.attempt);
     try std.testing.expectEqualStrings("planner", ticket.agent_hint);
     try std.testing.expectEqualStrings("fake-capability", ticket.capability_hash);
@@ -817,7 +821,7 @@ test "scheduler renews its live near-expiry claim and leaves missing child evide
     var service = try Service.init(allocator, &config, .{ .context = null, .sendFn = provider.httpSend });
     defer service.deinit();
     const now_ms = std.time.milliTimestamp();
-    try claimTicketForTest(allocator, &store, ticket_id, service.owner_id, "missing-child", "heartbeat-lease", now_ms + 1000, 1);
+    try claimTicketForTest(allocator, &store, ticket_id, service.owner_id, "missing-child", "heartbeat-lease", now_ms + 1000, 1, service.worker_generation);
 
     const result = try service.tick();
     try std.testing.expectEqual(@as(usize, 1), result.ticket_renewed_count);
@@ -852,7 +856,7 @@ test "scheduler requeues expired claims once and preserves the last child sessio
     var service = try Service.init(allocator, &config, .{ .context = null, .sendFn = provider.httpSend });
     defer service.deinit();
     const now_ms = std.time.milliTimestamp();
-    try claimTicketForTest(allocator, &store, ticket_id, "dead-worker", "stale-child", "stale-lease", now_ms - 1, 1);
+    try claimTicketForTest(allocator, &store, ticket_id, "dead-worker", "stale-child", "stale-lease", now_ms - 1, 1, 1);
 
     const first = try service.tick();
     try std.testing.expectEqual(@as(usize, 1), first.ticket_requeued_count);
@@ -897,12 +901,12 @@ test "scheduler completes terminal child sessions and marks failed work for repa
     try sessions.writeOutput(allocator, workspace, completed_session.id, "done-data");
     try sessions.setSessionStatus(allocator, workspace, &completed_session, .completed);
     const now_ms = std.time.milliTimestamp();
-    try claimTicketForTest(allocator, &store, completed_ticket_id, "worker-complete", completed_session.id, "complete-lease", now_ms + 30_000, 1);
+    try claimTicketForTest(allocator, &store, completed_ticket_id, "worker-complete", completed_session.id, "complete-lease", now_ms + 30_000, 1, 1);
 
     var failed_session = try sessions.initSessionWithOptions(allocator, workspace, "repair", .{ .display_name = "failed child" });
     defer failed_session.deinit(allocator);
     try sessions.setSessionFailure(allocator, workspace, &failed_session, "provider failed");
-    try claimTicketForTest(allocator, &store, failed_ticket_id, "worker-failed", failed_session.id, "failed-lease", now_ms + 30_000, 1);
+    try claimTicketForTest(allocator, &store, failed_ticket_id, "worker-failed", failed_session.id, "failed-lease", now_ms + 30_000, 1, 1);
 
     var service = try Service.init(allocator, &config, .{ .context = null, .sendFn = provider.httpSend });
     defer service.deinit();

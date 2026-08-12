@@ -2,7 +2,7 @@
 type: roadmap
 id: roadmap/harness-capability-next-90
 status: active
-updated: 2026-08-12
+updated: 2026-08-13
 owner: .docs/roadmap/24-harness-capability-next-90.md
 source: ../research/2026-08-12-full-harness-sitrep.md
 exit_criteria: All P0 moves are proven through the installed Windows owner path; later moves advance only when their dependency band is green.
@@ -68,8 +68,9 @@ advance the queue until the real installed consumer path proves it.
 | 20 | consolidate/add-tests | closed | Six synchronized 100-way probes now cover one-winner admission, append-only summary/message identity, same-millisecond event sequence, exact TUI replay suppression, and admission-fenced shutdown. Four consecutive graphs pass 19/19 and 1,959/1,959; ReleaseFast is 9/9. No production mechanism, test framework, database, simulator, or duplicate owner was added. The installed move-19 proof remains authoritative; two active operator-owned installed processes were preserved. |
 | 21 | consolidate/add | source-complete; install blocked | One project-local execution owner now survives presentation detach. Public `LocalClient` reconnects through an exact token/generation-gated loopback route; one private `ChildClient` retains the sole kernel/pool/scheduler tree. Twenty concurrent clients converge, foreground `serve` rejects a duplicate owner, graceful and forced-crash recovery produce one new generation, final process count is zero, stalled sockets are bounded, and explicit workspace selection defeats conflicting inherited redirection. The graph passes 1,968/1,968; ReleaseFast, lifecycle, and 110-segment duplicate-owner gates pass. Installed replacement waits for operator-owned PIDs 12028/14452 to exit naturally. |
 | 22 | delete/consolidate | closed | Deleted the uncalled per-session `run-session` executor, parser, and false capability help: 138 production lines removed. Canonical `run --session-id -> LocalClient -> /owner/rpc -> session/send` remains. Source tests prove the retired command is absent and submission reaches one kernel transport with observable `session_started -> assistant_response`; graph 1,970/1,970, ReleaseFast 9/9, unknown-command smoke, and owner tracer pass. |
+| 23 | consolidate/add-tests | closed | Replaced scheduler `lease.json` read/check/write leadership with the one shared crash-released process-lock primitive. A guard spans the full tick; the lease projection carries a random nonzero generation and is read back before dispatch. Barrier contention yields one winner; two complete source `kernel-stdio` processes against one due job produced one attempt ID, one reserved row, one completed row, and zero survivors. The graph passes 1,973/1,973, ReleaseFast 9/9, and the 34-segment ownership audit finds zero candidate/exact pairs. |
 | 31 | delete/consolidate | closed | Retired prompt leak and brittle prose assertions removed; broad graph green. |
-| 38 | consolidate | reopened/pending | Historical install proof passed for an earlier artifact. Current ReleaseFast is `899B9F340C4151A8E2D7EFD26F5778312F1EE82C93C8E0804DC36F954B9B9CA2`; installed remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`. Replace and rerun installed smokes only after operator-owned PIDs 12028/14452 exit naturally. |
+| 38 | consolidate | reopened/pending | Historical install proof passed for an earlier artifact. Current ReleaseFast is `06521D7CCA11F9084F79470340805EC1BE4D8E4B8BF4BBE62A5BBD9621AD24AE`; installed remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`. Replace and rerun installed smokes only after operator-owned PIDs 12028/14452 exit naturally. |
 
 ## Competitive basis
 
@@ -77,8 +78,8 @@ advance the queue until the real installed consumer path proves it.
 |---|---|---|
 | [Opik](https://github.com/comet-ml/opik) | Trace to diagnosis, approved diff, rerun, regression | Keep repair gated, replayable, and evaluator-backed. |
 | [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) | Daemon sessions, heartbeats, schedules, snapshot/rollback refinement | Make the worker survive the TUI; retain baseline conflict checks. |
-| [Eve](https://github.com/vercel/eve) | Indexed durable streams and guarded cancellation | Carry ledger sequence through every client boundary. |
-| [oh-my-pi](https://github.com/can1357/oh-my-pi) | Persistent eval, composable DAP, true stream abort, Agent Hub | Advertise only executable lifecycle-complete tools; disclose detail on demand. |
+| [Eve](https://github.com/vercel/eve) | Indexed durable streams, guarded cancellation, and one resolved artifact generation reused through schedule dispatch | Carry ledger sequence through every client boundary and keep one generation from claim through effect. |
+| [oh-my-pi](https://github.com/can1357/oh-my-pi) | Process-owned cross-platform locks, persistent eval, composable DAP, true stream abort, Agent Hub | Reuse one crash-released lock primitive; advertise only executable lifecycle-complete tools. |
 | [pi](https://github.com/earendil-works/pi) | Compact model/effort/context/cost footer and explicit unknown context | Keep one minimal footer and never fabricate precision after compaction. |
 | [OpenHands Runtime](https://docs.openhands.dev/openhands/usage/architecture/runtime) | One sandbox-owned action/observation runtime | Add access profiles through the existing tool owner, not tool-local bypasses. |
 | [OpenAI Codex](https://github.com/openai/codex) | Typed items, scoped instructions, compact plan state | Keep context segment-owned and clients projection-only. |
@@ -229,7 +230,8 @@ advance the queue until the real installed consumer path proves it.
 
 ## Immediate frontier
 
-Start at move 21. Moves 1-20 are the closed non-negotiable integrity floor. Moves 21-30
-turn the current in-process pool into the persistent system the operator asked
-for. Do not spend implementation time on PLUG, context sharding, or autonomous
-repair while either band remains red.
+Start at move 24. Moves 1-20, 22, and 23 are closed; move 21 is source-complete
+and blocked only at installed replacement. Moves 24-30 finish ticket
+serialization, durable agent mail, capacity truth, and crash reconciliation.
+Do not spend implementation time on PLUG, context sharding, or autonomous repair
+while that band remains red.

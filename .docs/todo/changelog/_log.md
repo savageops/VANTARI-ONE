@@ -1892,3 +1892,54 @@ replacement remain later explicit moves.
 
 **Next todo:** move 23 — replace scheduler read/check/write leadership with one
 inter-process exclusive claim and owner-generation fence.
+
+## 2026-08-13 - Roadmap move 23 scheduler leadership fenced
+
+**Changed:**
+
+- Replaced scheduler `lease.json` read/check/write leadership with one
+  crash-released OS lock held across the complete scheduled-job and ticket tick.
+- Extracted the proven owner byte-range lock into
+  `shared/process_lock.zig`; execution-owner startup/lifetime and scheduler
+  leadership now consume one primitive instead of maintaining two lock bodies.
+- Added a random nonzero scheduler generation to the durable lease projection,
+  rejected an active different generation, and read back the exact projection
+  before dispatch.
+- Replaced the constant ticket worker generation with the scheduler's process
+  generation. No database, daemon, election service, scheduler registry, or
+  second pool was added.
+- Added a synchronized contender falsifier and
+  `prove-scheduler-leadership.ps1`, which launches two full source kernels
+  against one due job and cleans only its own PIDs.
+
+**Competitive decision:**
+
+- Harvested Oh My Pi's process-owned crash-released lock and Eve's one-generation
+  dispatch invariant. Scion, NullClaw, and KrillClaw remain in-process-only;
+  Flue's tracked cron is manifest-only; Codex and pi expose no comparable local
+  scheduler owner. VANTARI retains fewer concepts and adds Windows-native
+  two-process proof.
+
+**Validation:**
+
+- Pinned Zig 0.15.1 graph: 19/19 steps and 1,973/1,973 tests. ReleaseFast: 9/9.
+- Barrier contention returns one guard and one `LeaseUnavailable`.
+- Native evidence root
+  `.zig-cache/owner-proofs/e421ccb28240402ead1fbcbcb3903335` records two
+  concurrent kernels, one attempt ID, one reserved row, one completed row,
+  generation `1127306601282036122`, empty stderr, and final zero proof-owned
+  processes.
+- GGUF duplicate-owner audit: 34 segments, zero candidate pairs, zero exact
+  pairs.
+- Source SHA-256 is
+  `06521D7CCA11F9084F79470340805EC1BE4D8E4B8BF4BBE62A5BBD9621AD24AE`.
+  Installed SHA-256 remains
+  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
+  operator-owned PIDs 12028 and 14452 remain untouched.
+
+**Boundary:** Scheduler leadership is closed in source. Move 24 owns ticket
+claim plus lease issuance as one serialized transition. Active-turn owner-crash
+reconciliation, mailbox delivery, and installed replacement remain later gates.
+
+**Next todo:** move 24 — serialize ticket claim plus lease issuance so one
+ticket revision creates one child session under contention.

@@ -110,6 +110,12 @@ The `log_ticket` tool supports `create`, `transition` (with reason), and `list`.
 
 Assignment is queue admission. It does not launch an agent directly. The scheduler claims assigned tickets only when the configured capacity has a free slot, then calls the existing `AgentService` and fixed-pool `Supervisor` path. Heartbeats, leases, stale-owner requeue, terminal reconciliation, and repair evidence remain durable scheduler/ticket state. `tickets.proactive_workpool` is opt-in; the default is a configured pool waiting for explicit assignment.
 
+Scheduler leadership is inter-process exclusive in source. One shared OS-owned
+lock spans the full tick; `lease.json` carries a random nonzero generation that
+is read back before dispatch. The native Windows proof starts two complete
+`kernel-stdio` processes against one due job and records one unique attempt.
+Ticket claim plus lease issuance remains the next serialized transition.
+
 ### Interjection Protocol (Speak While Working)
 
 The operator can send messages while the agent is actively working. Messages are:
@@ -277,7 +283,8 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - `src/core/prompts/builder.zig` — system prompt assembly (all layers)
 - `src/core/agents/supervisor.zig` — bounded in-process delegation
 - `src/core/tickets/index.zig` — canonical ticket ledger, queue projection, claims, leases, and repair evidence
-- `src/core/scheduler/service.zig` — capacity-aware ticket dispatch and stale-owner reconciliation
+- `src/core/scheduler/store.zig` — scheduled jobs, attempts, process-exclusive leadership, and generation projection
+- `src/core/scheduler/service.zig` — capacity-aware ticket dispatch and stale-owner reconciliation under one leadership guard
 - `src/core/sessions/summaries.zig` — bounded durable session/agent turn summaries
 - `src/core/agents/spec.zig` — agent specialist definitions
 - `src/core/providers/routes.zig` — per-agent route resolution
@@ -293,6 +300,7 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - `src/host/http_bridge.zig` — resident owner routes plus redacted browser routes
 - `src/host/stdio_client.zig` — private supervised `kernel-stdio` child transport
 - `src/host/stdio_rpc.zig` — kernel host, scheduler + buffer thread spawn
+- `src/shared/process_lock.zig` — sole crash-released inter-process lock primitive for owner and scheduler boundaries
 
 ## Current Posture
 
@@ -336,7 +344,7 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Message transcript writer | **Source and installed proven** | One per-session owner serializes every message role and initializes sequence from a bounded valid tail. Multi-process writer ownership remains coupled to the persistent-host work. |
 | Persistent execution owner | **Source proven; install pending** | One workspace lease converges 20 concurrent clients on one owner/kernel tree. Explicit workspace selection defeats inherited/configured redirection. Client detach preserves the generation; graceful stop drains; forced owner death leaves zero descendants; the next client creates one new generation. The active installed operator pair blocks replacement only. |
 | Session submission | **Source proven** | `run --session-id` routes through `LocalClient` and owner `session/send`; the retired per-session `run-session` process no longer bypasses shared capacity or nested delegation. |
-| Child branch/convergence | **Owner-lifetime proven** | Fixed-pool convergence now survives presentation-client exit. Owner-process death still marks running receipts stale instead of resuming a worker; scheduler fencing and exactly-once reconciliation remain open. |
+| Child branch/convergence | **Owner-lifetime proven** | Fixed-pool convergence now survives presentation-client exit. Scheduler leadership is process-exclusive and generation-fenced; owner-process death still marks running receipts stale instead of resuming a worker, and exactly-once reconciliation remains open. |
 | Write-intent ledger | **Frontier scaffold** | Reserve/commit helpers and tests exist; write-capable tools do not call them on the canonical mutation path. |
 | Byte-level session integrity | **Source and installed proven** | One LF-only reader owns BOM, invalid-UTF-8, JSON/schema, duplicate, and non-monotonic boundaries across event/message/context/intent/summary projections. Append refuses a poisoned current tail without rewriting it; operator-facing corruption events remain a later diagnostics decision. |
 | Context compiler | **Shipped source path** | One builder compiles transcript plus checkpoint state and validates tool topology before provider dispatch. |
@@ -347,7 +355,7 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Arena/quota discipline | **Frontier scaffold** | Scoped allocators exist; quota counters are not maintained by the live turn path. |
 | DAP | **Non-composable prototype** | attach destroys its adapter before return; stacktrace and variables start fresh unattached adapters. |
 | eval | **Partial prototype** | Python state exists only inside a call-owned kernel; Bun is one-shot and does not enforce the advertised timeout. |
-| Scheduler lease | **Process-local confidence only** | lease.json is read/check/written without an inter-process compare-and-swap, so dual leadership is possible. |
+| Scheduler leadership | **Source and two-process proven** | One crash-released OS lock spans the tick; `lease.json` carries a nonzero generation and is read back before dispatch. Two complete source kernels produced one reserved/completed attempt and zero survivors. |
 
 The current evidence and ordered repair ledger live in the
 [full-harness SITREP](../../.docs/research/2026-08-12-full-harness-sitrep.md)

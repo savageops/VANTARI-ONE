@@ -16,7 +16,8 @@ source_message_policy: "Every lettered unit MUST include source_message_anchor, 
 > [!warning] Current audit supersession
 > The archived 036g receipt remains historical evidence, but its completion
 > judgment is not current. The full-harness audit proved process-local worker
-> ownership, a non-atomic scheduler leader lease, and missing durable agent mail.
+> ownership and missing durable agent mail. Move 23 has since closed the
+> non-atomic scheduler leader lease with a two-kernel generation-fenced proof.
 > Findings 10 and 13 are closed. This parent remains pending until finding 11 is repaired and a
 > new terminal review passes.
 
@@ -239,6 +240,9 @@ Every row above compounds the parent ratchet.
 ## Current Frontier
 
 [`../findings/11-persistent-agent-worker-and-scheduler-arbitration.md`](../findings/11-persistent-agent-worker-and-scheduler-arbitration.md)
+
+Move 24 is the next executable slice: serialize ticket claim plus lease issuance
+without changing assignment's side-effect-free queue semantics.
 
 ## Stop Condition
 

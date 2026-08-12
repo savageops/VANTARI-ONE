@@ -1,5 +1,6 @@
 const std = @import("std");
 const fsutil = @import("../../shared/fsutil.zig");
+const process_lock = @import("../../shared/process_lock.zig");
 pub const types = @import("types.zig");
 
 pub const Error = error{
@@ -31,8 +32,20 @@ const ParsedJob = struct {
 
 const ParsedLease = struct {
     owner_id: []const u8,
+    generation: u64 = 0,
     acquired_at_ms: i64,
     expires_at_ms: i64,
+};
+
+pub const LeaseGuard = struct {
+    lease: types.SchedulerLease,
+    lock: process_lock.FileLock,
+
+    pub fn deinit(self: *LeaseGuard, allocator: std.mem.Allocator) void {
+        self.lease.deinit(allocator);
+        self.lock.deinit();
+        self.* = undefined;
+    }
 };
 
 pub const CreateOptions = struct {
@@ -267,10 +280,20 @@ pub fn tryAcquireLease(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
     owner_id: []const u8,
+    generation: u64,
     now_ms: i64,
     ttl_ms: i64,
-) !types.SchedulerLease {
-    if (ttl_ms <= 0) return Error.InvalidSchedule;
+) !LeaseGuard {
+    if (ttl_ms <= 0 or generation == 0) return Error.InvalidSchedule;
+
+    const lock_path = try schedulesPath(allocator, workspace_root, "lease.lock");
+    defer allocator.free(lock_path);
+    var lock = process_lock.acquire(lock_path, 0) catch |err| switch (err) {
+        error.LockUnavailable => return Error.LeaseUnavailable,
+        else => return err,
+    };
+    errdefer lock.deinit();
+
     const existing = readLease(allocator, workspace_root) catch |err| switch (err) {
         error.FileNotFound => null,
         else => return err,
@@ -278,16 +301,33 @@ pub fn tryAcquireLease(
     defer if (existing) |lease| lease.deinit(allocator);
 
     if (existing) |lease| {
-        if (lease.expires_at_ms > now_ms and !std.mem.eql(u8, lease.owner_id, owner_id)) return Error.LeaseUnavailable;
+        if (lease.expires_at_ms > now_ms and
+            (!std.mem.eql(u8, lease.owner_id, owner_id) or lease.generation != generation))
+        {
+            return Error.LeaseUnavailable;
+        }
     }
 
     const lease = types.SchedulerLease{
         .owner_id = try allocator.dupe(u8, owner_id),
+        .generation = generation,
         .acquired_at_ms = now_ms,
         .expires_at_ms = now_ms + ttl_ms,
     };
+    errdefer lease.deinit(allocator);
     try writeLease(allocator, workspace_root, lease);
-    return lease;
+
+    const persisted = try readLease(allocator, workspace_root);
+    defer persisted.deinit(allocator);
+    if (!std.mem.eql(u8, persisted.owner_id, lease.owner_id) or
+        persisted.generation != lease.generation or
+        persisted.acquired_at_ms != lease.acquired_at_ms or
+        persisted.expires_at_ms != lease.expires_at_ms)
+    {
+        return Error.LeaseUnavailable;
+    }
+
+    return .{ .lease = lease, .lock = lock };
 }
 
 pub fn reserveRunNow(allocator: std.mem.Allocator, workspace_root: []const u8, job_id: []const u8) !types.ScheduleAttempt {
@@ -396,6 +436,7 @@ fn readLease(allocator: std.mem.Allocator, workspace_root: []const u8) !types.Sc
     defer parsed.deinit();
     return .{
         .owner_id = try allocator.dupe(u8, parsed.value.owner_id),
+        .generation = parsed.value.generation,
         .acquired_at_ms = parsed.value.acquired_at_ms,
         .expires_at_ms = parsed.value.expires_at_ms,
     };
@@ -517,4 +558,112 @@ test "scheduler store rejects invalid interval and soft deletes jobs" {
     defer deleted.deinit(allocator);
     try std.testing.expectEqual(types.JobStatus.deleted, deleted.status);
     try std.testing.expectError(Error.ScheduleNotFound, reserveRunNow(allocator, workspace, job.id));
+}
+
+test "scheduler lease excludes concurrent generations and fences failover" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var first = try tryAcquireLease(allocator, workspace, "scheduler-a", 11, 100, 50);
+    try std.testing.expectEqual(@as(u64, 11), first.lease.generation);
+    try std.testing.expectError(Error.LeaseUnavailable, tryAcquireLease(allocator, workspace, "scheduler-b", 22, 100, 50));
+    try std.testing.expectError(Error.LeaseUnavailable, tryAcquireLease(allocator, workspace, "scheduler-a", 12, 100, 50));
+    first.deinit(allocator);
+
+    try std.testing.expectError(Error.LeaseUnavailable, tryAcquireLease(allocator, workspace, "scheduler-b", 22, 149, 50));
+
+    var successor = try tryAcquireLease(allocator, workspace, "scheduler-b", 22, 151, 50);
+    defer successor.deinit(allocator);
+    try std.testing.expectEqualStrings("scheduler-b", successor.lease.owner_id);
+    try std.testing.expectEqual(@as(u64, 22), successor.lease.generation);
+    try std.testing.expectEqual(@as(i64, 201), successor.lease.expires_at_ms);
+}
+
+test "scheduler lease race yields exactly one generation" {
+    const Race = struct {
+        const Outcome = enum { pending, won, unavailable, failed };
+        const Context = struct {
+            allocator: std.mem.Allocator,
+            workspace: []const u8,
+            owner_id: []const u8,
+            generation: u64,
+            ready: *std.atomic.Value(u8),
+            start: *std.atomic.Value(bool),
+            resolved: *std.atomic.Value(u8),
+            outcome: *Outcome,
+        };
+
+        fn contend(context: Context) void {
+            _ = context.ready.fetchAdd(1, .acq_rel);
+            while (!context.start.load(.acquire)) std.atomic.spinLoopHint();
+
+            var guard = tryAcquireLease(
+                context.allocator,
+                context.workspace,
+                context.owner_id,
+                context.generation,
+                100,
+                50,
+            ) catch |err| {
+                context.outcome.* = if (err == Error.LeaseUnavailable) .unavailable else .failed;
+                _ = context.resolved.fetchAdd(1, .acq_rel);
+                return;
+            };
+            context.outcome.* = .won;
+            _ = context.resolved.fetchAdd(1, .acq_rel);
+            while (context.resolved.load(.acquire) < 2) std.atomic.spinLoopHint();
+            guard.deinit(context.allocator);
+        }
+    };
+
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var ready = std.atomic.Value(u8).init(0);
+    var start = std.atomic.Value(bool).init(false);
+    var resolved = std.atomic.Value(u8).init(0);
+    var first_outcome: Race.Outcome = .pending;
+    var second_outcome: Race.Outcome = .pending;
+    const common = .{
+        .allocator = allocator,
+        .workspace = workspace,
+        .ready = &ready,
+        .start = &start,
+        .resolved = &resolved,
+    };
+    var first = try std.Thread.spawn(.{}, Race.contend, .{Race.Context{
+        .allocator = common.allocator,
+        .workspace = common.workspace,
+        .owner_id = "scheduler-race-a",
+        .generation = 31,
+        .ready = common.ready,
+        .start = common.start,
+        .resolved = common.resolved,
+        .outcome = &first_outcome,
+    }});
+    var second = try std.Thread.spawn(.{}, Race.contend, .{Race.Context{
+        .allocator = common.allocator,
+        .workspace = common.workspace,
+        .owner_id = "scheduler-race-b",
+        .generation = 32,
+        .ready = common.ready,
+        .start = common.start,
+        .resolved = common.resolved,
+        .outcome = &second_outcome,
+    }});
+    while (ready.load(.acquire) < 2) std.atomic.spinLoopHint();
+    start.store(true, .release);
+    first.join();
+    second.join();
+
+    const winners: u8 = @intFromBool(first_outcome == .won) + @intFromBool(second_outcome == .won);
+    const unavailable: u8 = @intFromBool(first_outcome == .unavailable) + @intFromBool(second_outcome == .unavailable);
+    try std.testing.expectEqual(@as(u8, 1), winners);
+    try std.testing.expectEqual(@as(u8, 1), unavailable);
 }
