@@ -2,6 +2,13 @@
 
 **Priority: P0**
 
+**Current delta (2026-08-12):** Message/event append now share bounded-tail
+sequence initialization, JSONL appends use a 100 ms durability batch with forced
+turn-boundary sync, and current readers salvage several malformed suffix/BOM
+cases. Duplicate-sequence signaling, common prefix ownership, binary payloads,
+and complete installed corruption proof remain moves 16–17 and 20. The inventory
+below is the original baseline unless a row is marked closed.
+
 ## The seam
 
 AGENTS.md §II states the contract verbatim: *"JSONL readers must preserve valid prefix state across poisoned suffixes, torn writes, BOMs, duplicated sequence IDs, and malformed trailing rows."* §XVIII item 14 names byte-level session integrity as a frontier item. §XIV lists "corrupted JSONL suffixes" as the first adversarial test every probe suite must exercise. The `.docs/log.txt` "Session Integrity and Recovery Gate" entry (2026-05-06) made this the foundational hardening pass: *"session files survive corruption and partial-write cases… no new runtime root, transcript, registry, or fallback path appears."*
@@ -10,15 +17,15 @@ This theme owns the **byte contract of the four append-only ledgers** (`messages
 
 It is explicitly **not** a new storage system. The append-only files already exist; this theme hardens the single owner of their read/append paths so the invariants AGENTS.md already asserts become mechanically true rather than aspirational.
 
-## What exists today
+## Baseline at roadmap capture
 
-- **Four append-only JSONL ledgers** under `.var/sessions/<session-id>/`: `messages.jsonl` (transcript, `seq`-addressed), `context.jsonl` (checkpoints), `events.jsonl` (spine), `memories.jsonl`. `messages.jsonl` already carries writer-assigned monotonic `seq` (`types.zig:183`, `SessionMessage.seq: u64`); `nextSessionMessageSeq` (`store.zig:821`) scans `max_seq + 1`. The monotonic primitive exists in-repo for the transcript; the other three ledgers have no sequence.
+- **Four append-only JSONL ledgers** live under `.var/sessions/<session-id>/`. Messages and events now carry writer-assigned monotonic `seq` and initialize through the shared bounded-tail `nextLedgerSeq`; context and memories retain their own schemas.
 - **One append path, one integrity repair.** `appendJsonlRecord` (`store.zig:727`) is the single writer for all four ledgers. Its entire integrity story is four lines (`:742-750`): read the last byte; if it is not `\n`, `pwriteAll("\n", end_position)` before the new record. That fixes exactly one failure mode — a prior append that lost its terminator. Everything else is undefended.
 - **No `fsync`/`sync` on the append path.** `appendJsonlRecord` calls `file.pwriteAll(jsonl, end_position)` (`:752`) and then `defer file.close()`. There is no `file.sync()` call. Writes sit in the OS page cache until the kernel flushes them; a power-loss or hard crash can lose the most recent appends entirely (not merely tear them). The Zig stdlib exposes `File.sync` (`lib/std/fs/File.zig:217`) — the primitive is available, it is simply not called.
 - **Readers `catch continue` on every malformed line.** `readEvents` (`store.zig:344`) and `readSessionMessagesFromPath` (`store.zig:664`) both parse line-by-line with `std.json.parseFromSlice(...) catch continue`. A poisoned row is **silently dropped and invisible** — the exact anti-pattern §XIV forbids, because there is no signal that a tear happened, no quarantine, no reconciliation event. `readLatestContextCheckpoint` (`:534`) and `readLatestEvent` (`:300`) walk backward and `catch`-skip bad lines the same way: the latest *valid* row is returned, but the operator never learns a row was lost.
 - **No BOM handling.** None of the readers strip or reject a leading UTF-8 BOM (`EF BB BF`). `std.json.parseFromSlice` will fail on a BOM-prefixed first line (per RFC 8259 strict parsers reject it), and that failure is swallowed by `catch continue` — so a BOM at the head of a ledger silently zeros out the entire file from the reader's perspective.
 - **No invalid-UTF-8 gate.** `readTextAlloc` (`fsutil.zig:58`) calls `std.fs.cwd().readFileAlloc`, which returns a byte slice; nothing runs `std.unicode.utf8ValidateSlice` (`lib/std/unicode.zig:231`) on it. A single `0x80` continuation byte without a lead byte, or a `0xFF` byte, will make `std.json.parseFromSlice` fail on that line — again silently swallowed.
-- **No duplicate-`seq` detection.** `nextSessionMessageSeq` takes `max(seq) + 1`, so a duplicate `seq` does not corrupt the *next* allocation; but `appendRawMessages` (`builder.zig:68`) iterates messages positionally and a duplicate `seq` inside the `first_kept_seq` window would emit two rows for one sequence, confusing the context compiler and the compactor's `buildPlan` (`compactor.zig:99`), which keys off `seq` ranges.
+- **No duplicate-`seq` detection.** The per-session writer prevents new in-process collisions, but readers still need to signal duplicate persisted values before context/compaction consumes ambiguous ranges.
 - **Self-healing already exists at the semantic layer.** `builder.zig` synthesizes interrupted tool results (`interrupted_tool_result`, `:23`) and skips orphan tool results (`:107`, `:111`). This is the right instinct at the transcript-structure layer; this theme provides the byte-layer guarantee that makes that self-healing evidence-trustworthy rather than built on silently-dropped rows.
 - **The BOM failure class is real, not hypothetical.** `.docs/log.txt` entry 261 (2026-05-06) literally begins its `message` field with `\u00ef\u00bb\u00bf` — the JSON-escaped UTF-8 BOM `EF BB BF`. The project's own history exhibits the exact byte sequence this theme must handle at the gate.
 
@@ -68,11 +75,11 @@ Eve persists execution through a vendored **Temporal Workflow World** (`.eve/.wo
 ## Why VANTARI does it better
 
 1. **Surfaced tears, not silent truncation.** SQLite WAL's rolling-checksum valid-prefix recovery is the right mechanism, but its silent data loss is the wrong policy. VANTARI will validate each frame, recover to the last valid frame on a mismatch (the valid-prefix invariant §XIV demands), and **emit a typed `ledger_torn` reconciliation event** recording the tear offset, the recovered `seq`, and the offending byte range — so the operator and the cold-start reducer both know evidence was lost, instead of discovering it later. The signal SQLite swallows, VANTARI publishes.
-2. **One append path, four ledgers, one integrity discipline.** pi-mono splits persistence between `appendFileSync` and a full `_rewriteFile`; Eve splits durability between Temporal and a many-small-files span spool. VANTARI already has the right primitive — one `appendJsonlRecord` (`store.zig:727`) is the single writer for all four ledgers. This theme hardens that one function (fsync, frame-CRC, terminator check) and every reader (`readEvents`, `readSessionMessagesFromPath`, `readLatestContextCheckpoint`, `readLatestEvent`) inherits the discipline. No second storage system, no parallel writer.
+2. **One append path, four ledgers, one integrity discipline.** pi-mono splits persistence between `appendFileSync` and a full `_rewriteFile`; Eve splits durability between Temporal and a many-small-files span spool. VANTARI already has the right primitive — one `appendJsonlRecord` is the shared writer. This theme hardens that function (bounded sync gate, frame CRC, terminator check) and every reader inherits the discipline. No second storage system, no parallel writer.
 3. **Append-only ledger, not many-small-files.** Eve's per-span-file isolation sidesteps the torn-tail problem by making each span its own file. VANTARI rejects that tradeoff: one append-only ledger per artifact is cheaper to scan, tail, and checkpoint than thousands of tiny files, and it is the substrate the north star's shard graph is built on. The torn-tail problem is solved at the frame layer (CRC + terminator + quarantine), not by fragmenting storage.
 4. **Refuse-and-quarantine over lossy repair.** pi-mono's `catch { /* Skip malformed lines */ }` and VANTARI's current `catch continue` both silently drop evidence. Eve's U+FFFD-style replacement is correct for *display* (terminal output) and wrong for *evidence* (a ledger row). VANTARI's gate refuses a poisoned row, quarantines its bytes to a sidecar (`<ledger>.quarantine`) that the ledger never reads back, emits the reconciliation event, and preserves the valid prefix byte-identical. The transcript is evidence, not a rendering surface.
 5. **Strict LF-only framing, BOM/invalid-UTF-8 rejection at the gate.** pi-mono's `jsonl.ts` documents the real framing trap (U+2028/U+2029 inside strings). VANTARI's writer already renders via `std.json.fmt` (which escapes structurally), and the reader will frame on `\n` only, reject a leading BOM at file open, and run `std.unicode.utf8ValidateSlice` on each frame before parse. A poisoned row becomes a typed reconciliation signal, not an invisible gap. The Zig stdlib exposes every primitive needed (`utf8ValidateSlice` at `lib/std/unicode.zig:231`, `Crc32` at `lib/std/hash/crc.zig:10`, `File.sync` at `lib/std/fs/File.zig:217`) — zero new dependencies.
-6. **Sequence-addressed, duplicate-detected.** Kafka's monotonic offset is the cursor and the duplicate detector. VANTARI's `messages.jsonl` already has `seq`; this theme extends the forward scan to detect a duplicate `seq` (keep first, flag second, emit `ledger_duplicate_seq`) rather than silently accepting both. The same scan that computes `nextSessionMessageSeq` (`store.zig:821`) becomes the integrity scan — no second pass, no second reader.
+6. **Sequence-addressed, duplicate-detected.** Kafka's monotonic offset is the cursor and the duplicate detector. VANTARI messages and events have `seq`; the common prefix reader detects duplicates (keep first, flag second, emit `ledger_duplicate_seq`) while the bounded `nextLedgerSeq` tail allocator stays O(1)-ish. One projection reader, no append-path full scan.
 
 ### TARGET FRAME CONTRACT
 
@@ -105,11 +112,11 @@ The valid prefix is byte-identical before and after recovery. The ledger file it
 - **Test (AGENTS.md §XIV item 1):** seed a `messages.jsonl` with 5 valid frames followed by a truncated 6th (no `\n`) followed by garbage; assert `readSessionMessages` returns exactly the 5 valid frames, `readLatestContextCheckpoint` over a torn `context.jsonl` returns the last valid checkpoint, and the valid prefix is byte-identical before and after the read.
 - **Proof:** adversarial suite runs the §XIV corrupted-JSONL-suffix probe and passes on the installed Windows binary.
 
-### P0-17b: Durability gate — fsync on append commit
-- **Contract:** every `appendJsonlRecord` call ends with `file.sync()` (Zig stdlib `File.sync`, `lib/std/fs/File.zig:217`) before `file.close()`, so the appended frame is flushed to the storage device and survives a power-loss or hard crash. A crash may tear the in-progress frame (caught by P0-17a) but may not lose a previously-committed frame.
-- **Mechanism:** add `try file.sync()` after `file.pwriteAll(jsonl, end_position)` at `store.zig:752`. This is the polarsignals/wal commit-frame primitive: *"CRC of all bytes appended since the last fsync."* No new file, no journal — the existing append path gains one line.
-- **Test:** append N frames, simulate a hard crash (kill process without graceful close), cold-start, and assert all N frames are present and parseable. Contrast with the pre-fix behavior where the tail frames are lost to the page cache.
-- **Proof:** a power-loss simulation test (write, kill -9 equivalent on Windows, re-open) shows zero frame loss across 1000 trials.
+### P0-17b: Durability gate — bounded batch plus terminal commit
+- **Contract:** streaming appends may share the 100 ms sync batch, but every success/failure/cancel turn boundary forces `syncSessionLedgers` before terminal response. The bounded throughput tradeoff is explicit and recoverable.
+- **Mechanism:** keep one `appendJsonlRecord(..., should_sync)` primitive plus the existing terminal ledger sync; do not restore per-token `FlushFileBuffers` or add a WAL.
+- **Test:** hard-kill probes bound possible loss to the batch window; graceful terminal probes retain every row after cold start.
+- **Proof:** installed Windows kill/reopen and normal-exit probes name the exact retained terminal sequence and leave zero process.
 
 ### P0-17c: BOM rejection and LF-only framing at the gate
 - **Contract:** a leading UTF-8 BOM (`EF BB BF`) at the head of any ledger is detected on open, recorded as a reconciliation signal, and stripped for the parse so the valid prefix is not zeroed. Framing is `\n`-only; U+2028/U+2029 inside JSON strings never split a frame (pi-mono `jsonl.ts` invariant). AGENTS.md §II "preserve valid prefix state across BOMs."
@@ -124,9 +131,9 @@ The valid prefix is byte-identical before and after recovery. The ledger file it
 - **Proof:** adversarial suite runs the invalid-UTF-8 probe and passes.
 
 ### P1-17e: Duplicate sequence ID detection (keep first, flag second)
-- **Contract:** the forward scan detects a duplicate `seq` in `messages.jsonl` (and, once theme 12 lands `seq` on `events.jsonl`, there too); the first occurrence is kept, the second is flagged with `ledger_duplicate_seq`, and `nextSessionMessageSeq` continues to allocate `max_seq + 1`. The duplicate is not silently dropped and not silently accepted. AGENTS.md §II "preserve valid prefix state across duplicated sequence IDs."
-- **Mechanism:** the integrity scan maintains a `std.AutoHashMap(u64, void)` of seen `seq` values; on collision, emit the signal and continue (the duplicate is informational, not a tear). Wire the same scan into `nextSessionMessageSeq` (`store.zig:821`) so the allocation and the integrity check are one pass. This mirrors Kafka's offset-monotonic invariant ([kafka.apache.org](https://kafka.apache.org/43/implementation/log/)).
-- **Test:** seed a `messages.jsonl` with `seq` 1, 2, 2, 3; assert the reader returns frames for seq 1, 2, 3 (first occurrence of 2 kept), `ledger_duplicate_seq` is emitted for the second seq-2 frame, and `nextSessionMessageSeq` returns 4.
+- **Contract:** the common forward reader detects duplicate `seq` in messages and events; the first occurrence remains visible, the second is flagged with `ledger_duplicate_seq`, and the append cursor is invalidated for explicit reconciliation. The duplicate is neither silently dropped nor accepted.
+- **Mechanism:** keep duplicate detection in the shared prefix reader, not the O(1) append allocator. Maintain one seen-sequence set while projecting rows and emit one typed integrity signal; preserve `nextLedgerSeq` as the bounded tail owner. This mirrors Kafka's offset-monotonic invariant ([kafka.apache.org](https://kafka.apache.org/43/implementation/log/)).
+- **Test:** seed `seq` 1, 2, 2, 3; assert projection keeps the first 2, emits one duplicate signal, and a subsequent append refuses or reconciles before allocating 4.
 - **Proof:** adversarial suite runs the duplicate-seq probe and passes.
 
 ### P1-17f: Per-frame CRC and rolling checksum (tamper/tear detection)
@@ -147,10 +154,10 @@ A shard is replayable only if its ledger survives a crash mid-write and a corrup
 
 ## Definition of done
 - Torn writes (partial trailing line, missing terminator) are detected; the valid prefix is preserved byte-identical; the tear is surfaced, not silently truncated (AGENTS.md §XIV item 1).
-- `appendJsonlRecord` calls `file.sync()` on commit; a hard crash no longer loses committed frames to the page cache.
+- Batched appends bound crash exposure to the declared window; every terminal turn forces a durable ledger sync without per-token flush throttling.
 - A leading UTF-8 BOM is detected, recorded, and stripped at the gate; LF-only framing is enforced; U+2028/U+2029 inside strings never split a frame (pi-mono `jsonl.ts` invariant).
 - Invalid UTF-8 is refused before parse (`std.unicode.utf8ValidateSlice`); the poisoned frame is quarantined, not lossily repaired.
-- Duplicate `seq` is detected (keep first, flag second); `nextSessionMessageSeq` and the integrity scan are one pass.
+- Duplicate `seq` is detected (keep first, flag second) by the shared prefix reader without regressing bounded-tail append initialization.
 - Per-frame CRC + `prev` chain (SQLite WAL rolling-checksum model) is opt-in per ledger, with the tear signal SQLite swallows made explicit.
 - Poisoned bytes go to a sidecar quarantine; the ledger file is never rewritten (AGENTS.md §II "Never compact, truncate, or rewrite after append").
 - The §XIV adversarial suite (corrupted JSONL suffix, BOM, invalid UTF-8, duplicate seq, byte-flip) passes and gates promotion; the same suite runs on the installed Windows binary.

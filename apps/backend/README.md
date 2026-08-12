@@ -304,6 +304,7 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Mechanism | Current state | Exact boundary |
 |---|---|---|
 | Append-only event spine | **Source-proven, client replay partial** | events.jsonl stores monotonic sequence numbers; stdio notifications currently drop seq and the TUI falls back to timestamp/type/text deduplication. |
+| Message transcript writer | **Source and installed proven** | One per-session owner serializes every message role and initializes sequence from a bounded valid tail. Multi-process writer ownership remains coupled to the persistent-host work. |
 | Child branch/convergence | **In-process proven** | Fixed-pool convergence works while the kernel lives; process restart marks running receipts stale instead of resuming a worker. |
 | Write-intent ledger | **Frontier scaffold** | Reserve/commit helpers and tests exist; write-capable tools do not call them on the canonical mutation path. |
 | Byte-level session integrity | **Partial** | Readers salvage valid prefixes and malformed tails; the complete invalid-UTF-8 and duplicate-sequence contract remains a promotion target. |
@@ -338,7 +339,7 @@ global config/auth/session owners. Skip guards hid coverage and did not solve th
 owner error. The build now assigns every one of six test artifacts a generated
 home; `zigw.ps1` and `zigw.sh` do the same for direct `zig test`; and a
 compile-gated `VANTARI_TEST_ROOT` rejects cache-root escape. The obsolete skip
-guards are deleted; the 1,929-test graph executes every lane while the live
+guards are deleted; the 1,931-test graph executes every lane while the live
 runtime root remains unchanged. Both audit-owned incident sets are held in
 reversible quarantine with backup, manifest, and rollback.
 

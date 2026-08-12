@@ -6,7 +6,7 @@ updated: 2026-08-12
 owner: .docs/roadmap/24-harness-capability-next-90.md
 source: ../research/2026-08-12-full-harness-sitrep.md
 exit_criteria: All P0 moves are proven through the installed Windows owner path; later moves advance only when their dependency band is green.
-governing_doctrine: AGENTS.d/extractions/2026-08-12-prompt-led-autonomy.md, AGENTS.d/extractions/2026-08-12-subtractive-capability.md
+governing_doctrine: AGENTS.d/extractions/2026-08-12-prompt-led-autonomy.md, AGENTS.d/extractions/2026-08-12-subtractive-capability.md, AGENTS.d/extractions/2026-08-12-sequence-addressed-agent-mailbox.md
 ---
 
 # Harness capability — next 90 moves
@@ -38,6 +38,9 @@ advance the queue until the real installed consumer path proves it.
 6. Prove prompt personalization with behavior-profile tests. At minimum cover
    terse/detailed, solo/orchestrated, conservative/aggressive, and low/high
    update cadence without alternate executor logic.
+7. Scale context through selective awareness, not transcript replication. Agents
+   exchange bounded sequence-addressed messages and pull summaries or artifacts
+   on demand. Tickets remain the only work lifecycle.
 
 ## Closure ledger
 
@@ -55,8 +58,9 @@ advance the queue until the real installed consumer path proves it.
 | 10 | consolidate | closed | Shutdown stops admission, fences late turns, signals active sessions, then joins. A real blocked provider turn persisted exactly one `session_cancelled` event and a cancelled RPC result; 20 repeated focused runs passed. |
 | 11 | consolidate | closed | Source TUI tests cover open/apply/close/reopen/timeout; installed `config/set` flipped `full_access_mode` in 5 ms through the real host transport, removed its isolated runtime, and left zero processes. |
 | 12 | consolidate | closed | `summaries.jsonl` v2 appends stable sequenced revisions under one owner and projects the greatest sequence per session. V1 import, poison continuation, 100 synchronized writers/100 retained rows, 1,929-test graph, and zero-pair dupe audit pass. Installed `session/send` imported 1,176 legacy rows and appended one v2 row with 1,177 unique sequences. |
+| 13 | consolidate/delete | closed | Every message role routes through one per-session ledger state; cold start reads only the bounded tail and the empty-file rewrite/full-transcript sequencer are deleted. One hundred mixed concurrent writers retained 100 unique monotonic rows; the poisoned-prefix tail probe, 1,931-test graph, 37-segment zero-pair dupe audit, and installed `user,assistant` sequence proof pass. |
 | 31 | delete/consolidate | closed | Retired prompt leak and brittle prose assertions removed; broad graph green. |
-| 38 | consolidate | closed | ReleaseFast and `%LOCALAPPDATA%/Vantari/bin/vantari.exe` share SHA-256 `E6566B141ED7D0178197C8077CF25E381E48E1972148FDE0248BAFE79B8E2445`; installer and isolated installed smokes exit cleanly. |
+| 38 | consolidate | closed | ReleaseFast and `%LOCALAPPDATA%/Vantari/bin/vantari.exe` share SHA-256 `3E1B87D8AFD02FA37AE08396B89288E95DB7329D35C1683725B087E2929F124A`; installer and isolated installed smokes exit cleanly. |
 
 ## Competitive basis
 
@@ -75,6 +79,9 @@ advance the queue until the real installed consumer path proves it.
 | [OpenAI Agents SDK sessions](https://openai.github.io/openai-agents-python/sessions/) | Shared-worker stores, atomic sequence order, resumable approvals | Serialize session mutation and resume interrupted runs against the same ledger. |
 | [Agent Deck](https://github.com/asheshgoplani/agent-deck) | Fleet status, waiting attention, worktrees, cost budgets, isolated session owner | Borrow progressive fleet disclosure without importing tmux as a second runtime. |
 | [LoopX](https://github.com/huangruiteng/loopx) | Goals, gates, claims, leases, evidence, quota, bounded continuation | Preserve human judgment and make every autonomous tick quota- and evidence-gated. |
+| [OpenAI Codex](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents_spec.rs) | Directed queued messages and separate wake-bearing follow-up work | Keep one typed delivery primitive with explicit queue/wake intent, stable delivery evidence, and no hidden transcript role coercion. |
+| [Claude Code teams](https://code.claude.com/docs/en/agent-teams) | Independent contexts, direct teammate mailboxes, shared task awareness | Preserve direct/group collaboration, but make it cold-start resumable and keep tickets as the single task owner. |
+| [AutoGen Core](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/framework/message-and-communication.html) | Serializable direct and broadcast messages with runtime routing | Harvest typed data and target scope; reject handler/topic/subscription forests for one local session hierarchy. |
 
 ## 1-10 — Make iteration safe and remove the settings hang
 
@@ -115,11 +122,11 @@ advance the queue until the real installed consumer path proves it.
 | 23 | Replace scheduler read/check/write leadership with an inter-process exclusive claim and generation fence. | `scheduler/store.zig`; two kernels yield one winner. |
 | 24 | Make ticket claim plus lease issuance one serialized transition. | `core/tickets`, scheduler; one ticket creates one child session. |
 | 25 | Preserve assignment as side-effect-free queue admission. | ticket state machine; assignment starts no provider turn. |
-| 26 | Notify eligible idle specialists when a ticket is created without auto-launching them. | scheduler/agent projection; notification is evidence, not execution. |
-| 27 | Let the model choose from a compact eligible-specialist catalog; let the kernel filter only unavailable, incompatible, or over-capacity routes. | `agents/spec.zig`, `agents/service.zig`; prompt-profile route proof plus deterministic eligibility receipt. |
+| 26 | Route ticket notices and agent-to-agent information through one sequence-addressed mailbox on the existing session/event spine. Support direct-session, parent, and current-group targets without auto-launching work. | agents/session/event owners; durable delivery receipt, no shared transcript, notification is evidence rather than execution. |
+| 27 | Let the model choose from a compact eligible-specialist and team snapshot, including when to message, inspect, challenge, queue, or wake; let the kernel filter only invalid scope, unavailable routes, capacity, depth, and contact budgets. | `agents/spec.zig`, `agents/service.zig`; prompt-profile route/communication proof plus deterministic eligibility receipt. |
 | 28 | Make configured fixed capacity govern active, idle, and queued projections. | agent config/supervisor; `active <= max` under contention. |
-| 29 | Persist heartbeat, owner generation, expiry, and exactly-once resume-or-requeue reconciliation. | agent receipts and scheduler; crash recovery cannot duplicate work. |
-| 30 | Prove assign, claim, TUI detach, worker kill, restart, complete/fail/cancel/repair, then run a new 036 terminal review. | installed Windows path; archive 036 only on full pass. |
+| 29 | Persist heartbeat, owner generation, expiry, mailbox delivery cursor, and exactly-once resume-or-requeue reconciliation. | agent receipts, mailbox, and scheduler; crash recovery cannot duplicate work or delivery. |
+| 30 | Prove assign, claim, directed/group/parent messaging, nested-parent delivery, TUI detach, worker kill, restart, complete/fail/cancel/repair, then run a new 036 terminal review. | installed Windows path; no lost/duplicate message and archive 036 only on full pass. |
 
 ## 31-40 — Close every active chain before opening another architecture front
 
@@ -149,7 +156,7 @@ advance the queue until the real installed consumer path proves it.
 | 47 | Render the group row as `Agents completed/total`; remove `waiting on N` filler. | child-group projection; all lifecycle snapshots. |
 | 48 | Render each child as agent name plus bounded canonical turn summary, truncated by display width. | `sessions/summaries.jsonl`; never expose `tool_completed` as the summary. |
 | 49 | Update one keyed child/tool row with a typed phase marker and elapsed time instead of appending lifecycle noise. | TUI keyed rows; no duplicate tool spans. |
-| 50 | Add an on-demand Agent Hub for route, model, effort, state, elapsed, tools, tokens/context/cost, receipt, and latest summary; prove no parent/child double-count. | Agent Hub plus installed visual matrix. |
+| 50 | Add an on-demand Agent Hub for route, model, effort, state, elapsed, tools, tokens/context/cost, receipt, latest summary, and unread-message signal; prove no parent/child double-count or transcript replication. | Agent Hub plus installed visual matrix. |
 
 ## 51-60 — Make every advertised tool executable and bounded
 
@@ -174,7 +181,7 @@ advance the queue until the real installed consumer path proves it.
 | 62 | Complete write-intent reserve, effect commit, and abandoned-intent reconciliation through real write tools. | tool runtime; cold start resolves every nonterminal intent. |
 | 63 | Wire ticket, quota, and scheduler policy keys into the one state machine or delete the dead keys and docs. | config/tickets/scheduler; no decorative control. |
 | 64 | Make tickets the only work lifecycle; keep summaries, plans, research, and changelog as ticket-linked artifacts. | prompts/tools/work state; remove `todo_slice` and `session_record` lifecycle duplication. |
-| 65 | Keep behavior in hot-loaded system/developer/persona/guardrail/context layers and native tool schemas as API truth; demand-load examples, availability detail, and skills. | prompt builder/registry; no duplicate behavioral policy or full catalog. |
+| 65 | Keep behavior in hot-loaded system/developer/persona/guardrail/context layers and native tool schemas as API truth; include collaboration cadence, challenge posture, wake posture, and nesting there; demand-load examples, availability detail, and skills. | prompt builder/registry; no duplicate behavioral policy or full catalog. |
 | 66 | Add prompt-token budgets and behavior-profile tests by provider, tool set, and skill route. | context compiler tests; terse/detailed, solo/orchestrated, conservative/aggressive, and update-cadence profiles change behavior without executor branches. |
 | 67 | Add stable message IDs and explicit compaction source/kept sequence ranges before automatic compaction. | sessions/context ledgers; checkpoint identity survives edits and replay. |
 | 68 | Separate exact, estimated, and unknown token accounting; expose capacity and remaining only at the proven precision. | provider usage/context telemetry; no false number. |

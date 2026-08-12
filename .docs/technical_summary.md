@@ -104,7 +104,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,929/1,929 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,931/1,931 tests with zero skips.
   Its 224-test host lane executes the formerly dormant stdio client/server and
   shared process-tree tests; the backend TUI lane passes 58/58.
 - Parent-shell production-home probes kept 99,960 files, 693,051,144 bytes,
@@ -138,16 +138,26 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   latest-row projection, poisoned-suffix continuation, and one-time v1 import.
   One hundred concurrent writers retained all 100 rows; the local GGUF dupe
   audit found zero candidate pairs across the summary, store, and fsutil owners.
+- Every session message role now routes through one per-session append owner.
+  One hundred mixed concurrent writers retained 100 unique monotonic rows, and
+  cold-start sequence initialization reads the valid bounded tail instead of the
+  full transcript.
 - Built and installed ReleaseFast SHA-256 both equal
-  `E6566B141ED7D0178197C8077CF25E381E48E1972148FDE0248BAFE79B8E2445`.
+  `3E1B87D8AFD02FA37AE08396B89288E95DB7329D35C1683725B087E2929F124A`.
 - Installed `session/send` against a disposable local provider imported all
   1,176 legacy summary rows, appended one terminal v2 row, retained 1,177
-  unique sequences, preserved the live legacy hash, and left zero process.
+  unique sequences, wrote contiguous unique `user,assistant` message rows,
+  preserved the live legacy hash, and left zero process.
 - The installed settings smoke flips `runtime.full_access_mode` to `true` in a
   disposable workspace, receives `var1.config_set.v1` in 5 ms, removes the
   isolated runtime, preserves the complete live root, and leaves zero process.
-- Moves 5–12 and finding 10 are closed. Move 13 now owns message append sequence;
-  persistent agent execution and inter-process scheduler arbitration remain P0.
+- Moves 5–13 and finding 10 are closed. Finding 13 is narrowed to exact event
+  transport/replay identity and shared byte-integrity work; persistent agent
+  execution and inter-process scheduler arbitration remain P0.
+- The hive direction is assigned to moves 21–30 and finding 11. The target is
+  one durable direct/group/parent mailbox over session/event ownership,
+  selective summary/artifact awareness, and nested normal sessions. No general
+  mailbox, restart-safe unread cursor, or peer wake path is shipped yet.
 - `git diff --check` exits 0 with line-ending warnings only.
 
 See [`research/2026-08-12-full-harness-sitrep.md`](research/2026-08-12-full-harness-sitrep.md)

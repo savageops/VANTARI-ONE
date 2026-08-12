@@ -1642,6 +1642,158 @@ test "events get monotonic seq assigned by appendEvent" {
     try std.testing.expectEqual(@as(u64, 3), events[2].seq);
 }
 
+test "session message writers serialize 100 concurrent appends per session" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const Gate = struct {
+        mutex: std.Thread.Mutex = .{},
+        condition: std.Thread.Condition = .{},
+        ready: usize = 0,
+        open: bool = false,
+
+        fn wait(self: *@This()) void {
+            self.mutex.lock();
+            self.ready += 1;
+            self.condition.broadcast();
+            while (!self.open) self.condition.wait(&self.mutex);
+            self.mutex.unlock();
+        }
+
+        fn release(self: *@This(), expected: usize) void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            while (self.ready < expected) self.condition.wait(&self.mutex);
+            self.open = true;
+            self.condition.broadcast();
+        }
+    };
+    const Worker = struct {
+        gate: *Gate,
+        workspace_root: []const u8,
+        index: usize,
+        ok: *bool,
+
+        fn run(self: @This()) void {
+            self.gate.wait();
+            var content_buffer: [48]u8 = undefined;
+            const content = std.fmt.bufPrint(&content_buffer, "message-{d}", .{self.index}) catch return;
+            switch (self.index % 4) {
+                0 => VAR1.core.session_store.appendSessionMessage(
+                    std.heap.page_allocator,
+                    self.workspace_root,
+                    "message-race",
+                    .user,
+                    content,
+                    @intCast(self.index + 1),
+                ) catch return,
+                1 => {
+                    const calls = [_]VAR1.shared.types.ToolCall{.{
+                        .id = @constCast("call-shared"),
+                        .name = @constCast("read_file"),
+                        .arguments_json = @constCast("{}"),
+                    }};
+                    VAR1.core.session_store.appendAssistantToolCallSessionMessage(
+                        std.heap.page_allocator,
+                        self.workspace_root,
+                        "message-race",
+                        content,
+                        calls[0..],
+                        null,
+                        @intCast(self.index + 1),
+                    ) catch return;
+                },
+                2 => VAR1.core.session_store.appendToolSessionMessage(
+                    std.heap.page_allocator,
+                    self.workspace_root,
+                    "message-race",
+                    "call-shared",
+                    content,
+                    @intCast(self.index + 1),
+                ) catch return,
+                else => {
+                    var id_buffer: [48]u8 = undefined;
+                    const message_id = std.fmt.bufPrint(&id_buffer, "converged-{d}", .{self.index}) catch return;
+                    const appended = VAR1.core.session_store.appendSessionMessageOnce(
+                        std.heap.page_allocator,
+                        self.workspace_root,
+                        "message-race",
+                        message_id,
+                        .assistant,
+                        content,
+                        @intCast(self.index + 1),
+                    ) catch return;
+                    if (!appended) return;
+                },
+            }
+            self.ok.* = true;
+        }
+    };
+
+    var gate = Gate{};
+    var results = [_]bool{false} ** 100;
+    var threads: [100]std.Thread = undefined;
+    for (&threads, 0..) |*thread, index| {
+        thread.* = try std.Thread.spawn(.{}, Worker.run, .{Worker{
+            .gate = &gate,
+            .workspace_root = workspace_root,
+            .index = index,
+            .ok = &results[index],
+        }});
+    }
+    gate.release(threads.len);
+    for (threads) |thread| thread.join();
+    for (results) |ok| try std.testing.expect(ok);
+
+    const messages = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, "message-race");
+    defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, messages);
+    try std.testing.expectEqual(@as(usize, 100), messages.len);
+
+    var seen_sequences = [_]bool{false} ** 101;
+    for (messages) |message| {
+        try std.testing.expect(message.seq >= 1 and message.seq <= 100);
+        try std.testing.expect(!seen_sequences[message.seq]);
+        seen_sequences[message.seq] = true;
+    }
+    for (seen_sequences[1..]) |seen| try std.testing.expect(seen);
+}
+
+test "message sequence initializes from the valid tail after a poisoned prefix" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+    const messages_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", "message-tail", "messages.jsonl" });
+    defer std.testing.allocator.free(messages_path);
+
+    var seeded = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer seeded.deinit();
+    for (0..32_768) |_| try seeded.appendSlice("poisoned-prefix\n");
+    try seeded.appendSlice("{\"id\":\"msg-900\",\"seq\":900,\"role\":\"user\",\"content\":\"seed\",\"timestamp_ms\":900}\n");
+    try VAR1.shared.fsutil.writeText(messages_path, seeded.items);
+
+    try VAR1.core.session_store.appendSessionMessage(
+        std.testing.allocator,
+        workspace_root,
+        "message-tail",
+        .assistant,
+        "tail append",
+        901,
+    );
+
+    const raw = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, messages_path);
+    defer std.testing.allocator.free(raw);
+    try std.testing.expect(std.mem.endsWith(
+        u8,
+        raw,
+        "{\"id\":\"msg-901\",\"seq\":901,\"role\":\"assistant\",\"content\":\"tail append\",\"timestamp_ms\":901}\n",
+    ));
+}
+
 test "event seq survives cold start and continues monotonically" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

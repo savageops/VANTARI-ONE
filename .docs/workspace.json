@@ -47,17 +47,18 @@
     "release_fast": "9/9 steps succeeded",
     "focused_tui": "58/58 passed; 0 skipped",
     "host_lifecycle": "224/224 passed; atomic admission, session-keyed buffer projection, cancellation-before-join shutdown, deadlines, and Job Object ownership",
-    "isolated_broad": "19/19 steps; 1929/1929 passed; 0 skipped",
+    "isolated_broad": "19/19 steps; 1931/1931 passed; 0 skipped",
     "test_runtime_isolation": "six build artifacts plus direct zig test receive generated VANTARI_HOME and VANTARI_TEST_ROOT; direct proof kept 99960 files and 693051144 bytes unchanged",
     "installed_binary": "C:/Users/Savage/AppData/Local/Vantari/bin/vantari.exe",
     "install_script": "apps/backend/scripts/install_windows.ps1",
-    "built_sha256": "E6566B141ED7D0178197C8077CF25E381E48E1972148FDE0248BAFE79B8E2445",
-    "installed_sha256": "E6566B141ED7D0178197C8077CF25E381E48E1972148FDE0248BAFE79B8E2445",
+    "built_sha256": "3E1B87D8AFD02FA37AE08396B89288E95DB7329D35C1683725B087E2929F124A",
+    "installed_sha256": "3E1B87D8AFD02FA37AE08396B89288E95DB7329D35C1683725B087E2929F124A",
     "installed_hash_matches": true,
     "installed_settings_smoke": "initialize ok; config/set var1.config_set.v1 in 5 ms; isolated runtime removed; live root unchanged; zero processes",
     "host_shutdown": "blocked provider request observed cancellation before join, persisted exactly one session_cancelled event, returned cancelled, and passed 20 repeat runs",
     "summary_ledger": "summaries.jsonl v2; stable seq; latest-row projection; v1 import; poisoned suffix continuation; 100/100 concurrent rows retained; dupe audit zero pairs",
-    "installed_summary_migration": "disposable VANTARI_HOME imported 1176/1176 legacy rows, appended one terminal summary through session/send, retained 1177 unique sequences, preserved live legacy SHA-256 5D3FF92999B433FF90CA65D1C68A9A960AB24F11979893360DB58710C41BBF1B, and left zero processes",
+    "message_ledger": "one process-local per-session append owner; every message role; 100/100 concurrent rows unique and monotonic; bounded valid-tail initialization; 37-segment dupe audit zero pairs",
+    "installed_summary_migration": "disposable VANTARI_HOME imported 1176/1176 legacy rows, appended one terminal summary through session/send, retained 1177 unique summary sequences, wrote two contiguous unique user/assistant message rows, preserved live legacy SHA-256 5D3FF92999B433FF90CA65D1C68A9A960AB24F11979893360DB58710C41BBF1B, and left zero processes",
     "active_installed_processes_preserved": []
   },
   "wip": {
@@ -68,8 +69,8 @@
   },
   "residuals": [
     "Both test-isolation incidents and legacy backend owners are repaired reversibly; quarantine/archive manifests and rollback paths remain retained evidence.",
-    "Agent execution is process-local and scheduler leader acquisition is not inter-process atomic.",
-    "RPC notifications drop event seq; message sequence allocation is not tail-initialized or per-session serialized.",
+    "Agent execution is process-local, scheduler leader acquisition is not inter-process atomic, and no durable direct/group/parent mailbox or unread cursor is shipped.",
+    "RPC notifications drop event seq; per-session message sequencing is closed inside one process, while multi-process writer ownership remains coupled to persistent-host arbitration.",
     "Autonomous repair remains a gated evidence workflow, not an implicit background mutator."
   ]
 }

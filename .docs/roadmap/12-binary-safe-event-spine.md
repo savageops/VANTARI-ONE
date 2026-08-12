@@ -2,6 +2,12 @@
 
 **Priority: P0**
 
+**Current delta (2026-08-12):** Event rows already carry writer-assigned `seq`,
+`appendEvent` uses the shared bounded-tail `nextLedgerSeq` initializer, and
+`readEventsAfterSeq` exists. The live gap is transport: move 14 carries that
+stored sequence through `SessionEventNotification`; moves 16–17 retain the
+binary/prefix-integrity work. The source map below is the original baseline.
+
 ## The seam
 
 The event spine (`events.jsonl`) is the runtime's only durable nervous system. Every turn, tool span, cancellation, failure, and (under the north star) every branch and convergence must be reconstructible from this one ledger after a cold start, a crash mid-write, or a poisoned trailing row. Two properties make that possible, and neither is optional:
@@ -11,7 +17,7 @@ The event spine (`events.jsonl`) is the runtime's only durable nervous system. E
 
 This theme owns the **storage substrate**: the frame format, the sequence contract, the torn-write/BOM/invalid-UTF-8 recovery, and the payload-externalization seam. It is the layer that theme 03 (typed event grammar) writes onto. Theme 03 owns the *shapes* of events; theme 12 owns the *durable, binary-safe ledger* those shapes are persisted to.
 
-## What exists today
+## Baseline at roadmap capture
 
 - **Typed event structs exist** (`apps/backend/src/shared/protocol/events.zig`): `ToolStarted`, `ToolFinished`, `ToolOutputDelta` (with `chunk_b64` — already binary-safe via base64), `ToolReview`. Each carries a `schema = "var1.*.v1"` version tag. This is the grammar floor, not the spine.
 - **`SessionEvent` is the durable row** (`apps/backend/src/shared/types.zig:149`): only `event_type: []const u8`, `message: []const u8`, `timestamp_ms: i64`. **There is no `seq` field.** The durable event row has no monotonic position.
@@ -19,9 +25,9 @@ This theme owns the **storage substrate**: the frame format, the sequence contra
 - **`appendJsonlRecord`** (`store.zig:727`) does pre-write repair of *one* failure mode: if the file's last byte is not `\n`, it inserts one before appending. That is the entire integrity story. There is no torn-write detection, no BOM handling, no invalid-UTF-8 rejection, no duplicate-seq guard, and no poisoned-row quarantine.
 - **`readEvents` / `readLatestEvent`** (`store.zig:318`, `:279`) parse line-by-line and `catch continue` on any unparseable line. A poisoned row is **silently dropped and invisible** — the exact anti-pattern AGENTS.md §XIV item 1 ("invalid checkpoint rows do not poison the latest valid checkpoint") forbids, because there is no signal that a tear happened.
 - **A monotonic cursor exists, but it is non-durable.** `stdio_rpc.zig:227` keeps `next_notification_sequence: u64 = 1` in `ClientState`, assigns one per notification (`:273`), caps the backlog at 512 (`:29`), and tails via `takeNotificationAfter(after_sequence)` (`:1277`). This is the correct cursor shape — but it lives only in process memory, resets on restart, and is decoupled from `events.jsonl`. The durable log has no cursor; the cursor has no durability. They never meet.
-- **`messages.jsonl` already has the right shape** (`types.zig:183`): `SessionMessage` carries `seq: u64`, and `nextSessionMessageSeq` (`store.zig:821`) scans for `max_seq + 1`. The transcript ledger is monotonic; the event ledger is not. The pattern to copy already exists in-repo.
+- **`messages.jsonl` supplied the sequence pattern.** It now has a stronger owner: every message role shares one per-session append state and `nextLedgerSeq` initializes from a bounded valid tail. The event ledger uses the same primitive.
 
-**Gap:** the durable event spine is a timestamp-keyed, string-payload, silently-lossy log. The monotonic cursor is in-memory. AGENTS.md §IV ("Event cursors use monotonic ledger position plus replay suppression") and §XVIII item 2 are **aspirational against the current code**, not implemented. Theme 03 (line 12) already asserts the cursor exists; this theme makes the assertion true.
+**Gap at capture:** the durable event spine was timestamp-keyed and the cursor was in-memory. Storage sequence has since landed; the notification envelope and client replay cursor remain incomplete.
 
 ## What the competitor does
 
@@ -62,7 +68,7 @@ Eve persists execution through a vendored **Temporal Workflow World** (`.eve/.wo
 
 ## Why VANTARI does it better
 
-1. **One ledger, monotonic, replayable — not split across three systems.** Eve divides durability between a Temporal Workflow World, an OTLP span spool, and an in-memory stream sequence; pi-mono has an in-memory bus and a full-rewrite session file. VANTARI already has the right primitive in-repo — `messages.jsonl`'s `seq` (`types.zig:183`, `nextSessionMessageSeq` at `store.zig:821`) — and will lift it onto `events.jsonl`. One sequence space, one append-only file, one cursor. The transcript ledger proves the pattern works; the event ledger inherits it.
+1. **One ledger, monotonic, replayable — not split across three systems.** Eve divides durability between a Temporal Workflow World, an OTLP span spool, and an in-memory stream sequence; pi-mono has an in-memory bus and a full-rewrite session file. VANTARI now uses one bounded-tail sequence primitive for both transcript and event ledgers; move 14 joins the stored event identity to the client cursor.
 2. **Durable cursor where Codex's is diagnostic-only.** Codex's `trace.jsonl` is opt-in and never gates recovery. VANTARI's spine will be the canonical execution ledger: cold-start replay, context compilation, and the TUI read model all derive from it. The cursor survives restart because it *is* the last-read `seq`, persisted in the ledger, not held in `ClientState` memory.
 3. **Payload externalization with in-line base64 fallback.** Codex separates `payloads/*.json` from the spine and keeps references inline. VANTARI already does the inline variant — `ToolOutputDelta.chunk_b64` (`events.zig:26`) carries binary stdout/stderr as base64 inside the event. The spine will support both: small binary fields inline as base64 (the existing, proven pattern), large payloads externalized to a sibling payload file referenced by id. Either way the event row stays canonical JSON and ordered.
 4. **Surfaced tears, not silent truncation.** SQLite WAL's rolling-checksum "valid prefix" recovery is the right mechanism, but its silent data loss is the wrong policy. VANTARI will compute a per-frame CRC over the canonical JSON bytes, recover to the last valid frame on a mismatch (the valid-prefix invariant AGENTS.md §XIV demands), and **emit a typed `spine_torn` reconciliation event** recording the tear offset and the recovered seq — so the operator and the reducer both know evidence was lost, instead of discovering it later.
@@ -88,8 +94,8 @@ events.jsonl  (append-only, LF-framed, one JSON object per line)
 ## Pipeline items under this theme
 
 ### P0-12a: Monotonic sequence + replay cursor on `events.jsonl`
-- **Contract:** every durable event row carries `seq: u64` assigned at append time; `store.appendEvent` allocates `max_seq + 1` by scanning the file (mirroring `nextSessionMessageSeq`); `events/subscribe` and `session/get` tail by `after_seq` instead of returning an unindexed list.
-- **Mechanism:** extend `SessionEvent` (`types.zig:149`) with `seq`; reuse the existing `nextSessionMessageSeq` scan pattern; replace the in-memory-only `next_notification_sequence` tail in `stdio_rpc.zig:1277` with a durable `after_seq` over `events.jsonl`. No new storage system — the file already exists.
+- **Contract:** every durable event row carries `seq: u64` assigned at append time; `events/subscribe` and `session/get` tail by stored `after_seq` instead of an unrelated notification ordinal.
+- **Mechanism:** storage is landed through `appendEvent`, `nextLedgerSeq`, and `readEventsAfterSeq`. Carry that exact value through the versioned RPC notification and delete timestamp/text replay suppression. No new storage system — the file already exists.
 - **Test:** same-millisecond burst of 100 events (AGENTS.md §XIV) round-trips with strictly increasing `seq` and a resumable cursor; replay from `after_seq = N` returns exactly the suffix.
 - **Proof:** cold-start replay reconstructs the event order byte-identical to the live emission order.
 

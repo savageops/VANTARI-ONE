@@ -59,7 +59,7 @@ Canonical session layout:
 | `events.jsonl` | runtime event spine | Ordered observable causality: turn, delta, tool, output, failure, cancellation. |
 | `output.txt` | terminal assistant output | Latest assistant terminal projection, not source truth. |
 
-- Add stable message IDs and monotonic sequence numbers before any compaction boundary depends on message position.
+- Every `messages.jsonl` row has a stable ID and monotonic sequence. All message roles route through one per-session append owner whose cold-start sequence is initialized from the last valid tail row; do not restore whole-transcript sequence scans or tool-specific writers.
 - Manual `session/compact` is the only live compaction writer. Auto/background compaction requires proven token accounting, cancellation behavior, idempotent range marks, and cold-start recovery.
 - Compaction is entry-aware. Checkpoints mark `source_seq_start`, `source_seq_end`, `first_kept_seq`, compacted entry count, and `aggressiveness_milli`.
 - Bounded compaction advances over stable JSONL entries. Higher aggressiveness may recompact an already summarized range because the full transcript remains source truth.
@@ -143,6 +143,10 @@ Sub-agents are normal VAR1 sessions launched by a parent and supervised through 
 - Do not delegate the immediate edit or decision if the parent needs that result before its next local action.
 - Child lifecycle state is append-only session/event evidence. Parent supervision must preserve heartbeat, terminal status, failure class, and resume-safe reconciliation.
 - Ticket assignment, scheduler claims, leases, heartbeat, stale-owner requeue, terminal reconciliation, and repair gating remain one typed queue-to-agent state machine; health fields are a read projection only.
+- Agent collaboration uses one sequence-addressed mailbox through the existing session/event owners. Permit direct-session, parent, and current-group targets; do not add a generic topic broker, shared global transcript, or second teammate runtime.
+- Mailbox messages carry bounded information and references. Tickets remain the only work lifecycle: a message never silently assigns, claims, or launches work.
+- Let the prompt envelope choose communication density, challenge posture, wake intent, and nested delegation. The kernel validates sender/recipient scope, capacity, depth, contact budget, ordering, delivery, replay, and acknowledgement.
+- Give each session selective awareness through agent inventory, canonical summaries, artifact references, and unread mailbox rows. Do not copy sibling transcripts into provider context.
 
 ## VII. Skill Routing Contract
 
@@ -320,7 +324,7 @@ Capability claims carry mechanism and proof. "Works" is not a mechanism. "Fast" 
 9. Write-intent ledger: write-capable tools reserve intent records before mutation, commit effect records after mutation, and reconcile abandoned intents at cold start.
 10. Frontier TUI workbench: terminal renders live item graph, bounded child turn summaries, assistant token stream, tool spans, command output, cancellation affordance, session navigation, pool/queue metadata, and optional raw event inspection.
 11. Provider capability probing: adapters cache verified streaming, tool-call shape, max payload, refusal/error envelopes, and context overflow signatures; unknown capability fails closed.
-12. Agent delegation supervision: parent sessions track child runs through typed edges, scoped capability profiles, heartbeat events, terminal status reconciliation, and resume-safe wait semantics; ticket claims feed the same fixed pool without a second scheduler.
+12. Agent delegation supervision: parent sessions track child runs through typed edges, scoped capability profiles, heartbeat events, terminal status reconciliation, sequence-addressed direct/group/parent mail, and resume-safe wait semantics; ticket claims feed the same fixed pool without a second scheduler.
 13. Deep pipeline test mesh: adversarial suites for provider recovery, tool loops, context rebuilds, TUI event consumption, installed auth/workspace resolution, and Windows process behavior.
 14. Byte-level session integrity: JSONL append/read paths detect torn writes, BOMs, invalid UTF-8, duplicated sequence IDs, and poisoned trailing rows without corrupting valid prefix state.
 15. Local performance telemetry: measure token compilation, JSONL scan, event replay, terminal frame render, process spawn, and tool dispatch latencies with low-noise counters gated behind explicit commands.

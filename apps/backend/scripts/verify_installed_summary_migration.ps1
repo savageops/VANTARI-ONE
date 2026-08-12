@@ -246,6 +246,7 @@ try {
     throw 'Installed session/create failed'
   }
   $sessionId = [string]$created.result.session.session_id
+  $messagesPath = Join-Path (Join-Path $sessionsRoot $sessionId) 'messages.jsonl'
   $sendRequest = [ordered]@{
     jsonrpc = '2.0'
     id = 'summary-send'
@@ -261,6 +262,25 @@ try {
   $process.StandardInput.Close()
   if (-not $process.WaitForExit(5000)) { throw 'Installed kernel did not exit after EOF' }
   if ($process.ExitCode -ne 0) { throw "Installed kernel exited $($process.ExitCode): $($process.StandardError.ReadToEnd())" }
+
+  if (-not (Test-Path -LiteralPath $messagesPath -PathType Leaf)) { throw 'messages.jsonl was not created' }
+  $messageRows = 0
+  $messageIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  $messageSequences = [Collections.Generic.HashSet[long]]::new()
+  $messageRoles = [Collections.Generic.List[string]]::new()
+  foreach ($line in Get-Content -LiteralPath $messagesPath) {
+    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+    $row = $line | ConvertFrom-Json
+    $messageRows += 1
+    if ([long]$row.seq -ne $messageRows) { throw "Non-contiguous installed message sequence: $($row.seq) at row $messageRows" }
+    if (-not $messageIds.Add([string]$row.id)) { throw "Duplicate installed message id: $($row.id)" }
+    if (-not $messageSequences.Add([long]$row.seq)) { throw "Duplicate installed message sequence: $($row.seq)" }
+    $messageRoles.Add([string]$row.role)
+  }
+  if ($messageRows -ne 2) { throw "Installed turn wrote $messageRows messages; expected 2" }
+  if ($messageRoles[0] -ne 'user' -or $messageRoles[1] -ne 'assistant') {
+    throw "Installed message roles were not user,assistant: $([string]::Join(',', $messageRoles))"
+  }
 
   if (-not (Test-Path -LiteralPath $jsonlPath -PathType Leaf)) { throw 'summaries.jsonl was not created' }
   $validRows = 0
@@ -288,6 +308,10 @@ try {
     appended_rows = $validRows - $legacyRows
     unique_sessions = $sessions.Count
     unique_sequences = $sequences.Count
+    message_rows = $messageRows
+    message_unique_ids = $messageIds.Count
+    message_unique_sequences = $messageSequences.Count
+    message_roles = [string]::Join(',', $messageRoles)
     legacy_sha256 = $legacyHash
     installed_sha256 = (Get-FileHash -LiteralPath $InstalledExe -Algorithm SHA256).Hash
     process_exit_code = $process.ExitCode

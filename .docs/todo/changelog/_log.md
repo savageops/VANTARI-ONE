@@ -1,5 +1,37 @@
 # Execution Log
 
+## 2026-08-12 - Per-session message ledger ownership
+
+**Outcome:** Replaced four partially independent transcript writers with one
+per-session append owner and bounded valid-tail sequence initialization.
+
+- User, assistant, assistant-tool-call, tool-result, and deterministic
+  convergence rows now share one session-keyed message state and one serializer.
+- Deleted the global message lock, whole-file sequence parse, empty-ledger
+  rewrite, and tool-specific append bodies. Sequence advances only after append;
+  a failed append invalidates cached state before retry.
+- One hundred synchronized mixed-role writers retained 100 rows with unique
+  monotonic sequences. A 32,768-line poisoned-prefix fixture followed by valid
+  seq 900 continued at seq 901 through the bounded tail reader.
+- The canonical graph passes 19/19 and 1,931/1,931; ReleaseFast passes 9/9. The
+  packaged GGUF audit inspected 37 segments across store/summary owners and
+  found zero candidate or exact duplicate pairs.
+- Installed `session/send` wrote contiguous unique `user,assistant` rows while
+  importing 1,176 legacy summaries and appending one v2 revision. Built and
+  installed SHA-256 match
+  `3E1B87D8AFD02FA37AE08396B89288E95DB7329D35C1683725B087E2929F124A`;
+  the live legacy hash stayed unchanged and zero VANTARI processes remain.
+- Harvest retained OpenAI Codex's ordered rollout writer, the Agents SDK's
+  atomic concurrent-first-write requirement, and pi's lean append shape.
+  VANTARI keeps one smaller session-ledger state and adds poisoned-tail,
+  contention, installed-path, and process-cleanup proof.
+- Captured the hive direction as one planned sequence-addressed
+  direct/parent/current-group mailbox over existing session/event ownership.
+  It replaces convergence-specific delivery after persistent ownership lands;
+  it does not add shared transcripts, generic topics, or a second work queue.
+- Next owner: move 14, carry stored event sequence through the versioned RPC
+  notification envelope.
+
 ## 2026-08-12 - Sequenced append-only session summaries
 
 **Outcome:** Replaced the concurrent last-writer-wins summary object with one

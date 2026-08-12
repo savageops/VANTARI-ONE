@@ -2,6 +2,12 @@
 
 **Priority: P2 (proof-gated, deferred)**
 
+**Current delta (2026-08-12):** The transcript hot-path hypothesis was resolved
+without native code: `nextLedgerSeq` reads a bounded tail once per process-local
+session state. The 100-writer and installed probes pass. This removes message
+sequence allocation as justification for a C ABI; bounded context-tail reads
+still require measurement before any acceleration socket is admissible.
+
 ## The seam
 
 AGENTS.md Section XVIII item 5 names a narrow `extern` boundary — a C ABI acceleration socket — as a frontier option, *only after profiling identifies a real bottleneck*. Candidate domains: tokenizer probes (exact token counting), SIMD search (JSONL scanning, needle matching), JSONL scanning (parsing performance for large transcripts), and terminal width/grapheme kernels.
@@ -10,7 +16,7 @@ This theme is intentionally the last in the frontier pipeline. It is the only th
 
 The socket is not an architecture. It is a *promotion channel*: scalar Zig code that is measurably hot gets an optional `extern` twin behind the same contract, compiled in only when the profiling harness proves the cost.
 
-## What exists today
+## Baseline at roadmap capture
 
 All four candidate domains are today implemented in pure scalar Zig, with no C interop, no `export fn`, no SIMD, and no external native dependency. The build (`apps/backend/build.zig`) links only the Zig standard library plus the `vantari_tui` (vaxis) module at the executable boundary; the `VAR1` library module is explicitly dependency-free.
 
@@ -20,12 +26,12 @@ All four candidate domains are today implemented in pure scalar Zig, with no C i
 - **Terminal width / grapheme kernels.** TUI row counting is byte-oriented, not grapheme-aware: `wrappedSegmentTake` walks raw bytes and breaks on ASCII space (`apps/backend/src/clients/tui_chat.zig:1291-1300`); `introVisualWidth` uses `std.unicode.utf8CountCodepoints` (`tui_chat.zig:1245-1247`), which counts codepoints, not display columns — wide CJK/emoji characters are under-counted. The vaxis `Unicode` handle (`tui_chat.zig:1949`) is used by `TextInput`, not by the transcript wrapping path.
 - **Profiling harness.** There is none. Timing today is limited to wall-clock `std.time.milliTimestamp()` stamps on session/tool lifecycle records (`apps/backend/src/core/executor/loop.zig:307,371,389`; `apps/backend/src/core/agents/service.zig:221,233,264`). No code measures context-compile latency, JSONL scan latency, event-replay latency, or terminal frame-render latency.
 
-Two latent inefficiencies are already visible without a harness, and both are *algorithmic* before they are instruction-level:
+Two latent inefficiencies were visible without a harness; one is now closed in scalar Zig:
 
-1. `nextSessionMessageSeq` (`store.zig`, called on every `appendSessionMessage`/`appendContextCheckpoint`) reads, fully JSON-parses, and heap-allocates **every** message in `messages.jsonl` solely to compute `max(seq) + 1`. The fix is a tail scan or a persisted high-water mark — pure Zig, no native code.
+1. **Closed:** message writers share one per-session state and initialize through a bounded `nextLedgerSeq` tail read; ordinary append no longer scans transcript history.
 2. `readLatestContextCheckpoint` already does the right thing (reverse tail-scan for the last valid line) but still `readTextAlloc`s the whole `context.jsonl` first. A bounded tail read would lower the same cost center without any ABI change.
 
-Both are evidence that the first bottleneck is the algorithm, not the instruction stream — exactly the distinction AGENTS.md Section X enforces.
+The landed fix confirms that the first bottleneck was the algorithm, not the instruction stream — exactly the distinction AGENTS.md Section X enforces.
 
 ## What the competitor does
 
@@ -42,7 +48,7 @@ Both are evidence that the first bottleneck is the algorithm, not the instructio
 VANTARI's advantage on this theme is not "we have native code and they do not" — it is the *discipline* of refusing native code until the cost model names a hot path. The competitors' shared posture (heuristic-only or provider-usage-only, forever) is the failure mode AGENTS.md Section XII forbids ("broad rewrites driven by intuition instead of a named state transition or measured bottleneck") run in reverse: a broad *non-rewrite* driven by the assumption that nothing is ever hot.
 
 1. **Cost-model-gated, not novelty-gated.** Every candidate native primitive must answer Section X's "Required Question" against a named cost center (context compile, tool dispatch, command run, TUI frame, session recovery). "Faster JSON" is not an answer; "context-compile JSONL scan exceeds N ms at M transcript rows, measured" is. Eve, Codex, and pi-mono never establish this measurement, so their heuristic is frozen by default.
-2. **Algorithm before instruction.** The two latent inefficiencies above (`nextSessionMessageSeq` full-parse-for-max, whole-file `readTextAlloc`) prove that the first win is algorithmic and pure-Zig. The cost model forces this order: a SIMD JSONL scanner is inadmissible while the scan path still parses the whole file to find one integer. Native code arrives only after the scalar path is already optimal for its algorithm.
+2. **Algorithm before instruction.** The message sequence full parse is deleted; the remaining whole-file context read must receive the same scalar algorithm pass before profiling can admit SIMD. Native code arrives only after the scalar path is optimal for its algorithm.
 3. **Same contract, optional twin.** The socket is a promotion channel, not a parallel system (Section XII: "parallel systems for the same responsibility" is forbidden). The native primitive must expose the *same* contract as the scalar path — same inputs, same outputs, same allocator ownership rules — behind a build-time switch. The scalar path stays canonical; the native path is a measured opt-in. This is the structural form of Section VIII's "a dynamic worker is admissible only when it calls the same proven primitive."
 4. **Opaque-handle ABI discipline.** When a native twin is admitted, the boundary follows the proven Zig pattern: `callconv(.C)` exports, `?*anyopaque` context handle, `extern struct` for ABI-stable data, paired `alloc`/`free` exports so the same runtime that allocates reclaims. No `std.mem.Allocator` crosses the boundary; the caller passes a caller-owned buffer or receives a handle it must release. This keeps the kernel dependency-free by construction (`build.zig`), with the native module an exe-level concern like vaxis today.
 
@@ -61,7 +67,7 @@ VANTARI's advantage on this theme is not "we have native code and they do not" �
 - **Proof:** the discrepancy corpus checked in, the build-time-off default proven (`build.zig` produces no native linkage without the flag), and the provider-payload parity evidence. Rejection protocol (Section XIII) applies in full if the discrepancy does not reproduce.
 
 ### P2-14c: SIMD JSONL scanner (conditional on P2-14a)
-- **Contract:** only admissible if P2-14a proves JSONL scan latency is a measured bottleneck *after* the algorithmic fixes (tail-scan for `nextSessionMessageSeq`, bounded tail read for `readLatestContextCheckpoint`) have landed in pure Zig. simdjson-class throughput (2–6 GB/s) is irrelevant if the transcript is KB–MB scale; the gate is measured scan time at the harness's pathological fixture size, not theoretical GB/s.
+- **Contract:** only admissible if P2-14a proves JSONL scan latency is a measured bottleneck after bounded `nextLedgerSeq` initialization and a bounded-tail `readLatestContextCheckpoint` have landed in pure Zig. simdjson-class throughput (2–6 GB/s) is irrelevant if the transcript is KB–MB scale; the gate is measured scan time at the harness's pathological fixture size, not theoretical GB/s.
 - **Mechanism:** if admitted, a `callconv(.C)` scanner export that takes a caller-owned `[*]const u8` + length and returns line offsets or parsed record handles via a paired `free` export. The scalar `splitScalar('\n')` + `parseFromSlice` path stays canonical; the SIMD path is a build-time opt-in twin behind the same read contract.
 - **Test:** the SIMD twin returns byte-identical parsed records to the scalar path on the adversarial JSONL suite (torn trailing writes, BOMs, invalid UTF-8, duplicate seqs — the Section XIV pressure set); and the scalar path is proven still-active when the build flag is off.
 - **Proof:** `perf` harness showing the scan cost drop on the pathological fixture, plus record-level parity evidence against the scalar reader. Rejection applies if the algorithmic fixes alone closed the gap.

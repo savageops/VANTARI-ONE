@@ -19,10 +19,10 @@ This document describes both current owners and target invariants. The
 [2026-08-12 full-harness SITREP](../../.docs/research/2026-08-12-full-harness-sitrep.md)
 is the current promotion boundary: agent execution is fixed-pool and
 process-local; scheduler lease acquisition is not inter-process atomic; stdio
-notifications drop stored event sequence values; and summary upserts are
-last-writer-wins. Host request ownership, same-session admission, buffer
-projection, shutdown cancellation, and test-root isolation are closed. Treat the
-remaining findings as authoritative over older shipped claims.
+notifications still drop stored event sequence values. Host request ownership,
+same-session admission, buffer projection, shutdown cancellation, test-root
+isolation, append-only summary revisions, and per-session message sequencing are
+closed. Treat the remaining findings as authoritative over older shipped claims.
 
 ## Runtime slice
 
@@ -336,7 +336,7 @@ Every session directory contains:
 - `events.jsonl`
 - `output.txt`
 
-`messages.jsonl` is the complete append-only transcript. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested.
+`messages.jsonl` is the complete append-only transcript. One process-local per-session ledger state serializes user, assistant, assistant-tool-call, tool-result, and idempotent convergence appends. It initializes sequence from the last valid bounded tail row instead of reparsing transcript history; append failure invalidates the cached cursor before retry. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested.
 
 `$VANTARI_HOME/config.json` is the canonical non-secret policy file. Its typed sections own runtime limits, wire API selection, role routing, editable agent definitions, context policy, prompt paths, and supported environment-style overrides. Built-in agent rows may tune persona/condition/route/budgets or be disabled; custom ids must inherit a compiled capability floor. `$VANTARI_HOME/auth.json` is the sibling credential/provider ledger. API keys, OAuth tokens, account identity, and active-provider state never move into config output. Nested/AppData auth paths are one-time migration inputs; `settings.toml` is no longer a runtime reader. The Windows installer preserves valid config byte-for-byte and backs up plus materializes the current schema only when the retained file fails validation.
 
@@ -357,6 +357,21 @@ Every session directory contains:
 `core/executor/loop.zig` parks a waiting parent on the supervisor condition without a provider call. The first unconsumed terminal child wakes the parent; the service appends that child's convergence record exactly once, rebuilds through the context compiler, and permits the next routing/synthesis turn while unfinished siblings remain supervised. A parent cannot emit terminal output while any owned child remains active. Full specialists execute as ordinary isolated VAR1 child sessions. Tool-free `model_task` specialists use one provider turn and validate their supplied output schema without acquiring a second transcript or tool runtime.
 
 Child assistant/reasoning deltas and tool transcripts stay in the child ledger. The parent event spine receives only bounded control events: group start, admission, queue, start, material progress/wait, child terminal, group terminal, and convergence. Every child `session.json` keeps a heap-owned immutable execution receipt containing the secret-free resolved agent, route, model, wire API, budgets, group, and branch identity; explicit checked JSON decoding preserves that receipt across optimized status rewrites and cold recovery. CLI, stdio, and TUI consume the same projection. The TUI renders Search, Explore, Agents, and To-dos through one group/item grammar with `[ ]`, `[>]`, `[x]`, `[!]`, `[-]` markers and `|--` / `` `--`` child rails; tool lifecycle phases remain event metadata while the child row is replaced by the bounded `assistant_response` summary from `sessions/summaries.jsonl`. No second status bus exists.
+
+### Planned selective agent awareness
+
+Moves 21–30 extend the persistent execution owner with one sequence-addressed
+mailbox through the existing agent/session/event lane. Every agent remains a
+normal session, including a child that becomes a bounded parent. The delivery
+surface resolves direct-session, parent, and current-group targets; carries a
+bounded body plus summary or artifact references; and persists delivery sequence,
+unread cursor, acknowledgement, and explicit queue/wake intent.
+
+This is not shipped yet. Current child completion still uses convergence-specific
+parent messages and events. The mailbox must replace that special wake path, not
+run beside it. Tickets remain the only work lifecycle. Context compilation may
+inject only bounded unread messages selected for that session; it must never copy
+all sibling transcripts or create a generic topic/subscription broker.
 
 ## Module ownership
 

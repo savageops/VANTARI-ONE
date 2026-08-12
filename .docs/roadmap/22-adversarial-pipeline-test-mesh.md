@@ -2,6 +2,11 @@
 
 **Priority: P0**
 
+**Current delta (2026-08-12):** The isolated graph now passes 1,931/1,931 with
+zero skips. The message contention/tail probes are landed. Same-millisecond
+client replay still depends on move 14 carrying stored event sequence through
+RPC, followed by move 15 replacing timestamp/text suppression.
+
 ## The seam
 
 AGENTS.md §XIV states the contract verbatim: *"Tests must behave like adversarial pipeline probes."* It then names thirteen probes every suite must exercise — corrupted JSONL suffixes, stale running sessions, failed no-prompt resumes, invalid tool batches, orphan tool results, duplicate context after provider overflow, command timeout and process locks, stdout/stderr cap markers, oversized write payloads, cwd escape before process launch, same-millisecond event bursts, terminal scrollback under live streaming, and installed binary auth/workspace resolution. §XIII makes tests gate 2 of the proof-gated promotion lifecycle: *"Tests cover the user-visible pipeline and at least one falsification pressure case."* §XVIII item 13 names the deep pipeline test mesh as a frontier item: *"adversarial suites for provider recovery, tool loops, context rebuilds, TUI event consumption, installed auth/workspace resolution, and Windows process behavior."*
@@ -10,7 +15,7 @@ The governing principle, also from §XIV: *"A passing test is valuable only when
 
 This theme is explicitly **not** a new test framework, a new test runner, or a parallel harness. The substrate already exists: the mock transports in `runtime_loop_test.zig`, the verify-switch in `agent_pipeline_deep_matrix_test.zig`, the in-process transport in `provider_test.zig`, and the isolated temp roots in `workspace_resolution_test.zig`. This theme completes the mesh — closes the probes that today have no dedicated assertion (same-millisecond ordering, terminal scrollback, TUI event consumption, installed-binary auth/workspace), hardens the existing probes into property form, and wires the whole mesh to gate promotion on the installed Windows binary.
 
-## What exists today
+## Baseline at roadmap capture
 
 The mesh is already substantial. `apps/backend/tests/` carries 1346 `test` functions across 13 files; the relevant inventory:
 
@@ -124,8 +129,8 @@ each probe:
 
 ### P0-22a: Same-millisecond event burst ordering (seq breaks ties over `created_at_ms`)
 - **Contract:** when two events share `created_at_ms` (real on fast machines, guaranteed under load), the reader returns them in monotonic `seq` order, not timestamp-string order. `events.jsonl` `seq` is the tiebreaker; `created_at_ms` is informational. AGENTS.md §XIV "same-millisecond event bursts." §IV rejects the timestamp-cursor model (Eve's `logs-events.ts` sorts by `at` string via `localeCompare`) precisely because it is non-deterministic under bursts.
-- **Mechanism:** the event reader (`readEvents`, `store.zig:318`) already splits on `\n`; add an assertion that the returned slice is sorted by `seq` ascending and that a `created_at_ms` collision does not reorder. This requires `seq` on `events.jsonl` (theme 12 P0-12b); until then, the probe asserts the transcript's `nextSessionMessageSeq` tiebreaker (`store.zig:821`) and the event-read order is stable. The probe seeds two events with identical `created_at_ms` and distinct `seq` and asserts order.
-- **Test (AGENTS.md §XIV item 11):** seed an `events.jsonl` with three frames where frames 2 and 3 share `created_at_ms = 123456789` but `seq` = 2, 3; assert `readEvents` returns them in `seq` order and that swapping the byte order of frames 2 and 3 in the file still yields `seq`-ascending output (the reader does not trust file position when `seq` disagrees). A shallow implementation that sorts by `created_at_ms` string fails this probe.
+- **Mechanism:** append through `appendEvent`, replay through `readEventsAfterSeq`, and carry that same stored `seq` through RPC. The client advances only the durable cursor; timestamp/type/text no longer participate in identity.
+- **Test (AGENTS.md §XIV item 11):** append 100 events with one timestamp and distinct stored sequences; assert source replay and RPC/TUI consumption each expose all 100 exactly once in sequence order. A shallow timestamp/text deduper fails this probe.
 - **Proof:** adversarial suite runs the same-millisecond probe and passes on the installed Windows binary.
 
 ### P0-22b: Stale running session reconciliation on cold start

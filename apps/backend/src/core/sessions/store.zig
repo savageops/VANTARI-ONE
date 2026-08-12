@@ -12,19 +12,24 @@ const types = @import("../../shared/types.zig");
 /// is retried, so the durability tradeoff is bounded and recoverable.
 const ledger_sync_batch_window_ms: i64 = 100;
 var last_ledger_sync_ms: i64 = 0;
+var ledger_sync_mutex: std.Thread.Mutex = .{};
 var last_session_touch_ms: i64 = 0;
 var store_ready_mutex: std.Thread.Mutex = .{};
 var ready_workspaces: std.StringHashMapUnmanaged(void) = .{};
 
-const EventSeqState = struct {
+const LedgerSeqState = struct {
     mutex: std.Thread.Mutex = .{},
     initialized: bool = false,
     next_seq: u64 = 1,
 };
 
-var event_seq_registry_mutex: std.Thread.Mutex = .{};
-var event_seq_states: std.StringHashMapUnmanaged(*EventSeqState) = .{};
-var message_append_mutex: std.Thread.Mutex = .{};
+const SessionLedgerState = struct {
+    events: LedgerSeqState = .{},
+    messages: LedgerSeqState = .{},
+};
+
+var session_ledger_registry_mutex: std.Thread.Mutex = .{};
+var session_ledger_states: std.StringHashMapUnmanaged(*SessionLedgerState) = .{};
 
 /// Force a durable flush for a session's ledgers. Called by the executor at
 /// turn boundaries (after the final assistant response / failure / cancel)
@@ -53,6 +58,8 @@ fn syncLedgerPath(path: []const u8) void {
     var file = std.fs.cwd().openFile(path, .{ .mode = .read_write }) catch return;
     defer file.close();
     file.sync() catch {};
+    ledger_sync_mutex.lock();
+    defer ledger_sync_mutex.unlock();
     last_ledger_sync_ms = std.time.milliTimestamp();
 }
 
@@ -161,6 +168,20 @@ const ParsedSessionMessage = struct {
     tool_calls: []types.ToolCall = &.{},
     timestamp_ms: i64,
     reasoning: ?[]const u8 = null,
+};
+
+const ParsedLedgerSequence = struct {
+    seq: u64,
+};
+
+const PendingSessionMessage = struct {
+    message_id: ?[]const u8 = null,
+    role: types.SessionMessageRole,
+    content: []const u8,
+    tool_call_id: ?[]const u8 = null,
+    tool_calls: []const types.ToolCall = &.{},
+    reasoning: ?[]const u8 = null,
+    timestamp_ms: i64,
 };
 
 const ParsedContextCheckpoint = struct {
@@ -554,15 +575,15 @@ pub fn appendEvent(
     const events_path = try eventsFilePath(allocator, workspace_root, session_id);
     defer allocator.free(events_path);
 
-    const seq_state = try eventSeqState(workspace_root, session_id);
+    const seq_state = &(try sessionLedgerState(workspace_root, session_id)).events;
     seq_state.mutex.lock();
     defer seq_state.mutex.unlock();
     if (!seq_state.initialized) {
-        seq_state.next_seq = try nextEventSeq(allocator, events_path);
+        seq_state.next_seq = try nextLedgerSeq(allocator, events_path);
         seq_state.initialized = true;
     }
     const next_seq = seq_state.next_seq;
-    seq_state.next_seq += 1;
+    const following_seq = try nextSequence(next_seq);
 
     var event_with_seq = event;
     event_with_seq.seq = next_seq;
@@ -576,22 +597,23 @@ pub fn appendEvent(
         seq_state.initialized = false;
         return err;
     };
+    seq_state.next_seq = following_seq;
 }
 
-/// Return a stable per-session sequencer so concurrent children never share a cursor cache.
-fn eventSeqState(workspace_root: []const u8, session_id: []const u8) !*EventSeqState {
+/// Return one process-local mutation owner for a session's append-only ledgers.
+fn sessionLedgerState(workspace_root: []const u8, session_id: []const u8) !*SessionLedgerState {
     const key = try std.fmt.allocPrint(std.heap.page_allocator, "{s}\x1f{s}", .{ workspace_root, session_id });
-    event_seq_registry_mutex.lock();
-    defer event_seq_registry_mutex.unlock();
-    if (event_seq_states.get(key)) |state| {
+    session_ledger_registry_mutex.lock();
+    defer session_ledger_registry_mutex.unlock();
+    if (session_ledger_states.get(key)) |state| {
         std.heap.page_allocator.free(key);
         return state;
     }
 
-    const state = try std.heap.page_allocator.create(EventSeqState);
+    const state = try std.heap.page_allocator.create(SessionLedgerState);
     errdefer std.heap.page_allocator.destroy(state);
     state.* = .{};
-    try event_seq_states.put(std.heap.page_allocator, key, state);
+    try session_ledger_states.put(std.heap.page_allocator, key, state);
     return state;
 }
 
@@ -795,32 +817,12 @@ pub fn appendSessionMessageWithReasoning(
     reasoning: ?[]const u8,
     timestamp_ms: i64,
 ) !void {
-    message_append_mutex.lock();
-    defer message_append_mutex.unlock();
-    const messages_path = try messagesFilePath(allocator, workspace_root, session_id);
-    defer allocator.free(messages_path);
-
-    if (!fsutil.fileExists(messages_path)) {
-        try writeSessionMessages(allocator, messages_path, &.{});
-    }
-
-    const next_seq = try nextSessionMessageSeq(allocator, messages_path);
-    const message_id = try sessionMessageId(allocator, next_seq);
-    defer allocator.free(message_id);
-
-    const jsonl = try std.fmt.allocPrint(allocator, "{f}\n", .{
-        std.json.fmt(.{
-            .id = message_id,
-            .seq = next_seq,
-            .role = types.sessionMessageRoleLabel(role),
-            .content = content,
-            .reasoning = reasoning,
-            .timestamp_ms = timestamp_ms,
-        }, .{}),
+    return appendSessionMessageRecord(allocator, workspace_root, session_id, .{
+        .role = role,
+        .content = content,
+        .reasoning = reasoning,
+        .timestamp_ms = timestamp_ms,
     });
-    defer allocator.free(jsonl);
-
-    try appendJsonlRecord(messages_path, jsonl);
 }
 
 /// Append a deterministic message at most once for idempotent group convergence.
@@ -833,30 +835,27 @@ pub fn appendSessionMessageOnce(
     content: []const u8,
     timestamp_ms: i64,
 ) !bool {
-    message_append_mutex.lock();
-    defer message_append_mutex.unlock();
     const messages_path = try messagesFilePath(allocator, workspace_root, session_id);
     defer allocator.free(messages_path);
-    if (!fsutil.fileExists(messages_path)) try writeSessionMessages(allocator, messages_path, &.{});
 
-    const existing = try readSessionMessagesFromPath(allocator, messages_path);
-    defer types.deinitSessionMessages(allocator, existing);
-    for (existing) |message| {
-        if (std.mem.eql(u8, message.id, message_id)) return false;
+    const seq_state = &(try sessionLedgerState(workspace_root, session_id)).messages;
+    seq_state.mutex.lock();
+    defer seq_state.mutex.unlock();
+
+    if (fsutil.fileExists(messages_path)) {
+        const existing = try readSessionMessagesFromPath(allocator, messages_path);
+        defer types.deinitSessionMessages(allocator, existing);
+        for (existing) |message| {
+            if (std.mem.eql(u8, message.id, message_id)) return false;
+        }
     }
 
-    const next_seq = try nextSessionMessageSeq(allocator, messages_path);
-    const jsonl = try std.fmt.allocPrint(allocator, "{f}\n", .{
-        std.json.fmt(.{
-            .id = message_id,
-            .seq = next_seq,
-            .role = types.sessionMessageRoleLabel(role),
-            .content = content,
-            .timestamp_ms = timestamp_ms,
-        }, .{}),
+    try appendSessionMessageRecordLocked(allocator, messages_path, seq_state, .{
+        .message_id = message_id,
+        .role = role,
+        .content = content,
+        .timestamp_ms = timestamp_ms,
     });
-    defer allocator.free(jsonl);
-    try appendJsonlRecord(messages_path, jsonl);
     return true;
 }
 
@@ -890,31 +889,13 @@ pub fn appendAssistantToolCallSessionMessage(
     reasoning: ?[]const u8,
     timestamp_ms: i64,
 ) !void {
-    const messages_path = try messagesFilePath(allocator, workspace_root, session_id);
-    defer allocator.free(messages_path);
-
-    if (!fsutil.fileExists(messages_path)) {
-        try writeSessionMessages(allocator, messages_path, &.{});
-    }
-
-    const next_seq = try nextSessionMessageSeq(allocator, messages_path);
-    const message_id = try sessionMessageId(allocator, next_seq);
-    defer allocator.free(message_id);
-
-    const jsonl = try std.fmt.allocPrint(allocator, "{f}\n", .{
-        std.json.fmt(.{
-            .id = message_id,
-            .seq = next_seq,
-            .role = types.sessionMessageRoleLabel(.assistant),
-            .content = content orelse "",
-            .tool_calls = tool_calls,
-            .reasoning = reasoning,
-            .timestamp_ms = timestamp_ms,
-        }, .{}),
+    return appendSessionMessageRecord(allocator, workspace_root, session_id, .{
+        .role = .assistant,
+        .content = content orelse "",
+        .tool_calls = tool_calls,
+        .reasoning = reasoning,
+        .timestamp_ms = timestamp_ms,
     });
-    defer allocator.free(jsonl);
-
-    try appendJsonlRecord(messages_path, jsonl);
 }
 
 pub fn appendToolSessionMessage(
@@ -925,30 +906,62 @@ pub fn appendToolSessionMessage(
     content: []const u8,
     timestamp_ms: i64,
 ) !void {
+    return appendSessionMessageRecord(allocator, workspace_root, session_id, .{
+        .role = .tool,
+        .content = content,
+        .tool_call_id = tool_call_id,
+        .timestamp_ms = timestamp_ms,
+    });
+}
+
+fn appendSessionMessageRecord(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    message: PendingSessionMessage,
+) !void {
     const messages_path = try messagesFilePath(allocator, workspace_root, session_id);
     defer allocator.free(messages_path);
 
-    if (!fsutil.fileExists(messages_path)) {
-        try writeSessionMessages(allocator, messages_path, &.{});
+    const seq_state = &(try sessionLedgerState(workspace_root, session_id)).messages;
+    seq_state.mutex.lock();
+    defer seq_state.mutex.unlock();
+    try appendSessionMessageRecordLocked(allocator, messages_path, seq_state, message);
+}
+
+fn appendSessionMessageRecordLocked(
+    allocator: std.mem.Allocator,
+    messages_path: []const u8,
+    seq_state: *LedgerSeqState,
+    message: PendingSessionMessage,
+) !void {
+    if (!seq_state.initialized) {
+        seq_state.next_seq = try nextLedgerSeq(allocator, messages_path);
+        seq_state.initialized = true;
     }
+    const next_seq = seq_state.next_seq;
+    const following_seq = try nextSequence(next_seq);
+    const owned_message_id = if (message.message_id == null) try sessionMessageId(allocator, next_seq) else null;
+    defer if (owned_message_id) |value| allocator.free(value);
+    const message_id = message.message_id orelse owned_message_id.?;
 
-    const next_seq = try nextSessionMessageSeq(allocator, messages_path);
-    const message_id = try sessionMessageId(allocator, next_seq);
-    defer allocator.free(message_id);
-
-    const jsonl = try std.fmt.allocPrint(allocator, "{f}\n", .{
-        std.json.fmt(.{
-            .id = message_id,
-            .seq = next_seq,
-            .role = types.sessionMessageRoleLabel(.tool),
-            .content = content,
-            .tool_call_id = tool_call_id,
-            .timestamp_ms = timestamp_ms,
-        }, .{}),
-    });
+    const jsonl = try std.fmt.allocPrint(allocator, "{f}\n", .{std.json.fmt(.{
+        .id = message_id,
+        .seq = next_seq,
+        .role = types.sessionMessageRoleLabel(message.role),
+        .content = message.content,
+        .tool_call_id = message.tool_call_id,
+        .tool_calls = if (message.tool_calls.len > 0) message.tool_calls else null,
+        .reasoning = message.reasoning,
+        .timestamp_ms = message.timestamp_ms,
+    }, .{ .emit_null_optional_fields = false })});
     defer allocator.free(jsonl);
 
-    try appendJsonlRecord(messages_path, jsonl);
+    appendJsonlRecord(messages_path, jsonl) catch |err| {
+        seq_state.initialized = false;
+        return err;
+    };
+    seq_state.next_seq = following_seq;
 }
 
 pub fn appendContextCheckpoint(
@@ -1302,32 +1315,6 @@ fn cloneParsedSessionMessage(
     };
 }
 
-fn writeSessionMessages(
-    allocator: std.mem.Allocator,
-    messages_path: []const u8,
-    messages: []const types.SessionMessage,
-) !void {
-    var body = std.array_list.Managed(u8).init(allocator);
-    defer body.deinit();
-    const writer = body.writer();
-
-    for (messages) |message| {
-        try writer.print("{f}\n", .{
-            std.json.fmt(.{
-                .id = message.id,
-                .seq = message.seq,
-                .role = types.sessionMessageRoleLabel(message.role),
-                .content = message.content,
-                .tool_call_id = message.tool_call_id,
-                .tool_calls = message.tool_calls,
-                .timestamp_ms = message.timestamp_ms,
-            }, .{}),
-        });
-    }
-
-    try fsutil.writeText(messages_path, body.items);
-}
-
 fn appendJsonlRecord(
     path: []const u8,
     jsonl: []const u8,
@@ -1337,10 +1324,12 @@ fn appendJsonlRecord(
     // provider streaming to ~1 token/sec; batching keeps the stream fast
     // while bounding crash loss to the last window of deltas. Terminal
     // turn boundaries force a full flush via `syncSessionLedgers`.
+    ledger_sync_mutex.lock();
     const now_ms = std.time.milliTimestamp();
     const should_sync = now_ms - last_ledger_sync_ms >= ledger_sync_batch_window_ms;
-    try fsutil.appendJsonlRecord(path, jsonl, should_sync);
     if (should_sync) last_ledger_sync_ms = now_ms;
+    ledger_sync_mutex.unlock();
+    try fsutil.appendJsonlRecord(path, jsonl, should_sync);
 }
 
 pub fn sessionsRootPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
@@ -1596,55 +1585,64 @@ fn outputFilePath(allocator: std.mem.Allocator, workspace_root: []const u8, sess
     return fsutil.join(allocator, &.{ root, "sessions", session_id, "output.txt" });
 }
 
-fn nextSessionMessageSeq(
+/// Initialize a ledger sequence from its last parseable row. The read window
+/// starts at 4 KiB and expands only when the tail has no complete valid row, so
+/// normal cold-start cost depends on the final record rather than ledger size.
+fn nextLedgerSeq(
     allocator: std.mem.Allocator,
-    messages_path: []const u8,
+    path: []const u8,
 ) !u64 {
-    if (!fsutil.fileExists(messages_path)) return 1;
+    if (!fsutil.fileExists(path)) return 1;
 
-    const messages = try readSessionMessagesFromPath(allocator, messages_path);
-    defer types.deinitSessionMessages(allocator, messages);
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+    const end_position = try file.getEndPos();
+    if (end_position == 0) return 1;
 
-    var max_seq: u64 = 0;
-    for (messages) |message| {
-        if (message.seq > max_seq) max_seq = message.seq;
+    const initial_window_bytes: u64 = 4 * 1024;
+    var window_bytes: u64 = @min(end_position, initial_window_bytes);
+    while (true) {
+        const start_position = end_position - window_bytes;
+        const tail_len = std.math.cast(usize, window_bytes) orelse return error.LedgerTailTooLarge;
+        const tail = try allocator.alloc(u8, tail_len);
+        defer allocator.free(tail);
+        const read_count = try file.preadAll(tail, start_position);
+        const content = tail[0..read_count];
+
+        var first_complete: usize = 0;
+        if (start_position > 0) {
+            first_complete = if (std.mem.indexOfScalar(u8, content, '\n')) |boundary|
+                boundary + 1
+            else
+                content.len;
+        }
+
+        var line_end = content.len;
+        while (line_end > first_complete) {
+            while (line_end > first_complete and (content[line_end - 1] == '\n' or content[line_end - 1] == '\r')) : (line_end -= 1) {}
+            if (line_end == first_complete) break;
+
+            var line_start = line_end;
+            while (line_start > first_complete and content[line_start - 1] != '\n') : (line_start -= 1) {}
+            const raw_line = std.mem.trim(u8, content[line_start..line_end], " \t\r");
+            line_end = if (line_start == first_complete) first_complete else line_start - 1;
+            if (raw_line.len == 0 or !std.unicode.utf8ValidateSlice(raw_line)) continue;
+
+            var parsed = std.json.parseFromSlice(ParsedLedgerSequence, allocator, stripUtf8Bom(raw_line), .{
+                .ignore_unknown_fields = true,
+            }) catch continue;
+            defer parsed.deinit();
+            return nextSequence(parsed.value.seq);
+        }
+
+        if (window_bytes == end_position) return 1;
+        window_bytes = if (window_bytes > end_position / 2) end_position else window_bytes * 2;
     }
-    return max_seq + 1;
 }
 
-/// Compute the next monotonic seq for `events.jsonl` via a backward tail scan.
-/// Because events are strictly append-ordered, the max seq is the seq of the
-/// last parseable line. This is O(1)-ish per append — it does not read or parse
-/// the entire file. Unparseable trailing lines (torn writes) are skipped.
-fn nextEventSeq(
-    allocator: std.mem.Allocator,
-    events_path: []const u8,
-) !u64 {
-    if (!fsutil.fileExists(events_path)) return 1;
-
-    const content = try fsutil.readTextAlloc(allocator, events_path);
-    defer allocator.free(content);
-
-    var end = content.len;
-    while (end > 0) {
-        while (end > 0 and (content[end - 1] == '\n' or content[end - 1] == '\r')) : (end -= 1) {}
-        if (end == 0) break;
-
-        var start = end;
-        while (start > 0 and content[start - 1] != '\n') : (start -= 1) {}
-
-        var parsed = std.json.parseFromSlice(ParsedSessionEvent, allocator, content[start..end], .{
-            .ignore_unknown_fields = true,
-        }) catch {
-            end = if (start == 0) 0 else start - 1;
-            continue;
-        };
-        defer parsed.deinit();
-
-        return parsed.value.seq + 1;
-    }
-
-    return 1;
+fn nextSequence(sequence: u64) !u64 {
+    if (sequence == std.math.maxInt(u64)) return error.SequenceOverflow;
+    return sequence + 1;
 }
 
 fn sessionMessageId(allocator: std.mem.Allocator, seq: u64) ![]u8 {
