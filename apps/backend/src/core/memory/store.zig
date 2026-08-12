@@ -325,7 +325,9 @@ fn looksLikeTranscript(content: []const u8) bool {
         std.ascii.indexOfIgnoreCase(content, "\"seq\"") != null;
 }
 
-fn oneLine(content: []const u8) []const u8 { return content; }
+fn oneLine(content: []const u8) []const u8 {
+    return content;
+}
 
 fn compactOneLine(allocator: std.mem.Allocator, content: []const u8) ![]u8 {
     var output = std.array_list.Managed(u8).init(allocator);
@@ -343,47 +345,126 @@ fn compactOneLine(allocator: std.mem.Allocator, content: []const u8) ![]u8 {
     return output.toOwnedSlice();
 }
 
-pub fn parseScope(value: []const u8) Error!Scope { if (std.mem.eql(u8, value, "session")) return .session; if (std.mem.eql(u8, value, "global")) return .global; return Error.InvalidScope; }
-pub fn parseOperation(value: []const u8) Error!Operation { if (std.mem.eql(u8, value, "remember")) return .remember; if (std.mem.eql(u8, value, "forget")) return .forget; return Error.InvalidOperation; }
-pub fn parseKind(value: []const u8) Error!Kind { inline for (std.meta.fields(Kind)) |field| if (std.mem.eql(u8, value, field.name)) return @enumFromInt(field.value); return Error.InvalidKind; }
-pub fn parseTrigger(value: []const u8) Error!Trigger { inline for (std.meta.fields(Trigger)) |field| if (std.mem.eql(u8, value, field.name)) return @enumFromInt(field.value); return Error.InvalidTrigger; }
-pub fn parseActivation(value: []const u8) Error!Activation { inline for (std.meta.fields(Activation)) |field| if (std.mem.eql(u8, value, field.name)) return @enumFromInt(field.value); return Error.InvalidActivation; }
-pub fn scopeLabel(value: Scope) []const u8 { return @tagName(value); }
-pub fn operationLabel(value: Operation) []const u8 { return @tagName(value); }
-pub fn kindLabel(value: Kind) []const u8 { return @tagName(value); }
-pub fn triggerLabel(value: Trigger) []const u8 { return @tagName(value); }
-pub fn activationLabel(value: Activation) []const u8 { return @tagName(value); }
+pub fn parseScope(value: []const u8) Error!Scope {
+    if (std.mem.eql(u8, value, "session")) return .session;
+    if (std.mem.eql(u8, value, "global")) return .global;
+    return Error.InvalidScope;
+}
+pub fn parseOperation(value: []const u8) Error!Operation {
+    if (std.mem.eql(u8, value, "remember")) return .remember;
+    if (std.mem.eql(u8, value, "forget")) return .forget;
+    return Error.InvalidOperation;
+}
+pub fn parseKind(value: []const u8) Error!Kind {
+    inline for (std.meta.fields(Kind)) |field| if (std.mem.eql(u8, value, field.name)) return @enumFromInt(field.value);
+    return Error.InvalidKind;
+}
+pub fn parseTrigger(value: []const u8) Error!Trigger {
+    inline for (std.meta.fields(Trigger)) |field| if (std.mem.eql(u8, value, field.name)) return @enumFromInt(field.value);
+    return Error.InvalidTrigger;
+}
+pub fn parseActivation(value: []const u8) Error!Activation {
+    inline for (std.meta.fields(Activation)) |field| if (std.mem.eql(u8, value, field.name)) return @enumFromInt(field.value);
+    return Error.InvalidActivation;
+}
+pub fn scopeLabel(value: Scope) []const u8 {
+    return @tagName(value);
+}
+pub fn operationLabel(value: Operation) []const u8 {
+    return @tagName(value);
+}
+pub fn kindLabel(value: Kind) []const u8 {
+    return @tagName(value);
+}
+pub fn triggerLabel(value: Trigger) []const u8 {
+    return @tagName(value);
+}
+pub fn activationLabel(value: Activation) []const u8 {
+    return @tagName(value);
+}
 
-test "scope parser accepts session" { try std.testing.expectEqual(Scope.session, try parseScope("session")); }
-test "scope parser accepts global" { try std.testing.expectEqual(Scope.global, try parseScope("global")); }
-test "scope parser rejects all as a write scope" { try std.testing.expectError(Error.InvalidScope, parseScope("all")); }
-test "operation parser accepts remember" { try std.testing.expectEqual(Operation.remember, try parseOperation("remember")); }
-test "operation parser accepts forget" { try std.testing.expectEqual(Operation.forget, try parseOperation("forget")); }
-test "operation parser rejects destructive delete" { try std.testing.expectError(Error.InvalidOperation, parseOperation("delete")); }
-test "kind parser accepts fact" { try std.testing.expectEqual(Kind.fact, try parseKind("fact")); }
-test "kind parser accepts decision" { try std.testing.expectEqual(Kind.decision, try parseKind("decision")); }
-test "kind parser accepts preference" { try std.testing.expectEqual(Kind.preference, try parseKind("preference")); }
-test "kind parser accepts invariant" { try std.testing.expectEqual(Kind.invariant, try parseKind("invariant")); }
-test "kind parser accepts lesson" { try std.testing.expectEqual(Kind.lesson, try parseKind("lesson")); }
-test "kind parser rejects summary transcript buckets" { try std.testing.expectError(Error.InvalidKind, parseKind("summary")); }
-test "trigger parser distinguishes explicit user memory" { try std.testing.expectEqual(Trigger.user_requested, try parseTrigger("user_requested")); }
-test "trigger parser distinguishes agent judgment" { try std.testing.expectEqual(Trigger.agent_decided, try parseTrigger("agent_decided")); }
-test "activation parser accepts always" { try std.testing.expectEqual(Activation.always, try parseActivation("always")); }
-test "activation parser accepts relevant" { try std.testing.expectEqual(Activation.relevant, try parseActivation("relevant")); }
-test "secret detector rejects private keys" { try std.testing.expect(looksSensitive("-----BEGIN PRIVATE KEY-----")); }
-test "secret detector rejects bearer tokens" { try std.testing.expect(looksSensitive("Authorization: Bearer secret")); }
-test "ordinary architecture decisions are not secrets" { try std.testing.expect(!looksSensitive("The memory owner is core/memory.")); }
-test "raw transcript-shaped content is rejected" { try std.testing.expect(looksLikeTranscript("{\"seq\":1,\"role\":\"user\",\"content\":\"x\"}")); }
-test "plain quoted prose is not a transcript replay" { try std.testing.expect(!looksLikeTranscript("The role is operator and content is compact.")); }
+test "scope parser accepts session" {
+    try std.testing.expectEqual(Scope.session, try parseScope("session"));
+}
+test "scope parser accepts global" {
+    try std.testing.expectEqual(Scope.global, try parseScope("global"));
+}
+test "scope parser rejects all as a write scope" {
+    try std.testing.expectError(Error.InvalidScope, parseScope("all"));
+}
+test "operation parser accepts remember" {
+    try std.testing.expectEqual(Operation.remember, try parseOperation("remember"));
+}
+test "operation parser accepts forget" {
+    try std.testing.expectEqual(Operation.forget, try parseOperation("forget"));
+}
+test "operation parser rejects destructive delete" {
+    try std.testing.expectError(Error.InvalidOperation, parseOperation("delete"));
+}
+test "kind parser accepts fact" {
+    try std.testing.expectEqual(Kind.fact, try parseKind("fact"));
+}
+test "kind parser accepts decision" {
+    try std.testing.expectEqual(Kind.decision, try parseKind("decision"));
+}
+test "kind parser accepts preference" {
+    try std.testing.expectEqual(Kind.preference, try parseKind("preference"));
+}
+test "kind parser accepts invariant" {
+    try std.testing.expectEqual(Kind.invariant, try parseKind("invariant"));
+}
+test "kind parser accepts lesson" {
+    try std.testing.expectEqual(Kind.lesson, try parseKind("lesson"));
+}
+test "kind parser rejects summary transcript buckets" {
+    try std.testing.expectError(Error.InvalidKind, parseKind("summary"));
+}
+test "trigger parser distinguishes explicit user memory" {
+    try std.testing.expectEqual(Trigger.user_requested, try parseTrigger("user_requested"));
+}
+test "trigger parser distinguishes agent judgment" {
+    try std.testing.expectEqual(Trigger.agent_decided, try parseTrigger("agent_decided"));
+}
+test "activation parser accepts always" {
+    try std.testing.expectEqual(Activation.always, try parseActivation("always"));
+}
+test "activation parser accepts relevant" {
+    try std.testing.expectEqual(Activation.relevant, try parseActivation("relevant"));
+}
+test "secret detector rejects private keys" {
+    try std.testing.expect(looksSensitive("-----BEGIN PRIVATE KEY-----"));
+}
+test "secret detector rejects bearer tokens" {
+    try std.testing.expect(looksSensitive("Authorization: Bearer secret"));
+}
+test "ordinary architecture decisions are not secrets" {
+    try std.testing.expect(!looksSensitive("The memory owner is core/memory."));
+}
+test "raw transcript-shaped content is rejected" {
+    try std.testing.expect(looksLikeTranscript("{\"seq\":1,\"role\":\"user\",\"content\":\"x\"}"));
+}
+test "plain quoted prose is not a transcript replay" {
+    try std.testing.expect(!looksLikeTranscript("The role is operator and content is compact."));
+}
 test "global metadata extraction recovers only hidden record" {
     const line = "- **topic** — value <!-- vantari-memory {\"schema\":\"vantari.memory.v1\"} -->";
     try std.testing.expectEqualStrings("{\"schema\":\"vantari.memory.v1\"}", extractJson(line, .global).?);
 }
-test "session extraction accepts JSONL rows" { try std.testing.expectEqualStrings("{\"id\":1}", extractJson("  {\"id\":1}\r", .session).?); }
-test "markdown without metadata is not memory" { try std.testing.expect(extractJson("- ordinary note", .global) == null); }
-test "relevance matches topic words" { try std.testing.expect(isRelevant("update memory architecture", "memory-owner", "core module")); }
-test "relevance matches content words" { try std.testing.expect(isRelevant("provider adapter", "transport", "Anthropic provider adapter")); }
-test "relevance ignores short generic words" { try std.testing.expect(!isRelevant("do it now", "memory-owner", "core module")); }
+test "session extraction accepts JSONL rows" {
+    try std.testing.expectEqualStrings("{\"id\":1}", extractJson("  {\"id\":1}\r", .session).?);
+}
+test "markdown without metadata is not memory" {
+    try std.testing.expect(extractJson("- ordinary note", .global) == null);
+}
+test "relevance matches topic words" {
+    try std.testing.expect(isRelevant("update memory architecture", "memory-owner", "core module"));
+}
+test "relevance matches content words" {
+    try std.testing.expect(isRelevant("provider adapter", "transport", "Anthropic provider adapter"));
+}
+test "relevance ignores short generic words" {
+    try std.testing.expect(!isRelevant("do it now", "memory-owner", "core module"));
+}
 test "flattening keeps global memory one-line" {
     const value = try compactOneLine(std.testing.allocator, "  first\n\tsecond   third  ");
     defer std.testing.allocator.free(value);
@@ -398,7 +479,6 @@ test "labels are stable storage vocabulary" {
 }
 
 test "session and global paths have exactly two canonical scopes" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
@@ -412,7 +492,6 @@ test "session and global paths have exactly two canonical scopes" {
 }
 
 test "session write is append-only and source-linked" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
@@ -420,7 +499,12 @@ test "session write is append-only and source-linked" {
     var session = try session_store.initSession(std.testing.allocator, workspace, "remember the selected owner");
     defer session.deinit(std.testing.allocator);
     const receipt = try append(std.testing.allocator, workspace, .{
-        .scope = .session, .kind = .decision, .topic = "memory-owner", .content = "core/memory is canonical.", .trigger = .user_requested, .session_id = session.id,
+        .scope = .session,
+        .kind = .decision,
+        .topic = "memory-owner",
+        .content = "core/memory is canonical.",
+        .trigger = .user_requested,
+        .session_id = session.id,
     });
     defer std.testing.allocator.free(receipt);
     const path = try sessionMemoryPath(std.testing.allocator, workspace, session.id);
@@ -432,7 +516,6 @@ test "session write is append-only and source-linked" {
 }
 
 test "same-topic session writes recall only the latest value" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
@@ -450,7 +533,6 @@ test "same-topic session writes recall only the latest value" {
 }
 
 test "forget tombstone removes topic from recall without deleting history" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace = try tmp.dir.realpathAlloc(std.testing.allocator, ".");

@@ -2,7 +2,6 @@ const std = @import("std");
 const VAR1 = @import("VAR1");
 
 test "canonical config file materializes typed runtime defaults" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/workspace", .{tmp.sub_path});
@@ -18,7 +17,6 @@ test "canonical config file materializes typed runtime defaults" {
 }
 
 test "canonical config environment values override runtime values" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/workspace", .{tmp.sub_path});
@@ -39,7 +37,6 @@ test "canonical config environment values override runtime values" {
 }
 
 test "canonical config rejects unknown keys instead of hiding typos" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/workspace", .{tmp.sub_path});
@@ -195,7 +192,6 @@ test "config loader rejects missing required keys" {
 }
 
 test "canonical config overlays non-secret context policy" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -223,7 +219,6 @@ test "canonical config overlays non-secret context policy" {
 }
 
 test "canonical config rejects unknown context policy keys" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -276,7 +271,6 @@ test "config loader ignores commented backup provider entries" {
 }
 
 test "loadDefault canonicalizes relative workspace root to an absolute current directory" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -311,7 +305,6 @@ test "loadDefault canonicalizes relative workspace root to an absolute current d
 }
 
 test "loadDefault seeds canonical auth state from env and then prefers auth ledger" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -380,7 +373,6 @@ test "loadDefault seeds canonical auth state from env and then prefers auth ledg
 }
 
 test "loadDefault accepts UTF-8 BOM auth ledger" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -444,7 +436,6 @@ test "loadDefault accepts UTF-8 BOM auth ledger" {
 }
 
 test "auth store migrates installed provider auth into the canonical workspace ledger" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -2326,7 +2317,12 @@ test "shard checkpoint is written to context.jsonl and survives cold start" {
         const etype = try std.testing.allocator.dupe(u8, "summary_checkpoint");
         const trigger = try std.testing.allocator.dupe(u8, "manual");
         const summary = try std.testing.allocator.dupe(u8, "Parent checkpoint summary.");
-        defer { std.testing.allocator.free(id); std.testing.allocator.free(etype); std.testing.allocator.free(trigger); std.testing.allocator.free(summary); }
+        defer {
+            std.testing.allocator.free(id);
+            std.testing.allocator.free(etype);
+            std.testing.allocator.free(trigger);
+            std.testing.allocator.free(summary);
+        }
         try VAR1.core.session_store.appendContextCheckpoint(std.testing.allocator, workspace_root, session.id, .{
             .id = id,
             .entry_type = etype,
@@ -2395,7 +2391,12 @@ test "shard checkpoint can be updated to converged status" {
         const etype = try std.testing.allocator.dupe(u8, "summary_checkpoint");
         const trigger = try std.testing.allocator.dupe(u8, "auto");
         const summary = try std.testing.allocator.dupe(u8, "Parent for convergence test.");
-        defer { std.testing.allocator.free(id); std.testing.allocator.free(etype); std.testing.allocator.free(trigger); std.testing.allocator.free(summary); }
+        defer {
+            std.testing.allocator.free(id);
+            std.testing.allocator.free(etype);
+            std.testing.allocator.free(trigger);
+            std.testing.allocator.free(summary);
+        }
         try VAR1.core.session_store.appendContextCheckpoint(std.testing.allocator, workspace_root, session.id, .{
             .id = id,
             .entry_type = etype,
@@ -2412,19 +2413,31 @@ test "shard checkpoint can be updated to converged status" {
 
     // Open shard.
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
-        "checkpoint-parent-2", 1, .open, "Branch investigating.",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "checkpoint-parent-2",
+        1,
+        .open,
+        "Branch investigating.",
     );
 
     // Converge the shard.
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
-        "checkpoint-parent-2", 1, .converged, "Branch converged with findings.",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "checkpoint-parent-2",
+        1,
+        .converged,
+        "Branch converged with findings.",
     );
 
     // The latest checkpoint must be the converged shard.
     const latest = try VAR1.core.session_store.readLatestContextCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
     );
     defer if (latest) |cp| cp.deinit(std.testing.allocator);
 
@@ -2458,18 +2471,34 @@ test "shard checkpoint does not corrupt summary checkpoint reads" {
         const etype = try std.testing.allocator.dupe(u8, "summary_checkpoint");
         const trigger = try std.testing.allocator.dupe(u8, "manual");
         const summary = try std.testing.allocator.dupe(u8, "First summary.");
-        defer { std.testing.allocator.free(id); std.testing.allocator.free(etype); std.testing.allocator.free(trigger); std.testing.allocator.free(summary); }
+        defer {
+            std.testing.allocator.free(id);
+            std.testing.allocator.free(etype);
+            std.testing.allocator.free(trigger);
+            std.testing.allocator.free(summary);
+        }
         try VAR1.core.session_store.appendContextCheckpoint(std.testing.allocator, workspace_root, session.id, .{
-            .id = id, .entry_type = etype, .created_at_ms = 100,
-            .source_seq_start = 1, .source_seq_end = 3, .first_kept_seq = 2,
-            .tokens_before_estimate = 100, .tokens_after_estimate = 50,
-            .trigger = trigger, .summary = summary,
+            .id = id,
+            .entry_type = etype,
+            .created_at_ms = 100,
+            .source_seq_start = 1,
+            .source_seq_end = 3,
+            .first_kept_seq = 2,
+            .tokens_before_estimate = 100,
+            .tokens_after_estimate = 50,
+            .trigger = trigger,
+            .summary = summary,
         });
     }
 
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
-        "summary-1", 1, .abandoned, "Abandoned branch.",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "summary-1",
+        1,
+        .abandoned,
+        "Abandoned branch.",
     );
 
     {
@@ -2477,18 +2506,31 @@ test "shard checkpoint does not corrupt summary checkpoint reads" {
         const etype = try std.testing.allocator.dupe(u8, "summary_checkpoint");
         const trigger = try std.testing.allocator.dupe(u8, "auto");
         const summary = try std.testing.allocator.dupe(u8, "Second summary after shard.");
-        defer { std.testing.allocator.free(id); std.testing.allocator.free(etype); std.testing.allocator.free(trigger); std.testing.allocator.free(summary); }
+        defer {
+            std.testing.allocator.free(id);
+            std.testing.allocator.free(etype);
+            std.testing.allocator.free(trigger);
+            std.testing.allocator.free(summary);
+        }
         try VAR1.core.session_store.appendContextCheckpoint(std.testing.allocator, workspace_root, session.id, .{
-            .id = id, .entry_type = etype, .created_at_ms = 200,
-            .source_seq_start = 1, .source_seq_end = 6, .first_kept_seq = 5,
-            .tokens_before_estimate = 200, .tokens_after_estimate = 80,
-            .trigger = trigger, .summary = summary,
+            .id = id,
+            .entry_type = etype,
+            .created_at_ms = 200,
+            .source_seq_start = 1,
+            .source_seq_end = 6,
+            .first_kept_seq = 5,
+            .tokens_before_estimate = 200,
+            .tokens_after_estimate = 80,
+            .trigger = trigger,
+            .summary = summary,
         });
     }
 
     // The latest checkpoint must be the second summary (not the shard).
     const latest = try VAR1.core.session_store.readLatestContextCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
     );
     defer if (latest) |cp| cp.deinit(std.testing.allocator);
 
@@ -2531,23 +2573,44 @@ test "shard convergence leaves parent transcript byte-identical" {
         const etype = try std.testing.allocator.dupe(u8, "summary_checkpoint");
         const trigger = try std.testing.allocator.dupe(u8, "manual");
         const summary = try std.testing.allocator.dupe(u8, "Parent for GC test.");
-        defer { std.testing.allocator.free(id); std.testing.allocator.free(etype); std.testing.allocator.free(trigger); std.testing.allocator.free(summary); }
+        defer {
+            std.testing.allocator.free(id);
+            std.testing.allocator.free(etype);
+            std.testing.allocator.free(trigger);
+            std.testing.allocator.free(summary);
+        }
         try VAR1.core.session_store.appendContextCheckpoint(std.testing.allocator, workspace_root, session.id, .{
-            .id = id, .entry_type = etype, .created_at_ms = 300,
-            .source_seq_start = 1, .source_seq_end = 2, .first_kept_seq = 1,
-            .tokens_before_estimate = 50, .tokens_after_estimate = 30,
-            .trigger = trigger, .summary = summary,
+            .id = id,
+            .entry_type = etype,
+            .created_at_ms = 300,
+            .source_seq_start = 1,
+            .source_seq_end = 2,
+            .first_kept_seq = 1,
+            .tokens_before_estimate = 50,
+            .tokens_after_estimate = 30,
+            .trigger = trigger,
+            .summary = summary,
         });
     }
 
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
-        "cp-gc-1", 1, .open, "Branch for GC test.",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "cp-gc-1",
+        1,
+        .open,
+        "Branch for GC test.",
     );
 
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
-        "cp-gc-1", 1, .converged, "Branch converged.",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "cp-gc-1",
+        1,
+        .converged,
+        "Branch converged.",
     );
 
     // Capture the transcript content AFTER shard operations.
@@ -2575,33 +2638,64 @@ test "shard tombstone marks survive cold start" {
         const etype = try std.testing.allocator.dupe(u8, "summary_checkpoint");
         const trigger = try std.testing.allocator.dupe(u8, "manual");
         const summary = try std.testing.allocator.dupe(u8, "Parent for tombstone test.");
-        defer { std.testing.allocator.free(id); std.testing.allocator.free(etype); std.testing.allocator.free(trigger); std.testing.allocator.free(summary); }
+        defer {
+            std.testing.allocator.free(id);
+            std.testing.allocator.free(etype);
+            std.testing.allocator.free(trigger);
+            std.testing.allocator.free(summary);
+        }
         try VAR1.core.session_store.appendContextCheckpoint(std.testing.allocator, workspace_root, session.id, .{
-            .id = id, .entry_type = etype, .created_at_ms = 500,
-            .source_seq_start = 1, .source_seq_end = 1, .first_kept_seq = 1,
-            .tokens_before_estimate = 30, .tokens_after_estimate = 15,
-            .trigger = trigger, .summary = summary,
+            .id = id,
+            .entry_type = etype,
+            .created_at_ms = 500,
+            .source_seq_start = 1,
+            .source_seq_end = 1,
+            .first_kept_seq = 1,
+            .tokens_before_estimate = 30,
+            .tokens_after_estimate = 15,
+            .trigger = trigger,
+            .summary = summary,
         });
     }
 
     // Open two branches.
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
-        "cp-gc-2", 1, .open, "Branch A.",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "cp-gc-2",
+        1,
+        .open,
+        "Branch A.",
     );
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
-        "cp-gc-2", 2, .open, "Branch B.",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "cp-gc-2",
+        2,
+        .open,
+        "Branch B.",
     );
 
     // Abandon branch A, converge branch B.
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
-        "cp-gc-2", 1, .abandoned, "Branch A abandoned.",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "cp-gc-2",
+        1,
+        .abandoned,
+        "Branch A abandoned.",
     );
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
-        "cp-gc-2", 2, .converged, "Branch B converged.",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "cp-gc-2",
+        2,
+        .converged,
+        "Branch B converged.",
     );
 
     // Cold-start read: verify all tombstone marks are in the raw ledger.
@@ -2619,7 +2713,9 @@ test "shard tombstone marks survive cold start" {
 
     // The latest checkpoint must be the converged branch B.
     const latest = try VAR1.core.session_store.readLatestContextCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
     );
     defer if (latest) |cp| cp.deinit(std.testing.allocator);
     try std.testing.expect(latest != null);
@@ -2642,19 +2738,35 @@ test "shard ledger is append-only — no deletion of tombstoned entries" {
         const etype = try std.testing.allocator.dupe(u8, "summary_checkpoint");
         const trigger = try std.testing.allocator.dupe(u8, "manual");
         const summary = try std.testing.allocator.dupe(u8, "Parent.");
-        defer { std.testing.allocator.free(id); std.testing.allocator.free(etype); std.testing.allocator.free(trigger); std.testing.allocator.free(summary); }
+        defer {
+            std.testing.allocator.free(id);
+            std.testing.allocator.free(etype);
+            std.testing.allocator.free(trigger);
+            std.testing.allocator.free(summary);
+        }
         try VAR1.core.session_store.appendContextCheckpoint(std.testing.allocator, workspace_root, session.id, .{
-            .id = id, .entry_type = etype, .created_at_ms = 600,
-            .source_seq_start = 1, .source_seq_end = 1, .first_kept_seq = 1,
-            .tokens_before_estimate = 30, .tokens_after_estimate = 15,
-            .trigger = trigger, .summary = summary,
+            .id = id,
+            .entry_type = etype,
+            .created_at_ms = 600,
+            .source_seq_start = 1,
+            .source_seq_end = 1,
+            .first_kept_seq = 1,
+            .tokens_before_estimate = 30,
+            .tokens_after_estimate = 15,
+            .trigger = trigger,
+            .summary = summary,
         });
     }
 
     // Open then abandon a branch.
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
-        "cp-gc-3", 1, .open, "Branch to abandon.",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "cp-gc-3",
+        1,
+        .open,
+        "Branch to abandon.",
     );
 
     const context_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{
@@ -2668,8 +2780,13 @@ test "shard ledger is append-only — no deletion of tombstoned entries" {
 
     // Write the tombstone.
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, session.id,
-        "cp-gc-3", 1, .abandoned, "Abandoned.",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "cp-gc-3",
+        1,
+        .abandoned,
+        "Abandoned.",
     );
 
     // Capture after tombstone.
@@ -2707,12 +2824,23 @@ test "convergeBranches merges child outputs into parent checkpoint and transcrip
         const etype = try std.testing.allocator.dupe(u8, "summary_checkpoint");
         const trigger = try std.testing.allocator.dupe(u8, "manual");
         const summary = try std.testing.allocator.dupe(u8, "Parent checkpoint for convergence.");
-        defer { std.testing.allocator.free(id); std.testing.allocator.free(etype); std.testing.allocator.free(trigger); std.testing.allocator.free(summary); }
+        defer {
+            std.testing.allocator.free(id);
+            std.testing.allocator.free(etype);
+            std.testing.allocator.free(trigger);
+            std.testing.allocator.free(summary);
+        }
         try VAR1.core.session_store.appendContextCheckpoint(std.testing.allocator, workspace_root, parent.id, .{
-            .id = id, .entry_type = etype, .created_at_ms = 1000,
-            .source_seq_start = 1, .source_seq_end = 2, .first_kept_seq = 1,
-            .tokens_before_estimate = 100, .tokens_after_estimate = 50,
-            .trigger = trigger, .summary = summary,
+            .id = id,
+            .entry_type = etype,
+            .created_at_ms = 1000,
+            .source_seq_start = 1,
+            .source_seq_end = 2,
+            .first_kept_seq = 1,
+            .tokens_before_estimate = 100,
+            .tokens_after_estimate = 50,
+            .trigger = trigger,
+            .summary = summary,
         });
     }
 
@@ -2791,7 +2919,9 @@ test "convergeBranches merges child outputs into parent checkpoint and transcrip
 
     // 5. Verify the latest checkpoint is the converged shard.
     const latest_cp = try VAR1.core.session_store.readLatestContextCheckpoint(
-        std.testing.allocator, workspace_root, parent.id,
+        std.testing.allocator,
+        workspace_root,
+        parent.id,
     );
     defer if (latest_cp) |cp| cp.deinit(std.testing.allocator);
     try std.testing.expect(latest_cp != null);
@@ -2818,35 +2948,66 @@ test "reconcileOpenShards marks unsettled open branches as abandoned at cold sta
         const etype = try std.testing.allocator.dupe(u8, "summary_checkpoint");
         const trigger = try std.testing.allocator.dupe(u8, "manual");
         const summary = try std.testing.allocator.dupe(u8, "Parent for cold-start test.");
-        defer { std.testing.allocator.free(id); std.testing.allocator.free(etype); std.testing.allocator.free(trigger); std.testing.allocator.free(summary); }
+        defer {
+            std.testing.allocator.free(id);
+            std.testing.allocator.free(etype);
+            std.testing.allocator.free(trigger);
+            std.testing.allocator.free(summary);
+        }
         try VAR1.core.session_store.appendContextCheckpoint(std.testing.allocator, workspace_root, parent.id, .{
-            .id = id, .entry_type = etype, .created_at_ms = 1000,
-            .source_seq_start = 1, .source_seq_end = 2, .first_kept_seq = 1,
-            .tokens_before_estimate = 100, .tokens_after_estimate = 50,
-            .trigger = trigger, .summary = summary,
+            .id = id,
+            .entry_type = etype,
+            .created_at_ms = 1000,
+            .source_seq_start = 1,
+            .source_seq_end = 2,
+            .first_kept_seq = 1,
+            .tokens_before_estimate = 100,
+            .tokens_after_estimate = 50,
+            .trigger = trigger,
+            .summary = summary,
         });
     }
 
     // Open branch A (will be left unsettled — simulated dead owner).
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, parent.id,
-        "cp-cold-1", 1, .open, "Branch A open.",
+        std.testing.allocator,
+        workspace_root,
+        parent.id,
+        "cp-cold-1",
+        1,
+        .open,
+        "Branch A open.",
     );
 
     // Open branch B, then converge it (settled — should NOT be abandoned).
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, parent.id,
-        "cp-cold-1", 2, .open, "Branch B open.",
+        std.testing.allocator,
+        workspace_root,
+        parent.id,
+        "cp-cold-1",
+        2,
+        .open,
+        "Branch B open.",
     );
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, parent.id,
-        "cp-cold-1", 2, .converged, "Branch B converged.",
+        std.testing.allocator,
+        workspace_root,
+        parent.id,
+        "cp-cold-1",
+        2,
+        .converged,
+        "Branch B converged.",
     );
 
     // Open branch C (also unsettled — simulated dead owner).
     try VAR1.core.session_store.appendShardCheckpoint(
-        std.testing.allocator, workspace_root, parent.id,
-        "cp-cold-1", 3, .open, "Branch C open.",
+        std.testing.allocator,
+        workspace_root,
+        parent.id,
+        "cp-cold-1",
+        3,
+        .open,
+        "Branch C open.",
     );
 
     // Set up agent service.
@@ -2867,7 +3028,9 @@ test "reconcileOpenShards marks unsettled open branches as abandoned at cold sta
 
     // Cold-start reconciliation: branches A and C are open and unsettled.
     const abandoned = try VAR1.core.agent_runtime.reconcileOpenShards(
-        &service, std.testing.allocator, parent.id,
+        &service,
+        std.testing.allocator,
+        parent.id,
     );
 
     // Exactly 2 branches (A and C) should be marked abandoned. Branch B was
@@ -2913,14 +3076,23 @@ test "write intent reserve and commit leaves durable evidence" {
 
     // Reserve an intent before mutation.
     try VAR1.core.session_store.reserveWriteIntent(
-        std.testing.allocator, workspace_root, session.id,
-        "intent-1", "write_file", "src/main.zig", "abc123",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "intent-1",
+        "write_file",
+        "src/main.zig",
+        "abc123",
     );
 
     // Commit the intent after successful mutation.
     try VAR1.core.session_store.commitWriteIntent(
-        std.testing.allocator, workspace_root, session.id,
-        "intent-1", "def456", 1024,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "intent-1",
+        "def456",
+        1024,
     );
 
     // Read the ledger: must have both reserved and committed entries.
@@ -2940,7 +3112,9 @@ test "write intent reserve and commit leaves durable evidence" {
 
     // Reconciliation: 0 abandoned (both reserved → committed).
     const abandoned = try VAR1.core.session_store.reconcileAbandonedIntents(
-        std.testing.allocator, workspace_root, session.id,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
     );
     try std.testing.expectEqual(@as(usize, 0), abandoned);
 }
@@ -2957,29 +3131,50 @@ test "abandoned write intent (reserved without commit) is detected at cold start
 
     // Reserve intent A (will be committed).
     try VAR1.core.session_store.reserveWriteIntent(
-        std.testing.allocator, workspace_root, session.id,
-        "intent-a", "write_file", "src/a.zig", "hash-a-before",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "intent-a",
+        "write_file",
+        "src/a.zig",
+        "hash-a-before",
     );
     try VAR1.core.session_store.commitWriteIntent(
-        std.testing.allocator, workspace_root, session.id,
-        "intent-a", "hash-a-after", 100,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "intent-a",
+        "hash-a-after",
+        100,
     );
 
     // Reserve intent B (simulated crash — never committed).
     try VAR1.core.session_store.reserveWriteIntent(
-        std.testing.allocator, workspace_root, session.id,
-        "intent-b", "write_file", "src/b.zig", "hash-b-before",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "intent-b",
+        "write_file",
+        "src/b.zig",
+        "hash-b-before",
     );
 
     // Reserve intent C (also never committed — crash).
     try VAR1.core.session_store.reserveWriteIntent(
-        std.testing.allocator, workspace_root, session.id,
-        "intent-c", "replace_in_file", "src/c.zig", "hash-c-before",
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "intent-c",
+        "replace_in_file",
+        "src/c.zig",
+        "hash-c-before",
     );
 
     // Cold-start reconciliation: intents B and C are reserved without commit.
     const abandoned = try VAR1.core.session_store.reconcileAbandonedIntents(
-        std.testing.allocator, workspace_root, session.id,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
     );
     try std.testing.expectEqual(@as(usize, 2), abandoned);
 }
@@ -2996,12 +3191,21 @@ test "write intent ledger is append-only and survives cold start" {
 
     // Write a complete intent cycle.
     try VAR1.core.session_store.reserveWriteIntent(
-        std.testing.allocator, workspace_root, session.id,
-        "intent-x", "append_file", "log.txt", null,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "intent-x",
+        "append_file",
+        "log.txt",
+        null,
     );
     try VAR1.core.session_store.commitWriteIntent(
-        std.testing.allocator, workspace_root, session.id,
-        "intent-x", "hash-x-after", 50,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "intent-x",
+        "hash-x-after",
+        50,
     );
 
     // Cold-start read: ledger must be readable and contain both entries.
@@ -3174,31 +3378,49 @@ test "event spine produces ordered replay for TUI under live streaming" {
     // assistant_response. Every event gets a monotonic seq.
     const ts: i64 = 1000;
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "turn_started", .message = "step 0", .timestamp_ms = ts,
+        .event_type = "turn_started",
+        .message = "step 0",
+        .timestamp_ms = ts,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "assistant_delta", .message = "Let me search ", .timestamp_ms = ts + 1,
+        .event_type = "assistant_delta",
+        .message = "Let me search ",
+        .timestamp_ms = ts + 1,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "assistant_delta", .message = "for the file.", .timestamp_ms = ts + 2,
+        .event_type = "assistant_delta",
+        .message = "for the file.",
+        .timestamp_ms = ts + 2,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "tool_started", .message = "search_files", .timestamp_ms = ts + 3,
+        .event_type = "tool_started",
+        .message = "search_files",
+        .timestamp_ms = ts + 3,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "tool_output_delta", .message = "Found 3 matches", .timestamp_ms = ts + 4,
+        .event_type = "tool_output_delta",
+        .message = "Found 3 matches",
+        .timestamp_ms = ts + 4,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "tool_finished", .message = "search done", .timestamp_ms = ts + 5,
+        .event_type = "tool_finished",
+        .message = "search done",
+        .timestamp_ms = ts + 5,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "tool_completed", .message = "completed", .timestamp_ms = ts + 6,
+        .event_type = "tool_completed",
+        .message = "completed",
+        .timestamp_ms = ts + 6,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "assistant_delta", .message = "I found the issue.", .timestamp_ms = ts + 7,
+        .event_type = "assistant_delta",
+        .message = "I found the issue.",
+        .timestamp_ms = ts + 7,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "assistant_response", .message = "Final answer.", .timestamp_ms = ts + 8,
+        .event_type = "assistant_response",
+        .message = "Final answer.",
+        .timestamp_ms = ts + 8,
     });
 
     // Cold-start read: the TUI reconstructs the full transcript from the event spine.
@@ -3249,7 +3471,9 @@ test "event spine preserves same-millisecond delta burst ordering for TUI replay
     const chunks = [_][]const u8{ "Hello", ", ", "world", "!" };
     for (chunks) |chunk| {
         try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-            .event_type = "assistant_delta", .message = chunk, .timestamp_ms = burst_ts,
+            .event_type = "assistant_delta",
+            .message = chunk,
+            .timestamp_ms = burst_ts,
         });
     }
 
@@ -3296,12 +3520,23 @@ test "launchFromCheckpoint creates child with parent checkpoint reference" {
         const etype = try std.testing.allocator.dupe(u8, "summary_checkpoint");
         const trigger = try std.testing.allocator.dupe(u8, "manual");
         const summary = try std.testing.allocator.dupe(u8, "Parent checkpoint for child launch.");
-        defer { std.testing.allocator.free(id); std.testing.allocator.free(etype); std.testing.allocator.free(trigger); std.testing.allocator.free(summary); }
+        defer {
+            std.testing.allocator.free(id);
+            std.testing.allocator.free(etype);
+            std.testing.allocator.free(trigger);
+            std.testing.allocator.free(summary);
+        }
         try VAR1.core.session_store.appendContextCheckpoint(std.testing.allocator, workspace_root, parent.id, .{
-            .id = id, .entry_type = etype, .created_at_ms = 1000,
-            .source_seq_start = 1, .source_seq_end = 5, .first_kept_seq = 3,
-            .tokens_before_estimate = 200, .tokens_after_estimate = 100,
-            .trigger = trigger, .summary = summary,
+            .id = id,
+            .entry_type = etype,
+            .created_at_ms = 1000,
+            .source_seq_start = 1,
+            .source_seq_end = 5,
+            .first_kept_seq = 3,
+            .tokens_before_estimate = 200,
+            .tokens_after_estimate = 100,
+            .trigger = trigger,
+            .summary = summary,
         });
     }
 
@@ -3323,9 +3558,13 @@ test "launchFromCheckpoint creates child with parent checkpoint reference" {
 
     // Launch a checkpoint-addressed child.
     const result = try VAR1.core.agent_runtime.launchFromCheckpoint(
-        &service, std.testing.allocator,
-        parent.id, "cp-launch-1", 1,
-        "Investigate the auth module.", "scout-auth",
+        &service,
+        std.testing.allocator,
+        parent.id,
+        "cp-launch-1",
+        1,
+        "Investigate the auth module.",
+        "scout-auth",
     );
     defer std.testing.allocator.free(result);
 
@@ -3362,7 +3601,9 @@ test "recallForBranch reads parent and child session memories" {
     var parent = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "parent memory");
     defer parent.deinit(std.testing.allocator);
     var child = try VAR1.core.session_store.initSessionWithOptions(
-        std.testing.allocator, workspace_root, "child memory",
+        std.testing.allocator,
+        workspace_root,
+        "child memory",
         .{ .parent_session_id = parent.id },
     );
     defer child.deinit(std.testing.allocator);
@@ -3383,8 +3624,10 @@ test "recallForBranch reads parent and child session memories" {
 
     // Recall for the branch — should include BOTH parent and child memories.
     const recalled = try VAR1.core.memory.store.recallForBranch(
-        std.testing.allocator, workspace_root,
-        child.id, parent.id, // child + parent
+        std.testing.allocator,
+        workspace_root,
+        child.id,
+        parent.id, // child + parent
         "architecture search", // query matches both topics
         4096, // byte budget
     );
@@ -3410,8 +3653,13 @@ test "session message persists and round-trips reasoning trace" {
     defer session.deinit(std.testing.allocator);
 
     try VAR1.core.session_store.appendSessionMessageWithReasoning(
-        std.testing.allocator, workspace_root, session.id,
-        .assistant, "255", "1. 15 * 17 = 255", 100,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        .assistant,
+        "255",
+        "1. 15 * 17 = 255",
+        100,
     );
 
     const messages = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, session.id);
@@ -3435,8 +3683,12 @@ test "session message without reasoning parses with null reasoning" {
     defer session.deinit(std.testing.allocator);
 
     try VAR1.core.session_store.appendSessionMessage(
-        std.testing.allocator, workspace_root, session.id,
-        .user, "what is 2+2", 100,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        .user,
+        "what is 2+2",
+        100,
     );
 
     const messages = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, session.id);
@@ -3460,15 +3712,22 @@ test "compactor preserves reasoning excerpt at low aggressiveness" {
     // Seed enough messages to trigger compaction (need > keep_recent_messages).
     try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .user, "msg1", 100);
     try VAR1.core.session_store.appendSessionMessageWithReasoning(
-        std.testing.allocator, workspace_root, session.id,
-        .assistant, "The answer is 42.", "I need to analyze the question carefully.", 200,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        .assistant,
+        "The answer is 42.",
+        "I need to analyze the question carefully.",
+        200,
     );
     try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .user, "msg3", 300);
     try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .assistant, "msg4", 400);
     try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .user, "msg5", 500);
 
     const result = try VAR1.core.context.compactor.compactSession(
-        std.testing.allocator, workspace_root, session.id,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
         .{ .keep_recent_messages = 2, .trigger = "manual", .aggressiveness_milli = 300 },
     );
     defer result.deinit(std.testing.allocator);
@@ -3495,15 +3754,22 @@ test "compactor drops reasoning at high aggressiveness" {
 
     try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .user, "msg1", 100);
     try VAR1.core.session_store.appendSessionMessageWithReasoning(
-        std.testing.allocator, workspace_root, session.id,
-        .assistant, "The answer is 42.", "I need to analyze the question carefully.", 200,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        .assistant,
+        "The answer is 42.",
+        "I need to analyze the question carefully.",
+        200,
     );
     try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .user, "msg3", 300);
     try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .assistant, "msg4", 400);
     try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .user, "msg5", 500);
 
     const result = try VAR1.core.context.compactor.compactSession(
-        std.testing.allocator, workspace_root, session.id,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
         .{ .keep_recent_messages = 2, .trigger = "manual", .aggressiveness_milli = 800 },
     );
     defer result.deinit(std.testing.allocator);
@@ -3529,8 +3795,12 @@ test "value-weighted compaction drops filler words before code identifiers" {
 
     // A message with a mix of filler and high-value tokens.
     try VAR1.core.session_store.appendSessionMessage(
-        std.testing.allocator, workspace_root, session.id,
-        .assistant, "The function parse_stream_delta in src/core/provider.zig returned a 404 error with the message Authentication Failed for the session", 100,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        .assistant,
+        "The function parse_stream_delta in src/core/provider.zig returned a 404 error with the message Authentication Failed for the session",
+        100,
     );
     try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .user, "msg2", 200);
     try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .assistant, "msg3", 300);
@@ -3539,7 +3809,9 @@ test "value-weighted compaction drops filler words before code identifiers" {
 
     // Compact with a small max_message_chars to force word dropping.
     const result = try VAR1.core.context.compactor.compactSession(
-        std.testing.allocator, workspace_root, session.id,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
         .{ .keep_recent_messages = 2, .trigger = "manual", .aggressiveness_milli = 300, .max_message_chars = 100 },
     );
     defer result.deinit(std.testing.allocator);
@@ -3567,8 +3839,12 @@ test "value-weighted compaction never truncates mid-word" {
     // Long message that will need compaction.
     const long_msg = "The quick brown fox jumps over the lazy dog and the function calculate_checksum handles the verification";
     try VAR1.core.session_store.appendSessionMessage(
-        std.testing.allocator, workspace_root, session.id,
-        .assistant, long_msg, 100,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        .assistant,
+        long_msg,
+        100,
     );
     try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .user, "msg2", 200);
     try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .assistant, "msg3", 300);
@@ -3576,7 +3852,9 @@ test "value-weighted compaction never truncates mid-word" {
     try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .assistant, "msg5", 500);
 
     const result = try VAR1.core.context.compactor.compactSession(
-        std.testing.allocator, workspace_root, session.id,
+        std.testing.allocator,
+        workspace_root,
+        session.id,
         .{ .keep_recent_messages = 2, .trigger = "manual", .aggressiveness_milli = 300, .max_message_chars = 50 },
     );
     defer result.deinit(std.testing.allocator);

@@ -101,21 +101,28 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 ## Current proof boundary
 
 - Pinned Zig 0.15.1 ReleaseFast build succeeds: 9/9 steps.
+- Every Zig test artifact now receives a generated child-process
+  `VANTARI_HOME`. `VANTARI_TEST_ROOT` rejects runtime paths outside the Zig
+  cache root, and 31 obsolete environment skip guards are removed.
+- The isolated broad graph executes and passes 1,695/1,695 tests with zero
+  skips. A parent-shell production-home probe kept live file count, byte count,
+  and the complete relative-path/content tree SHA-256 unchanged.
 - Focused backend TUI passes 54/56 with two skipped tests.
 - The tracked terminal package passes 103/104 with one skipped test.
-- The isolated broad graph passes 1690/1693. The three genuine failures are a
-  provider payload that still contains todo_slice and two stale prompt-guidance
-  expectations.
+- The broad prompt/tool gate is closed: retired `todo_slice` policy no longer
+  leaks into the normal provider payload, duplicate file-inspection prose is
+  removed, and tests protect the semantic guardrail instead of capitalization.
 - A first broad run inherited production `VANTARI_HOME`, read live auth, and
   touched 535 runtime files. That run is invalid as proof and is recorded as a
   P0 test-isolation incident.
 - Current built ReleaseFast SHA-256 is
-  `2FC85D7C0CDA1E58945D23D034E1C572252101BDF082C75A5B6DD79104706AA0`.
+  `ED189470EB55CF8A9333FA31CA04C155F681DEA56E364B31C1D3294FCD42243F`.
   Installed SHA-256 remains
   `7B12904FBEE46E2C741C17DCDAF677B85C2A5AB6AB4A4D9C6B7234F841993C5D`.
   The hashes do not match.
-- Installed PID 23376 (TUI) and PID 25192 (kernel-stdio) were active during the
-  audit. They were preserved; no reinstall or termination was attempted.
+- Installed PIDs 23376 and 25192 exited without intervention. A later TUI/kernel
+  pair started as PIDs 10624 and 33816; it is preserved, so live quarantine and
+  reinstall remain gated.
 - Full-access mode and the revised TUI/settings source lanes have focused proof
   but no current installed-binary proof.
 - Settings still has an open hang boundary: the local RPC client waits without

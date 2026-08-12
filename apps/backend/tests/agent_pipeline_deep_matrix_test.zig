@@ -403,12 +403,6 @@ fn verifyWorkspacePathBoundary(workspace_root: []const u8, index: usize) !void {
 }
 
 fn verifyDeepPipelineCase(index: usize) !void {
-    // VANTARI_HOME redirects runtimeRootForWorkspace to the real home — every
-    // case would share one sessions root and accumulate records across runs,
-    // breaking the per-workspace isolation assertions below. Same guard
-    // pattern as agent_scale_test.zig.
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
-
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 

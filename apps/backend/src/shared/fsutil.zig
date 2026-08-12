@@ -9,7 +9,10 @@ pub const PathError = error{
 
 pub const RuntimeError = error{
     RuntimeRootNotFound,
+    TestRuntimePathOutsideRoot,
 };
+
+const test_runtime_root_env = "VANTARI_TEST_ROOT";
 
 pub fn join(allocator: std.mem.Allocator, parts: []const []const u8) ![]u8 {
     return std.fs.path.join(allocator, parts);
@@ -132,6 +135,38 @@ fn pathPrefixEqual(left: []const u8, right: []const u8) bool {
     return std.mem.eql(u8, left, right);
 }
 
+fn ensurePathWithinRoot(
+    allocator: std.mem.Allocator,
+    root: []const u8,
+    candidate: []const u8,
+) !void {
+    const root_abs = try resolveAbsolute(allocator, root);
+    defer allocator.free(root_abs);
+    const candidate_abs = try resolveAbsolute(allocator, candidate);
+    defer allocator.free(candidate_abs);
+
+    if (!isWithinPath(root_abs, candidate_abs)) {
+        return RuntimeError.TestRuntimePathOutsideRoot;
+    }
+}
+
+fn ensureTestRuntimePath(allocator: std.mem.Allocator, candidate: []const u8) !void {
+    if (!builtin.is_test) return;
+    const test_root = std.process.getEnvVarOwned(allocator, test_runtime_root_env) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return,
+        else => return err,
+    };
+    defer allocator.free(test_root);
+    try ensurePathWithinRoot(allocator, test_root, candidate);
+}
+
+fn acceptRuntimeRoot(allocator: std.mem.Allocator, path: []u8) ![]u8 {
+    errdefer allocator.free(path);
+    try ensureTestRuntimePath(allocator, path);
+    ensureDirExists(path) catch {};
+    return path;
+}
+
 /// Resolve the runtime root for Vantari state (sessions, auth, config, loops,
 /// schedules, personas). This replaces the workspace-anchored `.var/`.
 ///
@@ -147,32 +182,28 @@ fn pathPrefixEqual(left: []const u8, right: []const u8) bool {
 pub fn runtimeRoot(allocator: std.mem.Allocator) ![]u8 {
     // 1. Explicit override
     if (std.process.getEnvVarOwned(allocator, "VANTARI_HOME")) |env_path| {
-        ensureDirExists(env_path) catch {};
-        return env_path;
+        return acceptRuntimeRoot(allocator, env_path);
     } else |_| {}
 
     // 2. HOME/.vantari (works on Linux, macOS, and Windows with HOME set)
     if (std.process.getEnvVarOwned(allocator, "HOME")) |home| {
         defer allocator.free(home);
         const path = try std.fs.path.join(allocator, &.{ home, ".vantari" });
-        ensureDirExists(path) catch {};
-        return path;
+        return acceptRuntimeRoot(allocator, path);
     } else |_| {}
 
     // 3. USERPROFILE\.vantari (Windows native)
     if (std.process.getEnvVarOwned(allocator, "USERPROFILE")) |profile| {
         defer allocator.free(profile);
         const path = try std.fs.path.join(allocator, &.{ profile, ".vantari" });
-        ensureDirExists(path) catch {};
-        return path;
+        return acceptRuntimeRoot(allocator, path);
     } else |_| {}
 
     // 4. LOCALAPPDATA/Vantari (Windows fallback)
     if (std.process.getEnvVarOwned(allocator, "LOCALAPPDATA")) |local| {
         defer allocator.free(local);
         const path = try std.fs.path.join(allocator, &.{ local, "Vantari" });
-        ensureDirExists(path) catch {};
-        return path;
+        return acceptRuntimeRoot(allocator, path);
     } else |_| {}
 
     return error.RuntimeRootNotFound;
@@ -181,18 +212,28 @@ pub fn runtimeRoot(allocator: std.mem.Allocator) ![]u8 {
 /// Resolve the runtime root for a given workspace context.
 ///
 /// Resolution order:
-/// 1. `$VANTARI_HOME` (production sets this to `~/.vantari`)
-/// 2. `workspace_root + ".var"` (test isolation + backward compatibility)
+/// 1. Test build: `workspace_root + ".var"` under `$VANTARI_TEST_ROOT`
+/// 2. `$VANTARI_HOME` (production sets this to `~/.vantari`)
+/// 3. `workspace_root + ".var"` (backward compatibility)
 ///
 /// Production sets `VANTARI_HOME=$HOME/.vantari` (or `%USERPROFILE%\.vantari`)
-/// via the install script. Tests pass their tmp dir as `workspace_root` and
-/// state lands in `<tmp>/.var/` — matching every existing test's inline path
-/// construction. No test changes needed.
+/// via the install script. The build graph gives each test artifact a generated
+/// home and constrains fixture state to Zig's cache root. Production does not
+/// set `VANTARI_TEST_ROOT`, so its precedence is unchanged.
 pub fn runtimeRootForWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
+    // Test runs keep each workspace fixture isolated under Zig's generated
+    // cache root. VANTARI_HOME remains available for global-state tests.
+    if (builtin.is_test and std.process.hasEnvVarConstant(test_runtime_root_env)) {
+        const local = try std.fs.path.join(allocator, &.{ workspace_root, ".var" });
+        errdefer allocator.free(local);
+        try ensureTestRuntimePath(allocator, local);
+        ensureDirExists(local) catch {};
+        return local;
+    }
+
     // 1. Explicit env override (production)
     if (std.process.getEnvVarOwned(allocator, "VANTARI_HOME")) |env_path| {
-        ensureDirExists(env_path) catch {};
-        return env_path;
+        return acceptRuntimeRoot(allocator, env_path);
     } else |_| {}
 
     // 2. Workspace-local .var (backward compatible with existing tests)
@@ -243,4 +284,19 @@ test "resolveWithAccessMode keeps containment unless full access is explicit" {
     const resolved = try resolveWithAccessMode(std.testing.allocator, workspace, outside, true);
     defer std.testing.allocator.free(resolved);
     try std.testing.expectEqualStrings(outside, resolved);
+}
+
+test "test runtime guard rejects paths outside its generated root" {
+    const root = try resolveAbsolute(std.testing.allocator, ".zig-cache/vantari-test-guard");
+    defer std.testing.allocator.free(root);
+    const inside = try std.fs.path.join(std.testing.allocator, &.{ root, "integration", ".var" });
+    defer std.testing.allocator.free(inside);
+    const outside = try std.fs.path.resolve(std.testing.allocator, &.{ root, "..", "operator-home" });
+    defer std.testing.allocator.free(outside);
+
+    try ensurePathWithinRoot(std.testing.allocator, root, inside);
+    try std.testing.expectError(
+        RuntimeError.TestRuntimePathOutsideRoot,
+        ensurePathWithinRoot(std.testing.allocator, root, outside),
+    );
 }

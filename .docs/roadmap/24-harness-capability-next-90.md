@@ -39,6 +39,16 @@ advance the queue until the real installed consumer path proves it.
    terse/detailed, solo/orchestrated, conservative/aggressive, and low/high
    update cadence without alternate executor logic.
 
+## Closure ledger
+
+| Move | Decision | State | Proof or gate |
+|---:|---|---|---|
+| 1 | consolidate | closed | Five generated test homes; 1,695/1,695 pass; live tree unchanged. |
+| 2 | add | closed | Test-only cache-root guard rejects escape; ReleaseFast remains 9/9. |
+| 3 | consolidate | gated | Full pre-repair snapshot and 129 exact-source fixture sessions classified; active PIDs 10624/33816 block mutation. |
+| 4 | delete/consolidate | in progress | Backend fixtures require reversible quarantine, not merge; todo/changelog owner split remains. |
+| 31 | delete/consolidate | closed | Retired prompt leak and brittle prose assertions removed; broad graph green. |
+
 ## Competitive basis
 
 | Reference | Load-bearing invariant harvested | VANTARI consequence |

@@ -35,7 +35,6 @@ fn findDefinition(name: []const u8) ?VAR1.shared.types.ToolDefinition {
 }
 
 fn verifyRegistryCase(index: usize) !void {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     switch (index) {
         0 => {
             var registry = try registryFromDocument("{\"version\":1}");

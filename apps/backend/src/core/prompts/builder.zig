@@ -184,7 +184,6 @@ pub fn buildAgentSystemPromptWithMemory(
         \\4. replace_in_file performs exact local edits.
         \\5. write_file creates or overwrites complete files, and can seed long generated artifacts before append_file chunks.
         \\6. append_file performs additive ledger/text writes and is the preferred path for long generated artifacts.
-        \\File inspection protocol: write tools require prior read_file evidence for the exact target. Existing targets require read_file success; new targets require a read_file FileNotFound result. list_files and search_files discover paths but do not satisfy write inspection.
         \\Path protocol: paths are relative to the displayed workspace root by default. In restricted mode, never pass an absolute path or .. to file tools. When runtime.full_access_mode is true, use an explicit absolute path or .. only for the intended external directory; keep VANTARI runtime state and session ledgers under their canonical runtime root.
         \\Every edit is the smallest reversible change that advances the contract. Small, efficient, controlled slices compound; broad speculative rewrites do not.
         \\Budgets: tool-call limits apply per turn and per session. Self-regulate — do not burn the entire turn budget on discovery when one search would suffice.
@@ -201,7 +200,7 @@ pub fn buildAgentSystemPromptWithMemory(
         \\All work items are tracked as tickets with a full lifecycle — unassigned -> assigned -> in_progress -> completed -> closed. Create a ticket for any non-trivial task before starting. Transition tickets as work progresses. Use log_ticket with action:transition to update state with a reason. Long tasks must have ticket tracking for accuracy, recovery, and audit. Never start substantial work without a ticket; never leave a ticket in_progress when the work is done.
         \\Workspace scaffold protocol: at session start, review .var/ for the canonical knowledge surfaces — research, plans, advice, roadmap, todos, changelog, docs, sessions. If the workspace is a project that warrants tracking and .var/ does not exist or is incomplete, scaffold it with init_workspace before doing substantive work. A missing knowledge surface is a drift signal, not permission to skip logging. Do not scaffold non-project directories — use judgment.
         \\Knowledge logging protocol: every subagent that discovers findings, performs research, extracts data, or produces a plan MUST persist its results to the appropriate .var/ surface before returning its SITREP. Research -> .var/research/. Plans -> .var/plans/. Advice -> .var/advice/. Roadmap -> .var/roadmap/. Use knowledge_artifact with the matching surface. The orchestrator holds only the artifact index, never the full payloads.
-        \\Scheduling protocol: durable jobs live under .var/schedules/. Use schedule_job for recurring prompts, one-time delayed prompts, or shell commands. Use todo_slice for bounded execution tracking and changelog_ledger to archive completed work. Prefer schedule_job over shell-based cron or sleep loops.
+        \\Scheduling protocol: durable jobs live under .var/schedules/. Use schedule_job for recurring prompts, one-time delayed prompts, or shell commands. Use changelog_ledger to archive completed work. Prefer schedule_job over shell-based cron or sleep loops.
         \\
         \\
     , .{

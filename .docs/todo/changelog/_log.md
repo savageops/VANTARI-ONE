@@ -1446,3 +1446,29 @@ Two consumer-breaking pipeline failures are now structurally impossible.
 - The model chooses behavior and the next eligible action. The kernel owns
   executable capability, durability, budgets, evidence, recovery, and explicit
   irreversible-action gates.
+
+## 2026-08-12 - Test artifact isolation and runtime-root guard
+
+**Changed:**
+
+- `apps/backend/build.zig` now creates all five test run artifacts through one
+  isolated constructor. Each child gets a generated `VANTARI_HOME` under the
+  Zig cache; the parent process environment remains untouched.
+- `apps/backend/src/shared/fsutil.zig` enforces `VANTARI_TEST_ROOT` before it
+  creates a global or workspace runtime path.
+- Removed 31 obsolete `VANTARI_HOME` skip guards from config, memory, settings,
+  registry, scale, deep-pipeline, and store tests.
+
+**Proof:**
+
+- Broad graph executes and passes 1,695/1,695 tests with zero skipped.
+- A run launched while the parent pointed at `C:\Users\Savage\.vantari`
+  preserved live file count, byte count, and complete relative-path/content
+  tree SHA-256.
+- The runtime-root guard accepts an in-root fixture and rejects an outside path
+  with `TestRuntimePathOutsideRoot`.
+- ReleaseFast succeeds 9/9 with the test-only root marker set to an unrelated
+  path, proving production code does not consume the marker.
+- Removed one retired `todo_slice` prompt instruction and one duplicate
+  file-inspection instruction. The existing write-before-inspect enforcement
+  remains covered by adversarial tool tests.

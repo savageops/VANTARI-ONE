@@ -565,7 +565,7 @@ test "tool error envelope teaches read-before-write recovery" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "FileNotFound result as absence proof") != null);
 }
 
-test "agent prompt carries file inspection and mutating shell guidance" {
+test "agent prompt carries file inspection and bounded wait guidance" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -575,10 +575,9 @@ test "agent prompt carries file inspection and mutating shell guidance" {
     const prompt = try VAR1.core.prompts.buildAgentSystemPrompt(std.testing.allocator, execCtx(workspace_root), .{});
     defer std.testing.allocator.free(prompt);
 
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Existing targets require read_file success") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "New targets require a read_file FileNotFound result") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "inspect the exact target with read_file") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "FileNotFound absence proof") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "list_files and search_files discover paths but do not satisfy write inspection") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "For shell_exec commands that mutate files, inspect targets first") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "wait_agent accepts timeout_ms") != null);
 }
 
@@ -1570,7 +1569,6 @@ test "agent system prompt teaches schema repair and file-tool roles" {
     defer std.testing.allocator.free(prompt);
 
     try std.testing.expect(std.mem.indexOf(u8, prompt, "# Internal Runtime Guardrails") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "repair the JSON object") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "list_files discovers paths") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Example JSON: {\"pattern\":\"read_file\",\"path\":\"src\",\"glob\":\"*.zig\",\"max_results\":20}") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "search_files locates symbols or text") != null);

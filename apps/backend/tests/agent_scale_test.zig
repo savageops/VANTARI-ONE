@@ -19,7 +19,6 @@ fn makeConfig(allocator: std.mem.Allocator, workspace_root: []const u8) !VAR1.sh
 }
 
 test "store readiness never rewrites additive session fields" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp, "store-ready-forward-compat");
@@ -46,7 +45,6 @@ test "store readiness never rewrites additive session fields" {
 }
 
 test "session JSON preserves the immutable execution receipt projection" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp, "receipt-projection");
@@ -243,7 +241,6 @@ fn definitionsContain(definitions: []const VAR1.shared.types.ToolDefinition, nam
 }
 
 test "resolved profiles drive a thirty-case catalog matrix and dispatch denial" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp, "profiles");
@@ -310,7 +307,6 @@ test "resolved profiles drive a thirty-case catalog matrix and dispatch denial" 
 }
 
 test "route roles resolve non-active provider model wire and thinking without persisting secrets" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp, "routes");
@@ -345,7 +341,6 @@ test "route roles resolve non-active provider model wire and thinking without pe
 }
 
 test "batch groups scale through one bounded pool at 1 5 20 and 100 tasks" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const cardinalities = [_]usize{ 1, 5, 20, 100 };
@@ -430,7 +425,6 @@ test "batch groups scale through one bounded pool at 1 5 20 and 100 tasks" {
 }
 
 test "first child result wakes the parent and each result converges exactly once" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp, "first-ready");
@@ -490,7 +484,6 @@ test "first child result wakes the parent and each result converges exactly once
 }
 
 test "child session owns only the supplied context packet and never copies parent history" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp, "context-isolation");
@@ -539,7 +532,6 @@ test "child session owns only the supplied context packet and never copies paren
 }
 
 test "parent parks without provider dispatch and resumes once after convergence" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp, "parent-park");
@@ -587,7 +579,6 @@ test "parent parks without provider dispatch and resumes once after convergence"
 }
 
 test "model tasks execute one provider turn without tools and enforce the requested output shape" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp, "model-schema");
@@ -640,7 +631,6 @@ test "model tasks execute one provider turn without tools and enforce the reques
 }
 
 test "group cancellation reaches queued and running children and terminates the group" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp, "cancel");
@@ -706,7 +696,6 @@ test "group cancellation reaches queued and running children and terminates the 
 }
 
 test "overlapping groups cancel and converge independently without cross consumption" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp, "overlap");
@@ -779,7 +768,6 @@ test "overlapping groups cancel and converge independently without cross consump
 }
 
 test "cold start rebuilds receipt groups and reconciles stale owners once" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp, "cold-recovery");

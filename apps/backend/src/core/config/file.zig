@@ -780,7 +780,6 @@ test "default config documents every persistent value" {
 }
 
 test "config file is created beside runtime state and loads typed defaults" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/workspace", .{tmp.sub_path});
@@ -799,7 +798,6 @@ test "config file is created beside runtime state and loads typed defaults" {
 }
 
 test "config environment values override runtime defaults and wire api is typed" {
-    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/workspace", .{tmp.sub_path});
