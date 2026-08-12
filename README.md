@@ -82,7 +82,7 @@ operator input ─► transcript ledger ─► context compiler ─► provider 
                                                          ─► typed events ─► terminal state
 ```
 
-Every transition produces durable evidence. Tool calls generate `tool_requested` → `tool_reviewed` → `tool_completed` or `tool_blocked` event chains. File mutations generate `var1.tool_effect.v1` receipts with before/after byte counts and SHA-256 hashes. Context compaction generates structured checkpoints without rewriting the transcript. Nothing is silent.
+Every transition produces durable evidence. Tool calls generate `tool_requested` → `tool_reviewed` → `tool_completed` or `tool_blocked` event chains. Command bytes persist as versioned base64 stdout/stderr deltas with stream and cap evidence. File mutations generate `var1.tool_effect.v1` receipts with before/after byte counts and SHA-256 hashes. Context compaction generates structured checkpoints without rewriting the transcript. Nothing is silent.
 
 <br/>
 
@@ -92,7 +92,7 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
 | **Kernel surface** | 109 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 1,934 passing backend cases across source and adversarial pipeline suites |
+| **Proof surface** | 1,936 passing backend cases across source and adversarial pipeline suites |
 | **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
 | **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |

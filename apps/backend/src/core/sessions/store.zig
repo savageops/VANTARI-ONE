@@ -156,7 +156,6 @@ const ParsedSessionEvent = struct {
     message: []const u8,
     timestamp_ms: i64,
     seq: u64 = 0,
-    bytes_b64: ?[]const u8 = null,
 };
 
 const ParsedSessionMessage = struct {
@@ -670,7 +669,6 @@ pub fn readLatestEvent(
             .message = try allocator.dupe(u8, parsed.value.message),
             .timestamp_ms = parsed.value.timestamp_ms,
             .seq = parsed.value.seq,
-            .bytes_b64 = if (parsed.value.bytes_b64) |b| try allocator.dupe(u8, b) else null,
         };
     }
 
@@ -713,7 +711,6 @@ pub fn readEvents(
             .message = try allocator.dupe(u8, parsed.value.message),
             .timestamp_ms = parsed.value.timestamp_ms,
             .seq = parsed.value.seq,
-            .bytes_b64 = if (parsed.value.bytes_b64) |b| try allocator.dupe(u8, b) else null,
         });
     }
 
@@ -783,7 +780,6 @@ pub fn readEventsAfterSeq(
             .message = try allocator.dupe(u8, parsed.value.message),
             .timestamp_ms = parsed.value.timestamp_ms,
             .seq = parsed.value.seq,
-            .bytes_b64 = if (parsed.value.bytes_b64) |b| try allocator.dupe(u8, b) else null,
         });
 
         end = if (start == 0) 0 else start - 1;

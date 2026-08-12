@@ -12,6 +12,7 @@ const store = @import("../sessions/store.zig");
 const summaries = @import("../sessions/summaries.zig");
 const tools = @import("../tools/runtime.zig");
 const types = @import("../../shared/types.zig");
+const protocol_events = @import("../../shared/protocol/events.zig");
 
 pub const Error = error{
     Cancelled,
@@ -1188,7 +1189,7 @@ fn onToolOutputDelta(
     cap_reached: bool,
 ) !void {
     const delta_context: *ToolDeltaContext = @ptrCast(@alignCast(ctx.?));
-    const message = try renderToolOutputDelta(
+    const message = try protocol_events.serializeToolOutputDelta(
         delta_context.allocator,
         tool_call_id,
         tool_name,
@@ -1206,32 +1207,6 @@ fn onToolOutputDelta(
         "tool_output_delta",
         message,
         delta_context.status,
-    );
-}
-
-fn renderToolOutputDelta(
-    allocator: std.mem.Allocator,
-    tool_call_id: []const u8,
-    tool_name: []const u8,
-    stream: []const u8,
-    chunk: []const u8,
-    cap_reached: bool,
-) ![]u8 {
-    const encoded_len = std.base64.standard.Encoder.calcSize(chunk.len);
-    const encoded = try allocator.alloc(u8, encoded_len);
-    defer allocator.free(encoded);
-    _ = std.base64.standard.Encoder.encode(encoded, chunk);
-
-    return std.fmt.allocPrint(
-        allocator,
-        "{{\"schema\":\"var1.tool_output_delta.v1\",\"tool_call_id\":{f},\"tool\":{f},\"stream\":{f},\"chunk_b64\":{f},\"cap_reached\":{s}}}",
-        .{
-            std.json.fmt(tool_call_id, .{}),
-            std.json.fmt(tool_name, .{}),
-            std.json.fmt(stream, .{}),
-            std.json.fmt(encoded, .{}),
-            if (cap_reached) "true" else "false",
-        },
     );
 }
 

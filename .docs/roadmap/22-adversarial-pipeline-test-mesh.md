@@ -2,11 +2,13 @@
 
 **Priority: P0**
 
-**Current delta (2026-08-12):** The isolated graph now passes 1,934/1,934 with
+**Current delta (2026-08-12):** The isolated graph now passes 1,936/1,936 with
 zero skips. The message contention/tail probes are landed. Moves 14–15 prove two
 identical same-millisecond events retain distinct stored/RPC sequences, each
 renders once, replay does not duplicate either event, and a gap returns the exact
-durable suffix. The installed binary returned sequences 2–4 after `after_seq=1`.
+durable suffix. Move 16 adds raw-byte stdout/stderr round-trip and installed cap
+evidence; the installed binary returned contiguous sequences 2–12 after
+`after_seq=1` and reconstructed both streams byte-identically within the cap.
 
 ## The seam
 
@@ -148,9 +150,9 @@ each probe:
 
 ### P0-22d: stdout/stderr cap marker on truncation (typed, not silent)
 - **Contract:** when a tool's stdout or stderr exceeds `max_output_bytes`, the captured output is truncated *and* a typed cap marker is appended (e.g., `[output truncated at N bytes; M bytes lost]`) so the provider and the operator can see truncation happened. The truncation is not a silent drop. AGENTS.md §XIV "stdout/stderr cap markers." §XVI names this "bounded stdout/stderr deltas," not "tool ran."
-- **Mechanism:** the shell_exec output capture (`tools_test.zig:1086` asserts cap deltas are forwarded) gains an assertion that the forwarded delta ends with a recognizable cap marker when truncation occurred, and that the marker carries the byte count. The existing `shell_exec clamps command limits before runner dispatch` (`:1183`) and `tool error envelope summarizes oversized failed arguments` (`:664`) are the adjacent probes; this item owns the *stdout/stderr* cap specifically.
-- **Test (AGENTS.md §XIV item 8):** invoke `shell_exec` with a command that emits `max_output_bytes + 4096` bytes on stdout; assert the captured delta length is `<= max_output_bytes`, the delta ends with the typed cap marker, and the marker string contains the lost-byte count. A shallow implementation that truncates without a marker (or that drops the overflow silently) fails this probe.
-- **Proof:** adversarial suite runs the cap-marker probe on the installed Windows binary and the cap marker is present in the event ledger.
+- **Mechanism:** `PipeCollector` drains past the byte bound while emitting `cap_reached` once; `serializeToolOutputDelta` preserves that typed marker beside `stream` and `chunk_b64`. Clients choose the human-readable marker; storage does not inject prose into binary evidence.
+- **Test (AGENTS.md §XIV item 8):** source round-trip covers NUL, invalid UTF-8, U+2028 bytes, and 0xFF. The installed command emits six stdout bytes and ten stderr bytes under an eight-byte per-stream cap; replay must return stdout unchanged, stderr's first eight bytes, no false stdout cap, and a true stderr cap.
+- **Proof:** **closed for byte transport.** Installed replay produced stdout `0080E280A8FF`, stderr `FF010080E280A8FE`, and `stderr_cap_reached=true` from the persisted event ledger. Move 23 retains the client-visible badge/preview policy.
 
 ### P0-22e: Command timeout and process-lock probe (process-tree termination + post-kill evidence)
 - **Contract:** a command that exceeds `timeout_ms` is terminated *including its process tree* (not just the leaf), the timeout is recorded as a typed event, and post-kill evidence (exit code, terminated child PIDs,残留 stdout/stderr) is captured before the runner returns. The probe also covers the process-lock failure class: a second invocation against a binary locked by a stale process produces a typed diagnostic, not an obscure file-lock error. AGENTS.md §XIV "command timeout and process locks"; §XV "diagnose locked installed binaries and stale local processes before failing obscurely."

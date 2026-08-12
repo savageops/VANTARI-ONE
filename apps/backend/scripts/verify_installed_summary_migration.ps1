@@ -78,6 +78,7 @@ public sealed class VantariSummaryFakeProvider : IDisposable
     private Thread thread;
     public int Port { get; private set; }
     public int Requests { get; private set; }
+    public int CompletionRequests { get; private set; }
     public bool SawCompletion { get; private set; }
     public Exception Error { get; private set; }
 
@@ -94,7 +95,7 @@ public sealed class VantariSummaryFakeProvider : IDisposable
     {
         try
         {
-            while (!SawCompletion && Requests < 4)
+            while (!SawCompletion && Requests < 8)
             {
                 using (TcpClient client = listener.AcceptTcpClient())
                 using (NetworkStream stream = client.GetStream())
@@ -110,10 +111,24 @@ public sealed class VantariSummaryFakeProvider : IDisposable
                     {
                         body = "{\"data\":[{\"id\":\"smoke-model\",\"context_length\":200000}]}";
                     }
+                    else if (firstLine.IndexOf("/chat/completions", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        CompletionRequests++;
+                        if (CompletionRequests == 1)
+                        {
+                            string command = "$out=[Console]::OpenStandardOutput();$stdout=[byte[]](0,128,226,128,168,255);$out.Write($stdout,0,$stdout.Length);$err=[Console]::OpenStandardError();$stderr=[byte[]](255,1,0,128,226,128,168,254,253,252);$err.Write($stderr,0,$stderr.Length)";
+                            string arguments = "{\"mode\":\"powershell\",\"command\":" + JsonQuote(command) + ",\"cwd\":\".\",\"timeout_ms\":10000,\"max_output_bytes\":8}";
+                            body = "{\"model\":\"smoke-model\",\"choices\":[{\"message\":{\"content\":null,\"tool_calls\":[{\"id\":\"call_binary_output\",\"type\":\"function\",\"function\":{\"name\":\"shell_exec\",\"arguments\":" + JsonQuote(arguments) + "}}]}}]}";
+                        }
+                        else
+                        {
+                            SawCompletion = true;
+                            body = "{\"model\":\"smoke-model\",\"choices\":[{\"message\":{\"content\":\"Installed summary migration completed.\"}}]}";
+                        }
+                    }
                     else
                     {
-                        SawCompletion = firstLine.IndexOf("/chat/completions", StringComparison.OrdinalIgnoreCase) >= 0;
-                        body = "{\"model\":\"smoke-model\",\"choices\":[{\"message\":{\"content\":\"Installed summary migration completed.\"}}]}";
+                        throw new InvalidDataException("Unexpected provider request: " + firstLine);
                     }
                     byte[] payload = Encoding.UTF8.GetBytes(body);
                     byte[] head = Encoding.ASCII.GetBytes(
@@ -160,6 +175,15 @@ public sealed class VantariSummaryFakeProvider : IDisposable
             return int.Parse(line.Substring(line.IndexOf(':') + 1).Trim());
         }
         return 0;
+    }
+
+    private static string JsonQuote(string value)
+    {
+        return "\"" + value
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"")
+            .Replace("\r", "\\r")
+            .Replace("\n", "\\n") + "\"";
     }
 
     private static void ReadBody(NetworkStream stream, int length)
@@ -278,13 +302,41 @@ try {
   $catchUpMessages = @($caughtUp.result.messages)
   $catchUpEvents = @($caughtUp.result.events)
   if ($catchUpMessages.Count -ne 0) { throw 'Installed events_only catch-up returned transcript rows' }
-  if ($catchUpEvents.Count -ne 3) { throw "Installed event catch-up returned $($catchUpEvents.Count) rows; expected 3" }
+  if ($catchUpEvents.Count -lt 3) { throw "Installed event catch-up returned only $($catchUpEvents.Count) rows" }
   for ($index = 0; $index -lt $catchUpEvents.Count; $index++) {
     $expectedSeq = $index + 2
     if ([long]$catchUpEvents[$index].seq -ne $expectedSeq) {
       throw "Installed event catch-up sequence diverged: expected $expectedSeq, got $($catchUpEvents[$index].seq)"
     }
   }
+  $outputDeltas = @($catchUpEvents | Where-Object { $_.event_type -eq 'tool_output_delta' })
+  if ($outputDeltas.Count -lt 2) { throw "Installed replay returned only $($outputDeltas.Count) tool_output_delta rows" }
+  $stdoutBytes = [Collections.Generic.List[byte]]::new()
+  $stderrBytes = [Collections.Generic.List[byte]]::new()
+  $stdoutCapReached = $false
+  $stderrCapReached = $false
+  foreach ($event in $outputDeltas) {
+    $delta = [string]$event.message | ConvertFrom-Json
+    if ($delta.schema -ne 'var1.tool_output_delta.v1' -or $delta.tool -ne 'shell_exec' -or $delta.tool_call_id -ne 'call_binary_output') {
+      throw "Unexpected installed output delta: $($event.message)"
+    }
+    $decoded = [Convert]::FromBase64String([string]$delta.chunk_b64)
+    if ($delta.stream -eq 'stdout') {
+      $stdoutBytes.AddRange([byte[]]$decoded)
+      if ([bool]$delta.cap_reached) { $stdoutCapReached = $true }
+    } elseif ($delta.stream -eq 'stderr') {
+      $stderrBytes.AddRange([byte[]]$decoded)
+      if ([bool]$delta.cap_reached) { $stderrCapReached = $true }
+    } else {
+      throw "Unexpected installed output stream: $($delta.stream)"
+    }
+  }
+  $stdoutHex = [Convert]::ToHexString($stdoutBytes.ToArray())
+  $stderrHex = [Convert]::ToHexString($stderrBytes.ToArray())
+  if ($stdoutHex -ne '0080E280A8FF') { throw "Installed stdout bytes diverged: $stdoutHex" }
+  if ($stderrHex -ne 'FF010080E280A8FE') { throw "Installed stderr bytes diverged: $stderrHex" }
+  if ($stdoutCapReached) { throw 'Installed stdout was falsely marked capped' }
+  if (-not $stderrCapReached) { throw 'Installed stderr cap marker was not replayed' }
   $process.StandardInput.Close()
   if (-not $process.WaitForExit(5000)) { throw 'Installed kernel did not exit after EOF' }
   if ($process.ExitCode -ne 0) { throw "Installed kernel exited $($process.ExitCode): $($process.StandardError.ReadToEnd())" }
@@ -303,9 +355,12 @@ try {
     if (-not $messageSequences.Add([long]$row.seq)) { throw "Duplicate installed message sequence: $($row.seq)" }
     $messageRoles.Add([string]$row.role)
   }
-  if ($messageRows -ne 2) { throw "Installed turn wrote $messageRows messages; expected 2" }
-  if ($messageRoles[0] -ne 'user' -or $messageRoles[1] -ne 'assistant') {
-    throw "Installed message roles were not user,assistant: $([string]::Join(',', $messageRoles))"
+  if ($messageRows -ne 4) { throw "Installed tool turn wrote $messageRows messages; expected 4" }
+  $expectedRoles = @('user', 'assistant', 'tool', 'assistant')
+  for ($index = 0; $index -lt $expectedRoles.Count; $index++) {
+    if ($messageRoles[$index] -ne $expectedRoles[$index]) {
+      throw "Installed message roles were not user,assistant,tool,assistant: $([string]::Join(',', $messageRoles))"
+    }
   }
 
   $eventNotifications = @($notifications | Where-Object { $_.method -eq 'session/event' })
@@ -323,7 +378,11 @@ try {
   }
   $eventsPath = Join-Path (Join-Path $sessionsRoot $sessionId) 'events.jsonl'
   if (-not (Test-Path -LiteralPath $eventsPath -PathType Leaf)) { throw 'events.jsonl was not created' }
-  $lastStoredEvent = (Get-Content -LiteralPath $eventsPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1) | ConvertFrom-Json
+  $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
+  $eventsText = $strictUtf8.GetString([IO.File]::ReadAllBytes($eventsPath))
+  if ($eventsText.IndexOf('chunk_b64', [StringComparison]::Ordinal) -lt 0) { throw 'Installed event ledger omitted binary output envelopes' }
+  if ($eventsText.IndexOf('bytes_b64', [StringComparison]::Ordinal) -ge 0) { throw 'Installed event ledger retained the removed top-level bytes_b64 path' }
+  $lastStoredEvent = ($eventsText -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1) | ConvertFrom-Json
   $lastNotification = $eventNotifications[-1].params
   if ([long]$lastStoredEvent.seq -ne $lastNotificationSeq) { throw 'Last installed event notification did not match stored sequence' }
   if ($lastStoredEvent.event_type -ne $lastNotification.event_type -or $lastStoredEvent.event_type -ne 'turn_finished') {
@@ -366,12 +425,18 @@ try {
     catch_up_event_rows = $catchUpEvents.Count
     catch_up_first_seq = [long]$catchUpEvents[0].seq
     catch_up_last_seq = [long]$catchUpEvents[-1].seq
+    tool_output_delta_rows = $outputDeltas.Count
+    stdout_hex = $stdoutHex
+    stderr_hex = $stderrHex
+    stdout_cap_reached = $stdoutCapReached
+    stderr_cap_reached = $stderrCapReached
     terminal_event_type = [string]$lastStoredEvent.event_type
     terminal_event_seq = [long]$lastStoredEvent.seq
     legacy_sha256 = $legacyHash
     installed_sha256 = (Get-FileHash -LiteralPath $InstalledExe -Algorithm SHA256).Hash
     process_exit_code = $process.ExitCode
     provider_requests = $provider.Requests
+    provider_completion_requests = $provider.CompletionRequests
     provider_completion = $provider.SawCompletion
   } | ConvertTo-Json -Compress
 } finally {

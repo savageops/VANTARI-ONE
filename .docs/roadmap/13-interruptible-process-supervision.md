@@ -2,6 +2,13 @@
 
 **Priority: P0**
 
+**Current delta (2026-08-12):** Move 7 closes Windows process-tree ownership,
+bounded parent/child exit, and pipe-reader drain through one shared Job Object.
+Move 16 closes byte-safe stdout/stderr persistence: raw pipe bytes become one
+typed base64 event payload with stream and cap evidence, and installed replay
+reconstructed exact stdout plus capped stderr. Operator cancellation during a
+running command and richer post-kill classification remain open under this theme.
+
 ## The seam
 
 `shell_exec` is the only tool that turns the model into an actor on the real machine: it spawns a process, drains its pipes, caps its output, watches a deadline, and on exit returns evidence the operator and the next turn must trust (AGENTS.md §V). A command run is the cost center with the widest blast radius — a misbehaving child can hang the turn, fill a pipe, escape the workspace, outlive its parent, or leave the session wedged with no reconcilable terminal state. AGENTS.md §X prices it explicitly: "process spawn, pipe draining, timeout, kill, output cap" and asks "Are stdout/stderr visible while the process runs and bounded at source?"
@@ -12,7 +19,7 @@ This theme owns the **supervision contract** for a single command run: (1) the p
 
 - **Two platform-specific run paths share one pipe-draining core.** `runCommandWithLimitsPortable` (`apps/backend/src/core/tools/runtime.zig:419`) and `runCommandWithLimitsWindows` (`runtime.zig:562`) both spawn a `std.process.Child` with `stdout/stderr = .Pipe`, then hand each pipe to a `PipeCollector` running on its own `std.Thread` (`runtime.zig:464-465`, `:609-610`).
 - **Pipe draining is already deadlock-safe.** `PipeCollector.readLoop` (`runtime.zig:538`) reads 4 KB frames; once `output.items.len >= max_output_bytes` it flips `cap_reached`, emits the cap marker through the callback exactly once, then `continue`s the loop — it **keeps reading and discarding** so the child's pipe never fills and blocks. The cap is enforced *at the collector*, not by closing the pipe. This is the correct primitive; both platforms inherit it.
-- **Streaming deltas already flow to the event spine.** `forwardCommandOutput` (`builtin/shell_exec.zig:135`) bridges into `ToolEventSink.onOutputDelta`, which the executor turns into `tool_output_delta` events with base64 `chunk_b64` and `cap_reached` (`executor/loop.zig:725-779`). Output is visible while the process runs; AGENTS.md §IV "bounded stdout/stderr deltas with stream id, cap marker, and byte-safe payload" is honored at the grammar layer.
+- **Streaming deltas flow through one typed serializer.** `forwardCommandOutput` (`builtin/shell_exec.zig`) bridges raw `PipeCollector` slices into `ToolEventSink.onOutputDelta`; `serializeToolOutputDelta` base64-encodes them into `chunk_b64` with stream and `cap_reached` before ledger append. Output is visible while the process runs and byte-identical after cold replay.
 - **Timeout exists, per platform, with different reach.** POSIX (`runtime.zig:467-489`) polls `waitpid(.., WNOHANG)` every 10 ms against a deadline and calls `child.kill()` on timeout. Windows (`runtime.zig:612-621`) calls `WaitForSingleObjectEx(child.id, timeout_ms, ..)` and on `error.WaitTimeOut` calls `windows.TerminateProcess(child.id, 1)` then waits infinite for the handle to signal. `CommandOutput.timed_out` is returned and rendered (`builtin/shell_exec.zig:218`, `module.zig:77`).
 - **Output and timeout budgets are declared and clamped.** `shell_exec`'s schema clamps `timeout_ms` to `[1, 60000]` and `max_output_bytes` to `[1, 65536]` per stream (`builtin/shell_exec.zig:20-21`, `:56-57`). argv mode, workspace-contained cwd (`fsutil.resolveInWorkspace`), and shell/bash/powershell modes are all enforced (`:147-180`).
 

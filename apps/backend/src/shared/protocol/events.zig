@@ -1,11 +1,7 @@
 const std = @import("std");
 
-/// Typed event structs for the VAR1 event spine. Every state transition
-/// is serialized through these structs via shared.json.renderAlloc,
-/// replacing the 147 hand-rolled allocPrint("{{...}}") sites scattered
-/// across the kernel. Each struct carries its schema version for
-/// forward-compatible evolution (AGENTS.md §IV: versioned event payloads).
-
+/// Typed payloads for migrated VAR1 event-spine paths. Each struct carries its
+/// schema version for forward-compatible evolution (AGENTS.md §IV).
 pub const ToolStarted = struct {
     schema: []const u8 = "var1.tool_started.v1",
     tool_call_id: []const u8,
@@ -40,10 +36,33 @@ pub const ToolReview = struct {
     reason: []const u8,
 };
 
-/// Serialize an event struct to an owned JSON string.
-/// This is the canonical path — no hand-rolled JSON for events.
+/// Serialize a typed event payload to owned canonical JSON.
 pub fn serialize(allocator: std.mem.Allocator, event: anytype) ![]u8 {
     return std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(event, .{})});
+}
+
+/// Preserve arbitrary command bytes in the one typed output envelope. The
+/// enclosing event ledger stays canonical UTF-8 JSON; clients decode only this
+/// runtime-owned field and treat the bytes as untrusted display data.
+pub fn serializeToolOutputDelta(
+    allocator: std.mem.Allocator,
+    tool_call_id: []const u8,
+    tool: []const u8,
+    stream: []const u8,
+    chunk: []const u8,
+    cap_reached: bool,
+) ![]u8 {
+    const encoded = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(chunk.len));
+    defer allocator.free(encoded);
+    _ = std.base64.standard.Encoder.encode(encoded, chunk);
+
+    return serialize(allocator, ToolOutputDelta{
+        .tool_call_id = tool_call_id,
+        .tool = tool,
+        .stream = stream,
+        .chunk_b64 = encoded,
+        .cap_reached = cap_reached,
+    });
 }
 
 test "ToolStarted serializes with schema" {
@@ -58,7 +77,7 @@ test "ToolStarted serializes with schema" {
     try std.testing.expect(std.mem.indexOf(u8, json, "call-1") != null);
 }
 
-test "ToolFinished with optional fields omits nulls" {
+test "ToolFinished serializes its terminal state" {
     const event = ToolFinished{
         .tool_call_id = "call-2",
         .tool = "shell_exec",

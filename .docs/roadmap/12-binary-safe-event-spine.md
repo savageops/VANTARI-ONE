@@ -6,9 +6,11 @@
 `appendEvent` uses the shared bounded-tail `nextLedgerSeq` initializer, and
 `readEventsAfterSeq` exists. Move 14 carries the exact stored sequence through
 `var1.session_event_notification.v1` after persistence. Move 15 makes the tracked
-TUI consume that identity and repair gaps from the durable suffix; moves 16–17
-retain binary/prefix-integrity work. The ignored browser prototypes still use the
-HTTP bridge transport cursor and are not a shipped proof surface.
+TUI consume that identity and repair gaps from the durable suffix. Move 16 routes
+raw `PipeCollector` bytes through one typed `ToolOutputDelta` serializer and
+persists inline `chunk_b64` with stream and cap evidence. Move 17 retains shared
+prefix-integrity work. The ignored browser prototypes still use the HTTP bridge
+transport cursor and are not a shipped proof surface.
 The source map below is the original baseline.
 
 ## The seam
@@ -18,7 +20,7 @@ The event spine (`events.jsonl`) is the runtime's only durable nervous system. E
 1. **Binary safety.** Event payloads carry command stdout/stderr, file contents, and tool arguments — arbitrary byte sequences that may include embedded NULs, invalid UTF-8, BOMs, or Unicode line separators (U+2028/U+2029) that are legal *inside* a JSON string but illegal as JSONL frame boundaries. A spine that round-trips these bytes through `std.json` lossily is a spine that silently corrupts evidence.
 2. **Monotonic causal order with a replay cursor.** An observer must resume from a durable position — not a wall-clock timestamp. Same-millisecond bursts (AGENTS.md §IV) make timestamp cursors ambiguous; only a writer-assigned, monotonically increasing sequence number gives a resumable, dedupable tail.
 
-This theme owns the **storage substrate**: the frame format, the sequence contract, the torn-write/BOM/invalid-UTF-8 recovery, and the payload-externalization seam. It is the layer that theme 03 (typed event grammar) writes onto. Theme 03 owns the *shapes* of events; theme 12 owns the *durable, binary-safe ledger* those shapes are persisted to.
+This theme owns the **storage substrate**: the frame format, the sequence contract, torn-write/BOM/invalid-UTF-8 recovery, and bounded inline byte envelopes. It is the layer that theme 03 (typed event grammar) writes onto. Theme 03 owns the *shapes* of events; theme 12 owns the *durable, binary-safe ledger* those shapes are persisted to.
 
 ## Baseline at roadmap capture
 
@@ -30,7 +32,7 @@ This theme owns the **storage substrate**: the frame format, the sequence contra
 - **A monotonic cursor exists, but it is non-durable.** `stdio_rpc.zig:227` keeps `next_notification_sequence: u64 = 1` in `ClientState`, assigns one per notification (`:273`), caps the backlog at 512 (`:29`), and tails via `takeNotificationAfter(after_sequence)` (`:1277`). This is the correct cursor shape — but it lives only in process memory, resets on restart, and is decoupled from `events.jsonl`. The durable log has no cursor; the cursor has no durability. They never meet.
 - **`messages.jsonl` supplied the sequence pattern.** It now has a stronger owner: every message role shares one per-session append state and `nextLedgerSeq` initializes from a bounded valid tail. The event ledger uses the same primitive.
 
-**Gap at capture:** the durable event spine was timestamp-keyed and the cursor was in-memory. Storage sequence, the versioned notification envelope, and the tracked TUI cursor have since landed. Binary payload and shared prefix integrity remain incomplete; ignored browser prototypes are outside the shipped client proof.
+**Gap at capture:** the durable event spine was timestamp-keyed and the cursor was in-memory. Storage sequence, the versioned notification envelope, the tracked TUI cursor, and bounded binary command payloads have since landed. Shared prefix integrity remains incomplete; ignored browser prototypes are outside the shipped client proof.
 
 ## What the competitor does
 
@@ -73,7 +75,7 @@ Eve persists execution through a vendored **Temporal Workflow World** (`.eve/.wo
 
 1. **One ledger, monotonic, replayable — not split across three systems.** Eve divides durability between a Temporal Workflow World, an OTLP span spool, and an in-memory stream sequence; pi-mono has an in-memory bus and a full-rewrite session file. VANTARI now uses one bounded-tail sequence primitive for both transcript and event ledgers; move 14 joins the stored event identity to the client cursor.
 2. **Durable cursor where Codex's is diagnostic-only.** Codex's `trace.jsonl` is opt-in and never gates recovery. VANTARI's spine will be the canonical execution ledger: cold-start replay, context compilation, and the TUI read model all derive from it. The cursor survives restart because it *is* the last-read `seq`, persisted in the ledger, not held in `ClientState` memory.
-3. **Payload externalization with in-line base64 fallback.** Codex separates `payloads/*.json` from the spine and keeps references inline. VANTARI already does the inline variant — `ToolOutputDelta.chunk_b64` (`events.zig:26`) carries binary stdout/stderr as base64 inside the event. The spine will support both: small binary fields inline as base64 (the existing, proven pattern), large payloads externalized to a sibling payload file referenced by id. Either way the event row stays canonical JSON and ordered.
+3. **One durable byte envelope, not connection-only output.** Codex `process/output` and `command/exec/outputDelta` carry base64 bytes, stream identity, and a cap marker, but their delivery is connection-scoped. VANTARI persists the same evidence under the event ledger's global sequence before replay. `shell_exec` already bounds each stream at 64 KiB, so inline `ToolOutputDelta.chunk_b64` is the complete current requirement. A payload-file writer, reference resolver, retention worker, and second failure surface are rejected until a measured payload bound makes them necessary.
 4. **Surfaced tears, not silent truncation.** SQLite WAL's rolling-checksum "valid prefix" recovery is the right mechanism, but its silent data loss is the wrong policy. VANTARI will compute a per-frame CRC over the canonical JSON bytes, recover to the last valid frame on a mismatch (the valid-prefix invariant AGENTS.md §XIV demands), and **emit a typed `spine_torn` reconciliation event** recording the tear offset and the recovered seq — so the operator and the reducer both know evidence was lost, instead of discovering it later.
 5. **Strict LF-only framing, BOM/invalid-UTF-8 rejection at the gate.** pi-mono's `jsonl.ts` documents the real framing trap (U+2028/U+2029 inside strings). VANTARI's writer renders via `std.json.fmt` (which escapes structurally), and the reader will frame on `\n` only, reject a leading BOM, and reject invalid UTF-8 at parse time rather than `catch continue`-swallowing it. A poisoned row becomes a typed reconciliation signal, not an invisible gap.
 
@@ -83,7 +85,6 @@ Eve persists execution through a vendored **Temporal Workflow World** (`.eve/.wo
 events.jsonl  (append-only, LF-framed, one JSON object per line)
   {"seq":42,"schema":"var1.tool_output_delta.v1","ts":...,
    "payload":{"tool_call_id":"call-7","stream":"stdout","chunk_b64":"...","cap":false},
-   "payload_ref":null,                         // or "p-0042" -> payloads/p-0042.bin
    "crc":<crc32 of the canonical line bytes>,   // rolling, chains prior frame
    "prev_seq":41}
 ```
@@ -91,7 +92,6 @@ events.jsonl  (append-only, LF-framed, one JSON object per line)
 - `seq` — writer-assigned, monotonic, the replay cursor.
 - `schema` — versioned type tag (theme 03 owns the vocabulary).
 - `payload` — canonical JSON for small/inline events; `chunk_b64` for binary.
-- `payload_ref` — id of an externalized payload file for large evidence (Codex pattern).
 - `crc` / `prev_seq` — rolling torn-write guard (SQLite WAL pattern); `prev_seq` also catches duplicate/out-of-order writes (Kafka offset invariant).
 
 ## Pipeline items under this theme
@@ -102,11 +102,11 @@ events.jsonl  (append-only, LF-framed, one JSON object per line)
 - **Test:** same-millisecond burst of 100 events (AGENTS.md §XIV) round-trips with strictly increasing `seq` and a resumable cursor; replay from `after_seq = N` returns exactly the suffix.
 - **Proof:** cold-start replay reconstructs the event order byte-identical to the live emission order.
 
-### P0-12b: Binary-safe payload contract (canonical JSON + base64 / externalized refs)
-- **Contract:** event payloads are canonical JSON; binary byte sequences (stdout/stderr, file contents) ride as base64 fields inline (the existing `chunk_b64` pattern) or as a `payload_ref` id pointing at a sibling `payloads/<id>.bin` file when they exceed a bound. No event row carries raw unescaped bytes.
-- **Mechanism:** `serialize` (`events.zig:45`) is the sole emission path; add a payload-spill writer alongside `appendJsonlRecord` that, above a threshold, writes the bytes to `payloads/p-<seq>.bin` and stores only the ref. Large tool outputs already flow through `ToolOutputDelta`; route oversized ones to spill.
-- **Test:** a `shell_exec` whose stdout contains a NUL byte, a 0x80 invalid-UTF-8 byte, and a U+2028 separator round-trips through the spine and reconstructs byte-identical output on replay.
-- **Proof:** hex-diff of replayed command output vs. original bytes is empty.
+### P0-12b: Binary-safe payload contract (closed by move 16)
+- **Contract:** command stdout/stderr bytes ride only in the versioned `ToolOutputDelta.chunk_b64` field with `tool_call_id`, stream, and cap evidence. No event row carries raw bytes or a second top-level binary field.
+- **Mechanism:** `serializeToolOutputDelta` (`shared/protocol/events.zig`) base64-encodes raw `PipeCollector` slices and delegates canonical JSON rendering to the typed protocol serializer. The executor no longer hand-renders this payload. The unused top-level `SessionEvent.bytes_b64` projection and its parallel reader branches are deleted.
+- **Test:** source round-trip uses stdout `00 80 E2 80 A8 FF` and stderr `FF 01`; it validates exact decoded bytes, valid UTF-8 JSONL, stream/cap metadata, and absence of `bytes_b64`.
+- **Proof:** installed `shell_exec` replay reconstructed stdout `0080E280A8FF` and capped stderr `FF010080E280A8FE` from two `tool_output_delta` rows. `session/get` returned contiguous sequences 2–12, the ledger decoded under strict UTF-8, and zero process remained.
 
 ### P0-12c: Torn-write recovery with surfaced reconciliation (valid-prefix + CRC)
 - **Contract:** each frame carries a rolling CRC over its canonical bytes chained to the prior frame; on open, the reader walks forward, validates every frame, and recovers to the last valid frame. A torn tail does not corrupt the valid prefix. Unlike SQLite, a tear is **not silent**: a typed `spine_torn` event records the tear offset and recovered `seq` before normal emission resumes.
@@ -120,11 +120,9 @@ events.jsonl  (append-only, LF-framed, one JSON object per line)
 - **Test:** a session dir seeded with a BOM-prefixed `events.jsonl`, a duplicate-`seq` pair, and a trailing invalid-UTF-8 row loads its valid prefix, reports all three integrity violations in order, and leaves `messages.jsonl`/`context.jsonl` untouched.
 - **Proof:** the §XIV adversarial list (corrupted JSONL suffixes, duplicate seq, poisoned rows) is exercised by a dedicated integrity suite that fails open on every regression.
 
-### P1-12e: Payload retention and compaction
-- **Contract:** externalized payload files are garbage-collected against the live event range; a payload referenced by no surviving event (after context compaction advances `first_kept_seq`) is removed, never the ledger rewritten.
-- **Mechanism:** a retention pass keyed off the latest checkpoint's `source_seq_end` / `first_kept_seq` (theme 01/02), deleting unreferenced `payloads/<id>.bin`. The append-only `events.jsonl` itself is never rewritten — only derived payload files are pruned.
-- **Test:** after compaction, payload files for retracted sequences are gone while payloads for the kept window survive; replay of the kept window is unchanged.
-- **Proof:** byte-identical replay of the compacted window before and after retention.
+### Rejected: payload spill and retention subsystem
+- **Decision:** do not add payload files, references, garbage collection, or a retention worker while `shell_exec` caps each stream at 64 KiB and the canonical inline envelope is proven.
+- **Revisit gate:** profile a shipped event class that must durably exceed the current bound and prove inline base64 causes a real storage or replay failure. Until then, the extra lifecycle is YAGNI.
 
 ## North-star link
 
@@ -132,9 +130,9 @@ A shard is replayable only if its causality is reconstructible from the ledger a
 
 ## Definition of done
 - `events.jsonl` rows carry a writer-assigned monotonic `seq`; replay and tail use `after_seq`, not timestamps.
-- Binary payloads round-trip byte-identical via inline base64 or externalized `payload_ref`; no event row carries raw unescaped bytes.
+- Binary payloads round-trip byte-identical through the bounded inline `chunk_b64` envelope; no event row carries raw unescaped bytes or a parallel binary field.
 - A torn write recovers to the valid prefix and emits a surfaced `spine_torn` reconciliation event (no silent truncation).
 - BOM, invalid UTF-8, duplicate `seq`, and poisoned trailing rows are detected, reported, and quarantined without corrupting valid prefix state (AGENTS.md §XVIII item 14).
 - LF-only framing is enforced; U+2028/U+2029 inside strings never split a frame.
 - The §XIV adversarial suite (corrupted JSONL suffix, same-millisecond burst, duplicate seq, poisoned row) passes and gates promotion.
-- No second event log, no parallel storage system, no rewrite of the append-only ledger — only derived payload files are pruned.
+- No second event log, payload store, retention worker, parallel storage system, or rewrite of the append-only ledger.

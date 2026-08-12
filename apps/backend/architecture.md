@@ -487,7 +487,7 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-12:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Isolated broad test graph -> 19/19 steps and 1934/1934 tests passed.
+- Isolated broad test graph -> 19/19 steps and 1936/1936 tests passed.
 - Focused backend TUI -> 59/59 passed.
 - Host lifecycle -> 224/224 passed, including atomic same-session admission,
   session-keyed buffer state, cancellation-before-join shutdown, RPC deadlines,
@@ -495,12 +495,14 @@ Latest local Windows validation on 2026-08-12:
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Built and installed SHA-256 both equal
-  `134D8600777C8ECAD7BF4B87AFF4BEB4D3ECD50BC72CF0A14C5BFB8CE19AF6DD`.
+  `23885BD546F6A663F4DC90F774A153FC0815277BD6F43FE6DA7872D9681E00EC`.
 - Installed settings transport flipped `runtime.full_access_mode` in an isolated
   workspace, removed all generated state, preserved the live root, and left
   zero VANTARI process.
-- Installed event catch-up after sequence 1 returned only stored sequences 2–4;
-  the last row and live notification were both `turn_finished` at sequence 4.
+- Installed tool-turn catch-up after sequence 1 returned contiguous stored
+  sequences 2–12. Two `tool_output_delta` rows reconstructed stdout
+  `0080E280A8FF` and capped stderr `FF010080E280A8FE`; the strict UTF-8 ledger
+  ended on the same stored/notified `turn_finished` sequence and left zero process.
 
 ## Cognitive architecture (frontier capabilities)
 

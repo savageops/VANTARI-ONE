@@ -3382,10 +3382,10 @@ test "write intent ledger is append-only and survives cold start" {
 }
 
 // =============================================================================
-// P0-12b: Binary-safe event payloads (bytes_b64 field)
+// P0-12b: Binary-safe command output through the canonical event envelope
 // =============================================================================
 
-test "event with bytes_b64 field survives cold-start round-trip" {
+test "stdout and stderr bytes survive canonical event ledger round-trip" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -3395,66 +3395,74 @@ test "event with bytes_b64 field survives cold-start round-trip" {
     var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "binary payload");
     defer session.deinit(std.testing.allocator);
 
-    // Append an event with a binary-safe base64 payload.
-    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
+    const stdout_bytes = [_]u8{ 0x00, 0x80, 0xe2, 0x80, 0xa8, 0xff };
+    const stderr_bytes = [_]u8{ 0xff, 0x01 };
+    const stdout_message = try VAR1.shared.protocol.events.serializeToolOutputDelta(
+        std.testing.allocator,
+        "call-binary",
+        "shell_exec",
+        "stdout",
+        &stdout_bytes,
+        false,
+    );
+    defer std.testing.allocator.free(stdout_message);
+    const stderr_message = try VAR1.shared.protocol.events.serializeToolOutputDelta(
+        std.testing.allocator,
+        "call-binary",
+        "shell_exec",
+        "stderr",
+        &stderr_bytes,
+        true,
+    );
+    defer std.testing.allocator.free(stderr_message);
+
+    const stdout_seq = try VAR1.core.session_store.appendEventWithSeq(std.testing.allocator, workspace_root, session.id, .{
         .event_type = "tool_output_delta",
-        .message = "Binary command output.",
+        .message = stdout_message,
         .timestamp_ms = 100,
-        .bytes_b64 = "SGVsbG8gV29ybGQ=", // base64 of "Hello World"
     });
-
-    // Append a normal text-only event (no bytes_b64).
-    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "tool_completed",
-        .message = "Done.",
-        .timestamp_ms = 200,
+    const stderr_seq = try VAR1.core.session_store.appendEventWithSeq(std.testing.allocator, workspace_root, session.id, .{
+        .event_type = "tool_output_delta",
+        .message = stderr_message,
+        .timestamp_ms = 101,
     });
+    try std.testing.expectEqual(@as(u64, 1), stdout_seq);
+    try std.testing.expectEqual(@as(u64, 2), stderr_seq);
 
-    // Cold-start read: both events must be readable with correct fields.
-    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
+    const events = try VAR1.core.session_store.readEventsAfterSeq(std.testing.allocator, workspace_root, session.id, 0);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
     try std.testing.expectEqual(@as(usize, 2), events.len);
+    try std.testing.expectEqual(@as(u64, 1), events[0].seq);
+    try std.testing.expectEqual(@as(u64, 2), events[1].seq);
 
-    // First event has bytes_b64.
-    try std.testing.expect(events[0].bytes_b64 != null);
-    try std.testing.expectEqualStrings("SGVsbG8gV29ybGQ=", events[0].bytes_b64.?);
+    const AssertDelta = struct {
+        fn matches(message: []const u8, stream: []const u8, expected: []const u8, cap_reached: bool) !void {
+            var parsed = try std.json.parseFromSlice(VAR1.shared.protocol.events.ToolOutputDelta, std.testing.allocator, message, .{});
+            defer parsed.deinit();
+            try std.testing.expectEqualStrings("var1.tool_output_delta.v1", parsed.value.schema);
+            try std.testing.expectEqualStrings("call-binary", parsed.value.tool_call_id);
+            try std.testing.expectEqualStrings("shell_exec", parsed.value.tool);
+            try std.testing.expectEqualStrings(stream, parsed.value.stream);
+            try std.testing.expectEqual(cap_reached, parsed.value.cap_reached);
 
-    // Second event has no bytes_b64 (text-only).
-    try std.testing.expect(events[1].bytes_b64 == null);
+            const decoded_len = try std.base64.standard.Decoder.calcSizeForSlice(parsed.value.chunk_b64);
+            const decoded = try std.testing.allocator.alloc(u8, decoded_len);
+            defer std.testing.allocator.free(decoded);
+            try std.base64.standard.Decoder.decode(decoded, parsed.value.chunk_b64);
+            try std.testing.expectEqualSlices(u8, expected, decoded);
+        }
+    };
+    try AssertDelta.matches(events[0].message, "stdout", &stdout_bytes, false);
+    try AssertDelta.matches(events[1].message, "stderr", &stderr_bytes, true);
 
-    // Verify the raw JSONL contains the bytes_b64 field.
-    const events_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{
-        workspace_root, ".var", "sessions", session.id, "events.jsonl",
-    });
+    const events_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "sessions", session.id, "events.jsonl" });
     defer std.testing.allocator.free(events_path);
     const raw = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, events_path);
     defer std.testing.allocator.free(raw);
-    try std.testing.expect(std.mem.indexOf(u8, raw, "\"bytes_b64\":\"SGVsbG8gV29ybGQ=\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, raw, "\"bytes_b64\":null") != null);
-}
-
-test "readLatestEvent returns bytes_b64 field" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
-    defer std.testing.allocator.free(workspace_root);
-
-    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "latest binary");
-    defer session.deinit(std.testing.allocator);
-
-    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "tool_output_delta",
-        .message = "latest binary output",
-        .timestamp_ms = 300,
-        .bytes_b64 = "AAECAwQ=", // base64 of bytes [0x00, 0x01, 0x02, 0x03, 0x04]
-    });
-
-    const latest = try VAR1.core.session_store.readLatestEvent(std.testing.allocator, workspace_root, session.id);
-    defer if (latest) |event| event.deinit(std.testing.allocator);
-    try std.testing.expect(latest != null);
-    try std.testing.expect(latest.?.bytes_b64 != null);
-    try std.testing.expectEqualStrings("AAECAwQ=", latest.?.bytes_b64.?);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(raw));
+    try std.testing.expect(std.mem.indexOf(u8, raw, "AIDigKj/") != null);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "/wE=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "bytes_b64") == null);
 }
 
 // =============================================================================

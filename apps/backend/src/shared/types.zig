@@ -297,17 +297,10 @@ pub const SessionEvent = struct {
     /// 0 for legacy rows written before seq existed or for in-memory events
     /// that have not yet been persisted.
     seq: u64 = 0,
-    /// Optional base64-encoded binary payload for binary-safe event entries
-    /// (AGENTS.md §XVIII item 2). When the event carries raw bytes (e.g.
-    /// command output with invalid UTF-8), the bytes are stored here as
-    /// base64 so the canonical JSON text remains valid. Null for text-only
-    /// events.
-    bytes_b64: ?[]const u8 = null,
 
     pub fn deinit(self: SessionEvent, allocator: std.mem.Allocator) void {
         allocator.free(self.event_type);
         allocator.free(self.message);
-        if (self.bytes_b64) |b| allocator.free(b);
     }
 };
 

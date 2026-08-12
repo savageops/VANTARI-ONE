@@ -1,5 +1,44 @@
 # Execution Log
 
+## 2026-08-12 - Binary-safe command output envelope
+
+**Outcome:** Closed move 16 with one durable typed serializer for arbitrary
+stdout/stderr bytes and deleted the unused parallel byte projection.
+
+- `serializeToolOutputDelta` base64-encodes raw `PipeCollector` slices and renders
+  `var1.tool_output_delta.v1` with `tool_call_id`, tool, stream, and cap evidence.
+  The executor's hand-built JSON is removed.
+- Deleted top-level `SessionEvent.bytes_b64`, its session-reader copies, and two
+  tests that proved only the hollow parallel field. Legacy rows remain prefix
+  readable through unknown-field tolerance; the removed field is not projected.
+- The adversarial source tracer persists stdout bytes `00 80 E2 80 A8 FF` and
+  stderr bytes `FF 01`, reads them through `readEventsAfterSeq`, decodes them
+  byte-identically, validates strict JSONL UTF-8, and rejects `bytes_b64` drift.
+- Harvested OpenAI Codex's base64 `process/output` sequence/stream contract and
+  `command/exec/outputDelta` cap marker from the
+  [exec-server](https://github.com/openai/codex/blob/main/codex-rs/exec-server/README.md)
+  and [app-server](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md).
+  VANTARI persists the envelope for cold replay; Codex output delivery is
+  connection-scoped.
+- Rejected a second process/chunk cursor and payload spill/retention subsystem.
+  Stored event `seq` plus `tool_call_id + stream` already identifies every
+  bounded delta, and `shell_exec` caps each stream at 64 KiB.
+- The isolated graph passes 19/19 and 1,936/1,936; ReleaseFast passes 9/9. The
+  four-owner GGUF audit inspected 62 segments and found zero candidate or exact
+  duplicate pairs.
+- Installed `session/send` persisted four `user,assistant,tool,assistant` rows
+  and 12 unique monotonic notifications. `session/get` after sequence 1 returned
+  contiguous sequences 2–12 and two output deltas. Replay reconstructed stdout
+  `0080E280A8FF`, capped stderr `FF010080E280A8FE`, and
+  `stderr_cap_reached=true`; strict UTF-8 ledger decode passed and zero VANTARI
+  processes remained.
+- Source and installed SHA-256 match
+  `23885BD546F6A663F4DC90F774A153FC0815277BD6F43FE6DA7872D9681E00EC`;
+  prior binary backup:
+  `C:\\Users\\Savage\\AppData\\Local\\Vantari\\bin\\vantari.exe.20260812-161006.bak`.
+- Next owner: move 17, make poisoned/torn/BOM/duplicate-sequence prefix recovery
+  one explicit shared ledger contract without adding a database or second log.
+
 ## 2026-08-12 - Exact TUI event replay identity
 
 **Outcome:** Deleted client-owned event identity and made the persisted per-session

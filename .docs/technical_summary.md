@@ -104,7 +104,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,934/1,934 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,936/1,936 tests with zero skips.
   Its 224-test host lane executes the formerly dormant stdio client/server and
   shared process-tree tests; the backend TUI lane passes 59/59.
 - Parent-shell production-home probes kept 99,960 files, 693,051,144 bytes,
@@ -147,19 +147,24 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   identical same-millisecond events retained distinct envelope identities. The
   tracked TUI now advances only by that sequence, fetches a durable suffix only
   on a gap or turn completion, and no longer owns timestamp/type/text identity.
+- Raw command stdout/stderr now routes through one typed `ToolOutputDelta`
+  serializer. The hand-rendered JSON and unused top-level `bytes_b64` projection
+  are deleted. Source replay preserves NUL, invalid UTF-8, U+2028 bytes, and 0xFF;
+  no payload-file subsystem was added under the existing 64 KiB stream cap.
 - Built and installed ReleaseFast SHA-256 both equal
-  `134D8600777C8ECAD7BF4B87AFF4BEB4D3ECD50BC72CF0A14C5BFB8CE19AF6DD`.
+  `23885BD546F6A663F4DC90F774A153FC0815277BD6F43FE6DA7872D9681E00EC`.
 - Installed `session/send` against a disposable local provider imported all
   1,176 legacy summary rows, appended one terminal v2 row, retained 1,177
-  unique sequences, wrote contiguous unique `user,assistant` message rows, and
-  emitted four unique monotonic event notifications. Catch-up after sequence 1
-  returned only sequences 2–4. The final notification and ledger row were both
-  `turn_finished` at sequence 4; the live legacy hash was preserved and zero
-  process remained.
+  unique sequences, wrote contiguous unique `user,assistant,tool,assistant`
+  message rows, and emitted 12 unique monotonic event notifications. Catch-up
+  after sequence 1 returned sequences 2–12 and reconstructed exact stdout
+  `0080E280A8FF` plus capped stderr `FF010080E280A8FE`. The final notification
+  and ledger row were both `turn_finished` at sequence 12; the live legacy hash
+  was preserved and zero process remained.
 - The installed settings smoke flips `runtime.full_access_mode` to `true` in a
   disposable workspace, receives `var1.config_set.v1` in 5 ms, removes the
   isolated runtime, preserves the complete live root, and leaves zero process.
-- Moves 5–15 and finding 10 are closed. Finding 13 is narrowed to shared
+- Moves 5–16 and finding 10 are closed. Finding 13 is narrowed to shared
   byte-integrity and adversarial burst work; persistent agent execution and
   inter-process scheduler arbitration remain P0.
 - The hive direction is assigned to moves 21–30 and finding 11. The target is

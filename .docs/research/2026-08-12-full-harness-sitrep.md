@@ -20,11 +20,11 @@ Current classification:
 |---|---|---|
 | Build | Pass | ReleaseFast builds 9/9 with Zig 0.15.1. |
 | Focused TUI | Pass | Backend TUI 59/59 with zero skips. |
-| Broad tests | Pass | Canonical isolated graph is 19/19 and 1,934/1,934 with zero skips. |
-| Installed proof | Pass for moves 1–15 | Source and installed ReleaseFast share SHA-256 `134D8600777C8ECAD7BF4B87AFF4BEB4D3ECD50BC72CF0A14C5BFB8CE19AF6DD`; disposable settings and session-ledger probes exit with zero processes. |
+| Broad tests | Pass | Canonical isolated graph is 19/19 and 1,936/1,936 with zero skips. |
+| Installed proof | Pass for moves 1–16 | Source and installed ReleaseFast share SHA-256 `23885BD546F6A663F4DC90F774A153FC0815277BD6F43FE6DA7872D9681E00EC`; disposable settings and session-ledger probes exit with zero processes. |
 | Agent pool | In-process only | A process restart converts running receipts to StaleAgentOwner; no detached worker launch is wired. |
 | Ticket persistence | Partial | Ticket events persist, but leader lease acquisition is read/check/write without an inter-process compare-and-swap. |
-| Event replay | Pass for tracked TUI | `var1.session_event_notification.v1` carries exact stored sequence after persistence; the TUI advances by that sequence and requests only a missing durable suffix. Ignored browser prototypes retain a compatibility SSE transport id. |
+| Event replay | Pass for tracked TUI | `var1.session_event_notification.v1` carries exact stored sequence after persistence; the TUI advances by that sequence and requests only a missing durable suffix. Raw command bytes persist through one typed base64 envelope with stream/cap evidence. Ignored browser prototypes retain a compatibility SSE transport id. |
 | Self-repair | Evidence floor only | Trace, diagnostics, and rerun substrate exist; causal diagnosis, approved patching, exact-input replay, and regression locking do not form one runtime loop. |
 
 No broad runtime rewrite was made during this audit. The worktree already contains 55 modified tracked files plus a large untracked implementation set, and the installed process is active. Current findings are converted into the executable ledger at [../todo/findings/00-INDEX.md](../todo/findings/00-INDEX.md).
@@ -271,7 +271,7 @@ VANTARI currently owns FailureReceipt and part of ExactInputRerun. It does not y
 | Chain or request | Filesystem state | Source truth | Accounted status |
 |---|---|---|---|
 | 021 Codex subscription auth | 021a-b archived; 021c-f pending | Live chain at 021c. It overlaps provider/auth owners and must precede any 035 installed provider proof that changes the same surfaces. | Open; unchanged by this audit. |
-| 035 provider cost and compat | 035a-f archived; 035g-h pending | Cost/telemetry client code exists and source tests cover it. No current live provider event plus installed /status proof; installed hash is stale. | Implemented in source, not closed. Keep 035g/h pending. |
+| 035 provider cost and compat | 035a-f archived; 035g-h pending | Cost/telemetry client code exists and source tests cover it. The current artifact is installed, but no current live provider event plus installed /status proof exists. | Implemented in source, not closed. Keep 035g/h pending. |
 | 036 ticket pool and repair | 036a-g archived; parent remains in pending with status complete | In-process queue and UI projection exist. Process survival and inter-process lease safety are unproven and contradicted by source. | Historical closeout is overclaimed. Reopen through P0 findings before parent archival. |
 | PLUG plugin socket | Parent and PLUGa-h pending; no archived units | Unstarted chain. Built-ins remain the only default capability surface. | Open, lower priority than integrity findings. |
 | Full access mode | Default false; one shared resolver and ExecutionContext projection | Source tests are green. Installed `config/set` flipped the key to true in an isolated workspace and returned `var1.config_set.v1` in 5 ms. | Installed and source proof complete for the setting path. |
@@ -283,17 +283,17 @@ VANTARI currently owns FailureReceipt and part of ExactInputRerun. It does not y
 | Probe | Result |
 |---|---|
 | apps/backend ReleaseFast build | 9/9 steps succeeded. |
-| Canonical isolated graph | 19/19 steps; 1,934/1,934 tests across integration, executable, TUI, memory, chain 035, and host lanes. |
+| Canonical isolated graph | 19/19 steps; 1,936/1,936 tests across integration, executable, TUI, memory, chain 035, and host lanes. |
 | Backend TUI lane | 59/59 passed, including exact same-millisecond render identity, gap catch-up, settings open/apply/close/reopen/timeout, and remote-error handling. |
 | Host lifecycle lane | 224/224 passed, including atomic same-session admission, session-keyed buffer projection, cancellation-before-join shutdown, deadlines, and Job Object ownership. |
 | Admission and buffer races | 100 contenders produced one turn owner and 99 non-starters; a losing prompt was retained as a steer. A→B buffer switching rejected late A state. |
 | Summary concurrency | 100 synchronized upserts retained every session with unique sequences; latest-row projection, poisoned-suffix continuation, v1 import, and shared JSONL append passed. Dupe audit found zero candidate pairs across summary/store/fsutil owners. |
 | Message append concurrency | 100 synchronized mixed-role appends retained 100 unique monotonic rows. A 32,768-line poisoned prefix followed by valid seq 900 continued at seq 901 through bounded tail initialization. The 37-segment GGUF audit found zero candidate pairs across store and summary owners. |
-| Installed session ledgers | Disposable `VANTARI_HOME` imported 1,176/1,176 legacy summary rows, appended one terminal summary through `session/send`, retained 1,177 unique summary sequences, wrote contiguous unique `user,assistant` messages, emitted four unique monotonic event notifications, returned exactly sequences 2–4 after `after_seq=1`, ended on the stored `turn_finished` sequence, preserved the live legacy SHA-256, and exited with zero VANTARI processes. |
+| Installed session ledgers | Disposable `VANTARI_HOME` imported 1,176/1,176 legacy summary rows, appended one terminal summary through `session/send`, retained 1,177 unique summary sequences, wrote contiguous unique `user,assistant,tool,assistant` messages, emitted 12 unique monotonic event notifications, returned contiguous sequences 2–12 after `after_seq=1`, reconstructed stdout `0080E280A8FF` and capped stderr `FF010080E280A8FE` from two typed deltas, ended on the stored `turn_finished` sequence, preserved the live legacy SHA-256, and exited with zero VANTARI processes. |
 | Active shutdown | A real blocked provider request observed cancellation before join, persisted exactly one `session_cancelled` event, returned `cancelled`, fenced late starts, and passed 20 repeats. |
 | Direct-test isolation | Wrapper rerun kept 99,960 files / 693,051,144 bytes and config/auth hashes unchanged; one generated cache-owned home; zero VANTARI processes. |
 | git diff --check | Exit 0; line-ending warnings only. |
-| Built and installed ReleaseFast SHA-256 | `134D8600777C8ECAD7BF4B87AFF4BEB4D3ECD50BC72CF0A14C5BFB8CE19AF6DD`; exact match. |
+| Built and installed ReleaseFast SHA-256 | `23885BD546F6A663F4DC90F774A153FC0815277BD6F43FE6DA7872D9681E00EC`; exact match. |
 | Installed settings transport | `initialize` plus `config/set` returned in 5 ms; isolated runtime removed; live config/auth/lease and full tree metrics unchanged; zero processes. |
 | Installed process boundary | Forced parent termination also removed its kernel child through the shared Windows Job Object; zero VANTARI processes remained. |
 | Smoke-harness correction | The first settings smoke inherited live `VANTARI_HOME` and rotated only the expired scheduler `lease.json` (one-byte timestamp-width change). Config, auth, summaries, and process inventory were unchanged. The retained script now pins a disposable workspace and proves the live lease hash unchanged. |

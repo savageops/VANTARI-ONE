@@ -22,6 +22,7 @@ Session summary mutation and per-session message append are serialized and appen
   ledger state and initializes its cursor from the last valid bounded tail row.
 - Closed move 14: [protocol/types.zig:68](../../../apps/backend/src/shared/protocol/types.zig#L68) defines `var1.session_event_notification.v1` with the exact stored `seq`; all live producers persist before emitting it.
 - Closed move 15: [tui_chat.zig](../../../apps/backend/src/clients/tui_chat.zig) deletes timestamp/type/text suppression, advances only by exact event sequence, and requests the missing suffix on a gap or after turn completion.
+- Closed move 16: [events.zig](../../../apps/backend/src/shared/protocol/events.zig) owns raw-byte base64 serialization for `ToolOutputDelta`; the executor's hand-rendered JSON and the unused top-level `SessionEvent.bytes_b64` path are deleted.
 
 ## Required mechanism
 
@@ -49,14 +50,16 @@ Carry the exact stored event sequence and byte payload through one versioned pro
 - 100 synchronized mixed-role message appends retained 100 rows with unique
   monotonic sequences; a 32,768-line poisoned-prefix fixture continued from the
   valid tail row without the removed full-transcript sequencer.
-- The complete graph passes 1,934/1,934. Installed `session/send` wrote two
-  contiguous unique message rows and emitted four unique monotonic event
-  notifications ending on the stored `turn_finished` sequence. Installed
-  `session/get` after sequence 1 returned exactly sequences 2–4. Source/installed
-  SHA-256 match and zero VANTARI processes remain.
+- The complete graph passes 1,936/1,936. Installed `session/send` wrote four
+  contiguous unique `user,assistant,tool,assistant` rows and emitted 12 unique
+  monotonic event notifications ending on the stored `turn_finished` sequence.
+  Installed `session/get` after sequence 1 returned contiguous sequences 2–12;
+  two byte envelopes reconstructed stdout `0080E280A8FF` and capped stderr
+  `FF010080E280A8FE`. Source/installed SHA-256 match and zero VANTARI processes
+  remain.
 - Packaged GGUF dupe audit: 37 segments and zero candidate or exact pairs across
   `store.zig` and `summaries.zig`.
-- Finding remains pending for moves 16–17 and 20.
+- Finding remains pending for moves 17 and 20.
 
 ## Out of scope
 
