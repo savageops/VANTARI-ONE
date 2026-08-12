@@ -6,6 +6,7 @@ const commands = @import("commands.zig");
 const settings_view = @import("settings_view.zig");
 
 const protocol = VAR1.core.protocol_types;
+const protocol_events = VAR1.shared.protocol.events;
 const stdio_rpc = VAR1.host.stdio_rpc;
 
 const TextInput = tui.widgets.TextInput;
@@ -153,7 +154,7 @@ const ChatState = struct {
     agent_pool_available: usize = 0,
     agent_pool_healthy: bool = false,
     agent_pool_known: bool = false,
-    // Session cost read model accumulated from turn_finished v2 events
+    // Session cost read model accumulated from completed turn_terminal events
     // (measured provider tokens + priced cost; cost stays zero-flag unless a
     // turn reported a priced quantity).
     session_prompt_tokens: u64 = 0,
@@ -685,7 +686,8 @@ const ChatState = struct {
             self.active_run_seq = seq;
             return;
         }
-        if (std.mem.eql(u8, event_type, "assistant_response") or
+        if (std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type) or
+            std.mem.eql(u8, event_type, "turn_finished") or
             std.mem.eql(u8, event_type, "session_cancelled") or
             std.mem.eql(u8, event_type, "session_failed"))
         {
@@ -694,7 +696,8 @@ const ChatState = struct {
     }
 
     fn applyProgressEvent(self: *ChatState, event_type: []const u8, message: []const u8) !bool {
-        if (try self.recordTurnTelemetry(event_type, message)) return true;
+        const recorded_telemetry = try self.recordTurnTelemetry(event_type, message);
+        if (recorded_telemetry and !std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type)) return true;
         if (std.mem.eql(u8, event_type, "assistant_delta")) {
             try self.addAssistantDelta(message);
             return true;
@@ -717,6 +720,7 @@ const ChatState = struct {
 
     fn recordTurnTelemetry(self: *ChatState, event_type: []const u8, message: []const u8) !bool {
         if (!std.mem.eql(u8, event_type, "turn_started") and
+            !std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type) and
             !std.mem.eql(u8, event_type, "turn_finished")) return false;
 
         const TurnTelemetry = struct {
@@ -725,17 +729,22 @@ const ChatState = struct {
             completion_tokens: u64 = 0,
             cached_tokens: u64 = 0,
             cost_total_usd: ?f64 = null,
+            outcome: []const u8 = "completed",
         };
         var parsed = std.json.parseFromSlice(TurnTelemetry, self.allocator, message, .{
             .ignore_unknown_fields = true,
         }) catch return false;
         defer parsed.deinit();
 
-        self.context_used_tokens = parsed.value.window_tokens;
-        // turn_finished v2 carries measured provider tokens + priced cost;
-        // accumulate into the session read model for /status (turn_started
-        // only refreshes the window estimate).
-        if (std.mem.eql(u8, event_type, "turn_finished")) {
+        if (parsed.value.window_tokens > 0 or std.mem.eql(u8, event_type, "turn_started")) {
+            self.context_used_tokens = parsed.value.window_tokens;
+        }
+        // Current completed terminal rows and read-only legacy turn_finished
+        // rows carry measured provider tokens and priced cost.
+        if (std.mem.eql(u8, event_type, "turn_finished") or
+            (std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type) and
+                std.mem.eql(u8, parsed.value.outcome, "completed")))
+        {
             self.session_prompt_tokens += parsed.value.prompt_tokens;
             self.session_completion_tokens += parsed.value.completion_tokens;
             self.session_cached_tokens += parsed.value.cached_tokens;
@@ -2159,7 +2168,7 @@ fn isChildToolPhase(phase: []const u8) bool {
         "tool_finished",
         "tool_output_delta",
         "tool_completed",
-        "turn_failed",
+        protocol_events.turn_terminal_event_type,
     };
     for (tool_phases) |candidate| {
         if (std.mem.eql(u8, phase, candidate)) return true;
@@ -3021,10 +3030,26 @@ fn formatProgress(allocator: std.mem.Allocator, event_type: []const u8, message:
     if (std.mem.eql(u8, event_type, "tool_budget_exceeded")) return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "budget: {s}", .{message}));
     if (std.mem.eql(u8, event_type, "session_waiting")) return try allocator.dupe(u8, "waiting on child group");
     if (std.mem.eql(u8, event_type, "child_convergence_started")) return try allocator.dupe(u8, "agents converging");
+    if (std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type)) return formatTurnTerminal(allocator, message);
     if (std.mem.eql(u8, event_type, "session_failed")) return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "failed: {s}", .{message}));
     if (std.mem.startsWith(u8, event_type, "context_compaction_")) return formatContextCompaction(allocator, event_type, message);
 
     return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "{s}: {s}", .{ progressLabel(event_type), message }));
+}
+
+fn formatTurnTerminal(allocator: std.mem.Allocator, message: []const u8) !?[]u8 {
+    const Terminal = struct {
+        outcome: []const u8,
+        detail: []const u8 = "",
+    };
+    var parsed = std.json.parseFromSlice(Terminal, allocator, message, .{
+        .ignore_unknown_fields = true,
+    }) catch return try allocator.dupe(u8, "terminal event malformed");
+    defer parsed.deinit();
+    if (std.mem.eql(u8, parsed.value.outcome, "completed")) return null;
+    const label = if (std.mem.eql(u8, parsed.value.outcome, "timed_out")) "timed out" else parsed.value.outcome;
+    if (parsed.value.detail.len == 0) return try allocator.dupe(u8, label);
+    return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "{s}: {s}", .{ label, parsed.value.detail }));
 }
 
 fn formatToolRequested(allocator: std.mem.Allocator, message: []const u8) !?[]u8 {
@@ -3347,6 +3372,7 @@ fn skipProgressEvent(event_type: []const u8) bool {
         std.mem.eql(u8, event_type, "assistant_response") or
         std.mem.eql(u8, event_type, "reasoning_delta") or
         std.mem.eql(u8, event_type, "turn_started") or
+        // Read-only compatibility for pre-v1 terminal ledgers.
         std.mem.eql(u8, event_type, "turn_finished") or
         std.mem.eql(u8, event_type, "provider_turn_recovered") or
         std.mem.eql(u8, event_type, "branch_converged") or
@@ -3369,6 +3395,7 @@ fn progressLabel(event_type: []const u8) []const u8 {
     if (std.mem.eql(u8, event_type, "tool_budget_exceeded")) return "budget";
     if (std.mem.eql(u8, event_type, "session_waiting")) return "waiting";
     if (std.mem.startsWith(u8, event_type, "context_compaction_")) return "context";
+    if (std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type)) return "terminal";
     if (std.mem.eql(u8, event_type, "session_failed")) return "failed";
     return event_type;
 }
@@ -3416,10 +3443,12 @@ test "tui run generation follows session lifecycle events" {
     _ = try state.recordProgressEvent(1, "session_started", "");
     try std.testing.expectEqual(@as(u64, 1), state.active_run_seq);
     _ = try state.recordProgressEvent(2, "assistant_response", "done");
+    try std.testing.expectEqual(@as(u64, 1), state.active_run_seq);
+    _ = try state.recordProgressEvent(3, protocol_events.turn_terminal_event_type, "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":1,\"outcome\":\"completed\",\"detail\":\"\"}");
     try std.testing.expectEqual(@as(u64, 0), state.active_run_seq);
-    _ = try state.recordProgressEvent(3, "session_started", "");
-    try std.testing.expectEqual(@as(u64, 3), state.active_run_seq);
-    _ = try state.recordProgressEvent(4, "session_failed", "failed");
+    _ = try state.recordProgressEvent(4, "session_started", "");
+    try std.testing.expectEqual(@as(u64, 4), state.active_run_seq);
+    _ = try state.recordProgressEvent(5, protocol_events.turn_terminal_event_type, "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":4,\"outcome\":\"failed\",\"detail\":\"failed\"}");
     try std.testing.expectEqual(@as(u64, 0), state.active_run_seq);
 }
 
@@ -4769,7 +4798,7 @@ test "tui activity families share nested checkbox grammar" {
     try std.testing.expectEqualStrings("", activityConnector(.group, false));
 }
 
-test "tui turn_finished v2 telemetry parses tokens and priced cost" {
+test "tui completed terminal telemetry parses tokens and priced cost" {
     const allocator = std.testing.allocator;
     var state = ChatState{
         .allocator = allocator,
@@ -4783,8 +4812,8 @@ test "tui turn_finished v2 telemetry parses tokens and priced cost" {
     };
     defer state.deinit();
 
-    const payload = "{\"schema\":\"var1.turn_finished.v2\",\"step\":1,\"window_tokens\":2000,\"output_bytes\":10,\"prompt_tokens\":1234,\"completion_tokens\":567,\"cached_tokens\":89,\"cost_total_usd\":0.001234}";
-    try std.testing.expect(try state.recordTurnTelemetry("turn_finished", payload));
+    const payload = "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":1,\"outcome\":\"completed\",\"detail\":\"\",\"step\":1,\"window_tokens\":2000,\"output_bytes\":10,\"prompt_tokens\":1234,\"completion_tokens\":567,\"cached_tokens\":89,\"cost_total_usd\":0.001234}";
+    try std.testing.expect(try state.recordTurnTelemetry(protocol_events.turn_terminal_event_type, payload));
 
     try std.testing.expectEqual(@as(u64, 1234), state.session_prompt_tokens);
     try std.testing.expectEqual(@as(u64, 567), state.session_completion_tokens);
@@ -4793,7 +4822,7 @@ test "tui turn_finished v2 telemetry parses tokens and priced cost" {
     try std.testing.expectApproxEqAbs(@as(f64, 0.001234), state.session_cost_usd, 1e-9);
 }
 
-test "tui turn_finished accumulates session cost across turns" {
+test "tui terminal telemetry accumulates session cost across turns" {
     const allocator = std.testing.allocator;
     var state = ChatState{
         .allocator = allocator,
@@ -4807,10 +4836,10 @@ test "tui turn_finished accumulates session cost across turns" {
     };
     defer state.deinit();
 
-    const first = "{\"schema\":\"var1.turn_finished.v2\",\"prompt_tokens\":100,\"completion_tokens\":50,\"cached_tokens\":0,\"cost_total_usd\":0.0001}";
-    const second = "{\"schema\":\"var1.turn_finished.v2\",\"prompt_tokens\":200,\"completion_tokens\":100,\"cached_tokens\":10,\"cost_total_usd\":0.0002}";
-    try std.testing.expect(try state.recordTurnTelemetry("turn_finished", first));
-    try std.testing.expect(try state.recordTurnTelemetry("turn_finished", second));
+    const first = "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":1,\"outcome\":\"completed\",\"prompt_tokens\":100,\"completion_tokens\":50,\"cached_tokens\":0,\"cost_total_usd\":0.0001}";
+    const second = "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":2,\"outcome\":\"completed\",\"prompt_tokens\":200,\"completion_tokens\":100,\"cached_tokens\":10,\"cost_total_usd\":0.0002}";
+    try std.testing.expect(try state.recordTurnTelemetry(protocol_events.turn_terminal_event_type, first));
+    try std.testing.expect(try state.recordTurnTelemetry(protocol_events.turn_terminal_event_type, second));
 
     try std.testing.expectEqual(@as(u64, 300), state.session_prompt_tokens);
     try std.testing.expectEqual(@as(u64, 150), state.session_completion_tokens);
@@ -4818,7 +4847,7 @@ test "tui turn_finished accumulates session cost across turns" {
     try std.testing.expectApproxEqAbs(@as(f64, 0.0003), state.session_cost_usd, 1e-12);
 }
 
-test "tui turn_finished null cost leaves has_session_cost false" {
+test "tui terminal null cost leaves has_session_cost false" {
     const allocator = std.testing.allocator;
     var state = ChatState{
         .allocator = allocator,
@@ -4832,8 +4861,8 @@ test "tui turn_finished null cost leaves has_session_cost false" {
     };
     defer state.deinit();
 
-    const payload = "{\"schema\":\"var1.turn_finished.v2\",\"prompt_tokens\":42,\"completion_tokens\":7,\"cached_tokens\":0,\"cost_total_usd\":null}";
-    try std.testing.expect(try state.recordTurnTelemetry("turn_finished", payload));
+    const payload = "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":1,\"outcome\":\"completed\",\"prompt_tokens\":42,\"completion_tokens\":7,\"cached_tokens\":0,\"cost_total_usd\":null}";
+    try std.testing.expect(try state.recordTurnTelemetry(protocol_events.turn_terminal_event_type, payload));
 
     try std.testing.expectEqual(@as(u64, 42), state.session_prompt_tokens);
     try std.testing.expect(!state.has_session_cost);

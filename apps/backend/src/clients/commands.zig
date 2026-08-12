@@ -165,7 +165,7 @@ pub fn renderHelp(allocator: std.mem.Allocator) ![]u8 {
 }
 
 /// Session token/cost read model rendered by /status. Populated by the TUI
-/// from turn_finished v2 events (measured provider tokens + priced cost).
+/// from completed turn_terminal events (measured provider tokens + priced cost).
 pub const StatusTelemetry = struct {
     prompt_tokens: u64 = 0,
     completion_tokens: u64 = 0,

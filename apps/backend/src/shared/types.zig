@@ -484,7 +484,7 @@ pub const CompletionRequest = struct {
 /// Why: the event spine's token telemetry must come from the provider's usage
 /// block, not a compile-time estimate. Preserves: per-turn measured evidence.
 /// Evidence: filled by all three provider adapters (035a/035c); priced by
-/// pricing.calculateCost; emitted in turn_finished v2 events.
+/// pricing.calculateCost; emitted in completed turn_terminal events.
 pub const Usage = struct {
     prompt_tokens: u64 = 0,
     completion_tokens: u64 = 0,

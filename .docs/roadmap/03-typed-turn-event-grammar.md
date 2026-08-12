@@ -8,7 +8,7 @@ The event spine (`events.jsonl`) is the runtime's nervous system. Shards need re
 
 ## What exists today
 
-- Typed events exist: `turn_started`, `session_started`, `assistant_delta`, `assistant_response`, `tool_requested`, `tool_reviewed`, `tool_started`, `tool_output_delta`, `tool_finished`, `tool_completed`, `tool_blocked`, cancellation, failure.
+- Typed events exist: `turn_started`, `session_started`, `assistant_delta`, `assistant_response`, `tool_requested`, `tool_reviewed`, `tool_started`, `tool_output_delta`, `tool_finished`, `tool_completed`, `tool_blocked`, and one generation-bound `turn_terminal` with completed/failed/timed_out/cancelled outcome.
 - Event cursors use monotonic ledger position + replay suppression (AGENTS.md §IV).
 - Audit + evaluation consume the spine.
 
@@ -31,9 +31,9 @@ Eve (`packages/eve/src/execution/workflow-steps.ts`, `turn-workflow.ts`, `harnes
 ## Pipeline items under this theme
 
 ### P0-3a: Close the grammar (loop seam isolation)
-- **Contract:** `loop.zig` is reduced around the four-phase turn body; `turn_started`, `assistant_delta`, `turn_failed`, cancellation reconciliation, and `tool_requested` are closed with replay tests.
+- **Contract:** `loop.zig` is reduced around the four-phase turn body; `turn_started`, `assistant_delta`, one `turn_terminal`, cancellation reconciliation, and `tool_requested` are closed with replay tests. Move 19 closed terminal uniqueness and outcome typing; old terminal names remain read-only.
 - **Mechanism:** the executor emits each typed event in the correct phase; the event grammar is the sole contract between kernel and clients.
-- **Test:** an adversarial suite replays a full turn from `events.jsonl` and reconstructs the exact causal chain (turn → deltas → tool_requested → tool_completed → turn_finished).
+- **Test:** an adversarial suite replays a full turn from `events.jsonl` and reconstructs the exact causal chain (turn → deltas → tool_requested → tool_completed → turn_terminal).
 - **Proof:** `events.jsonl` replay after cold start reproduces the client-visible sequence.
 
 ### P0-3b: Branch events

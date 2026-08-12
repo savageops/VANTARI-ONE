@@ -294,6 +294,8 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - Plugin management surface (manage_plugin — list/info/enable/disable)
 - Role-routed bounded delegation with silent advisors
 - Surgical precision work ethic
+- One generation-bound `turn_terminal` settlement for completed, failed,
+  timed-out, and cancelled runs
 
 ## Deep architecture — current capability truth
 
@@ -304,6 +306,7 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Mechanism | Current state | Exact boundary |
 |---|---|---|
 | Append-only event spine | **Source and installed proven** | `events.jsonl` stores monotonic sequence numbers; stdio notifications carry the exact stored sequence and the tracked TUI advances only by that identity with demand-driven suffix repair. |
+| Single terminal settlement | **Source and installed proven** | `commitTurnTerminal` admits exactly one `var1.turn_terminal.v1` row per `session_started.seq`; repeated identical settlement is idempotent, conflicting or stale settlement is rejected, and legacy terminal names are read-only. |
 | Generation-bound cancellation | **Source and installed proven** | The tracked TUI sends the observed `session_started.seq` as `expected_run_seq`; missing, unobserved, and stale generations do not mutate a newer run. Shutdown retains an admission-fenced unconditional path. |
 | Message transcript writer | **Source and installed proven** | One per-session owner serializes every message role and initializes sequence from a bounded valid tail. Multi-process writer ownership remains coupled to the persistent-host work. |
 | Child branch/convergence | **In-process proven** | Fixed-pool convergence works while the kernel lives; process restart marks running receipts stale instead of resuming a worker. |

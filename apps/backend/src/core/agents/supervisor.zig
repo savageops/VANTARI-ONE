@@ -9,6 +9,7 @@ const routes = @import("../providers/routes.zig");
 const store = @import("../sessions/store.zig");
 const summaries = @import("../sessions/summaries.zig");
 const tools = @import("../tools/runtime.zig");
+const protocol_events = @import("../../shared/protocol/events.zig");
 const types = @import("../../shared/types.zig");
 
 pub const Error = error{
@@ -517,7 +518,7 @@ pub const Supervisor = struct {
 
         for (group.tasks) |task| {
             if (task.lifecycle != .cancelled or task.finished_at_ms != cancelled_at_ms) continue;
-            markQueuedSessionCancelled(task, reason);
+            markSessionTerminal(task, .cancelled, reason);
             if (self.commitTerminalTaskEvidence(task, reason)) disposeRoute(task);
         }
         self.condition.broadcast();
@@ -830,7 +831,7 @@ fn runTaskEntry(supervisor: *Supervisor, task: *Task) void {
         return;
     };
     if (route.execution_kind == .kernel) {
-        markSessionFailed(task, "KernelRouteIsNotAgentExecutable");
+        markSessionTerminal(task, .failed, "KernelRouteIsNotAgentExecutable");
         disposeRoute(task);
         supervisor.finishTask(task, .failed, "KernelRouteIsNotAgentExecutable");
         return;
@@ -842,9 +843,9 @@ fn runTaskEntry(supervisor: *Supervisor, task: *Task) void {
         } else |err| {
             const lifecycle: TaskLifecycle = if (err == executor.Error.Cancelled) .cancelled else .failed;
             if (lifecycle == .cancelled) {
-                markSessionCancelled(task, "ModelTaskCancelled");
+                markSessionTerminal(task, .cancelled, "ModelTaskCancelled");
             } else {
-                markSessionFailed(task, @errorName(err));
+                markSessionTerminal(task, if (err == error.ConnectionTimedOut) .timed_out else .failed, @errorName(err));
             }
             disposeRoute(task);
             supervisor.finishTask(task, lifecycle, @errorName(err));
@@ -853,7 +854,7 @@ fn runTaskEntry(supervisor: *Supervisor, task: *Task) void {
     }
 
     const capability_profile = profile_contract.resolveProfile(task.capability_profile_id) catch {
-        markSessionFailed(task, "UnsupportedCapabilityProfile");
+        markSessionTerminal(task, .failed, "UnsupportedCapabilityProfile");
         disposeRoute(task);
         supervisor.finishTask(task, .failed, "UnsupportedCapabilityProfile");
         return;
@@ -914,7 +915,7 @@ fn runModelTask(supervisor: *Supervisor, task: *Task, route: *routes.ResolvedRou
     var session = try store.readSessionRecord(task_allocator, route.config.workspace_root, task.session_id);
     defer session.deinit(task_allocator);
     try store.setSessionStatus(task_allocator, route.config.workspace_root, &session, .running);
-    try store.appendEvent(task_allocator, route.config.workspace_root, task.session_id, .{
+    const run_seq = try store.appendEventWithSeq(task_allocator, route.config.workspace_root, task.session_id, .{
         .event_type = "session_started",
         .message = "Bounded model task started.",
         .timestamp_ms = std.time.milliTimestamp(),
@@ -944,23 +945,20 @@ fn runModelTask(supervisor: *Supervisor, task: *Task, route: *routes.ResolvedRou
     const now_ms = std.time.milliTimestamp();
     try store.upsertAssistantSessionMessageWithReasoning(task_allocator, route.config.workspace_root, task.session_id, content, completion.reasoning, now_ms);
     try store.writeOutput(task_allocator, route.config.workspace_root, task.session_id, content);
-    try store.setSessionStatus(task_allocator, route.config.workspace_root, &session, .completed);
     try store.appendEvent(task_allocator, route.config.workspace_root, task.session_id, .{
         .event_type = "assistant_response",
         .message = content,
         .timestamp_ms = now_ms,
     });
-    // Typed turn terminal evidence with measured usage + cost, same builder
-    // as the kernel loop (single owner, no payload drift). Allocated payload
-    // is freed after appendEvent serializes it into the durable ledger.
-    const finished_msg = turn_payload.turnFinishedPayload(task_allocator, 0, &.{}, completion.model, completion.usage, content.len) catch "Bounded model task completed in one provider turn.";
-    const owns_finished = finished_msg.ptr != "Bounded model task completed in one provider turn.".ptr;
-    try store.appendEvent(task_allocator, route.config.workspace_root, task.session_id, .{
-        .event_type = "turn_finished",
-        .message = finished_msg,
-        .timestamp_ms = now_ms,
-    });
-    if (owns_finished) task_allocator.free(finished_msg);
+    var terminal = try store.commitTurnTerminal(
+        task_allocator,
+        route.config.workspace_root,
+        &session,
+        run_seq,
+        turn_payload.completedTerminalInput(0, &.{}, completion.model, completion.usage, content.len),
+        now_ms,
+    );
+    defer terminal.deinit(task_allocator);
     store.syncSessionLedgers(task_allocator, route.config.workspace_root, task.session_id) catch {};
     try docs_sync.completeSession(task_allocator, route.config.workspace_root, .{
         .session_id = task.session_id,
@@ -1084,7 +1082,7 @@ fn shouldProjectChildEvent(event_type: []const u8) bool {
         "tool_completed",
         "session_waiting",
         "assistant_response",
-        "turn_failed",
+        protocol_events.turn_terminal_event_type,
     };
     for (projected) |candidate| if (std.mem.eql(u8, event_type, candidate)) return true;
     return false;
@@ -1098,40 +1096,19 @@ fn disposeRoute(task: *Task) void {
     }
 }
 
-fn markSessionFailed(task: *Task, reason: []const u8) void {
+fn markSessionTerminal(task: *Task, outcome: protocol_events.TurnTerminalOutcome, reason: []const u8) void {
     const route = task.route orelse return;
     var session = store.readSessionRecord(std.heap.page_allocator, route.config.workspace_root, task.session_id) catch return;
     defer session.deinit(std.heap.page_allocator);
-    store.setSessionFailure(std.heap.page_allocator, route.config.workspace_root, &session, reason) catch {};
-    store.appendEvent(std.heap.page_allocator, route.config.workspace_root, task.session_id, .{
-        .event_type = "session_failed",
-        .message = reason,
-        .timestamp_ms = std.time.milliTimestamp(),
-    }) catch {};
-}
-
-fn markSessionCancelled(task: *Task, reason: []const u8) void {
-    const route = task.route orelse return;
-    var session = store.readSessionRecord(std.heap.page_allocator, route.config.workspace_root, task.session_id) catch return;
-    defer session.deinit(std.heap.page_allocator);
-    store.setSessionStatus(std.heap.page_allocator, route.config.workspace_root, &session, .cancelled) catch {};
-    store.appendEvent(std.heap.page_allocator, route.config.workspace_root, task.session_id, .{
-        .event_type = "session_cancelled",
-        .message = reason,
-        .timestamp_ms = std.time.milliTimestamp(),
-    }) catch {};
-}
-
-fn markQueuedSessionCancelled(task: *Task, reason: []const u8) void {
-    const route = task.route orelse return;
-    var session = store.readSessionRecord(std.heap.page_allocator, route.config.workspace_root, task.session_id) catch return;
-    defer session.deinit(std.heap.page_allocator);
-    store.setSessionStatus(std.heap.page_allocator, route.config.workspace_root, &session, .cancelled) catch {};
-    store.appendEvent(std.heap.page_allocator, route.config.workspace_root, task.session_id, .{
-        .event_type = "session_cancelled",
-        .message = reason,
-        .timestamp_ms = std.time.milliTimestamp(),
-    }) catch {};
+    var terminal = store.commitTurnTerminal(
+        std.heap.page_allocator,
+        route.config.workspace_root,
+        &session,
+        null,
+        .{ .outcome = outcome, .detail = reason },
+        std.time.milliTimestamp(),
+    ) catch return;
+    terminal.deinit(std.heap.page_allocator);
 }
 
 fn hasDurableTerminalState(task: *Task) bool {

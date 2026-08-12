@@ -134,9 +134,8 @@ fn verifySuccessfulProviderRun(workspace_root: []const u8, index: usize) !void {
     const latest = try VAR1.core.session_store.readLatestEvent(std.testing.allocator, workspace_root, result.session_id);
     defer if (latest) |event| event.deinit(std.testing.allocator);
     try std.testing.expect(latest != null);
-    // turn_finished is the terminal event (emitted after assistant_response),
-    // closing the turn lifecycle with measured token telemetry (P0-3a).
-    try std.testing.expectEqualStrings("turn_finished", latest.?.event_type);
+    try std.testing.expectEqualStrings("turn_terminal", latest.?.event_type);
+    try std.testing.expect(std.mem.indexOf(u8, latest.?.message, "\"outcome\":\"completed\"") != null);
 }
 
 fn verifyProviderFailureRun(workspace_root: []const u8, index: usize) !void {
@@ -167,7 +166,8 @@ fn verifyProviderFailureRun(workspace_root: []const u8, index: usize) !void {
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
     try std.testing.expect(events.len >= 2);
     try std.testing.expectEqualStrings("session_started", events[0].event_type);
-    try std.testing.expectEqualStrings("session_failed", events[events.len - 1].event_type);
+    try std.testing.expectEqualStrings("turn_terminal", events[events.len - 1].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[events.len - 1].message, "\"outcome\":\"failed\"") != null);
 }
 
 fn verifyToolTranscriptRoundTrip(workspace_root: []const u8, index: usize) !void {

@@ -487,12 +487,12 @@ fn launchTicket(
         .idempotency_key = request.idempotency_key,
         .claimed_at_ms = created_at_ms,
     }) catch |err| {
-        markTicketAdmissionFailed(service, child_session.id, @errorName(err));
+        markSessionAdmissionFailed(service.config.workspace_root, child_session.id, @errorName(err));
         return err;
     };
     defer claim.deinit(allocator);
     if (!claim.appended) {
-        markTicketAdmissionFailed(service, child_session.id, "TicketClaimReplay");
+        markSessionAdmissionFailed(service.config.workspace_root, child_session.id, "TicketClaimReplay");
         return Error.TicketClaimReplay;
     }
 
@@ -975,12 +975,15 @@ fn recoverReceiptGroups(
             var failure_class: ?[]const u8 = member.failure_reason;
             if (member.status == .initialized or member.status == .running) {
                 const stale_reason = "StaleAgentOwner";
-                try store.setSessionFailure(allocator, service.config.workspace_root, member, stale_reason);
-                try store.appendEvent(allocator, service.config.workspace_root, member.id, .{
-                    .event_type = "session_failed",
-                    .message = stale_reason,
-                    .timestamp_ms = std.time.milliTimestamp(),
-                });
+                var terminal = try store.commitTurnTerminal(
+                    allocator,
+                    service.config.workspace_root,
+                    member,
+                    null,
+                    .{ .outcome = .failed, .detail = stale_reason },
+                    std.time.milliTimestamp(),
+                );
+                terminal.deinit(allocator);
                 try appendRecoveredTaskFinishedEvent(service, allocator, parent_session_id, member.*, stale_reason);
                 docs_sync.completeSession(allocator, service.config.workspace_root, .{
                     .session_id = member.id,
@@ -1446,29 +1449,25 @@ fn renderChildPrompt(
 /// Mark every partially persisted child truthfully when atomic batch admission fails.
 fn markAdmissionFailed(task: *child_supervisor.Task, reason: []const u8) void {
     const route = task.route orelse return;
-    var session = store.readSessionRecord(std.heap.page_allocator, route.config.workspace_root, task.session_id) catch return;
-    defer session.deinit(std.heap.page_allocator);
-    store.setSessionFailure(std.heap.page_allocator, route.config.workspace_root, &session, reason) catch {};
-    store.appendEvent(std.heap.page_allocator, route.config.workspace_root, task.session_id, .{
-        .event_type = "session_failed",
-        .message = reason,
-        .timestamp_ms = std.time.milliTimestamp(),
-    }) catch {};
+    markSessionAdmissionFailed(route.config.workspace_root, task.session_id, reason);
 }
 
 /// A ticket claim can lose a revision/idempotency race after the child session
 /// has been persisted because the session id is part of the durable claim.
 /// Keep that loser session truthful and terminal; never leave an initialized
 /// orphan for cold-start recovery to mistake for live work.
-fn markTicketAdmissionFailed(service: *Service, session_id: []const u8, reason: []const u8) void {
-    var session = store.readSessionRecord(std.heap.page_allocator, service.config.workspace_root, session_id) catch return;
+fn markSessionAdmissionFailed(workspace_root: []const u8, session_id: []const u8, reason: []const u8) void {
+    var session = store.readSessionRecord(std.heap.page_allocator, workspace_root, session_id) catch return;
     defer session.deinit(std.heap.page_allocator);
-    store.setSessionFailure(std.heap.page_allocator, service.config.workspace_root, &session, reason) catch {};
-    store.appendEvent(std.heap.page_allocator, service.config.workspace_root, session_id, .{
-        .event_type = "session_failed",
-        .message = reason,
-        .timestamp_ms = std.time.milliTimestamp(),
-    }) catch {};
+    var terminal = store.commitTurnTerminal(
+        std.heap.page_allocator,
+        workspace_root,
+        &session,
+        null,
+        .{ .outcome = .failed, .detail = reason },
+        std.time.milliTimestamp(),
+    ) catch return;
+    terminal.deinit(std.heap.page_allocator);
 }
 
 fn hasText(value: []const u8) bool {

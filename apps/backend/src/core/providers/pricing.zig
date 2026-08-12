@@ -8,7 +8,7 @@ const types = @import("../../shared/types.zig");
 /// calculateCost (packages/ai/src/models.ts:51-62): cost = ($/1M) * tokens
 /// per bucket, summed. Preserves: cost is only ever CLAIMED when a price is
 /// known — unknown models return null and token accounting still works.
-/// Evidence: consumed by turn_payload (turn_finished v2) and tested here.
+/// Evidence: consumed by turn_payload completed terminal input and tested here.
 pub const ModelPrice = struct {
     /// USD per 1,000,000 prompt (and cache_creation) tokens.
     input_usd: f64,

@@ -103,3 +103,7 @@ without a second state bus.
   sequence 11 returned `requested`, the terminal event was `session_cancelled`,
   the kernel exited 0, three provider requests were observed, and zero VANTARI
   process remained.
+
+The event name above is retained as historical move-18 evidence. Move 19 removed
+that writer; current cancellation closes through one generation-bound
+`var1.turn_terminal.v1` row with outcome `cancelled`.

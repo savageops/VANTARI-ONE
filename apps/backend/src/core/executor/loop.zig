@@ -153,7 +153,7 @@ pub fn runPromptWithOptions(
 
     try store.setSessionStatus(allocator, config.workspace_root, &session, .running);
     try options.hooks.onSessionInitialized(session.id);
-    try recordSessionEvent(
+    const run_seq = try recordSessionEventWithSeq(
         allocator,
         config.workspace_root,
         options.hooks,
@@ -226,6 +226,7 @@ pub fn runPromptWithOptions(
                 config.workspace_root,
                 options.hooks,
                 &session,
+                run_seq,
                 agent_service,
             );
         }
@@ -239,7 +240,7 @@ pub fn runPromptWithOptions(
         &messages,
         0,
     ) catch |err| {
-        try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err), run_start_ms);
+        try failSession(allocator, config.workspace_root, options.hooks, &session, run_seq, .failed, provider.failureDiagnosticForError(err), run_start_ms);
         return err;
     };
 
@@ -285,7 +286,7 @@ pub fn runPromptWithOptions(
         // allocations from the previous turn are freed in one operation.
         turn_arena.reset();
         if (options.hooks.shouldCancel(session.id)) {
-            try cancelSession(allocator, config.workspace_root, options.hooks, &session, "Cancellation requested.");
+            try cancelSession(allocator, config.workspace_root, options.hooks, &session, run_seq, "Cancellation requested.");
             return Error.Cancelled;
         }
 
@@ -345,7 +346,7 @@ pub fn runPromptWithOptions(
             &messages,
             base_message_count,
         ) catch |err| {
-            try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err), run_start_ms);
+            try failSession(allocator, config.workspace_root, options.hooks, &session, run_seq, .failed, provider.failureDiagnosticForError(err), run_start_ms);
             return err;
         };
 
@@ -395,7 +396,16 @@ pub fn runPromptWithOptions(
                 err == error.NetworkUnreachable or
                 err == error.ConnectionTimedOut)
             {
-                try failSession(allocator, config.workspace_root, options.hooks, &session, provider.failureDiagnosticForError(err), run_start_ms);
+                try failSession(
+                    allocator,
+                    config.workspace_root,
+                    options.hooks,
+                    &session,
+                    run_seq,
+                    if (err == error.ConnectionTimedOut) .timed_out else .failed,
+                    provider.failureDiagnosticForError(err),
+                    run_start_ms,
+                );
                 return err;
             }
             // ContextWindowExceeded is NOT terminal — it triggers the
@@ -422,7 +432,7 @@ pub fn runPromptWithOptions(
             );
             provider_retries += 1;
             if (provider_retries >= max_provider_retries) {
-                try failSession(allocator, config.workspace_root, options.hooks, &session, diag, run_start_ms);
+                try failSession(allocator, config.workspace_root, options.hooks, &session, run_seq, .failed, diag, run_start_ms);
                 return err;
             }
             // Exponential backoff before retry: 1s, 2s, 4s, 8s. A provider
@@ -440,7 +450,7 @@ pub fn runPromptWithOptions(
         defer completion.deinit(allocator);
         provider_retries = 0; // reset on success
         if (options.hooks.shouldCancel(session.id)) {
-            try cancelSession(allocator, config.workspace_root, options.hooks, &session, "Cancellation requested during provider execution.");
+            try cancelSession(allocator, config.workspace_root, options.hooks, &session, run_seq, "Cancellation requested during provider execution.");
             return Error.Cancelled;
         }
 
@@ -471,7 +481,7 @@ pub fn runPromptWithOptions(
                     session.status,
                 );
                 try docs_sync.appendLog(allocator, config.workspace_root, budget_message);
-                try failSession(allocator, config.workspace_root, options.hooks, &session, @errorName(Error.ToolBudgetExceeded), run_start_ms);
+                try failSession(allocator, config.workspace_root, options.hooks, &session, run_seq, .failed, @errorName(Error.ToolBudgetExceeded), run_start_ms);
                 return Error.ToolBudgetExceeded;
             }
 
@@ -507,7 +517,7 @@ pub fn runPromptWithOptions(
 
             for (completion.tool_calls) |tool_call| {
                 if (options.hooks.shouldCancel(session.id)) {
-                    try cancelSession(allocator, config.workspace_root, options.hooks, &session, "Cancellation requested.");
+                    try cancelSession(allocator, config.workspace_root, options.hooks, &session, run_seq, "Cancellation requested.");
                     return Error.Cancelled;
                 }
 
@@ -629,6 +639,7 @@ pub fn runPromptWithOptions(
                         config.workspace_root,
                         options.hooks,
                         &session,
+                        run_seq,
                         agent_service,
                     );
                     base_message_count = try rebuildProviderBaseMessages(
@@ -705,6 +716,7 @@ pub fn runPromptWithOptions(
                     config.workspace_root,
                     options.hooks,
                     &session,
+                    run_seq,
                     agent_service,
                 );
                 base_message_count = try rebuildProviderBaseMessages(
@@ -721,7 +733,6 @@ pub fn runPromptWithOptions(
             const final_timestamp = std.time.milliTimestamp();
             try store.upsertAssistantSessionMessageWithReasoning(allocator, config.workspace_root, session.id, final_output, completion.reasoning, final_timestamp);
             try store.writeOutput(allocator, config.workspace_root, session.id, final_output);
-            try store.setSessionStatus(allocator, config.workspace_root, &session, .completed);
             // Mandatory summary discipline: the orchestrator must leave a fresh
             // <=100-word summary before the turn ends. If update_session_summary
             // was not called during this run, the kernel writes a deterministic
@@ -733,7 +744,7 @@ pub fn runPromptWithOptions(
                 config.workspace_root,
                 session.id,
                 session.parent_session_id orelse "",
-                types.statusLabel(session.status),
+                "completed",
                 session.prompt,
                 final_output,
                 run_start_ms,
@@ -751,23 +762,14 @@ pub fn runPromptWithOptions(
                 types.statusLabel(session.status),
                 final_timestamp,
             );
-            // Typed turn terminal evidence: every completed turn emits
-            // turn_finished with measured token telemetry (AGENTS.md §IV, P0-3a).
-            // Same ownership pattern as turn_started: allocate, persist, free.
-            {
-                const finished_msg = turn_payload.turnFinishedPayload(allocator, step, messages.items, completion.model, completion.usage, final_output.len) catch "Provider turn completed.";
-                const owns_finished = finished_msg.ptr != "Provider turn completed.".ptr;
-                try recordSessionEvent(
-                    allocator,
-                    config.workspace_root,
-                    options.hooks,
-                    session.id,
-                    "turn_finished",
-                    finished_msg,
-                    session.status,
-                );
-                if (owns_finished) allocator.free(finished_msg);
-            }
+            try commitTerminalEvent(
+                allocator,
+                config.workspace_root,
+                options.hooks,
+                &session,
+                run_seq,
+                turn_payload.completedTerminalInput(step, messages.items, completion.model, completion.usage, final_output.len),
+            );
             // Force the final durability flush — the batched sync gate in
             // appendJsonlRecord skips most per-event flushes for streaming
             // speed; the terminal assistant response must be durable before
@@ -801,13 +803,12 @@ pub fn runPromptWithOptions(
         const final_timestamp = std.time.milliTimestamp();
         try store.upsertAssistantSessionMessage(allocator, config.workspace_root, session.id, final_output, final_timestamp);
         try store.writeOutput(allocator, config.workspace_root, session.id, final_output);
-        try store.setSessionStatus(allocator, config.workspace_root, &session, .completed);
         _ = try summaries.ensureFreshSummary(
             allocator,
             config.workspace_root,
             session.id,
             session.parent_session_id orelse "",
-            types.statusLabel(session.status),
+            "completed",
             session.prompt,
             final_output,
             run_start_ms,
@@ -825,6 +826,15 @@ pub fn runPromptWithOptions(
             types.statusLabel(session.status),
             final_timestamp,
         );
+        try commitTerminalEvent(
+            allocator,
+            config.workspace_root,
+            options.hooks,
+            &session,
+            run_seq,
+            turn_payload.completedTerminalInput(step, messages.items, completion.model, completion.usage, final_output.len),
+        );
+        store.syncSessionLedgers(allocator, config.workspace_root, session.id) catch {};
         try docs_sync.completeSession(allocator, config.workspace_root, .{
             .session_id = session.id,
             .status = types.statusLabel(session.status),
@@ -832,6 +842,7 @@ pub fn runPromptWithOptions(
             .output = final_output,
             .updated_at_ms = session.updated_at_ms,
         });
+        try docs_sync.appendLog(allocator, config.workspace_root, "session completed");
 
         return .{
             .session_id = try allocator.dupe(u8, session.id),
@@ -839,7 +850,7 @@ pub fn runPromptWithOptions(
         };
     }
 
-    try failSession(allocator, config.workspace_root, options.hooks, &session, "StepLimitExceeded", run_start_ms);
+    try failSession(allocator, config.workspace_root, options.hooks, &session, run_seq, .failed, "StepLimitExceeded", run_start_ms);
     return Error.StepLimitExceeded;
 }
 
@@ -853,6 +864,7 @@ fn awaitChildGroups(
     workspace_root: []const u8,
     hooks: Hooks,
     session: *types.SessionRecord,
+    run_seq: u64,
     agent_service: tools.AgentService,
 ) !bool {
     var snapshot = try agent_service.waitParent(session.id, 0);
@@ -873,7 +885,7 @@ fn awaitChildGroups(
     while (!snapshot.ready and !snapshot.terminal) {
         if (hooks.shouldCancel(session.id)) {
             _ = agent_service.cancelParent(session.id, "Parent cancellation requested.") catch 0;
-            try cancelSession(allocator, workspace_root, hooks, session, "Cancellation requested while waiting for child groups.");
+            try cancelSession(allocator, workspace_root, hooks, session, run_seq, "Cancellation requested while waiting for child groups.");
             return Error.Cancelled;
         }
         // If the operator interjected while parked, break early so the step
@@ -1538,10 +1550,13 @@ fn cancelSession(
     workspace_root: []const u8,
     hooks: Hooks,
     session: *types.SessionRecord,
+    run_seq: u64,
     reason: []const u8,
 ) !void {
-    try store.setSessionStatus(allocator, workspace_root, session, .cancelled);
-    try recordSessionEvent(allocator, workspace_root, hooks, session.id, "session_cancelled", reason, session.status);
+    try commitTerminalEvent(allocator, workspace_root, hooks, session, run_seq, .{
+        .outcome = .cancelled,
+        .detail = reason,
+    });
     store.syncSessionLedgers(allocator, workspace_root, session.id) catch {};
     try docs_sync.writePending(allocator, workspace_root, .{
         .session_id = session.id,
@@ -1558,11 +1573,16 @@ fn failSession(
     workspace_root: []const u8,
     hooks: Hooks,
     session: *types.SessionRecord,
+    run_seq: u64,
+    outcome: protocol_events.TurnTerminalOutcome,
     failure_reason: []const u8,
     run_start_ms: i64,
 ) !void {
-    try store.setSessionFailure(allocator, workspace_root, session, failure_reason);
-    try recordSessionEvent(allocator, workspace_root, hooks, session.id, "session_failed", failure_reason, session.status);
+    if (outcome != .failed and outcome != .timed_out) return error.InvalidFailureTerminalOutcome;
+    try commitTerminalEvent(allocator, workspace_root, hooks, session, run_seq, .{
+        .outcome = outcome,
+        .detail = failure_reason,
+    });
     // Failed turns still end the session — the summary timeline must show why.
     // The fallback row (source == "kernel_fallback") is the durable evidence.
     _ = try summaries.ensureFreshSummary(
@@ -1598,6 +1618,18 @@ fn recordSessionEvent(
     message: []const u8,
     status: types.SessionStatus,
 ) !void {
+    _ = try recordSessionEventWithSeq(allocator, workspace_root, hooks, session_id, event_type, message, status);
+}
+
+fn recordSessionEventWithSeq(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    hooks: Hooks,
+    session_id: []const u8,
+    event_type: []const u8,
+    message: []const u8,
+    status: types.SessionStatus,
+) !u64 {
     const timestamp_ms = std.time.milliTimestamp();
     const seq = try store.appendEventWithSeq(allocator, workspace_root, session_id, .{
         .event_type = event_type,
@@ -1609,4 +1641,27 @@ fn recordSessionEvent(
     // (AGENTS.md §IV). A slow/broken TUI pipe must never corrupt the
     // provider turn — the durable event has already been persisted above.
     hooks.onSessionEvent(session_id, seq, event_type, message, types.statusLabel(status), timestamp_ms) catch {};
+    return seq;
+}
+
+fn commitTerminalEvent(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    hooks: Hooks,
+    session: *types.SessionRecord,
+    run_seq: u64,
+    input: protocol_events.TurnTerminalInput,
+) !void {
+    const timestamp_ms = std.time.milliTimestamp();
+    var commit = try store.commitTurnTerminal(allocator, workspace_root, session, run_seq, input, timestamp_ms);
+    defer commit.deinit(allocator);
+    if (!commit.appended) return;
+    hooks.onSessionEvent(
+        session.id,
+        commit.seq,
+        protocol_events.turn_terminal_event_type,
+        commit.payload.?,
+        types.statusLabel(session.status),
+        timestamp_ms,
+    ) catch {};
 }

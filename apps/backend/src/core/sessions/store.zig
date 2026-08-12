@@ -1,6 +1,7 @@
 const std = @import("std");
 const fsutil = @import("../../shared/fsutil.zig");
 const jsonl_reader = @import("../../shared/jsonl.zig");
+const protocol_events = @import("../../shared/protocol/events.zig");
 const types = @import("../../shared/types.zig");
 
 /// Batched durability gate. Per-append `file.sync()` on Windows is
@@ -118,6 +119,46 @@ const ParsedSessionEvent = struct {
     message: []const u8,
     timestamp_ms: i64,
     seq: u64 = 0,
+};
+
+const ParsedTurnTerminal = struct {
+    schema: []const u8,
+    run_seq: u64,
+    outcome: []const u8,
+    detail: []const u8 = "",
+};
+
+pub const TurnTerminalProjection = struct {
+    seq: u64,
+    run_seq: u64,
+    outcome: protocol_events.TurnTerminalOutcome,
+    detail: []u8,
+
+    pub fn deinit(self: TurnTerminalProjection, allocator: std.mem.Allocator) void {
+        allocator.free(self.detail);
+    }
+};
+
+pub const TurnTerminalCommit = struct {
+    appended: bool,
+    seq: u64,
+    run_seq: u64,
+    outcome: protocol_events.TurnTerminalOutcome,
+    /// Exact JSON stored in events.jsonl, present only when this call appended.
+    payload: ?[]u8 = null,
+
+    pub fn deinit(self: TurnTerminalCommit, allocator: std.mem.Allocator) void {
+        if (self.payload) |value| allocator.free(value);
+    }
+};
+
+const TurnTerminalScan = struct {
+    run_seq: u64 = 0,
+    terminal: ?TurnTerminalProjection = null,
+
+    fn deinit(self: TurnTerminalScan, allocator: std.mem.Allocator) void {
+        if (self.terminal) |value| value.deinit(allocator);
+    }
 };
 
 const ParsedSessionMessage = struct {
@@ -550,6 +591,16 @@ pub fn appendEventWithSeq(
     const seq_state = &(try sessionLedgerState(workspace_root, session_id)).events;
     seq_state.mutex.lock();
     defer seq_state.mutex.unlock();
+
+    return appendEventLocked(allocator, events_path, seq_state, event);
+}
+
+fn appendEventLocked(
+    allocator: std.mem.Allocator,
+    events_path: []const u8,
+    seq_state: *LedgerSeqState,
+    event: types.SessionEvent,
+) !u64 {
     if (!seq_state.initialized) {
         seq_state.next_seq = try nextLedgerSeq(allocator, events_path);
         seq_state.initialized = true;
@@ -571,6 +622,75 @@ pub fn appendEventWithSeq(
     };
     seq_state.next_seq = following_seq;
     return next_seq;
+}
+
+/// Commit the only current run-terminal event under the existing event-ledger
+/// mutation lock. Repeated identical settlement is idempotent; a stale
+/// generation or conflicting outcome cannot append behind the authoritative row.
+/// The session record remains a projection of this durable event.
+pub fn commitTurnTerminal(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session: *types.SessionRecord,
+    expected_run_seq: ?u64,
+    input: protocol_events.TurnTerminalInput,
+    timestamp_ms: i64,
+) !TurnTerminalCommit {
+    const events_path = try eventsFilePath(allocator, workspace_root, session.id);
+    defer allocator.free(events_path);
+    const seq_state = &(try sessionLedgerState(workspace_root, session.id)).events;
+
+    var commit = blk: {
+        seq_state.mutex.lock();
+        defer seq_state.mutex.unlock();
+        if (!seq_state.initialized) {
+            seq_state.next_seq = try nextLedgerSeq(allocator, events_path);
+            seq_state.initialized = true;
+        }
+
+        var scan = try scanCurrentTurnTerminal(allocator, events_path);
+        defer scan.deinit(allocator);
+        if (expected_run_seq) |expected| {
+            if (expected != scan.run_seq) return error.StaleRunGeneration;
+        }
+        if (scan.terminal) |terminal| {
+            if (terminal.outcome != input.outcome) return error.TerminalOutcomeConflict;
+            break :blk TurnTerminalCommit{
+                .appended = false,
+                .seq = terminal.seq,
+                .run_seq = terminal.run_seq,
+                .outcome = terminal.outcome,
+            };
+        }
+
+        const payload = try protocol_events.serializeTurnTerminal(allocator, scan.run_seq, input);
+        errdefer allocator.free(payload);
+        const seq = try appendEventLocked(allocator, events_path, seq_state, .{
+            .event_type = protocol_events.turn_terminal_event_type,
+            .message = payload,
+            .timestamp_ms = timestamp_ms,
+        });
+        break :blk TurnTerminalCommit{
+            .appended = true,
+            .seq = seq,
+            .run_seq = scan.run_seq,
+            .outcome = input.outcome,
+            .payload = payload,
+        };
+    };
+    errdefer commit.deinit(allocator);
+
+    switch (input.outcome) {
+        .completed => try setSessionStatus(allocator, workspace_root, session, .completed),
+        .cancelled => try setSessionStatus(allocator, workspace_root, session, .cancelled),
+        .failed, .timed_out => try setSessionFailure(
+            allocator,
+            workspace_root,
+            session,
+            if (input.detail.len > 0) input.detail else protocol_events.turnTerminalOutcomeLabel(input.outcome),
+        ),
+    }
+    return commit;
 }
 
 /// Return one process-local mutation owner for a session's append-only ledgers.
@@ -609,6 +729,91 @@ fn acceptEventSequence(reader: *jsonl_reader.PrefixReader, sequence: u64) bool {
         return true;
     }
     return reader.acceptSequence(sequence);
+}
+
+fn legacyTurnTerminalOutcome(event_type: []const u8) ?protocol_events.TurnTerminalOutcome {
+    if (std.mem.eql(u8, event_type, "turn_finished")) return .completed;
+    if (std.mem.eql(u8, event_type, "session_failed") or std.mem.eql(u8, event_type, "turn_failed")) return .failed;
+    if (std.mem.eql(u8, event_type, "session_cancelled") or std.mem.eql(u8, event_type, "turn_cancelled")) return .cancelled;
+    if (std.mem.eql(u8, event_type, "turn_timed_out")) return .timed_out;
+    return null;
+}
+
+/// Scan the valid event prefix and project only the latest run generation.
+/// Legacy terminal names remain read-only inputs; current writes use one typed
+/// `turn_terminal` row. Two terminal rows for one generation are corruption,
+/// not a last-row-wins state transition.
+fn scanCurrentTurnTerminal(
+    allocator: std.mem.Allocator,
+    events_path: []const u8,
+) !TurnTerminalScan {
+    if (!fsutil.fileExists(events_path)) return .{};
+    const content = try fsutil.readTextAlloc(allocator, events_path);
+    defer allocator.free(content);
+
+    var scan = TurnTerminalScan{};
+    errdefer scan.deinit(allocator);
+    var reader = jsonl_reader.PrefixReader.init(allocator, content);
+    while (try reader.next()) |line| {
+        var parsed = std.json.parseFromSlice(ParsedSessionEvent, allocator, line, .{
+            .ignore_unknown_fields = true,
+        }) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            reader.reject(.invalid_schema);
+            break;
+        };
+        defer parsed.deinit();
+        if (!acceptEventSequence(&reader, parsed.value.seq)) break;
+
+        if (std.mem.eql(u8, parsed.value.event_type, "session_started")) {
+            if (scan.terminal) |terminal| terminal.deinit(allocator);
+            scan.terminal = null;
+            scan.run_seq = parsed.value.seq;
+            continue;
+        }
+
+        var outcome = legacyTurnTerminalOutcome(parsed.value.event_type);
+        var detail = parsed.value.message;
+        if (std.mem.eql(u8, parsed.value.event_type, protocol_events.turn_terminal_event_type)) {
+            var terminal = std.json.parseFromSlice(ParsedTurnTerminal, allocator, parsed.value.message, .{
+                .ignore_unknown_fields = true,
+            }) catch |err| {
+                if (err == error.OutOfMemory) return err;
+                return error.InvalidTurnTerminalPayload;
+            };
+            defer terminal.deinit();
+            if (!std.mem.eql(u8, terminal.value.schema, "var1.turn_terminal.v1")) return error.InvalidTurnTerminalPayload;
+            if (terminal.value.run_seq != scan.run_seq) return error.StaleTurnTerminalGeneration;
+            outcome = protocol_events.parseTurnTerminalOutcome(terminal.value.outcome) catch return error.InvalidTurnTerminalPayload;
+            detail = terminal.value.detail;
+        }
+        const resolved_outcome = outcome orelse continue;
+        if (scan.terminal != null) return error.DuplicateTurnTerminal;
+        scan.terminal = .{
+            .seq = parsed.value.seq,
+            .run_seq = scan.run_seq,
+            .outcome = resolved_outcome,
+            .detail = try allocator.dupe(u8, detail),
+        };
+    }
+    return scan;
+}
+
+/// Cold-start projection of the latest admitted run's terminal evidence.
+pub fn readCurrentTurnTerminal(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+) !?TurnTerminalProjection {
+    const events_path = try eventsFilePath(allocator, workspace_root, session_id);
+    defer allocator.free(events_path);
+    var scan = try scanCurrentTurnTerminal(allocator, events_path);
+    defer scan.deinit(allocator);
+    if (scan.terminal) |terminal| {
+        scan.terminal = null;
+        return terminal;
+    }
+    return null;
 }
 
 pub fn readLatestEvent(

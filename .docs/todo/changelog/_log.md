@@ -1722,3 +1722,42 @@ Two consumer-breaking pipeline failures are now structurally impossible.
 - Removed one retired `todo_slice` prompt instruction and one duplicate
   file-inspection instruction. The existing write-before-inspect enforcement
   remains covered by adversarial tool tests.
+
+## 2026-08-12 - Roadmap integrity floor through move 19
+
+**Changed:**
+
+- Accounted for closed roadmap moves 2–18 in the current closure ledger at
+  `.docs/roadmap/24-harness-capability-next-90.md`; this changelog previously
+  stopped after move 1. Historical closeout evidence remains unchanged.
+- Consolidated every current run settlement behind
+  `apps/backend/src/core/sessions/store.zig::commitTurnTerminal` and deleted the
+  active success/failure/cancellation terminal dialects.
+- Added `var1.turn_terminal.v1` with exact `session_started.seq` and outcome
+  `completed`, `failed`, `timed_out`, or `cancelled`. Identical retries are
+  idempotent; stale, conflicting, malformed, and duplicate settlement fails
+  before a second authoritative row can append.
+- Updated the tracked TUI, host, child supervisor/service, installed smoke,
+  root contract, READMEs, architecture, SITREP, roadmap themes, machine record,
+  and current research projections. Legacy terminal names remain read-only for
+  existing ledgers.
+
+**Validation:**
+
+- `apps/backend/scripts/zigw.ps1 build test --summary all`: 19/19 steps and
+  1,958/1,958 tests.
+- `apps/backend/scripts/zigw.ps1 build -Doptimize=ReleaseFast --summary all`:
+  9/9 steps.
+- Packaged GGUF dupe audit across eight production owners: 237 segments, eight
+  similarity candidates, zero exact duplicates, and no second production
+  settlement owner.
+- `apps/backend/scripts/install_windows.ps1 -SkipBuild`: source and installed
+  SHA-256 both
+  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
+- `apps/backend/scripts/verify_installed_summary_migration.ps1`: installed
+  provider/tool turn ended on one stored/notified `turn_terminal` at sequence
+  12 with schema `var1.turn_terminal.v1`, outcome `completed`, and `run_seq = 1`;
+  process exit 0 and zero remaining VANTARI processes.
+
+**Next todo:** move 20 — 100-way adversarial admission, summary, message,
+event-burst, and shutdown mesh.

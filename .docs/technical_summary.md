@@ -158,6 +158,11 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Interactive cancellation binds to the durable `session_started.seq` observed by
   the client. Missing, unobserved, and stale `expected_run_seq` values are typed
   no-ops; shutdown remains unconditional only after admission is fenced.
+- Every admitted run closes through one `var1.turn_terminal.v1` row bound to its
+  `session_started.seq`. `commitTurnTerminal` serializes settlement with event
+  append, makes identical retries idempotent, rejects stale/conflicting closure,
+  and projects completed/failed/cancelled session status from the durable row;
+  timeout remains distinct terminal evidence and projects to failed.
 - Session summaries are append-only v2 rows with stable sequence identity,
   latest-row projection, poisoned-suffix continuation, and one-time v1 import.
   One hundred concurrent writers retained all 100 rows; the local GGUF dupe
@@ -181,22 +186,24 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   exactly. No CRC fields, sidecar quarantine ledger, auto-truncation path, or
   repair daemon was added.
 - Built and installed ReleaseFast SHA-256 both equal
-  `B361AD2A66609590236E4967517718C7ECD3563E7474578D08009D09622E1FA4`.
+  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
 - Installed `session/send` against a disposable local provider imported all
   1,176 legacy summary rows, appended one terminal v2 row, retained 1,177
   unique sequences, wrote contiguous unique `user,assistant,tool,assistant`
   message rows, and emitted 12 unique monotonic event notifications. Catch-up
   after sequence 1 returned sequences 2–12 and reconstructed exact stdout
   `0080E280A8FF` plus capped stderr `FF010080E280A8FE`. The final notification
-  and ledger row were both `turn_finished` at sequence 12; the live legacy hash
-  was preserved and zero process remained.
+  and ledger row were the same sole `turn_terminal` at sequence 12. Its payload
+  was `var1.turn_terminal.v1`, `completed`, and `run_seq = 1`; the live legacy
+  hash was preserved and zero process remained.
 - The installed settings smoke flips `runtime.full_access_mode` to `true` in a
   disposable workspace, receives `var1.config_set.v1` in 5 ms, removes the
   isolated runtime, preserves the complete live root, and leaves zero process.
-- The installed cancellation race observed run sequences 1, 6, and 11. Delayed
+- The move-18 installed cancellation race observed run sequences 1, 6, and 11. Delayed
   cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
-  returned `requested`, produced `session_cancelled`, and exited with zero process.
-- Moves 5–18 and finding 10 are closed. Finding 13 is narrowed to move 20's
+  returned `requested` and exited with zero process. Its legacy terminal name is
+  retained only as historical proof; move 19 removed that writer.
+- Moves 5–19 and finding 10 are closed. Finding 13 is narrowed to move 20's
   adversarial burst mesh; persistent agent execution and inter-process scheduler
   arbitration remain P0.
 - The hive direction is assigned to moves 21–30 and finding 11. The target is

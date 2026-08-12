@@ -78,6 +78,15 @@ Each theme file follows the same shape:
 
 ---
 
+## Current move closeouts
+
+- [Move 19 — one terminal event per run](./19-single-terminal-event.md): one
+  generation-bound settlement owner; source and installed proof complete.
+- [Move 18 — generation-bound cancellation](./18-generation-bound-cancellation.md):
+  exact observed-run cancellation; superseded terminal naming is historical only.
+
+---
+
 ## Cross-cutting north-star principles (apply to every item)
 
 1. **Shard, don't replay.** Each turn is a fresh context window. A shard is a checkpoint of the parent chat plus one step's branch. Nothing is ever "replayed" into a window that could be pointed at a checkpoint instead.

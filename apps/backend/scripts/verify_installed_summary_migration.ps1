@@ -382,10 +382,22 @@ try {
   $eventsText = $strictUtf8.GetString([IO.File]::ReadAllBytes($eventsPath))
   if ($eventsText.IndexOf('chunk_b64', [StringComparison]::Ordinal) -lt 0) { throw 'Installed event ledger omitted binary output envelopes' }
   if ($eventsText.IndexOf('bytes_b64', [StringComparison]::Ordinal) -ge 0) { throw 'Installed event ledger retained the removed top-level bytes_b64 path' }
-  $lastStoredEvent = ($eventsText -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1) | ConvertFrom-Json
+  $eventRows = @($eventsText -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_ | ConvertFrom-Json })
+  $startedEvents = @($eventRows | Where-Object { $_.event_type -eq 'session_started' })
+  if ($startedEvents.Count -ne 1) { throw "Installed turn stored $($startedEvents.Count) session_started rows; expected 1" }
+  $terminalEvents = @($eventRows | Where-Object { $_.event_type -eq 'turn_terminal' })
+  if ($terminalEvents.Count -ne 1) { throw "Installed turn stored $($terminalEvents.Count) turn_terminal rows; expected 1" }
+  $terminalPayload = [string]$terminalEvents[0].message | ConvertFrom-Json
+  if ($terminalPayload.schema -ne 'var1.turn_terminal.v1' -or $terminalPayload.outcome -ne 'completed') {
+    throw "Unexpected installed terminal payload: $($terminalEvents[0].message)"
+  }
+  if ([long]$terminalPayload.run_seq -ne [long]$startedEvents[0].seq) {
+    throw "Installed terminal run generation diverged: started=$($startedEvents[0].seq) terminal=$($terminalPayload.run_seq)"
+  }
+  $lastStoredEvent = $eventRows[-1]
   $lastNotification = $eventNotifications[-1].params
   if ([long]$lastStoredEvent.seq -ne $lastNotificationSeq) { throw 'Last installed event notification did not match stored sequence' }
-  if ($lastStoredEvent.event_type -ne $lastNotification.event_type -or $lastStoredEvent.event_type -ne 'turn_finished') {
+  if ($lastStoredEvent.event_type -ne $lastNotification.event_type -or $lastStoredEvent.event_type -ne 'turn_terminal') {
     throw "Installed terminal event order diverged: stored=$($lastStoredEvent.event_type) notified=$($lastNotification.event_type)"
   }
 
@@ -432,6 +444,9 @@ try {
     stderr_cap_reached = $stderrCapReached
     terminal_event_type = [string]$lastStoredEvent.event_type
     terminal_event_seq = [long]$lastStoredEvent.seq
+    terminal_schema = [string]$terminalPayload.schema
+    terminal_outcome = [string]$terminalPayload.outcome
+    terminal_run_seq = [long]$terminalPayload.run_seq
     legacy_sha256 = $legacyHash
     installed_sha256 = (Get-FileHash -LiteralPath $InstalledExe -Algorithm SHA256).Hash
     process_exit_code = $process.ExitCode

@@ -2,6 +2,7 @@ const std = @import("std");
 const context_compactor = @import("../core/context/compactor.zig");
 const config_file = @import("../core/config/file.zig");
 const loop = @import("../core/executor/loop.zig");
+const protocol_events = @import("../shared/protocol/events.zig");
 const protocol_types = @import("../shared/protocol/types.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
 const models = @import("../core/providers/models.zig");
@@ -985,16 +986,12 @@ fn handleSessionCancel(server: *Server, params: ?std.json.Value) ![]u8 {
     var outcome: []const u8 = "not_cancellable";
     var active_run_seq: ?u64 = null;
     if (session.status == .initialized) {
-        try store.setSessionStatus(server.allocator, server.config.workspace_root, &session, .cancelled);
         cancellation_requested = true;
         outcome = "cancelled_before_start";
-        server.recordAndEmitSessionEvent(
-            session.id,
-            "session_cancelled",
-            "Cancellation requested before execution started.",
-            types.statusLabel(session.status),
-            session.updated_at_ms,
-        ) catch {};
+        try commitAndEmitTurnTerminal(server, &session, 0, .{
+            .outcome = .cancelled,
+            .detail = "Cancellation requested before execution started.",
+        });
     } else if (session.status == .running) {
         const request = server.runtime.requestCancel(session.id, expected_run_seq);
         active_run_seq = request.active_run_seq;
@@ -1008,16 +1005,12 @@ fn handleSessionCancel(server: *Server, params: ?std.json.Value) ![]u8 {
         if (request.outcome == .requested) {
             cancellation_requested = true;
         } else if (request.outcome == .not_running and try isStaleUnownedRunningSession(server, &session)) {
-            try store.setSessionStatus(server.allocator, server.config.workspace_root, &session, .cancelled);
             cancellation_requested = true;
             outcome = "stale_owner_cancelled";
-            server.recordAndEmitSessionEvent(
-                session.id,
-                "session_cancelled",
-                "Cancellation closed a stale running session with no active kernel execution owner.",
-                types.statusLabel(session.status),
-                session.updated_at_ms,
-            ) catch {};
+            try commitAndEmitTurnTerminal(server, &session, null, .{
+                .outcome = .cancelled,
+                .detail = "Cancellation closed a stale running session with no active kernel execution owner.",
+            });
         }
     }
 
@@ -1104,15 +1097,49 @@ fn handleSessionGet(server: *Server, params: ?std.json.Value) ![]u8 {
 
 fn reconcileStaleRunningSession(server: *Server, session: *types.SessionRecord) !void {
     if (session.status != .running) return;
+    const persisted_terminal = try store.readCurrentTurnTerminal(server.allocator, server.config.workspace_root, session.id);
+    defer if (persisted_terminal) |terminal| terminal.deinit(server.allocator);
+    if (persisted_terminal) |terminal| {
+        try commitAndEmitTurnTerminal(server, session, terminal.run_seq, .{
+            .outcome = terminal.outcome,
+            .detail = terminal.detail,
+        });
+        return;
+    }
     if (!(try isStaleUnownedRunningSession(server, session))) return;
 
-    const timestamp_ms = std.time.milliTimestamp();
     const failure_reason = "Session was marked running but no active kernel execution owns it.";
-    // Durable write first — this is the source of truth. The live notification
-    // is a read model (AGENTS.md §IV); a broken TUI pipe must not corrupt the
-    // reconciliation RPC (session/get is polled by the TUI every ~100ms).
-    try store.setSessionFailure(server.allocator, server.config.workspace_root, session, failure_reason);
-    server.recordAndEmitSessionEvent(session.id, "session_failed", failure_reason, "failed", timestamp_ms) catch {};
+    try commitAndEmitTurnTerminal(server, session, null, .{
+        .outcome = .failed,
+        .detail = failure_reason,
+    });
+}
+
+fn commitAndEmitTurnTerminal(
+    server: *Server,
+    session: *types.SessionRecord,
+    expected_run_seq: ?u64,
+    input: protocol_events.TurnTerminalInput,
+) !void {
+    const timestamp_ms = std.time.milliTimestamp();
+    var commit = try store.commitTurnTerminal(
+        server.allocator,
+        server.config.workspace_root,
+        session,
+        expected_run_seq,
+        input,
+        timestamp_ms,
+    );
+    defer commit.deinit(server.allocator);
+    if (!commit.appended) return;
+    server.emitSessionEvent(
+        session.id,
+        commit.seq,
+        protocol_events.turn_terminal_event_type,
+        commit.payload.?,
+        types.statusLabel(session.status),
+        timestamp_ms,
+    ) catch {};
 }
 
 fn isStaleUnownedRunningSession(server: *Server, session: *const types.SessionRecord) !bool {
@@ -1957,7 +1984,7 @@ test "active request shutdown cancels before join and persists one terminal even
     defer types.deinitSessionEvents(std.testing.allocator, events);
     var terminal_events: usize = 0;
     for (events) |event| {
-        if (std.mem.eql(u8, event.event_type, "session_cancelled")) terminal_events += 1;
+        if (std.mem.eql(u8, event.event_type, protocol_events.turn_terminal_event_type)) terminal_events += 1;
     }
     try std.testing.expectEqual(@as(usize, 1), terminal_events);
 
@@ -2122,7 +2149,7 @@ test "session/get reconciles stale running sessions into user-visible failure" {
 
     try std.testing.expect(std.mem.indexOf(u8, response, "\"id\":\"req-stale\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"failed\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, response, "\"event_type\":\"session_failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"event_type\":\"turn_terminal\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "no active kernel execution owns it") != null);
 
     var persisted = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
@@ -2172,7 +2199,7 @@ test "session/get preserves fresh running sessions without live owner" {
 
     try std.testing.expect(std.mem.indexOf(u8, response, "\"id\":\"req-fresh\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"running\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, response, "\"event_type\":\"session_failed\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"event_type\":\"turn_terminal\"") == null);
 
     var persisted = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
     defer persisted.deinit(std.testing.allocator);
@@ -2326,7 +2353,7 @@ test "session/compact reconciles stale running sessions before running compactio
     const latest_event = try store.readLatestEvent(std.testing.allocator, workspace_root, session.id);
     defer if (latest_event) |event| event.deinit(std.testing.allocator);
     try std.testing.expect(latest_event != null);
-    try std.testing.expectEqualStrings("session_failed", latest_event.?.event_type);
+    try std.testing.expectEqualStrings(protocol_events.turn_terminal_event_type, latest_event.?.event_type);
 }
 
 test "session/send without prompt reconciles stale running sessions without implicit execution" {
@@ -2443,7 +2470,7 @@ test "session/cancel persists initialized-session cancellation events" {
     const latest_event = try store.readLatestEvent(std.testing.allocator, workspace_root, session.id);
     defer if (latest_event) |event| event.deinit(std.testing.allocator);
     try std.testing.expect(latest_event != null);
-    try std.testing.expectEqualStrings("session_cancelled", latest_event.?.event_type);
+    try std.testing.expectEqualStrings(protocol_events.turn_terminal_event_type, latest_event.?.event_type);
     try std.testing.expect(std.mem.indexOf(u8, latest_event.?.message, "before execution started") != null);
 }
 
@@ -2553,6 +2580,6 @@ test "session/cancel closes stale running sessions without live owner" {
     const latest_event = try store.readLatestEvent(std.testing.allocator, workspace_root, session.id);
     defer if (latest_event) |event| event.deinit(std.testing.allocator);
     try std.testing.expect(latest_event != null);
-    try std.testing.expectEqualStrings("session_cancelled", latest_event.?.event_type);
+    try std.testing.expectEqualStrings(protocol_events.turn_terminal_event_type, latest_event.?.event_type);
     try std.testing.expect(std.mem.indexOf(u8, latest_event.?.message, "no active kernel execution owner") != null);
 }

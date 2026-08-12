@@ -2053,6 +2053,142 @@ test "event projections stop at the same duplicate sequence boundary" {
     try std.testing.expectEqualStrings("prefix", suffix[0].message);
 }
 
+test "turn terminal commit is one typed row per durable run generation" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "terminal generation");
+    defer session.deinit(std.testing.allocator);
+
+    try VAR1.core.session_store.setSessionStatus(std.testing.allocator, workspace_root, &session, .running);
+    const first_run_seq = try VAR1.core.session_store.appendEventWithSeq(std.testing.allocator, workspace_root, session.id, .{
+        .event_type = "session_started",
+        .message = "run one",
+        .timestamp_ms = 1,
+    });
+    var first = try VAR1.core.session_store.commitTurnTerminal(
+        std.testing.allocator,
+        workspace_root,
+        &session,
+        first_run_seq,
+        .{ .outcome = .completed, .detail = "done", .output_bytes = 4 },
+        2,
+    );
+    defer first.deinit(std.testing.allocator);
+    try std.testing.expect(first.appended);
+    try std.testing.expectEqual(first_run_seq, first.run_seq);
+    try std.testing.expectEqual(VAR1.shared.protocol.events.TurnTerminalOutcome.completed, first.outcome);
+    try std.testing.expect(first.payload != null);
+    try std.testing.expect(std.mem.indexOf(u8, first.payload.?, "\"schema\":\"var1.turn_terminal.v1\"") != null);
+
+    var duplicate = try VAR1.core.session_store.commitTurnTerminal(
+        std.testing.allocator,
+        workspace_root,
+        &session,
+        first_run_seq,
+        .{ .outcome = .completed, .detail = "done" },
+        3,
+    );
+    defer duplicate.deinit(std.testing.allocator);
+    try std.testing.expect(!duplicate.appended);
+    try std.testing.expectEqual(first.seq, duplicate.seq);
+    try std.testing.expectError(error.TerminalOutcomeConflict, VAR1.core.session_store.commitTurnTerminal(
+        std.testing.allocator,
+        workspace_root,
+        &session,
+        first_run_seq,
+        .{ .outcome = .failed, .detail = "late conflict" },
+        4,
+    ));
+
+    try VAR1.core.session_store.setSessionStatus(std.testing.allocator, workspace_root, &session, .running);
+    const second_run_seq = try VAR1.core.session_store.appendEventWithSeq(std.testing.allocator, workspace_root, session.id, .{
+        .event_type = "session_started",
+        .message = "run two",
+        .timestamp_ms = 5,
+    });
+    try std.testing.expectError(error.StaleRunGeneration, VAR1.core.session_store.commitTurnTerminal(
+        std.testing.allocator,
+        workspace_root,
+        &session,
+        first_run_seq,
+        .{ .outcome = .failed, .detail = "stale writer" },
+        6,
+    ));
+    var second = try VAR1.core.session_store.commitTurnTerminal(
+        std.testing.allocator,
+        workspace_root,
+        &session,
+        second_run_seq,
+        .{ .outcome = .timed_out, .detail = "ConnectionTimedOut" },
+        7,
+    );
+    defer second.deinit(std.testing.allocator);
+    try std.testing.expect(second.appended);
+
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
+    var terminal_count: usize = 0;
+    for (events) |event| {
+        if (std.mem.eql(u8, event.event_type, "turn_terminal")) terminal_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), terminal_count);
+
+    const current = try VAR1.core.session_store.readCurrentTurnTerminal(std.testing.allocator, workspace_root, session.id);
+    defer if (current) |terminal| terminal.deinit(std.testing.allocator);
+    try std.testing.expect(current != null);
+    try std.testing.expectEqual(second_run_seq, current.?.run_seq);
+    try std.testing.expectEqual(VAR1.shared.protocol.events.TurnTerminalOutcome.timed_out, current.?.outcome);
+    try std.testing.expectEqual(VAR1.shared.types.SessionStatus.failed, session.status);
+    try std.testing.expectEqualStrings("ConnectionTimedOut", session.failure_reason.?);
+}
+
+test "cold-start terminal projection rejects malformed and duplicate closure" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var malformed = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "malformed terminal");
+    defer malformed.deinit(std.testing.allocator);
+    _ = try VAR1.core.session_store.appendEventWithSeq(std.testing.allocator, workspace_root, malformed.id, .{
+        .event_type = "session_started",
+        .message = "start",
+        .timestamp_ms = 1,
+    });
+    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, malformed.id, .{
+        .event_type = "turn_terminal",
+        .message = "{malformed}",
+        .timestamp_ms = 2,
+    });
+    try std.testing.expectError(error.InvalidTurnTerminalPayload, VAR1.core.session_store.readCurrentTurnTerminal(std.testing.allocator, workspace_root, malformed.id));
+
+    var duplicate = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "duplicate terminal");
+    defer duplicate.deinit(std.testing.allocator);
+    const run_seq = try VAR1.core.session_store.appendEventWithSeq(std.testing.allocator, workspace_root, duplicate.id, .{
+        .event_type = "session_started",
+        .message = "start",
+        .timestamp_ms = 3,
+    });
+    const payload = try VAR1.shared.protocol.events.serializeTurnTerminal(std.testing.allocator, run_seq, .{
+        .outcome = .completed,
+    });
+    defer std.testing.allocator.free(payload);
+    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, duplicate.id, .{
+        .event_type = "turn_terminal",
+        .message = payload,
+        .timestamp_ms = 4,
+    });
+    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, duplicate.id, .{
+        .event_type = "turn_terminal",
+        .message = payload,
+        .timestamp_ms = 5,
+    });
+    try std.testing.expectError(error.DuplicateTurnTerminal, VAR1.core.session_store.readCurrentTurnTerminal(std.testing.allocator, workspace_root, duplicate.id));
+}
+
 test "message projection stops at a duplicate sequence boundary" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

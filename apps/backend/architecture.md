@@ -478,6 +478,9 @@ The current validation lane should always prove these slices together:
 - auto and provider-overflow compaction write observable checkpoint/event records
 - session JSONL projections stop at one typed valid-prefix boundary, and append refuses malformed or partial current suffix rows without rewriting append-only history
 - interactive cancellation mutates only the run whose observed `session_started.seq` matches `expected_run_seq`; delayed generations are typed no-ops
+- every admitted run settles through one `var1.turn_terminal.v1` row bound to
+  that `session_started.seq`; duplicate identical settlement is idempotent and
+  stale or conflicting settlement is rejected before append
 - context reconstruction reads `session.json`, latest valid `context.jsonl` checkpoint, and `messages.jsonl` through `core/context/builder.zig`
 - explicit prompt-layer configuration fails closed when the configured file is missing or empty
 - the runtime-owned burst/checkpoint/continuation contract survives project prompt overrides
@@ -489,27 +492,29 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-12:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Isolated broad test graph -> 19/19 steps and 1950/1950 tests passed.
+- Isolated broad test graph -> 19/19 steps and 1958/1958 tests passed.
 - Focused backend TUI -> 61/61 passed.
-- Host lifecycle -> 237/237 passed, including atomic same-session admission,
+- Host lifecycle -> 238/238 passed, including atomic same-session admission,
   session-keyed buffer state, exact-generation cancellation,
   cancellation-before-join shutdown, RPC deadlines, late-response retirement,
   and Windows Job Object ownership.
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Built and installed SHA-256 both equal
-  `B361AD2A66609590236E4967517718C7ECD3563E7474578D08009D09622E1FA4`.
+  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
 - Installed settings transport flipped `runtime.full_access_mode` in an isolated
   workspace, removed all generated state, preserved the live root, and left
   zero VANTARI process.
-- Installed delayed-cancel proof observed run sequences 1, 6, and 11. Cancels
+- The move-18 installed delayed-cancel proof observed run sequences 1, 6, and 11. Cancels
   for sequences 1 and 6 returned `stale_run` without stopping newer work; the
-  exact sequence 11 returned `requested`, persisted `session_cancelled`, exited
-  the kernel cleanly, and left zero VANTARI process.
+  exact sequence 11 returned `requested` and exited the kernel cleanly. Its
+  legacy `session_cancelled` writer is superseded by the move-19 terminal owner.
 - Installed tool-turn catch-up after sequence 1 returned contiguous stored
   sequences 2–12. Two `tool_output_delta` rows reconstructed stdout
   `0080E280A8FF` and capped stderr `FF010080E280A8FE`; the strict UTF-8 ledger
-  ended on the same stored/notified `turn_finished` sequence and left zero process.
+  ended on one stored/notified `turn_terminal` at sequence 12 with schema
+  `var1.turn_terminal.v1`, outcome `completed`, and `run_seq = 1`; zero process
+  remained.
 
 ## Cognitive architecture (frontier capabilities)
 
@@ -585,7 +590,14 @@ The same module owns the request thinking shape (`detectThinkingFormat`): z.ai e
 
 All three wire adapters fill `CompletionResponse.usage` with the provider-reported token buckets (prompt / completion / cached), including the streaming paths (chat_completions terminal `{"choices":[],"usage":...}` chunk, Anthropic `message_start` + `message_delta`, Responses `response.completed`). `core/providers/pricing.zig` owns the compiled per-model price table (harvested from prime-agent `models.generated.ts` plus published rates; provenance comments per row) and derives `Cost` with the prime formula `($/1M) × tokens`. Unknown models yield no price — cost is never fabricated; token accounting still flows.
 
-The typed event spine closes the turn with schema `var1.turn_finished.v2` (built by the single owner `core/executor/turn_payload.zig`, consumed by both the kernel loop and model-task supervisor): `prompt_tokens`, `completion_tokens`, `cached_tokens`, and `cost_total_usd` (number when priced, null otherwise) join the estimated `window_tokens` and `output_bytes`. The TUI renders the accumulated session cost in `/status`.
+The typed event spine closes every run through
+`core/sessions/store.zig::commitTurnTerminal`. The canonical serializer in
+`shared/protocol/events.zig` emits `var1.turn_terminal.v1` with `run_seq`,
+`outcome`, `detail`, `step`, `prompt_tokens`, `completion_tokens`,
+`cached_tokens`, `cost_total_usd`, estimated `window_tokens`, and
+`output_bytes`. `core/executor/turn_payload.zig` builds completed-run telemetry;
+failure, timeout, and cancellation use the same settlement owner. The TUI
+renders accumulated session cost in `/status`.
 
 ### Knowledge scaffolding
 

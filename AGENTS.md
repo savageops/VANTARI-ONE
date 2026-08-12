@@ -96,8 +96,7 @@ Typed events are the runtime's nervous system. String breadcrumbs may exist only
 | Assistant text | `assistant_delta` chunks before final `assistant_response`. |
 | Tool lifecycle | `tool_requested -> tool_reviewed -> tool_started -> tool_output_delta* -> tool_finished -> tool_completed`. |
 | Command output | bounded stdout/stderr deltas with stream id, cap marker, and byte-safe payload. |
-| Failure | typed terminal event before final client response. |
-| Cancellation | cancellation intent plus terminal reconciliation evidence. |
+| Terminal | exactly one `turn_terminal` with schema `var1.turn_terminal.v1`, the exact `session_started.seq`, and outcome `completed`, `failed`, `timed_out`, or `cancelled`. |
 
 ### Directives
 
@@ -112,6 +111,7 @@ Typed events are the runtime's nervous system. String breadcrumbs may exist only
 - Event cursors use monotonic ledger position plus replay suppression. Timestamp-only cursors are insufficient under same-millisecond bursts.
 - `var1.session_event_notification.v1` carries the exact stored event `seq`. Persist before emission; clients must not replace ledger identity with a transport-local ordinal.
 - A client uses stored `seq` as its sole render identity. A transport ordinal drains only its process-local queue; a sequence gap requests the durable `session/get` suffix. Do not add timestamp/text caches or periodic full-event polling.
+- `core/sessions/store.zig::commitTurnTerminal` is the only current run-settlement writer. Commit under the event-ledger lock; repeat of the same outcome is idempotent, a stale generation or conflicting outcome fails before append, and session status remains a projection. Treat `turn_finished`, `session_failed`, `session_cancelled`, and related turn-specific names as read-only legacy inputs.
 
 ## V. Tool Runtime Contract
 
@@ -318,7 +318,7 @@ Capability claims carry mechanism and proof. "Works" is not a mechanism. "Fast" 
 
 ## XVIII. Frontier Roadmap
 
-1. Typed turn/item event grammar: replace mixed string progress with versioned `turn_started`, `assistant_delta`, `tool_started`, `tool_output_delta`, `tool_finished`, `turn_finished`, and `turn_failed` schemas while keeping legacy readers read-only.
+1. Typed turn/item event grammar: extend the shipped versioned `turn_started`, `assistant_delta`, tool-span, and single `turn_terminal` grammar without reintroducing outcome-specific terminal event names; keep legacy readers read-only.
 2. Binary-safe event spine: store event payloads as canonical JSON plus optional base64 byte fields, stable sequence numbers, monotonic causal order, and replay cursors.
 3. Tool execution spans: every tool call gets start/end timestamps, duration, risk decision, capability owner, output caps, side-effect summary, and failure class.
 4. Interruptible process supervision: long commands support timeout, operator cancellation, stdout/stderr draining, process-tree termination, and post-kill evidence.

@@ -252,6 +252,11 @@ The TUI keeps this mechanic legible without adding a status forest: the footer s
 
 Every agent run is a **session** — a durable execution unit with its own transcript ledger, context checkpoints, event history, and terminal output. Sessions survive process restarts, context overflow, and provider failures. They can be created, resumed, compacted, cancelled, and inspected through the protocol surface.
 
+Each admitted run closes with exactly one `turn_terminal` event. Its
+`var1.turn_terminal.v1` payload binds to the durable `session_started` sequence
+and records `completed`, `failed`, `timed_out`, or `cancelled`; the session JSON
+status is a recoverable projection of that ledger fact.
+
 ```text
 session/create ─► session/send ─► [executor loop] ─► session/get
                                                     ─► session/compact
@@ -468,6 +473,7 @@ sequenceDiagram
   Kernel->>Provider: model step
   Provider-->>Kernel: output or tool call
   Kernel->>Store: append messages / sequenced events / output
+  Kernel->>Store: commit one generation-bound turn_terminal
   Kernel-->>Host: session result + notifications carrying stored event sequence
   Host-->>Client: JSON-RPC response / SSE event
 ```

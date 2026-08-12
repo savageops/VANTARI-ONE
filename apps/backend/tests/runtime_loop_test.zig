@@ -54,6 +54,16 @@ fn mockSendFailure(
     return error.ConnectionRefused;
 }
 
+fn mockSendTimeout(
+    _: ?*anyopaque,
+    _: std.mem.Allocator,
+    _: []const u8,
+    _: []const u8,
+    _: []const u8,
+) anyerror![]u8 {
+    return error.ConnectionTimedOut;
+}
+
 fn mockSendLeakyOperatorReply(
     _: ?*anyopaque,
     allocator: std.mem.Allocator,
@@ -99,6 +109,25 @@ fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
         offset += relative_index + needle.len;
     }
     return count;
+}
+
+fn expectOneTurnTerminal(events: []const VAR1.shared.types.SessionEvent, expected_outcome: []const u8) !void {
+    const TerminalPayload = struct {
+        schema: []const u8,
+        run_seq: u64,
+        outcome: []const u8,
+    };
+    var count: usize = 0;
+    for (events) |event| {
+        if (!std.mem.eql(u8, event.event_type, "turn_terminal")) continue;
+        count += 1;
+        var parsed = try std.json.parseFromSlice(TerminalPayload, std.testing.allocator, event.message, .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings("var1.turn_terminal.v1", parsed.value.schema);
+        try std.testing.expect(parsed.value.run_seq > 0);
+        try std.testing.expectEqualStrings(expected_outcome, parsed.value.outcome);
+    }
+    try std.testing.expectEqual(@as(usize, 1), count);
 }
 
 const ResumePromptContext = struct {
@@ -684,13 +713,14 @@ test "loop writes runtime state and archives docs on success" {
     defer result.deinit(std.testing.allocator);
 
     try std.testing.expect(std.mem.indexOf(u8, result.output, "3") != null);
-    try std.testing.expectEqualStrings("turn_finished", capture.last_event_type.?);
+    try std.testing.expectEqualStrings("turn_terminal", capture.last_event_type.?);
     try std.testing.expectEqualStrings("completed", capture.last_status.?);
     const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, result.session_id);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
     try std.testing.expect(events.len > 0);
     try std.testing.expectEqual(events[events.len - 1].seq, capture.last_seq);
     try std.testing.expectEqualStrings(events[events.len - 1].event_type, capture.last_event_type.?);
+    try expectOneTurnTerminal(events, "completed");
 
     const changelog_path = try VAR1.core.docs_sync.changelogSlicePath(std.testing.allocator, workspace_root, result.session_id);
     defer std.testing.allocator.free(changelog_path);
@@ -906,16 +936,15 @@ test "loop retries once after provider-declared context overflow" {
 
     const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, result.session_id);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
-    // Event spine: session_started, turn_started (step 0), context_compaction_started,
-    // context_compaction_completed, turn_finished, assistant_response.
+    // Event spine: session_started, turn_started (step 0), context compaction,
+    // assistant_response, then one typed terminal row.
     try std.testing.expect(events.len >= 5);
     try std.testing.expectEqualStrings("session_started", events[0].event_type);
     try std.testing.expectEqualStrings("turn_started", events[1].event_type);
     try std.testing.expectEqualStrings("context_compaction_started", events[2].event_type);
     try std.testing.expectEqualStrings("context_compaction_completed", events[3].event_type);
-    // The terminal event is turn_finished (emitted after assistant_response),
-    // closing the turn lifecycle with measured token telemetry.
-    try std.testing.expectEqualStrings("turn_finished", events[events.len - 1].event_type);
+    try std.testing.expectEqualStrings("turn_terminal", events[events.len - 1].event_type);
+    try expectOneTurnTerminal(events, "completed");
     try std.testing.expect(std.mem.indexOf(u8, events[2].message, "provider_overflow") != null);
     try std.testing.expect(std.mem.indexOf(u8, events[3].message, "source_seq=") != null);
     try std.testing.expect(std.mem.indexOf(u8, events[3].message, "first_kept_seq=") != null);
@@ -956,15 +985,36 @@ test "loop records a failed session when provider transport fails" {
 
     const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, sessions[0].id);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
-    // Event spine: session_started, turn_started (step 0 ingress before the
-    // provider call fails), session_failed.
+    // Event spine: session_started, turn_started, then one failed terminal.
     try std.testing.expectEqual(@as(usize, 3), events.len);
     try std.testing.expectEqualStrings("session_started", events[0].event_type);
     try std.testing.expectEqualStrings("turn_started", events[1].event_type);
-    try std.testing.expectEqualStrings("session_failed", events[2].event_type);
+    try std.testing.expectEqualStrings("turn_terminal", events[2].event_type);
     try std.testing.expect(std.mem.indexOf(u8, events[2].message, "ConnectionRefused") != null);
-    try std.testing.expectEqualStrings("session_failed", capture.last_event_type.?);
+    try expectOneTurnTerminal(events, "failed");
+    try std.testing.expectEqualStrings("turn_terminal", capture.last_event_type.?);
     try std.testing.expectEqualStrings("failed", capture.last_status.?);
+}
+
+test "loop preserves provider timeout as a distinct terminal outcome" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+    const config = try makeConfig(std.testing.allocator, workspace_root, 4);
+    defer config.deinit(std.testing.allocator);
+
+    try std.testing.expectError(error.ConnectionTimedOut, VAR1.core.executor.runPromptWithOptions(std.testing.allocator, config, "timeout", .{
+        .transport = .{ .context = null, .sendFn = mockSendTimeout },
+        .execution_context = .{ .workspace_root = config.workspace_root },
+    }));
+
+    const sessions = try VAR1.core.session_store.listSessionRecords(std.testing.allocator, workspace_root);
+    defer VAR1.shared.types.deinitSessionRecords(std.testing.allocator, sessions);
+    try std.testing.expectEqual(@as(usize, 1), sessions.len);
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, sessions[0].id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
+    try expectOneTurnTerminal(events, "timed_out");
 }
 
 test "loop marks a session cancelled when hooks request cancellation" {
@@ -1003,13 +1053,14 @@ test "loop marks a session cancelled when hooks request cancellation" {
     const latest_event = try VAR1.core.session_store.readLatestEvent(std.testing.allocator, workspace_root, session.id);
     defer if (latest_event) |event| event.deinit(std.testing.allocator);
     try std.testing.expect(latest_event != null);
-    try std.testing.expectEqualStrings("session_cancelled", latest_event.?.event_type);
+    try std.testing.expectEqualStrings("turn_terminal", latest_event.?.event_type);
 
     const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
     try std.testing.expectEqual(@as(usize, 2), events.len);
     try std.testing.expectEqualStrings("session_started", events[0].event_type);
-    try std.testing.expectEqualStrings("session_cancelled", events[1].event_type);
+    try std.testing.expectEqualStrings("turn_terminal", events[1].event_type);
+    try expectOneTurnTerminal(events, "cancelled");
 }
 
 test "loop sanitizes leaked internal tool names without false child-wait messaging" {
@@ -1508,10 +1559,11 @@ test "loop completes gracefully when provider returns empty response" {
     });
     defer result.deinit(std.testing.allocator);
 
-    // Session must reach a terminal state without crashing.
-    try std.testing.expect(capture.last_status != null);
-    try std.testing.expect(std.mem.eql(u8, capture.last_status.?, "completed") or
-        std.mem.eql(u8, capture.last_status.?, "failed"));
+    try std.testing.expectEqualStrings("completed", capture.last_status.?);
+    try std.testing.expectEqualStrings("turn_terminal", capture.last_event_type.?);
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, result.session_id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
+    try expectOneTurnTerminal(events, "completed");
 }
 
 // =============================================================================
