@@ -21,7 +21,8 @@ Keep one current technical summary and one findings index. Mark every capability
 
 - 021: a-b archived; c-f pending; current frontier 021c.
 - 035: a-f archived; g-h pending; source implementation present; installed proof missing.
-- 036: a-g archived; parent remains pending and its complete claim is superseded by findings 10, 11, and 13.
+- 036: a-g archived; parent remains pending. Findings 10 and 13 are closed;
+  finding 11 and roadmap moves 21–30 are its sole current repair frontier.
 - PLUG: parent and a-h pending; unstarted; lower priority than P0 integrity work.
 
 ## Acceptance

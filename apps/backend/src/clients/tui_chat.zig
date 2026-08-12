@@ -3893,7 +3893,7 @@ test "tui chat removes pending assistant placeholder when tool progress arrives 
     try std.testing.expectEqualStrings("Done.", state.messages.items[1].text);
 }
 
-test "tui durable event cursor preserves identical same timestamp bursts and rejects replays" {
+test "tui durable cursor preserves 100 identical same timestamp events and rejects every replay" {
     var state = ChatState{
         .allocator = std.testing.allocator,
         .client = undefined,
@@ -3922,21 +3922,29 @@ test "tui durable event cursor preserves identical same timestamp bursts and rej
         }
     };
 
-    var first = try Fixture.init(std.testing.allocator, 40, 1);
-    defer first.deinit(std.testing.allocator);
-    var second = try Fixture.init(std.testing.allocator, 41, 2);
-    defer second.deinit(std.testing.allocator);
-    var replay = try Fixture.init(std.testing.allocator, 42, 2);
-    defer replay.deinit(std.testing.allocator);
-
     try state.startAssistantPlaceholder();
-    try std.testing.expect(try state.recordProgressNotification("session-one", first));
-    try std.testing.expect(try state.recordProgressNotification("session-one", second));
-    try std.testing.expect(!try state.recordProgressNotification("session-one", replay));
+    for (1..101) |raw_seq| {
+        const seq: u64 = @intCast(raw_seq);
+        var notification = try Fixture.init(std.testing.allocator, seq, seq);
+        defer notification.deinit(std.testing.allocator);
+        try std.testing.expect(try state.recordProgressNotification("session-one", notification));
+    }
 
     try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
-    try std.testing.expectEqualStrings("samesame", state.messages.items[0].text);
-    try std.testing.expectEqual(@as(u64, 2), state.last_event_seq);
+    try std.testing.expectEqual(@as(usize, 400), state.messages.items[0].text.len);
+    for (0..100) |index| {
+        try std.testing.expectEqualStrings("same", state.messages.items[0].text[index * 4 ..][0..4]);
+    }
+    try std.testing.expectEqual(@as(u64, 100), state.last_event_seq);
+
+    for (1..101) |raw_seq| {
+        const seq: u64 = @intCast(raw_seq);
+        var replay = try Fixture.init(std.testing.allocator, seq + 100, seq);
+        defer replay.deinit(std.testing.allocator);
+        try std.testing.expect(!try state.recordProgressNotification("session-one", replay));
+    }
+    try std.testing.expectEqual(@as(usize, 400), state.messages.items[0].text.len);
+    try std.testing.expectEqual(@as(u64, 100), state.last_event_seq);
 }
 
 test "tui durable catch-up applies an exact missing suffix in ledger order" {

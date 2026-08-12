@@ -2329,7 +2329,7 @@ test "session record reader strips UTF-8 BOM from session.json" {
     try std.testing.expectEqualStrings("bom session", record.prompt);
 }
 
-test "events with same-millisecond timestamps are disambiguated by monotonic seq" {
+test "100 concurrent same-millisecond event writers retain one exact replay sequence" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -2339,44 +2339,90 @@ test "events with same-millisecond timestamps are disambiguated by monotonic seq
     var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "burst prompt");
     defer session.deinit(std.testing.allocator);
 
-    // Append 3 events that all share the exact same timestamp_ms (simulating a
-    // same-millisecond burst). Without seq, a timestamp-only cursor could not
-    // distinguish their order. With seq, the order is deterministic.
+    const Gate = struct {
+        mutex: std.Thread.Mutex = .{},
+        condition: std.Thread.Condition = .{},
+        ready: usize = 0,
+        open: bool = false,
+
+        // Hold every writer at one boundary so the test pressures the ledger
+        // mutation owner instead of measuring thread-spawn order.
+        fn wait(self: *@This()) void {
+            self.mutex.lock();
+            self.ready += 1;
+            self.condition.broadcast();
+            while (!self.open) self.condition.wait(&self.mutex);
+            self.mutex.unlock();
+        }
+
+        fn release(self: *@This(), expected: usize) void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            while (self.ready < expected) self.condition.wait(&self.mutex);
+            self.open = true;
+            self.condition.broadcast();
+        }
+    };
+    const Worker = struct {
+        gate: *Gate,
+        workspace_root: []const u8,
+        session_id: []const u8,
+        index: usize,
+        ok: *bool,
+
+        fn run(self: @This()) void {
+            self.gate.wait();
+            var message_buffer: [32]u8 = undefined;
+            const message = std.fmt.bufPrint(&message_buffer, "event-{d}", .{self.index}) catch return;
+            VAR1.core.session_store.appendEvent(std.heap.page_allocator, self.workspace_root, self.session_id, .{
+                .event_type = "assistant_delta",
+                .message = message,
+                .timestamp_ms = 999999,
+            }) catch return;
+            self.ok.* = true;
+        }
+    };
+
     const burst_ts: i64 = 999999;
-    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "tool_started",
-        .message = "burst-1",
-        .timestamp_ms = burst_ts,
-    });
-    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "tool_output_delta",
-        .message = "burst-2",
-        .timestamp_ms = burst_ts,
-    });
-    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "tool_finished",
-        .message = "burst-3",
-        .timestamp_ms = burst_ts,
-    });
+    var gate = Gate{};
+    var results = [_]bool{false} ** 100;
+    var threads: [100]std.Thread = undefined;
+    for (&threads, 0..) |*thread, index| {
+        thread.* = try std.Thread.spawn(.{}, Worker.run, .{Worker{
+            .gate = &gate,
+            .workspace_root = workspace_root,
+            .session_id = session.id,
+            .index = index,
+            .ok = &results[index],
+        }});
+    }
+    gate.release(threads.len);
+    for (threads) |thread| thread.join();
+    for (results) |ok| try std.testing.expect(ok);
 
     const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
 
-    // All 3 share the same timestamp, but seq is strictly monotonic.
-    try std.testing.expectEqual(@as(usize, 3), events.len);
-    try std.testing.expectEqual(burst_ts, events[0].timestamp_ms);
-    try std.testing.expectEqual(burst_ts, events[1].timestamp_ms);
-    try std.testing.expectEqual(burst_ts, events[2].timestamp_ms);
+    try std.testing.expectEqual(@as(usize, 100), events.len);
+    var seen_messages = [_]bool{false} ** 100;
+    for (events, 0..) |event, index| {
+        try std.testing.expectEqual(@as(u64, @intCast(index + 1)), event.seq);
+        try std.testing.expectEqual(burst_ts, event.timestamp_ms);
+        try std.testing.expectEqualStrings("assistant_delta", event.event_type);
+        try std.testing.expect(std.mem.startsWith(u8, event.message, "event-"));
+        const message_index = try std.fmt.parseInt(usize, event.message["event-".len..], 10);
+        try std.testing.expect(message_index < seen_messages.len);
+        try std.testing.expect(!seen_messages[message_index]);
+        seen_messages[message_index] = true;
+    }
+    for (seen_messages) |seen| try std.testing.expect(seen);
 
-    // seq breaks the tie: 1 < 2 < 3, matching append order.
-    try std.testing.expectEqual(@as(u64, 1), events[0].seq);
-    try std.testing.expectEqual(@as(u64, 2), events[1].seq);
-    try std.testing.expectEqual(@as(u64, 3), events[2].seq);
-
-    // The event types are in the causal order: started → delta → finished.
-    try std.testing.expectEqualStrings("tool_started", events[0].event_type);
-    try std.testing.expectEqualStrings("tool_output_delta", events[1].event_type);
-    try std.testing.expectEqualStrings("tool_finished", events[2].event_type);
+    const suffix = try VAR1.core.session_store.readEventsAfterSeq(std.testing.allocator, workspace_root, session.id, 37);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, suffix);
+    try std.testing.expectEqual(@as(usize, 63), suffix.len);
+    for (suffix, 0..) |event, index| {
+        try std.testing.expectEqual(@as(u64, @intCast(index + 38)), event.seq);
+    }
 }
 
 test "stale running session is recoverable as failed with durable evidence after cold start" {
@@ -3719,7 +3765,7 @@ test "stdout and stderr bytes survive canonical event ledger round-trip" {
 // tool lifecycle events, and output deltas must be ordered, complete, and
 // replayable from cold start — preserving transcript comprehension.
 
-test "event spine produces ordered replay for TUI under live streaming" {
+test "event spine produces ordered replay through the current terminal boundary" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -3729,86 +3775,104 @@ test "event spine produces ordered replay for TUI under live streaming" {
     var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "live streaming tui test");
     defer session.deinit(std.testing.allocator);
 
-    // Simulate a live streaming session: turn_started → assistant_delta* →
+    // Simulate a live streaming session: session_started → turn_started → assistant_delta* →
     // tool_started → tool_output_delta* → tool_finished → tool_completed →
-    // assistant_response. Every event gets a monotonic seq.
+    // assistant_response → turn_terminal. Every event gets a monotonic seq.
     const ts: i64 = 1000;
-    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "turn_started",
-        .message = "step 0",
+    const run_seq = try VAR1.core.session_store.appendEventWithSeq(std.testing.allocator, workspace_root, session.id, .{
+        .event_type = "session_started",
+        .message = "run 1",
         .timestamp_ms = ts,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
-        .event_type = "assistant_delta",
-        .message = "Let me search ",
+        .event_type = "turn_started",
+        .message = "step 0",
         .timestamp_ms = ts + 1,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
         .event_type = "assistant_delta",
-        .message = "for the file.",
+        .message = "Let me search ",
         .timestamp_ms = ts + 2,
+    });
+    try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
+        .event_type = "assistant_delta",
+        .message = "for the file.",
+        .timestamp_ms = ts + 3,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
         .event_type = "tool_started",
         .message = "search_files",
-        .timestamp_ms = ts + 3,
+        .timestamp_ms = ts + 4,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
         .event_type = "tool_output_delta",
         .message = "Found 3 matches",
-        .timestamp_ms = ts + 4,
+        .timestamp_ms = ts + 5,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
         .event_type = "tool_finished",
         .message = "search done",
-        .timestamp_ms = ts + 5,
+        .timestamp_ms = ts + 6,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
         .event_type = "tool_completed",
         .message = "completed",
-        .timestamp_ms = ts + 6,
+        .timestamp_ms = ts + 7,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
         .event_type = "assistant_delta",
         .message = "I found the issue.",
-        .timestamp_ms = ts + 7,
+        .timestamp_ms = ts + 8,
     });
     try VAR1.core.session_store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
         .event_type = "assistant_response",
         .message = "Final answer.",
-        .timestamp_ms = ts + 8,
+        .timestamp_ms = ts + 9,
     });
+    var terminal = try VAR1.core.session_store.commitTurnTerminal(
+        std.testing.allocator,
+        workspace_root,
+        &session,
+        run_seq,
+        .{ .outcome = .completed },
+        ts + 10,
+    );
+    defer terminal.deinit(std.testing.allocator);
+    try std.testing.expect(terminal.appended);
 
     // Cold-start read: the TUI reconstructs the full transcript from the event spine.
     const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
 
-    // All 9 events must be present — no data loss under streaming.
-    try std.testing.expectEqual(@as(usize, 9), events.len);
+    // All 11 events must be present — no data loss under streaming.
+    try std.testing.expectEqual(@as(usize, 11), events.len);
 
-    // Seq must be strictly monotonic (1..9) — the TUI uses seq for cursor-based replay.
+    // Seq must be strictly monotonic (1..11) — the TUI uses seq for cursor-based replay.
     for (events, 0..) |event, i| {
         try std.testing.expectEqual(@as(u64, @intCast(i + 1)), event.seq);
     }
 
     // The event types must be in the correct causal order:
-    // turn_started → assistant_delta → tool lifecycle → assistant_delta → assistant_response.
-    try std.testing.expectEqualStrings("turn_started", events[0].event_type);
-    try std.testing.expectEqualStrings("assistant_delta", events[1].event_type);
+    // session_started → turn_started → assistant_delta → tool lifecycle →
+    // assistant_delta → assistant_response → turn_terminal.
+    try std.testing.expectEqualStrings("session_started", events[0].event_type);
+    try std.testing.expectEqualStrings("turn_started", events[1].event_type);
     try std.testing.expectEqualStrings("assistant_delta", events[2].event_type);
-    try std.testing.expectEqualStrings("tool_started", events[3].event_type);
-    try std.testing.expectEqualStrings("tool_output_delta", events[4].event_type);
-    try std.testing.expectEqualStrings("tool_finished", events[5].event_type);
-    try std.testing.expectEqualStrings("tool_completed", events[6].event_type);
-    try std.testing.expectEqualStrings("assistant_delta", events[7].event_type);
-    try std.testing.expectEqualStrings("assistant_response", events[8].event_type);
+    try std.testing.expectEqualStrings("assistant_delta", events[3].event_type);
+    try std.testing.expectEqualStrings("tool_started", events[4].event_type);
+    try std.testing.expectEqualStrings("tool_output_delta", events[5].event_type);
+    try std.testing.expectEqualStrings("tool_finished", events[6].event_type);
+    try std.testing.expectEqualStrings("tool_completed", events[7].event_type);
+    try std.testing.expectEqualStrings("assistant_delta", events[8].event_type);
+    try std.testing.expectEqualStrings("assistant_response", events[9].event_type);
+    try std.testing.expectEqualStrings(VAR1.shared.protocol.events.turn_terminal_event_type, events[10].event_type);
 
-    // The latest event must be the final assistant_response (terminal state).
+    // The latest event must be the one current run-terminal event.
     const latest = try VAR1.core.session_store.readLatestEvent(std.testing.allocator, workspace_root, session.id);
     defer if (latest) |event| event.deinit(std.testing.allocator);
     try std.testing.expect(latest != null);
-    try std.testing.expectEqualStrings("assistant_response", latest.?.event_type);
-    try std.testing.expectEqual(@as(u64, 9), latest.?.seq);
+    try std.testing.expectEqualStrings(VAR1.shared.protocol.events.turn_terminal_event_type, latest.?.event_type);
+    try std.testing.expectEqual(@as(u64, 11), latest.?.seq);
 }
 
 test "event spine preserves same-millisecond delta burst ordering for TUI replay" {

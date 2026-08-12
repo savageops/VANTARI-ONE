@@ -203,8 +203,10 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
   returned `requested` and exited with zero process. Its legacy terminal name is
   retained only as historical proof; move 19 removed that writer.
-- Moves 5–19 and finding 10 are closed. Finding 13 is narrowed to move 20's
-  adversarial burst mesh; persistent agent execution and inter-process scheduler
+- Moves 5–20 plus findings 10 and 13 are closed. Six synchronized 100-way probes
+  cover admission, summary, message, event, tracked-TUI replay, and shutdown.
+  Four consecutive canonical graphs pass 1,959/1,959 without a new harness or
+  production mechanism. Persistent agent execution and inter-process scheduler
   arbitration remain P0.
 - The hive direction is assigned to moves 21–30 and finding 11. The target is
   one durable direct/group/parent mailbox over session/event ownership,

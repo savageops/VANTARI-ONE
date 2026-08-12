@@ -1,7 +1,7 @@
 ---
 type: finding
 id: harness-finding-13
-status: pending
+status: closed
 priority: P0
 owner: apps/backend/src/core/sessions
 source: ../../research/2026-08-12-full-harness-sitrep.md
@@ -39,8 +39,12 @@ Carry the exact stored event sequence and byte payload through one versioned pro
 
 - [x] 100 concurrent summary upserts retain the latest row for every session.
 - [x] 100 concurrent message appends produce unique monotonic sequence values.
-- [x] Duplicate same-millisecond events with identical text retain distinct stored and RPC sequence values.
-- [x] Duplicate same-millisecond events with identical text all render once and only once.
+- [x] 100 concurrent same-millisecond event appends retain sequences `1..100`
+  and every unique payload exactly once.
+- [x] 100 identical same-millisecond TUI events all render once; replay changes
+  neither transcript nor cursor.
+- [x] 100 active runtime owners all observe one shutdown fence; every late
+  admission fails with `ServerShuttingDown`.
 - [x] Torn, malformed, invalid-UTF-8, and duplicate-sequence rows preserve the
   same valid prefix across event, message, context, intent, and summary ledgers.
 - [x] Long-session append initialization is not proportional to total message count.
@@ -58,9 +62,9 @@ Carry the exact stored event sequence and byte payload through one versioned pro
 - 100 synchronized mixed-role message appends retained 100 rows with unique
   monotonic sequences; a 32,768-line poisoned-prefix fixture continued from the
   valid tail row without the removed full-transcript sequencer.
-- The complete graph passes 1,950/1,950. Installed `session/send` wrote four
+- The complete graph passes 1,959/1,959 across four consecutive runs. Installed `session/send` wrote four
   contiguous unique `user,assistant,tool,assistant` rows and emitted 12 unique
-  monotonic event notifications ending on the stored `turn_finished` sequence.
+  monotonic event notifications ending on the stored `turn_terminal` sequence.
   Installed `session/get` after sequence 1 returned contiguous sequences 2–12;
   two byte envelopes reconstructed stdout `0080E280A8FF` and capped stderr
   `FF010080E280A8FE`. Source/installed SHA-256 match and zero VANTARI processes
@@ -81,7 +85,15 @@ Carry the exact stored event sequence and byte payload through one versioned pro
   `B361AD2A66609590236E4967517718C7ECD3563E7474578D08009D09622E1FA4`; the
   130-segment GGUF audit found zero candidate or exact pairs, and zero process
   remained.
-- Finding remains pending only for move 20's 100-way adversarial mesh.
+- Move 20 adds the missing 100-way event, TUI replay, and shutdown probes. The
+  existing 100-way admission, summary, and message probes remain green; all six
+  high-cardinality seams use explicit release gates and authoritative readback.
+- ReleaseFast passes 9/9. The test-only artifact hash is
+  `7F1256550B859566F89DD7B86A33E34D239D69CEB612D185396CB621388A24B2`;
+  the prior installed artifact and its live ledger proof remain unchanged because
+  operator-owned TUI/kernel processes were preserved instead of interrupted.
+- Finding closed 2026-08-12. No production mechanism or second test harness was
+  required.
 
 ## Out of scope
 

@@ -279,6 +279,7 @@ Tests must behave like adversarial pipeline probes:
 - oversized write payloads
 - cwd escape before process launch
 - same-millisecond event bursts
+- 100-way admission, ledger append, exact replay, and admission-fenced shutdown
 - terminal scrollback under live streaming
 - installed binary auth/workspace resolution
 

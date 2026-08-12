@@ -1761,3 +1761,41 @@ Two consumer-breaking pipeline failures are now structurally impossible.
 
 **Next todo:** move 20 — 100-way adversarial admission, summary, message,
 event-burst, and shutdown mesh.
+
+## 2026-08-12 - Roadmap integrity floor closed through move 20
+
+**Changed:**
+
+- Added synchronized 100-way pressure at the three missing seams: concurrent
+  same-millisecond event append, exact tracked-TUI delivery/replay, and the
+  admission-fenced shutdown sweep.
+- Retained the existing 100-way admission, summary, and mixed-role message
+  probes. Six high-cardinality seams now read back authoritative ledger or
+  runtime state.
+- Corrected the live-stream replay fixture to end on the current
+  generation-bound `turn_terminal`, not the historical `assistant_response`
+  boundary.
+- Closed finding 13 and advanced the 90-move frontier to move 21. No production
+  mechanism, shared fixture framework, database, randomizer, simulator, or
+  parallel owner was added.
+- Repaired chain 036 continuity: the pending parent no longer labels itself
+  complete or points at closed finding 10. Finding 11 and moves 21–30 are its
+  sole current frontier.
+
+**Validation:**
+
+- Four consecutive `scripts/zigw.ps1 build test --summary all` runs: 19/19
+  steps and 1,959/1,959 tests each. Owner artifacts report 1,499 integration,
+  61 tracked-TUI, and 239 host tests.
+- `scripts/zigw.ps1 build -Doptimize=ReleaseFast --summary all`: 9/9 steps.
+- Test-only ReleaseFast SHA-256:
+  `7F1256550B859566F89DD7B86A33E34D239D69CEB612D185396CB621388A24B2`.
+  The installed move-19 hash remains
+  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
+  operator-owned TUI PID 12028 and `kernel-stdio` PID 14452 were preserved.
+- Dupe-audit and installed replacement are explicitly deferred: the diff
+  changes test declarations and records only; move 38 owns replacement after
+  active installed owners exit.
+
+**Next todo:** move 21 — make one daemon or detached worker process the
+long-lived execution owner without adding a parallel pool.

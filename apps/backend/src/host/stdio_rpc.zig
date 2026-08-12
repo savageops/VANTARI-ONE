@@ -1620,6 +1620,75 @@ test "100 concurrent session sends admit one turn owner" {
     try std.testing.expect(!runtime.isRunning("session-race"));
 }
 
+test "shutdown fence reaches 100 active session owners before late admission" {
+    const Gate = struct {
+        mutex: std.Thread.Mutex = .{},
+        condition: std.Thread.Condition = .{},
+        ready: usize = 0,
+        open: bool = false,
+
+        // Keep every observer behind one boundary until beginShutdown has
+        // atomically fenced admission and marked all active owners.
+        fn wait(self: *@This()) void {
+            self.mutex.lock();
+            self.ready += 1;
+            self.condition.broadcast();
+            while (!self.open) self.condition.wait(&self.mutex);
+            self.mutex.unlock();
+        }
+
+        fn release(self: *@This(), expected: usize) void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            while (self.ready < expected) self.condition.wait(&self.mutex);
+            self.open = true;
+            self.condition.broadcast();
+        }
+    };
+    const Observer = struct {
+        gate: *Gate,
+        runtime: *Runtime,
+        session_id: []const u8,
+        saw_cancel: *bool,
+
+        fn run(self: @This()) void {
+            self.gate.wait();
+            self.saw_cancel.* = self.runtime.shouldCancel(self.session_id);
+        }
+    };
+
+    var runtime = Runtime{};
+    defer runtime.deinit(std.testing.allocator);
+    var id_buffers: [100][32]u8 = undefined;
+    var session_ids: [100][]const u8 = undefined;
+    for (&session_ids, 0..) |*session_id, index| {
+        session_id.* = try std.fmt.bufPrint(&id_buffers[index], "shutdown-session-{d}", .{index});
+        try runtime.ensureSession(std.testing.allocator, session_id.*, null);
+        try std.testing.expectEqual(SessionStartAdmission.started, try runtime.tryStartSession(std.testing.allocator, session_id.*, null));
+        try std.testing.expect(runtime.observeRunStart(session_id.*, @intCast(index + 1)));
+    }
+
+    var gate = Gate{};
+    var saw_cancel = [_]bool{false} ** 100;
+    var threads: [100]std.Thread = undefined;
+    for (&threads, 0..) |*thread, index| {
+        thread.* = try std.Thread.spawn(.{}, Observer.run, .{Observer{
+            .gate = &gate,
+            .runtime = &runtime,
+            .session_id = session_ids[index],
+            .saw_cancel = &saw_cancel[index],
+        }});
+    }
+
+    try std.testing.expectEqual(@as(usize, 100), runtime.beginShutdown());
+    gate.release(threads.len);
+    for (threads) |thread| thread.join();
+    for (saw_cancel) |observed| try std.testing.expect(observed);
+    for (session_ids) |session_id| {
+        try std.testing.expectError(Error.ServerShuttingDown, runtime.tryStartSession(std.testing.allocator, session_id, null));
+    }
+}
+
 test "stale cancel generation cannot stop a newer session run" {
     var runtime = Runtime{};
     defer runtime.deinit(std.testing.allocator);

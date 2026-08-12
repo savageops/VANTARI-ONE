@@ -8,7 +8,7 @@ status: pending
 epic_boundary: "Add a durable buffered ticket execution plane that claims assigned work through the existing supervisor and scheduler, recovers stale runs, and exposes truthful ticket/pool evidence to clients."
 subtodo_start: /todo/pending/036a-ticket-agent-pool-and-repair.md
 subtodo_final: /todo/changelog/036g-ticket-agent-pool-and-repair.md
-continuation: "Reopened by the 2026-08-12 harness audit. Resolve findings 10, 11, and 13, add focused fix and re-review units, then repeat installed proof before parent archival."
+continuation: "Reopened by the 2026-08-12 harness audit. Findings 10 and 13 are closed. Resolve finding 11 through roadmap moves 21-30, add focused fix and re-review units, then repeat installed proof before parent archival."
 source_message_policy: "Every lettered unit MUST include source_message_anchor, source_message_excerpt, source_message_proof_obligation, and an Original User Message Proof section with verbatim snippets from the original user message."
 ---
 # 036 Ticket agent pool and repair queue
@@ -16,8 +16,8 @@ source_message_policy: "Every lettered unit MUST include source_message_anchor, 
 > [!warning] Current audit supersession
 > The archived 036g receipt remains historical evidence, but its completion
 > judgment is not current. The full-harness audit proved process-local worker
-> ownership, a non-atomic scheduler leader lease, and unsafe concurrent summary
-> mutation. This parent remains pending until those findings are repaired and a
+> ownership, a non-atomic scheduler leader lease, and missing durable agent mail.
+> Findings 10 and 13 are closed. This parent remains pending until finding 11 is repaired and a
 > new terminal review passes.
 
 ## Objective
@@ -186,7 +186,7 @@ The external harvest is closed by `.docs/research/2026-08-10-ticket-agent-pool-a
 
 | File | Phase | Role | Status |
 |------|-------|------|--------|
-| `/todo/pending/036-ticket-agent-pool-and-repair.md` | parent | Chain root | complete |
+| `/todo/pending/036-ticket-agent-pool-and-repair.md` | parent | Chain root | pending |
 | `/todo/changelog/036a-ticket-agent-pool-and-repair.md` | a | Baseline / contract lock | archived |
 | `/todo/changelog/036b-ticket-agent-pool-and-repair.md` | b | Ticket schema, projection, transitions, claims, leases | archived |
 | `/todo/changelog/036c-ticket-agent-pool-and-repair.md` | c | Supervisor capacity and ticket launch seam | archived |
@@ -238,7 +238,7 @@ Every row above compounds the parent ratchet.
 
 ## Current Frontier
 
-[`../findings/10-kernel-lifetime-and-rpc-admission.md`](../findings/10-kernel-lifetime-and-rpc-admission.md)
+[`../findings/11-persistent-agent-worker-and-scheduler-arbitration.md`](../findings/11-persistent-agent-worker-and-scheduler-arbitration.md)
 
 ## Stop Condition
 
@@ -248,4 +248,4 @@ process exit.
 
 ## Next todo
 
-[`../findings/10-kernel-lifetime-and-rpc-admission.md`](../findings/10-kernel-lifetime-and-rpc-admission.md)
+[`../findings/11-persistent-agent-worker-and-scheduler-arbitration.md`](../findings/11-persistent-agent-worker-and-scheduler-arbitration.md)

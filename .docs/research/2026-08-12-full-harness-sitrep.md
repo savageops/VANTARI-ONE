@@ -356,17 +356,20 @@ root byte/count/hash identical.
 1. Protect state: **closed** — tests are isolated, incident rows are quarantined, and legacy runtime-shaped owners are archived without merge.
 2. Fix host lifetime: **closed** — bounded executor, deadlines, atomic session admission, synchronized buffer routing, cancellation-before-join stress, and child-process cleanup all pass.
 3. Fix persistent arbitration: one crash-surviving worker owner and inter-process scheduler lease claim.
-4. Fix ledgers and replay: **summary/message mutation, tracked-TUI sequence replay, binary-safe payload, and common prefix salvage closed**; move 20's 100-way adversarial mesh remains.
+4. Fix ledgers and replay: **closed** — summary/message mutation, binary-safe
+   payload, common prefix salvage, and six synchronized 100-way admission,
+   ledger, tracked-TUI replay, and shutdown probes pass four consecutive graphs.
 5. Restore capability truth: persistent eval, composable DAP, real TTSR abort, one search executable identity, and removal of dead policy surfaces.
 6. Close existing chains in order: 021 frontier, 035 live installed proof, reopened 036 re-review, then PLUG.
 7. Promote only after isolated broad tests, adversarial multi-process tests, installed source-hash equality, live provider/tool evidence, and clean child/process exit.
 
 ## Residual boundary
 
-This audit proves the current checkout, atomic same-session admission, active
-request shutdown, ReleaseFast installed binary, disposable summary migration,
-per-session message append contention/tail initialization, isolated settings
-transport, exact TUI event suffix catch-up, and Windows child cleanup on this machine. It does not prove a clean
+This audit proves the current checkout, 100-way atomic same-session admission,
+100-way event/message/summary ownership, a 100-owner shutdown fence, 100-event
+tracked-TUI replay, ReleaseFast installed binary, disposable summary migration,
+isolated settings transport, exact TUI event suffix catch-up, and Windows child
+cleanup on this machine. It does not prove a clean
 clone, another host, a live multi-kernel scheduler race, a multi-process session
 writer, or a live external-provider turn on this ReleaseFast binary. Those remain
 explicit promotion gates, not implied success.
