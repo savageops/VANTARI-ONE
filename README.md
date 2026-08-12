@@ -209,6 +209,7 @@ cd apps/backend
 ```powershell
 cd apps/backend
 .\scripts\install_windows.ps1
+.\scripts\verify_installed_settings.ps1             # isolated settings/lifecycle smoke
 vantari -c                                     # launch the interactive TUI session
 ```
 

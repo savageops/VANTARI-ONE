@@ -101,32 +101,35 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 ## Current proof boundary
 
 - Pinned Zig 0.15.1 ReleaseFast build succeeds: 9/9 steps.
-- Every Zig test artifact now receives a generated child-process
-  `VANTARI_HOME`. `VANTARI_TEST_ROOT` rejects runtime paths outside the Zig
-  cache root, and 31 obsolete environment skip guards are removed.
-- The isolated broad graph executes and passes 1,695/1,695 tests with zero
-  skips. A parent-shell production-home probe kept live file count, byte count,
-  and the complete relative-path/content tree SHA-256 unchanged.
-- Focused backend TUI passes 54/56 with two skipped tests.
-- The tracked terminal package passes 103/104 with one skipped test.
+- Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
+  `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
+  obsolete environment skip guards are removed.
+- The complete graph passes 19/19 steps and 1,919/1,919 tests with zero skips.
+  Its 220-test host lane executes the formerly dormant stdio client/server and
+  shared process-tree tests; the backend TUI lane passes 58/58.
+- Parent-shell production-home probes kept 99,960 files, 693,051,143 bytes,
+  config/auth/summary hashes, and process inventory unchanged across the graph.
 - The broad prompt/tool gate is closed: retired `todo_slice` policy no longer
   leaks into the normal provider payload, duplicate file-inspection prose is
   removed, and tests protect the semantic guardrail instead of capitalization.
-- A first broad run inherited production `VANTARI_HOME`, read live auth, and
-  touched 535 runtime files. That run is invalid as proof and is recorded as a
-  P0 test-isolation incident.
-- Current built ReleaseFast SHA-256 is
-  `ED189470EB55CF8A9333FA31CA04C155F681DEA56E364B31C1D3294FCD42243F`.
-  Installed SHA-256 remains
-  `7B12904FBEE46E2C741C17DCDAF677B85C2A5AB6AB4A4D9C6B7234F841993C5D`.
-  The hashes do not match.
-- Installed PIDs 23376 and 25192 exited without intervention. A later TUI/kernel
-  pair started as PIDs 10624 and 33816; it is preserved, so live quarantine and
-  reinstall remain gated.
-- Full-access mode and the revised TUI/settings source lanes have focused proof
-  but no current installed-binary proof.
-- Settings still has an open hang boundary: the local RPC client waits without
-  a response deadline and waits for child exit without a shutdown timeout.
+- The invalid first broad run is repaired reversibly: 129 generated sessions,
+  16 changelog directories, 18 summary keys, and 64 known test rows are held in
+  `C:\Users\Savage\.vantari-quarantine\2026-08-12-test-isolation-incident`
+  with snapshot, manifest, rollback, and retained-state readback.
+- Seven legacy backend runtime-shaped owners are archived without merge under
+  `.var/backup/2026-08-12-legacy-backend-runtime`; automatic todo/changelog
+  projections now write direct workspace `.var` owners.
+- `Server` owns one bounded four-worker/32-request executor. Local RPC calls use
+  method deadlines and discard late responses. One shared Windows Job Object
+  owns child trees; graceful exit, forced termination, and reader drain are
+  bounded.
+- Built and installed ReleaseFast SHA-256 both equal
+  `E457855E8B971C02E9A06D807AE53BCD0822256B26B9CA5CBD7987F0C874C057`.
+- The installed settings smoke flips `runtime.full_access_mode` to `true` in a
+  disposable workspace, receives `var1.config_set.v1` in 5 ms, removes the
+  isolated runtime, preserves the complete live root, and leaves zero process.
+- Atomic same-session admission, synchronized buffer identity/preview state,
+  and full active-request shutdown stress remain moves 8–10.
 - `git diff --check` exits 0 with line-ending warnings only.
 
 See [`research/2026-08-12-full-harness-sitrep.md`](research/2026-08-12-full-harness-sitrep.md)

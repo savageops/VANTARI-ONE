@@ -275,6 +275,7 @@ A passing test is valuable only when the assertion proves an invariant a shallow
 - WSL or POSIX success may support analysis. It is not shipped proof for user-facing Windows behavior.
 - Operator scripts must diagnose locked installed binaries and stale local processes before failing obscurely.
 - Process supervision must account for Windows handle lifetime, pipe draining, timeout, and child termination.
+- `apps/backend/src/shared/process_tree.zig` is the shared Windows child-tree owner. Reuse its Job Object and bounded wait/drain primitives; do not add subsystem-local Job Object bindings.
 - Installed `%LOCALAPPDATA%\Vantari\bin\vantari.exe` proof is mandatory after CLI/TUI/provider/workspace/auth changes.
 
 ## XVI. Communication Standard

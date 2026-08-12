@@ -1,5 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const json = @import("../shared/json.zig");
+const process_tree = @import("../shared/process_tree.zig");
+const protocol_types = @import("../shared/protocol/types.zig");
 const wire = @import("stdio_wire.zig");
 
 /// Client side of the VAR1 stdio JSON-RPC protocol. Extracted from
@@ -13,6 +16,7 @@ const wire = @import("stdio_wire.zig");
 pub const Error = error{
     MissingChildPipes,
     InvalidRpcResponse,
+    RpcTimeout,
 };
 
 pub const RpcCallResult = struct {
@@ -37,12 +41,19 @@ pub const Notification = struct {
 };
 
 const max_notification_backlog = 512;
+const default_rpc_timeout_ms = 10_000;
+const compaction_rpc_timeout_ms = 5 * 60 * 1000;
+const turn_rpc_timeout_ms = 30 * 60 * 1000;
+const child_graceful_exit_ms = 5_000;
+const child_forced_exit_ms = 5_000;
+const reader_exit_ms = 5_000;
 
 const ClientState = struct {
     allocator: std.mem.Allocator,
     mutex: std.Thread.Mutex = .{},
     cond: std.Thread.Condition = .{},
     responses: std.StringHashMapUnmanaged([]u8) = .{},
+    retired_requests: std.StringHashMapUnmanaged(void) = .{},
     notifications: std.array_list.Managed(Notification),
     notification_head: usize = 0,
     next_request_id: usize = 1,
@@ -65,6 +76,10 @@ const ClientState = struct {
         }
         self.responses.deinit(self.allocator);
 
+        var retired_iterator = self.retired_requests.iterator();
+        while (retired_iterator.next()) |entry| self.allocator.free(entry.key_ptr.*);
+        self.retired_requests.deinit(self.allocator);
+
         for (self.notifications.items[self.notification_head..]) |notification| notification.deinit(self.allocator);
         self.notifications.deinit();
     }
@@ -74,6 +89,12 @@ const ClientState = struct {
         defer {
             self.cond.broadcast();
             self.mutex.unlock();
+        }
+
+        if (self.retired_requests.fetchRemove(request_id)) |entry| {
+            self.allocator.free(entry.key);
+            self.allocator.free(response_payload);
+            return;
         }
 
         try self.responses.put(self.allocator, try self.allocator.dupe(u8, request_id), response_payload);
@@ -146,6 +167,7 @@ const ReaderContext = struct {
 pub const LocalClient = struct {
     allocator: std.mem.Allocator,
     child: std.process.Child,
+    process_job: process_tree.KillOnCloseJob,
     state: *ClientState,
     stdin_mutex: std.Thread.Mutex = .{},
     reader_context: ?*ReaderContext = null,
@@ -160,6 +182,8 @@ pub const LocalClient = struct {
         defer allocator.free(exe_path);
 
         var argv = [_][]const u8{ exe_path, "kernel-stdio" };
+        var process_job = try process_tree.KillOnCloseJob.init();
+        errdefer process_job.deinit();
         var child = std.process.Child.init(&argv, allocator);
         child.cwd = workspace_root;
         child.stdin_behavior = .Pipe;
@@ -177,9 +201,20 @@ pub const LocalClient = struct {
                 stdout_file.close();
                 child.stdout = null;
             }
-            _ = child.kill() catch {};
-            _ = child.wait() catch {};
+            if (builtin.os.tag == .windows) {
+                process_job.terminate(child.id, 1);
+                process_job.deinit();
+                if (process_tree.waitForProcess(child.id, child_forced_exit_ms) catch false) {
+                    _ = child.wait() catch {};
+                } else {
+                    process_tree.closeUnreapedChildHandles(&child);
+                }
+            } else {
+                _ = child.kill() catch {};
+                _ = child.wait() catch {};
+            }
         }
+        try process_job.assign(child.id);
 
         const state = try allocator.create(ClientState);
         errdefer allocator.destroy(state);
@@ -199,6 +234,7 @@ pub const LocalClient = struct {
         var client = LocalClient{
             .allocator = allocator,
             .child = child,
+            .process_job = process_job,
             .state = state,
             .reader_context = reader_context,
         };
@@ -214,21 +250,65 @@ pub const LocalClient = struct {
             self.child.stdin = null;
         }
 
-        _ = self.child.wait() catch {};
+        const child_reaped = if (builtin.os.tag == .windows)
+            self.finishWindowsChild()
+        else blk: {
+            _ = self.child.wait() catch {};
+            break :blk true;
+        };
 
-        if (self.reader_thread) |thread| thread.join();
+        var reader_joined = true;
+        if (self.reader_thread) |thread| {
+            if (builtin.os.tag == .windows and !child_reaped) {
+                process_tree.cancelThreadIo(thread);
+                if (process_tree.waitForThread(thread, reader_exit_ms) catch false) {
+                    thread.join();
+                } else {
+                    thread.detach();
+                    reader_joined = false;
+                    std.log.err("kernel stdout reader did not stop after bounded process-tree termination; retaining its state", .{});
+                }
+            } else {
+                thread.join();
+            }
+            self.reader_thread = null;
+        }
 
-        if (self.reader_context) |reader_context| {
+        if (reader_joined) if (self.reader_context) |reader_context| {
             reader_context.stdout_file.close();
             self.allocator.destroy(reader_context);
             self.reader_context = null;
+        };
+
+        if (reader_joined) {
+            self.state.deinit();
+            self.allocator.destroy(self.state);
+        }
+    }
+
+    fn finishWindowsChild(self: *LocalClient) bool {
+        if (process_tree.waitForProcess(self.child.id, child_graceful_exit_ms) catch false) {
+            _ = self.child.wait() catch {};
+            self.process_job.deinit();
+            return true;
         }
 
-        self.state.deinit();
-        self.allocator.destroy(self.state);
+        self.process_job.terminate(self.child.id, 1);
+        self.process_job.deinit();
+        if (process_tree.waitForProcess(self.child.id, child_forced_exit_ms) catch false) {
+            _ = self.child.wait() catch {};
+            return true;
+        }
+
+        process_tree.closeUnreapedChildHandles(&self.child);
+        return false;
     }
 
     pub fn call(self: *LocalClient, method: []const u8, params_json: []const u8) !RpcCallResult {
+        return self.callWithTimeout(method, params_json, timeoutForMethod(method));
+    }
+
+    pub fn callWithTimeout(self: *LocalClient, method: []const u8, params_json: []const u8, timeout_ms: usize) !RpcCallResult {
         if (self.child.stdin == null) return Error.MissingChildPipes;
 
         const request_number = self.state.nextRequestId();
@@ -244,7 +324,7 @@ pub const LocalClient = struct {
             try wire.writeFrame(self.child.stdin.?, request_payload);
         }
 
-        const response_payload = try waitForResponse(self, request_id);
+        const response_payload = try waitForResponse(self.state, self.allocator, request_id, timeout_ms);
         defer self.allocator.free(response_payload);
 
         var parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, response_payload, .{});
@@ -285,6 +365,12 @@ pub const LocalClient = struct {
     }
 };
 
+fn timeoutForMethod(method: []const u8) usize {
+    if (std.mem.eql(u8, method, protocol_types.methods.session_send)) return turn_rpc_timeout_ms;
+    if (std.mem.eql(u8, method, protocol_types.methods.session_compact)) return compaction_rpc_timeout_ms;
+    return default_rpc_timeout_ms;
+}
+
 pub fn renderRpcRequest(
     allocator: std.mem.Allocator,
     request_id: []const u8,
@@ -318,22 +404,35 @@ fn renderRpcNotification(
     );
 }
 
-fn waitForResponse(self: *LocalClient, request_id: []const u8) ![]u8 {
-    while (true) {
-        self.state.mutex.lock();
-        defer self.state.mutex.unlock();
+fn waitForResponse(state: *ClientState, allocator: std.mem.Allocator, request_id: []const u8, timeout_ms: usize) ![]u8 {
+    const timeout_ns = std.math.mul(u64, @intCast(timeout_ms), std.time.ns_per_ms) catch std.math.maxInt(u64);
+    var timer = try std.time.Timer.start();
 
-        if (self.state.responses.fetchRemove(request_id)) |entry| {
-            self.allocator.free(entry.key);
+    while (true) {
+        state.mutex.lock();
+        defer state.mutex.unlock();
+
+        if (state.responses.fetchRemove(request_id)) |entry| {
+            allocator.free(entry.key);
             return entry.value;
         }
 
-        if (self.state.closed) {
-            if (self.state.read_error) |read_error| return read_error;
+        if (state.closed) {
+            if (state.read_error) |read_error| return read_error;
             return Error.InvalidRpcResponse;
         }
 
-        self.state.cond.wait(&self.state.mutex);
+        const elapsed_ns = timer.read();
+        if (elapsed_ns >= timeout_ns) {
+            try state.retired_requests.put(allocator, try allocator.dupe(u8, request_id), {});
+            return Error.RpcTimeout;
+        }
+        state.cond.timedWait(&state.mutex, timeout_ns - elapsed_ns) catch |err| switch (err) {
+            error.Timeout => {
+                try state.retired_requests.put(allocator, try allocator.dupe(u8, request_id), {});
+                return Error.RpcTimeout;
+            },
+        };
     }
 }
 
@@ -454,6 +553,28 @@ const TestNotificationProducer = struct {
         };
     }
 };
+
+test "response wait times out and discards a late reply" {
+    const allocator = std.testing.allocator;
+    var state = ClientState.init(allocator);
+    defer state.deinit();
+
+    try std.testing.expectError(Error.RpcTimeout, waitForResponse(&state, allocator, "req-late", 1));
+    try std.testing.expectEqual(@as(usize, 1), state.retired_requests.count());
+
+    const late_payload = try allocator.dupe(u8, "{\"jsonrpc\":\"2.0\",\"id\":\"req-late\",\"result\":{}}");
+    errdefer allocator.free(late_payload);
+    try state.recordResponse("req-late", late_payload);
+    try std.testing.expectEqual(@as(usize, 0), state.retired_requests.count());
+    try std.testing.expectEqual(@as(usize, 0), state.responses.count());
+}
+
+test "every rpc method receives a finite owner deadline" {
+    try std.testing.expectEqual(turn_rpc_timeout_ms, timeoutForMethod(protocol_types.methods.session_send));
+    try std.testing.expectEqual(compaction_rpc_timeout_ms, timeoutForMethod(protocol_types.methods.session_compact));
+    try std.testing.expectEqual(default_rpc_timeout_ms, timeoutForMethod(protocol_types.methods.config_set));
+    try std.testing.expect(timeoutForMethod("unknown/method") > 0);
+}
 
 test "notification wait wakes on the condition without polling latency" {
     const allocator = std.testing.allocator;

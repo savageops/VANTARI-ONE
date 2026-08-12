@@ -17,7 +17,6 @@ const fsutil = @import("../../../shared/fsutil.zig");
 /// VANTARI's hashline is simpler than oh-my-pi's (no syntactic block resolution,
 /// no named registers, no move/rename) but covers the 90% case: line-range
 /// replacement with stale-anchor rejection.
-
 /// Compute a 4-hex content hash for a file. This is the "tag" that anchors
 /// edits — if the file changes, the tag changes, and stale edits are rejected.
 pub fn contentHash(allocator: std.mem.Allocator, content: []const u8) ![]u8 {
@@ -69,9 +68,10 @@ pub fn applyHunks(
     while (iter.next()) |line| {
         try lines.append(line);
     }
-    // Handle trailing newline: if the content ends with \n, the last split
-    // produces an empty string. Keep it so we know to re-add the newline.
     const has_trailing_newline = original.len > 0 and original[original.len - 1] == '\n';
+    if (has_trailing_newline and lines.items.len > 0 and lines.items[lines.items.len - 1].len == 0) {
+        _ = lines.pop();
+    }
 
     // Sort hunks by start_line descending (apply bottom-to-top).
     const sorted_hunks = try allocator.dupe(HashHunk, hunks);
@@ -103,18 +103,14 @@ pub fn applyHunks(
         }
 
         // Replace lines[start..end] with repl_lines.
-        // Use orderedReplaceRange for in-place replacement.
         var new_lines = std.array_list.Managed([]const u8).init(allocator);
-        defer new_lines.deinit();
+        errdefer new_lines.deinit();
         try new_lines.appendSlice(lines.items[0..start]);
         try new_lines.appendSlice(repl_lines.items);
         try new_lines.appendSlice(lines.items[end..]);
 
         lines.deinit();
         lines = new_lines;
-        // Prevent double-free: move ownership.
-        // (new_lines.deinit() is deferred but we moved it into lines)
-        // Actually we need to be careful here. Let's use a different approach.
     }
 
     // Rejoin lines.

@@ -455,14 +455,17 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-12:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Isolated broad test graph -> 1690/1693 passed; three prompt/tool-contract
-  failures remain.
-- Focused backend TUI -> 54/56 passed, two skipped.
-- Vendored packages/tui -> 103/104 passed, one skipped.
+- Isolated broad test graph -> 19/19 steps and 1919/1919 tests passed.
+- Focused backend TUI -> 58/58 passed.
+- Host lifecycle -> 220/220 passed, including bounded executor admission/drain,
+  RPC deadlines, late-response retirement, and Windows Job Object ownership.
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
-- Built and installed hashes differ while an operator TUI and kernel-stdio
-  process remain active; no reinstall was attempted.
+- Built and installed SHA-256 both equal
+  `E457855E8B971C02E9A06D807AE53BCD0822256B26B9CA5CBD7987F0C874C057`.
+- Installed settings transport flipped `runtime.full_access_mode` in an isolated
+  workspace, removed all generated state, preserved the live root, and left
+  zero VANTARI process.
 
 ## Cognitive architecture (frontier capabilities)
 

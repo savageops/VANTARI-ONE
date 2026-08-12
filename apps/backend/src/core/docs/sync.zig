@@ -69,12 +69,10 @@ pub fn appendLog(allocator: std.mem.Allocator, workspace_root: []const u8, messa
 }
 
 pub fn runLogPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
-    const root = try fsutil.runtimeRootForWorkspace(allocator, workspace_root);
-    defer allocator.free(root);
-    const dir = try fsutil.join(allocator, &.{ root, "changelog" });
+    const dir = try fsutil.join(allocator, &.{ workspace_root, ".var", "changelog" });
     defer allocator.free(dir);
     std.fs.cwd().makePath(dir) catch {};
-    return fsutil.join(allocator, &.{ root, "changelog", "_log.md" });
+    return fsutil.join(allocator, &.{ workspace_root, ".var", "changelog", "_log.md" });
 }
 
 pub fn memoriesFilePath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
@@ -82,21 +80,17 @@ pub fn memoriesFilePath(allocator: std.mem.Allocator, workspace_root: []const u8
 }
 
 pub fn todoSlicePath(allocator: std.mem.Allocator, workspace_root: []const u8, session_id: []const u8) ![]u8 {
-    const root = try fsutil.runtimeRootForWorkspace(allocator, workspace_root);
-    defer allocator.free(root);
-    const session_dir = try fsutil.join(allocator, &.{ root, "todos", "session", session_id });
+    const session_dir = try fsutil.join(allocator, &.{ workspace_root, ".var", "todos", "session", session_id });
     defer allocator.free(session_dir);
     std.fs.cwd().makePath(session_dir) catch {};
-    return fsutil.join(allocator, &.{ root, "todos", "session", session_id, "todo-slice1.md" });
+    return fsutil.join(allocator, &.{ workspace_root, ".var", "todos", "session", session_id, "todo-slice1.md" });
 }
 
 pub fn changelogSlicePath(allocator: std.mem.Allocator, workspace_root: []const u8, session_id: []const u8) ![]u8 {
-    const root = try fsutil.runtimeRootForWorkspace(allocator, workspace_root);
-    defer allocator.free(root);
-    const session_dir = try fsutil.join(allocator, &.{ root, "changelog", session_id });
+    const session_dir = try fsutil.join(allocator, &.{ workspace_root, ".var", "changelog", session_id });
     defer allocator.free(session_dir);
     std.fs.cwd().makePath(session_dir) catch {};
-    return fsutil.join(allocator, &.{ root, "changelog", session_id, "todo-slice1.md" });
+    return fsutil.join(allocator, &.{ workspace_root, ".var", "changelog", session_id, "todo-slice1.md" });
 }
 
 fn renderSessionDoc(allocator: std.mem.Allocator, snapshot: types.ProgressSnapshot) ![]u8 {

@@ -175,14 +175,21 @@ pub const SettingsState = struct {
         });
         defer self.allocator.free(params);
 
-        const result = rpc_client.call(protocol.methods.config_set, params) catch {
+        const result = rpc_client.call(protocol.methods.config_set, params) catch |err| {
             if (self.status_message) |msg| self.allocator.free(msg);
-            self.status_message = try self.allocator.dupe(u8, "Error: config/set RPC failed");
+            self.status_message = try self.allocator.dupe(u8, switch (err) {
+                error.RpcTimeout => "Error: config/set timed out",
+                else => "Error: config/set RPC failed",
+            });
             return;
         };
         defer result.deinit(self.allocator);
 
         if (self.status_message) |msg| self.allocator.free(msg);
+        if (result.error_json != null) {
+            self.status_message = try self.allocator.dupe(u8, "Error: config/set rejected");
+            return;
+        }
         self.status_message = try std.fmt.allocPrint(self.allocator, "Saved {s}.{s} = {s} (applies on next turn)", .{
             section_name,
             entry.key,
@@ -474,4 +481,86 @@ test "settings accepts newer values with older help metadata" {
         }
     }
     try std.testing.expect(found);
+}
+
+const SettingsTestResult = struct {
+    error_json: ?[]const u8 = null,
+
+    fn deinit(_: SettingsTestResult, _: std.mem.Allocator) void {}
+};
+
+const SettingsSuccessClient = struct {
+    calls: usize = 0,
+
+    fn call(self: *SettingsSuccessClient, method: []const u8, params: []const u8) anyerror!SettingsTestResult {
+        try std.testing.expectEqualStrings(protocol.methods.config_set, method);
+        try std.testing.expect(std.mem.indexOf(u8, params, "\"section\":\"runtime\"") != null);
+        self.calls += 1;
+        return .{};
+    }
+};
+
+const SettingsTimeoutClient = struct {
+    fn call(_: *SettingsTimeoutClient, _: []const u8, _: []const u8) anyerror!SettingsTestResult {
+        return error.RpcTimeout;
+    }
+};
+
+fn selectRuntimeBool(state: *SettingsState, key: []const u8) !void {
+    for (state.entries.items, 0..) |entry, index| {
+        if (std.mem.eql(u8, entry.key, key)) {
+            try std.testing.expect(entry.is_bool);
+            state.entry_cursor = index;
+            return;
+        }
+    }
+    return error.TestExpectedEqual;
+}
+
+test "settings apply close and repeated reopen share one state owner" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var state = SettingsState.init(allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    try state.loadSection();
+    try selectRuntimeBool(&state, "full_access_mode");
+
+    var client = SettingsSuccessClient{};
+    try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = tui.Key.enter }, &client));
+    try std.testing.expectEqual(@as(usize, 1), client.calls);
+    try std.testing.expect(std.mem.startsWith(u8, state.status_message.?, "Saved runtime.full_access_mode"));
+
+    try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = tui.Key.escape }, &client));
+    try std.testing.expect(!state.open);
+
+    state.open = true;
+    try state.loadSection();
+    try std.testing.expect(state.entries.items.len > 0);
+    try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = tui.Key.escape }, &client));
+    try std.testing.expect(!state.open);
+}
+
+test "settings timeout is visible and remains closable" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var state = SettingsState.init(allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    try state.loadSection();
+    try selectRuntimeBool(&state, "full_access_mode");
+
+    var client = SettingsTimeoutClient{};
+    try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = tui.Key.enter }, &client));
+    try std.testing.expectEqualStrings("Error: config/set timed out", state.status_message.?);
+    try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = tui.Key.escape }, &client));
+    try std.testing.expect(!state.open);
 }

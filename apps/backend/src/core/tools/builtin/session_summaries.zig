@@ -128,7 +128,8 @@ pub fn execute(
 
 fn ageLabel(updated_at_ms: i64) []const u8 {
     const now_ms = std.time.milliTimestamp();
-    const elapsed_s: i64 = @max(0, @divTrunc(now_ms - updated_at_ms, 1000));    if (elapsed_s < 60) return "just now";
+    const elapsed_s: i64 = @max(0, @divTrunc(now_ms - updated_at_ms, 1000));
+    if (elapsed_s < 60) return "just now";
     if (elapsed_s < 3600) return "minutes ago";
     if (elapsed_s < 86400) return "hours ago";
     return "days ago";
@@ -174,9 +175,12 @@ test "session_summaries filters by query and returns the full single-session row
 
     const single = try execute(allocator, ctx, "{\"session_id\":\"sess-q2\"}");
     defer allocator.free(single);
-    try std.testing.expect(std.mem.indexOf(u8, single, "SESSION \"sess-q2\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, single, "Audited all open tickets.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, single, "SUMMARY ") != null);
+    var parsed_single = try std.json.parseFromSlice(std.json.Value, allocator, single, .{});
+    defer parsed_single.deinit();
+    const content = parsed_single.value.object.get("content").?.string;
+    try std.testing.expect(std.mem.indexOf(u8, content, "SESSION \"sess-q2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "Audited all open tickets.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "SUMMARY ") != null);
 }
 
 test "session_summaries project scope excludes foreign-workspace rows" {

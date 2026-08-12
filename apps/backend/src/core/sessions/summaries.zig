@@ -394,7 +394,7 @@ test "upsertSummary writes a durable schema-bound row and increments turn_count"
     const second = try upsertSummary(allocator, workspace, "sess-1", "", "Title two", "agents", "Summary text two", "completed", "agent", 2000);
     try std.testing.expectEqual(@as(usize, 2), second);
 
-    const row = (try readSummary(allocator, workspace, "sess-1")).?;
+    var row = (try readSummary(allocator, workspace, "sess-1")).?;
     defer row.deinit(allocator);
     try std.testing.expectEqualStrings("sess-1", row.session_id);
     try std.testing.expectEqualStrings("Title two", row.title);
@@ -494,7 +494,7 @@ test "ensureFreshSummary writes kernel fallback when the agent missed the mandat
     );
     try std.testing.expectEqual(Freshness.kernel_fallback, freshness);
 
-    const row = (try readSummary(allocator, workspace, "sess-a")).?;
+    var row = (try readSummary(allocator, workspace, "sess-a")).?;
     defer row.deinit(allocator);
     try std.testing.expectEqualStrings("kernel_fallback", row.source);
     try std.testing.expectEqualStrings("completed", row.status);
@@ -526,7 +526,7 @@ test "ensureFreshSummary accepts a fresh agent update and leaves it untouched" {
     );
     try std.testing.expectEqual(Freshness.updated_by_agent, freshness);
 
-    const row = (try readSummary(allocator, workspace, "sess-b")).?;
+    var row = (try readSummary(allocator, workspace, "sess-b")).?;
     defer row.deinit(allocator);
     try std.testing.expectEqualStrings("agent", row.source);
     try std.testing.expectEqualStrings("Agent's own 100-word summary of the turn", row.summary);

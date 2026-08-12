@@ -274,11 +274,13 @@ fn buildRequestJson(
     // detectThinkingFormat; harvested from prime openai-completions.ts:564-577):
     // - zai: z.ai's coding paas endpoint (api.z.ai/api/coding/paas/v4) expects
     //   `enable_thinking` as a TOP-LEVEL boolean. Default ON (empty string or
-    //   "on" enables reasoning) — only "off" disables. Critical for GLM-5.2:
+    //   "enabled" enables reasoning) — "disabled" and the legacy "off"
+    //   spelling disable it. Critical for GLM-5.2:
     //   without enable_thinking, reasoning_content is silently off (P0 fix f9e0dcc).
     // - deepseek: nested `thinking: {type:"enabled"|"disabled"}` convention.
     // - standard: no thinking field (LM Studio, Ollama, OpenAI).
-    const thinking_disabled = std.mem.eql(u8, thinking_mode, "off");
+    const thinking_disabled = std.ascii.eqlIgnoreCase(thinking_mode, "disabled") or
+        std.ascii.eqlIgnoreCase(thinking_mode, "off");
     switch (thinking_format) {
         .zai => {
             if (!thinking_disabled) {
@@ -1410,7 +1412,7 @@ test "provider preserves non-200 HTTP status diagnostic for session failure" {
     const diagnostic = failureDiagnosticForError(Error.BadStatus);
     try std.testing.expect(std.mem.indexOf(u8, diagnostic, "BadStatus status=503") != null);
     try std.testing.expect(std.mem.indexOf(u8, diagnostic, "HTTP/1.1 503 Service Unavailable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic, "runtime warming retry later") != null);
+    try std.testing.expect(std.mem.indexOf(u8, diagnostic, "runtime warming\\nretry later") != null);
 }
 
 test "provider reconstructs CRLF SSE streams with sparse multi-tool indexes" {
@@ -1466,6 +1468,26 @@ test "provider request payload opts into streaming and parallel tool calls when 
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"parallel_tool_calls\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"name\":\"read_file\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"name\":\"search_files\"") != null);
+}
+
+test "provider request payload keeps z.ai thinking enabled when configured" {
+    const messages = [_]types.ChatMessage{
+        .{ .role = .user, .content = @constCast("hello") },
+    };
+    const payload = try buildRequestJson(
+        std.testing.allocator,
+        "test-model",
+        .{ .messages = messages[0..] },
+        false,
+        "enabled",
+        "",
+        -1.0,
+        .zai,
+    );
+    defer std.testing.allocator.free(payload);
+
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"enable_thinking\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"enable_thinking\":false") == null);
 }
 
 test "provider reconstructs split SSE data fields instead of dropping first visible token" {

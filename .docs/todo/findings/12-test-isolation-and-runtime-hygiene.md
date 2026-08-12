@@ -1,7 +1,7 @@
 ---
 type: finding
 id: harness-finding-12
-status: pending
+status: closed
 priority: P0
 owner: apps/backend/build.zig
 source: ../../research/2026-08-12-full-harness-sitrep.md
@@ -36,36 +36,29 @@ For this incident: wait for the exact installed process pair to exit, snapshot C
 - Secret scanning and git status cannot stage legacy auth or state.
 - Quarantine has a manifest and rollback path; live state is read back after projection repair.
 
-## Progress — 2026-08-12
+## Closure — 2026-08-12
 
-- Move 1 is closed. All five test artifacts use one
-  `addIsolatedTestRun` constructor. Each child receives a generated
-  `VANTARI_HOME`; the parent shell does not change.
-- Move 2 is closed. The test-only `VANTARI_TEST_ROOT` marker constrains global and
-  workspace runtime paths to Zig's cache root. An outside path returns
-  `TestRuntimePathOutsideRoot` before directory creation; ReleaseFast compiles
-  the marker out of production runtime behavior.
-- Deleted 31 `VANTARI_HOME` skip guards. The broad graph now executes all
-  1,695 tests instead of hiding 188 cases.
-- With the parent pointed at `C:\Users\Savage\.vantari`, the run preserved
-  live file count, byte count, and the complete relative-path/content tree
-  SHA-256. It passed 1,695 of 1,695.
-- Move 31 is closed. Removed one retired `todo_slice` prompt instruction, one
-  duplicate file-inspection instruction, and brittle prose assertions while
-  preserving the enforced write-before-inspect contract.
-- A recoverable pre-repair snapshot exists at
+- Moves 1–2: all six test artifacts use `addIsolatedTestRun`; child homes and
+  `std.testing.tmpDir` stay under `apps/backend/.zig-cache`, and the test-only
+  guard rejects escape. The graph passes 1,919/1,919 with zero skips while the
+  live root remains byte/count/hash identical.
+- Move 3: the pre-repair snapshot remains at
   `C:\Users\Savage\.vantari-backups\2026-08-12-test-isolation-incident-pre-repair`.
-  The copy contains 100,483 files and 693,081,758 bytes. Incident
-  classification found 129 session directories whose prompts all match exact
-  Zig source literals.
-- Live mutation remains paused because a new installed TUI/kernel pair started
-  as PIDs 10624 and 33816 during snapshot verification. Their new session and
-  scheduler lease were preserved.
+  The exact 129 sessions, 16 changelog directories, 18 summary keys, and 64
+  known test rows are quarantined at
+  `C:\Users\Savage\.vantari-quarantine\2026-08-12-test-isolation-incident`.
+  Manifest, rollback, zero-hit live readback, auth preservation, and zero
+  process inventory are proven.
+- Move 4: seven legacy backend owners containing 2,252 files and 2,127,443 bytes
+  are archived without merge under
+  `.var/backup/2026-08-12-legacy-backend-runtime`. All old sources are absent,
+  archive readback matches, secret-shaped fixtures remain untracked, and
+  todo/changelog sync uses direct workspace `.var` owners.
+- Move 31 removed the retired `todo_slice` prompt instruction, duplicate
+  file-inspection prose, and brittle wording assertions without weakening the
+  enforced write-before-inspect contract.
 
-This finding stays pending. Move 3 still owns incident quarantine and projection
-readback after the active installed pair exits. Move 4 owns reversible quarantine
-of ignored backend fixtures plus consolidation of the split todo/changelog owner;
-no fixture merge into live `.var` or `.vantari` is justified.
+No generated fixture was merged into operator state. This finding is closed.
 
 ## Source-message proof
 

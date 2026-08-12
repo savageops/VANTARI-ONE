@@ -333,7 +333,13 @@ The one thing VANTARI has that oh-my-pi (the closest competitor with async job o
 
 ### The Config/Auth Drift (5 recurrences, permanently fixed)
 
-A subtle bug where `runtimeRootForWorkspace` ignores the workspace argument when `VANTARI_HOME` is set, causing test fixtures to write to the real global config/auth path. This manifested 5 times across the session (config key `auto_compact` vs `auto_compaction`, auth reverting from glm-5.2 to glm-5.1, test providers leaking into the global ledger). A background code-reviewer agent independently flagged the pattern, leading to a systematic audit and permanent fix: 6 tests now carry the `VANTARI_HOME` skip guard.
+A subtle bug let test fixtures inherit production `VANTARI_HOME` and reach the
+global config/auth/session owners. Skip guards hid coverage and did not solve the
+owner error. The build now assigns every one of six test artifacts a generated
+home, and a compile-gated `VANTARI_TEST_ROOT` guard rejects cache-root escape.
+The obsolete skip guards are deleted; the 1,919-test graph executes every lane
+while the live runtime root remains unchanged. The one contaminated audit run is
+held in a reversible quarantine with manifest and rollback.
 
 ### The Parallel-System Detection
 

@@ -98,12 +98,22 @@ pub fn build(b: *std.Build) void {
     });
     const run_chain035_tests = addIsolatedTestRun(b, chain035_tests, "chain035");
 
+    const host_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/host_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_host_tests = addIsolatedTestRun(b, host_tests, "host");
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_integration_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_tui_chat_tests.step);
     test_step.dependOn(&run_memory_tests.step);
     test_step.dependOn(&run_chain035_tests.step);
+    test_step.dependOn(&run_host_tests.step);
 }
 
 /// Isolate test state at the child-process boundary.
@@ -114,9 +124,12 @@ fn addIsolatedTestRun(
     name: []const u8,
 ) *std.Build.Step.Run {
     const run = b.addRunArtifact(artifact);
+    // std.testing.tmpDir is rooted at <cwd>/.zig-cache/tmp. Keep the explicit
+    // test home under that same non-product owner even when a wrapper moves
+    // Zig's compile cache elsewhere.
     const test_root = b.pathResolve(&.{
         b.build_root.path orelse ".",
-        b.cache_root.path orelse ".",
+        ".zig-cache",
     });
     const test_home = b.pathResolve(&.{
         test_root,

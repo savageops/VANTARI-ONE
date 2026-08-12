@@ -55,6 +55,42 @@ const SessionRuntimeState = struct {
 };
 
 const max_pending_messages = 5;
+const max_request_workers = 4;
+const max_admitted_requests = 32;
+const rpc_server_busy_code: i32 = -32005;
+
+const RequestAdmission = struct {
+    mutex: std.Thread.Mutex = .{},
+    accepting: bool = false,
+    admitted: usize = 0,
+
+    fn start(self: *RequestAdmission) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.accepting = true;
+    }
+
+    fn stop(self: *RequestAdmission) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.accepting = false;
+    }
+
+    fn tryAcquire(self: *RequestAdmission) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (!self.accepting or self.admitted >= max_admitted_requests) return false;
+        self.admitted += 1;
+        return true;
+    }
+
+    fn release(self: *RequestAdmission) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        std.debug.assert(self.admitted > 0);
+        self.admitted -= 1;
+    }
+};
 
 const Runtime = struct {
     mutex: std.Thread.Mutex = .{},
@@ -112,6 +148,7 @@ const Runtime = struct {
         defer self.mutex.unlock();
 
         if (self.sessions.getPtr(session_id)) |state| {
+            if (!state.running) return false;
             state.cancel_requested = true;
             return true;
         }
@@ -183,6 +220,9 @@ const Server = struct {
     agent_service: tools.AgentService,
     stdout_file: std.fs.File,
     write_mutex: std.Thread.Mutex = .{},
+    request_pool: std.Thread.Pool = undefined,
+    request_pool_started: bool = false,
+    request_admission: RequestAdmission = .{},
     runtime: Runtime = .{},
     scheduler_service: ?scheduler.Service = null,
     scheduler_thread: ?std.Thread = null,
@@ -197,7 +237,39 @@ const Server = struct {
     buffer_preview_mutex: std.Thread.Mutex = .{},
     buffer_preview_text: ?[]u8 = null,
 
+    fn startRequestExecutor(self: *Server) !void {
+        try self.request_pool.init(.{
+            .allocator = std.heap.page_allocator,
+            .n_jobs = max_request_workers,
+        });
+        self.request_pool_started = true;
+        self.request_admission.start();
+    }
+
+    fn stopRequestExecutor(self: *Server) void {
+        self.request_admission.stop();
+        if (!self.request_pool_started) return;
+        self.request_pool.deinit();
+        self.request_pool_started = false;
+        std.debug.assert(self.request_admission.admitted == 0);
+    }
+
+    fn submitRequest(self: *Server, request_payload: []u8) !bool {
+        if (!self.request_admission.tryAcquire()) return false;
+        errdefer self.request_admission.release();
+
+        const job = try std.heap.page_allocator.create(RequestJob);
+        errdefer std.heap.page_allocator.destroy(job);
+        job.* = .{
+            .server = self,
+            .request_payload = request_payload,
+        };
+        try self.request_pool.spawn(processRequestWorker, .{job});
+        return true;
+    }
+
     fn deinit(self: *Server) void {
+        self.stopRequestExecutor();
         self.agent_service.bindEventSink(.{});
         if (self.scheduler_service) |*service| {
             service.requestStop();
@@ -288,6 +360,7 @@ pub fn serveKernel(
         .context = &server,
         .notifyFn = onAgentParentEvent,
     });
+    try server.startRequestExecutor();
     server.scheduler_service = try scheduler.Service.initWithAgentService(allocator, config, transport, agent_service);
     server.scheduler_thread = try std.Thread.spawn(.{}, runSchedulerService, .{&server.scheduler_service.?});
 
@@ -312,14 +385,14 @@ pub fn serveKernel(
     while (true) {
         const request_payload = try frame_reader.readFrame(stdin_file) orelse break;
 
-        const job = try std.heap.page_allocator.create(RequestJob);
-        job.* = .{
-            .server = &server,
-            .request_payload = request_payload,
-        };
-
-        const thread = try std.Thread.spawn(.{}, processRequestWorker, .{job});
-        thread.detach();
+        if (!try server.submitRequest(request_payload)) {
+            defer allocator.free(request_payload);
+            const response = try renderBusyResponse(allocator, request_payload);
+            if (response) |payload| {
+                defer allocator.free(payload);
+                try server.writePayload(payload);
+            }
+        }
     }
 }
 
@@ -367,12 +440,25 @@ fn runBufferService(service: *buffer_service.Service) void {
 fn processRequestWorker(job: *RequestJob) void {
     defer std.heap.page_allocator.destroy(job);
     defer job.server.allocator.free(job.request_payload);
+    defer job.server.request_admission.release();
 
     const response_payload = processRequest(job.server, job.request_payload) catch return;
     if (response_payload) |payload| {
         defer job.server.allocator.free(payload);
         job.server.writePayload(payload) catch {};
     }
+}
+
+fn renderBusyResponse(allocator: std.mem.Allocator, request_payload: []const u8) !?[]u8 {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, request_payload, .{}) catch {
+        return try renderErrorResponse(allocator, null, rpc_server_busy_code, "Server request capacity exhausted");
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object) {
+        return try renderErrorResponse(allocator, null, rpc_server_busy_code, "Server request capacity exhausted");
+    }
+    const id = extractRequestId(parsed.value.object) catch null;
+    return errorResponseOrNull(allocator, id, rpc_server_busy_code, "Server request capacity exhausted");
 }
 
 fn processRequest(server: *Server, request_payload: []const u8) !?[]u8 {
@@ -1311,6 +1397,26 @@ fn extractRequestId(object: std.json.ObjectMap) !?[]const u8 {
     return value.string;
 }
 
+test "request admission is bounded and closes before shutdown" {
+    var admission = RequestAdmission{};
+    admission.start();
+    for (0..max_admitted_requests) |_| try std.testing.expect(admission.tryAcquire());
+    try std.testing.expect(!admission.tryAcquire());
+    for (0..max_admitted_requests) |_| admission.release();
+    admission.stop();
+    try std.testing.expect(!admission.tryAcquire());
+}
+
+test "request overload preserves request id and ignores notifications" {
+    const response = (try renderBusyResponse(std.testing.allocator, "{\"jsonrpc\":\"2.0\",\"id\":\"req-busy\",\"method\":\"health/get\"}")).?;
+    defer std.testing.allocator.free(response);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"id\":\"req-busy\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"code\":-32005") != null);
+
+    const notification = try renderBusyResponse(std.testing.allocator, "{\"jsonrpc\":\"2.0\",\"method\":\"events/subscribe\"}");
+    try std.testing.expect(notification == null);
+}
+
 test "success response includes id and payload" {
     const allocator = std.testing.allocator;
     const response = try renderSuccessResponse(allocator, "abc", "{\"ok\":true}");
@@ -1432,6 +1538,28 @@ fn attachTestStdout(tmp: *std.testing.TmpDir, server: *Server, name: []const u8)
     const file = try tmp.dir.createFile(name, .{ .read = true });
     server.stdout_file = file;
     return file;
+}
+
+test "request executor drains admitted frames before server teardown" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var server = makeTestServer();
+    defer server.deinit();
+    const stdout_file = try attachTestStdout(&tmp, &server, "rpc-output.bin");
+    defer stdout_file.close();
+
+    try server.startRequestExecutor();
+    const request = try std.testing.allocator.dupe(u8, "{\"jsonrpc\":\"2.0\",\"id\":\"drain-1\",\"method\":\"initialize\"}");
+    errdefer std.testing.allocator.free(request);
+    try std.testing.expect(try server.submitRequest(request));
+    server.stopRequestExecutor();
+
+    try std.testing.expectEqual(@as(usize, 0), server.request_admission.admitted);
+    try stdout_file.seekTo(0);
+    const output = try stdout_file.readToEndAlloc(std.testing.allocator, 16 * 1024);
+    defer std.testing.allocator.free(output);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"id\":\"drain-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "VAR1-kernel-stdio-v2") != null);
 }
 
 fn appendStaleStartedEvent(workspace_root: []const u8, session_id: []const u8) !void {

@@ -45,29 +45,29 @@
   "proof": {
     "zig": "C:/Users/Savage/AppData/Local/VANTARI-ONE/toolchains/zig-x86_64-windows-0.15.1/zig.exe",
     "release_fast": "9/9 steps succeeded",
-    "focused_tui": "54/56 passed; 2 skipped",
-    "vendored_tui": "103/104 passed; 1 skipped",
-    "isolated_broad": "1695/1695 passed; 0 skipped",
-    "test_runtime_isolation": "five test artifacts receive generated VANTARI_HOME; test-only VANTARI_TEST_ROOT rejects cache-root escape; live file count, bytes, and complete tree hash unchanged",
+    "focused_tui": "58/58 passed; 0 skipped",
+    "host_lifecycle": "220/220 passed; bounded admission, overload, drain, deadlines, and Job Object ownership",
+    "isolated_broad": "19/19 steps; 1919/1919 passed; 0 skipped",
+    "test_runtime_isolation": "six test artifacts receive generated VANTARI_HOME; test-only VANTARI_TEST_ROOT rejects cache-root escape; live file count, bytes, config/auth/summary hashes unchanged",
     "installed_binary": "C:/Users/Savage/AppData/Local/Vantari/bin/vantari.exe",
     "install_script": "apps/backend/scripts/install_windows.ps1",
-    "built_sha256": "ED189470EB55CF8A9333FA31CA04C155F681DEA56E364B31C1D3294FCD42243F",
-    "installed_sha256": "7B12904FBEE46E2C741C17DCDAF677B85C2A5AB6AB4A4D9C6B7234F841993C5D",
-    "installed_hash_matches": false,
-    "active_installed_processes_preserved": [10624, 33816]
+    "built_sha256": "E457855E8B971C02E9A06D807AE53BCD0822256B26B9CA5CBD7987F0C874C057",
+    "installed_sha256": "E457855E8B971C02E9A06D807AE53BCD0822256B26B9CA5CBD7987F0C874C057",
+    "installed_hash_matches": true,
+    "installed_settings_smoke": "initialize ok; config/set var1.config_set.v1 in 5 ms; isolated runtime removed; live root unchanged; zero processes",
+    "active_installed_processes_preserved": []
   },
   "wip": {
     "021": "021a-b archived; 021c-f pending; frontier 021c",
-    "035": "035a-f archived; 035g-h pending; source implementation present; installed proof missing",
+    "035": "035a-f archived; 035g-h pending; current binary installed; live provider /status proof still missing",
     "036": "036a-g archived; parent closeout superseded by P0 findings and not ready for archival",
     "PLUG": "parent and PLUGa-h pending; unstarted"
   },
   "residuals": [
-    "The first broad run inherited production VANTARI_HOME and touched 535 live runtime files; quarantine and projection repair require backup plus active-process shutdown.",
-    "Incident quarantine and installed replacement are paused while installed PIDs 10624 and 33816 own live state.",
+    "Test-isolation incident and legacy backend owners are repaired reversibly; quarantine/archive manifests and rollback paths remain retained evidence.",
     "Agent execution is process-local and scheduler leader acquisition is not inter-process atomic.",
     "RPC notifications drop event seq; summaries and message sequence allocation are not concurrency-safe.",
-    "Settings retains an unbounded RPC/child wait failure class.",
+    "Atomic same-session admission, synchronized buffer identity/preview state, and active-request shutdown stress remain moves 8-10.",
     "Autonomous repair remains a gated evidence workflow, not an implicit background mutator."
   ]
 }

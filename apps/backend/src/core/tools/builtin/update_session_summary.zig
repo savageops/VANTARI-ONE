@@ -92,6 +92,7 @@ pub fn execute(
 
 test "update_session_summary writes a schema-bound ledger row with effect receipt" {
     const allocator = std.testing.allocator;
+    const summary = "Implemented the session summary ledger with mandatory pre-turn-end updates and kernel fallback evidence.";
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
@@ -101,17 +102,21 @@ test "update_session_summary writes a schema-bound ledger row with effect receip
         .session_id = "sess-tool-1",
     };
 
-    const output = try execute(allocator, ctx,
-        \\{"summary":"Implemented the session summary ledger with mandatory pre-turn-end updates and kernel fallback evidence.","title":"Summary ledger","topic":"sessions"}
-    );
+    const arguments = try std.fmt.allocPrint(allocator, "{{\"summary\":{f},\"title\":\"Summary ledger\",\"topic\":\"sessions\"}}", .{std.json.fmt(summary, .{})});
+    defer allocator.free(arguments);
+    const output = try execute(allocator, ctx, arguments);
     defer allocator.free(output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output, "\"ok\":true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "update_session_summary") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "\"words\":12") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "var1.session_summary.v1") != null);
+    var parsed_output = try std.json.parseFromSlice(std.json.Value, allocator, output, .{});
+    defer parsed_output.deinit();
+    try std.testing.expect(parsed_output.value.object.get("ok").?.bool);
+    try std.testing.expectEqualStrings("update_session_summary", parsed_output.value.object.get("tool").?.string);
+    var receipt = try std.json.parseFromSlice(std.json.Value, allocator, parsed_output.value.object.get("content").?.string, .{});
+    defer receipt.deinit();
+    try std.testing.expectEqual(@as(i64, @intCast(summaries.countWords(summary))), receipt.value.object.get("words").?.integer);
+    try std.testing.expectEqualStrings("var1.session_summary.v1", receipt.value.object.get("schema").?.string);
 
-    const row = (try summaries.readSummary(allocator, workspace, "sess-tool-1")).?;
+    var row = (try summaries.readSummary(allocator, workspace, "sess-tool-1")).?;
     defer row.deinit(allocator);
     try std.testing.expectEqualStrings("Summary ledger", row.title);
     try std.testing.expectEqualStrings("sessions", row.topic);

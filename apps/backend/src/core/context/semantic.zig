@@ -84,6 +84,11 @@ fn scoreWithTfIdf(
         docs[i + 1] = msg.content;
     }
 
+    // Hash maps retain key slices. Keep normalized terms in one arena for the
+    // complete scoring pass instead of pointing them at the reusable buffer.
+    var key_arena = std.heap.ArenaAllocator.init(allocator);
+    defer key_arena.deinit();
+
     // Build the vocabulary (unique terms across all docs).
     var vocab = std.StringHashMap(u32).init(allocator);
     defer vocab.deinit();
@@ -107,12 +112,13 @@ fn scoreWithTfIdf(
             // Lowercase the token for normalization.
             var lower_buf: [256]u8 = undefined;
             const lower = toLower(token, &lower_buf);
-            const entry = try dtc.getOrPut(lower);
+            const stable_lower = try key_arena.allocator().dupe(u8, lower);
+            const entry = try dtc.getOrPut(stable_lower);
             if (!entry.found_existing) entry.value_ptr.* = 0;
             entry.value_ptr.* += 1;
 
             // Add to global vocab.
-            const vocab_entry = try vocab.getOrPut(lower);
+            const vocab_entry = try vocab.getOrPut(stable_lower);
             if (!vocab_entry.found_existing) vocab_entry.value_ptr.* = @as(u32, @intCast(vocab.count() - 1));
         }
     }
@@ -265,6 +271,37 @@ test "TF-IDF scorer ranks relevant messages higher than irrelevant" {
 
     // The config-related message should score higher than the weather message.
     try std.testing.expect(scores[0] > scores[1]);
+}
+
+test "TF-IDF normalization owns keys and is deterministic" {
+    const purpose = "Resolve Provider Settings";
+
+    var messages = [_]types.SessionMessage{
+        .{
+            .id = try std.testing.allocator.dupe(u8, "msg-1"),
+            .seq = 1,
+            .role = .assistant,
+            .content = try std.testing.allocator.dupe(u8, "provider provider settings resolved"),
+            .timestamp_ms = 100,
+        },
+        .{
+            .id = try std.testing.allocator.dupe(u8, "msg-2"),
+            .seq = 2,
+            .role = .assistant,
+            .content = try std.testing.allocator.dupe(u8, "Weather forecast outside"),
+            .timestamp_ms = 200,
+        },
+    };
+    defer for (&messages) |*m| m.deinit(std.testing.allocator);
+
+    const first = try scoreMessages(std.testing.allocator, null, purpose, &messages);
+    defer std.testing.allocator.free(first);
+    const second = try scoreMessages(std.testing.allocator, null, purpose, &messages);
+    defer std.testing.allocator.free(second);
+
+    try std.testing.expect(first[0] > 0.0);
+    try std.testing.expect(first[0] > first[1]);
+    try std.testing.expectEqualSlices(f32, first, second);
 }
 
 test "scoreMessages with no messages returns empty" {

@@ -5,6 +5,7 @@ const registry = @import("registry.zig");
 const profile_contract = @import("../agents/profile.zig");
 pub const review = @import("review.zig");
 const workspace_state_tools = @import("workspace_runtime.zig");
+const process_tree = @import("../../shared/process_tree.zig");
 const types = @import("../../shared/types.zig");
 const list_files = @import("builtin/list_files.zig");
 const search_files = @import("builtin/search_files.zig");
@@ -684,81 +685,6 @@ const PipeCollector = struct {
 // atomically via one kernel operation. This matches the pattern used by
 // GitLab Runner and dotnet/runtime for the same reason.
 
-const win = std.os.windows;
-
-extern "kernel32" fn CreateJobObjectW(lpJobAttributes: ?*win.SECURITY_ATTRIBUTES, lpName: ?win.LPCWSTR) callconv(.winapi) ?win.HANDLE;
-extern "kernel32" fn SetInformationJobObject(
-    hJob: win.HANDLE,
-    JobObjectInfoClass: win.DWORD,
-    lpJobObjectInfo: *anyopaque,
-    cbJobObjectInfoLength: win.DWORD,
-) callconv(.winapi) win.BOOL;
-extern "kernel32" fn AssignProcessToJobObject(hJob: win.HANDLE, hProcess: win.HANDLE) callconv(.winapi) win.BOOL;
-
-const JobObjectExtendedLimitInformation: win.DWORD = 9;
-
-const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: win.DWORD = 0x2000;
-
-const IO_COUNTERS = extern struct {
-    ReadOperationCount: win.ULONGLONG,
-    WriteOperationCount: win.ULONGLONG,
-    OtherOperationCount: win.ULONGLONG,
-    ReadTransferCount: win.ULONGLONG,
-    WriteTransferCount: win.ULONGLONG,
-    OtherTransferCount: win.ULONGLONG,
-};
-
-const JOBOBJECT_BASIC_LIMIT_INFORMATION = extern struct {
-    PerProcessUserTimeLimit: win.LARGE_INTEGER,
-    PerJobUserTimeLimit: win.LARGE_INTEGER,
-    LimitFlags: win.DWORD,
-    MinimumWorkingSetSize: win.SIZE_T,
-    MaximumWorkingSetSize: win.SIZE_T,
-    ActiveProcessLimit: win.DWORD,
-    Affinity: win.ULONG_PTR,
-    PriorityClass: win.DWORD,
-    SchedulingClass: win.DWORD,
-};
-
-const JOBOBJECT_EXTENDED_LIMIT_INFORMATION = extern struct {
-    BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION,
-    IoInfo: IO_COUNTERS,
-    ProcessMemoryLimit: win.SIZE_T,
-    JobMemoryLimit: win.SIZE_T,
-    PeakProcessMemoryUsed: win.SIZE_T,
-    PeakJobMemoryUsed: win.SIZE_T,
-};
-
-/// Create a Job Object that kills all assigned processes when its handle is
-/// closed. The caller owns the returned handle and must close it (or rely on
-/// process exit to close it automatically).
-fn createKillOnCloseJob() !win.HANDLE {
-    const job = CreateJobObjectW(null, null) orelse return error.JobObjectCreateFailed;
-
-    var info = std.mem.zeroes(JOBOBJECT_EXTENDED_LIMIT_INFORMATION);
-    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-
-    const ok = SetInformationJobObject(
-        job,
-        JobObjectExtendedLimitInformation,
-        @ptrCast(&info),
-        @sizeOf(JOBOBJECT_EXTENDED_LIMIT_INFORMATION),
-    );
-    if (ok == 0) {
-        _ = win.CloseHandle(job);
-        return error.JobObjectSetInfoFailed;
-    }
-
-    return job;
-}
-
-/// Assign a process handle to a Job Object so it (and all its children) are
-/// killed when the Job Object handle is closed.
-fn assignProcessToJob(job: win.HANDLE, process_handle: win.HANDLE) !void {
-    const ok = AssignProcessToJobObject(job, process_handle);
-    if (ok == 0) return error.JobObjectAssignFailed;
-}
-
 fn runCommandWithLimitsWindows(
     allocator: std.mem.Allocator,
     cwd: []const u8,
@@ -771,19 +697,13 @@ fn runCommandWithLimitsWindows(
     // This ensures that when we kill the child on timeout, the entire process
     // tree dies — not just the direct child. Grandchildren (the actual command
     // under cmd/powershell/bash) are reaped atomically by the kernel.
-    var job_handle: ?win.HANDLE = null;
-    if (createKillOnCloseJob()) |job| {
-        job_handle = job;
-    } else |_| {
+    var job = process_tree.KillOnCloseJob.init() catch blk: {
         // Job Object creation is best-effort: if it fails (e.g. already in a
         // job group on some Windows versions), fall back to the old single-
         // process TerminateProcess path.
-    }
-    defer {
-        if (job_handle) |job| {
-            _ = win.CloseHandle(job);
-        }
-    }
+        break :blk process_tree.KillOnCloseJob{};
+    };
+    defer job.deinit();
 
     var child = std.process.Child.init(argv, allocator);
     child.stdin_behavior = .Ignore;
@@ -804,12 +724,7 @@ fn runCommandWithLimitsWindows(
     };
 
     // Assign the child to the Job Object so the entire tree is killable.
-    if (job_handle) |job| {
-        assignProcessToJob(job, child.id) catch {
-            // Assignment can fail if the process is already in another job.
-            // The kill-on-close handle close will still terminate what it can.
-        };
-    }
+    job.assign(child.id) catch {};
 
     const stdout_file = child.stdout.?;
     child.stdout = null;
@@ -843,7 +758,7 @@ fn runCommandWithLimitsWindows(
             // Terminate the direct child. If the Job Object is assigned, closing
             // the job handle (in the defer above) will also kill grandchildren.
             // We still TerminateProcess for immediate effect.
-            windows.TerminateProcess(child.id, 1) catch {};
+            job.terminate(child.id, 1);
             windows.WaitForSingleObjectEx(child.id, windows.INFINITE, false) catch {};
         },
         else => return err,

@@ -1,5 +1,27 @@
 # Execution Log
 
+## 2026-08-12 - Runtime isolation and bounded host lifecycle
+
+**Outcome:** Closed the live-state incident, removed legacy runtime ownership,
+bounded the stdio host/client lifecycle, and proved the installed settings path
+without mutating operator state.
+
+- Isolated six test artifacts under `apps/backend/.zig-cache`; the complete
+  graph passes 19/19 steps and 1,919/1,919 tests with zero skips.
+- Quarantined the exact 129-session incident set plus its summary/changelog
+  projections with snapshot, manifest, rollback, and retained-state readback.
+- Archived seven legacy backend runtime owners (2,252 files) without merging
+  fixtures; todo/changelog sync now writes direct workspace `.var` owners.
+- Replaced detached RPC request threads with one Server-owned four-worker pool,
+  32-request admission, typed overload, and ordered drain.
+- Added per-method RPC deadlines, late-response retirement, settings timeout and
+  remote-error states, and one shared Windows Job Object with bounded exit/drain.
+- Added 220 host-lifecycle tests and raised the focused TUI lane to 58/58.
+- Installed ReleaseFast hash
+  `E457855E8B971C02E9A06D807AE53BCD0822256B26B9CA5CBD7987F0C874C057`
+  matches source. Isolated installed `config/set` completed in 5 ms, removed its
+  generated state, preserved the live root, and left zero VANTARI process.
+
 ## 2026-08-10 - Explicit cross-directory agent access boundary
 
 **Outcome:** Agent-facing file, search, LSP, and process tools now support an explicit full-access mode without weakening the default workspace boundary.

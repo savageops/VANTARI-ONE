@@ -312,7 +312,9 @@ test "shell_exec full access mode resolves an external cwd" {
         .runWithLimitsFn = Runner.run,
     });
     defer std.testing.allocator.free(output);
-    try std.testing.expect(std.mem.indexOf(u8, output, external_root) != null);
+    var parsed_output = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, output, .{});
+    defer parsed_output.deinit();
+    try std.testing.expectEqualStrings(external_root, parsed_output.value.object.get("cwd").?.string);
 }
 
 fn undefinedRun(
