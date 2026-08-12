@@ -12,7 +12,7 @@ scope: full-harness
 
 VANTARI has a strong kernel thesis and several unusually good local mechanisms: one context compiler, append-only transcript and event ledgers, typed tool review and dispatch, bounded Windows process execution, provider-wire separation, one project-local execution owner around fixed agent capacity, and a compact TUI read model. The architecture is materially better than a chat-wrapper harness.
 
-The current checkout is not production-ready for persistent autonomous execution. Its critical gap is not model intelligence or UI polish. Move 21 separates presentation lifetime from execution lifetime in source: TUI/CLI detach leaves one owner/kernel/pool generation alive. Move 22 removed the unused per-session executor that bypassed that owner. Move 23 closes scheduler split-brain with one crash-released process lock and a read-back generation fence. Move 24 process-serializes the ticket ledger and commits worker generation, lease, capability, and deterministic child identity in the winning claim before child creation. Exact active-turn reconciliation after owner death, durable agent messaging, and installed artifact parity remain open. Host request lifetime, test isolation, append-only summary mutation, per-session message sequencing, exact event sequence transport, and shipped-TUI replay are closed. Chain 036 remains pending until moves 25–30 close the process-failure contract.
+The current checkout is not production-ready for persistent autonomous execution. Its critical gap is not model intelligence or UI polish. Move 21 separates presentation lifetime from execution lifetime in source: TUI/CLI detach leaves one owner/kernel/pool generation alive. Move 22 removed the unused per-session executor that bypassed that owner. Move 23 closes scheduler split-brain with one crash-released process lock and a read-back generation fence. Move 24 process-serializes the ticket ledger and commits worker generation, lease, capability, and deterministic child identity in the winning claim before child creation. Move 25 proves assignment is ledger-only and deletes the unused ticket-policy branch. Exact active-turn reconciliation after owner death, durable agent messaging, and installed artifact parity remain open. Host request lifetime, test isolation, append-only summary mutation, per-session message sequencing, exact event sequence transport, and shipped-TUI replay are closed. Chain 036 remains pending until moves 26–30 close the process-failure contract.
 
 Current classification:
 
@@ -20,8 +20,8 @@ Current classification:
 |---|---|---|
 | Build | Pass | ReleaseFast builds 9/9 with Zig 0.15.1. |
 | Focused TUI | Pass | Backend TUI 61/61 with zero skips. |
-| Broad tests | Pass | Canonical isolated graph is 19/19 and 1,976/1,976 with zero skips. |
-| Installed proof | Historical pass through move 20; current replacement blocked | Installed move-19 SHA-256 remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`; current source is `DF57FB34112E0D1125D50620995EDF2683711D546B359226F504D2C4A03C6C00`. Operator PIDs 12028/14452 are preserved until natural exit. |
+| Broad tests | Pass | Canonical isolated graph is 19/19 and 1,933/1,933 with zero skips; one registry loop executes all 53 declared cases. |
+| Installed proof | Historical pass through move 20; current replacement blocked | Installed move-19 SHA-256 remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`; current source is `77A2B111DCA35AA08E4D33973D83AB2FB9783E6C4D423A09611D24F0EE3142FD`. Operator PIDs 12028/14452 are preserved until natural exit. |
 | Execution owner | Source pass | `LocalClient` reconnects to one workspace owner; 20/20 concurrent clients converge, foreground duplicate start is rejected, explicit workspace defeats inherited redirection, graceful/crash recovery creates one new generation, and teardown leaves zero proof-owned processes. |
 | Agent pool | Presentation-persistent; owner-crash recovery open | The fixed pool survives TUI/CLI exit. Owner restart still converts running receipts to `StaleAgentOwner`; exactly-once resume/requeue is not wired. |
 | Scheduler/ticket persistence | Admission pass; owner-crash recovery open | Two complete kernels yield one scheduler generation, one schedule attempt, one serialized ticket claim, and one matching deterministic child session. |
@@ -173,7 +173,7 @@ parallel continuation path around the owner.
 Child completion currently reaches the parent through convergence-specific
 messages and control events. There is no general peer mailbox, group delivery,
 restart-safe unread cursor, or model-selected queue/wake path. The accepted
-direction for moves 25–30 is selective awareness: one sequence-addressed
+direction for moves 26–30 is selective awareness: one sequence-addressed
 direct/group/parent mailbox over the same session/event owner, canonical
 summaries and artifact references on demand, and no shared transcript or topic
 broker. Codex supplies queued versus wake-bearing delivery pressure; Claude Code
@@ -184,6 +184,12 @@ target scope. VANTARI must add cold-start replay and fewer concepts.
 
 Assignment is correctly modeled as queue admission. The scheduler claims assigned tickets only when AgentService reports capacity. This preserves one capacity owner and avoids a second worker registry.
 
+Move 25 locks that invariant. Both create-as-assigned and transition-to-assigned
+append queue state without creating a claim, active-session id, session record,
+or provider turn. `agent_routes.max_concurrency` is the sole capacity setting;
+the four-key `tickets` policy object, loader, validation, and public examples are
+deleted because none governed execution.
+
 Move 23 closes the former split-brain seam. [tryAcquireLease](../../apps/backend/src/core/scheduler/store.zig) acquires `.var/schedules/lease.lock` through the shared process-lock primitive, rejects an active different owner/generation, writes `lease.json`, reads the exact generation back, and returns a guard held through scheduled-job and ticket mutation. The lease file remains a durable projection and failover clock; the operating-system lock is the mutex.
 
 The mechanism combines the strongest useful pressure from six tracked harnesses without importing their incidental architecture. Oh My Pi contributes a process-owned crash-released lock; Eve contributes one resolved generation reused through dispatch. Scion, NullClaw, and KrillClaw retain in-process schedulers and therefore fail the two-kernel leadership requirement. Flue exposes cron as manifest-only in the tracked source; Codex and pi have no comparable project-local scheduler owner. VANTARI adds no database, daemon, election service, or second registry.
@@ -191,6 +197,13 @@ The mechanism combines the strongest useful pressure from six tracked harnesses 
 Move 24 extends the same owner instead of adding a second transaction system. `core/tickets` acquires `.var/tickets/ledger.lock` around every projection and mutation. One claim append commits revision, worker generation, lease, attempt, selected capability, and a child-session id derived from the claim identity. Only the append winner may materialize and submit that child. Flue supplies the strongest identity precedent by deriving a child session from parent plus task identity; Codex, Oh My Pi, Eve, pi, NullClaw, and KrillClaw either remain in one runtime or do not provide a durable cross-process ticket claim. VANTARI adds the missing process fence without a database, transaction coordinator, second queue, or second pool.
 
 Native evidence root `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1` starts two full source `kernel-stdio` processes against one due shell job and one assigned ticket. It records one attempt ID, one reserved row, one completed row, one ticket claim, one matching deterministic child session, one shared nonzero worker generation, empty stderr, graceful EOF shutdown, and zero proof-owned survivors.
+
+Competitive pressure confirms the smaller boundary. Temporal, Eve, Celery, and
+BullMQ separate durable admission from capacity-bound claim. Codex claims bounded
+eligible rows before model calls. Flue derives child identity before execution.
+Pi and Oh My Pi spawn from explicit live task calls, while Scion, NullClaw, and
+KrillClaw queue inside one process. VANTARI keeps the durable split and claim
+identity without their database, broker, daemon, or direct-launch branch.
 
 ### TUI projection
 
@@ -247,7 +260,7 @@ The producer/transport replay contract now carries exact identity: `SessionEvent
 | P1-4 | DAP calls are non-composable | dap_attach destroys its client before returning; stacktrace and variables spawn fresh unattached adapters, despite usage hints that they continue the attach session. Reads have no deadline. | Make one session-scoped DAP client with request IDs, timeouts, cancellation, and teardown evidence. |
 | P1-5 | TTSR does not abort mid-stream | rule_abort_requested is set by a delta callback, but the callback returns normally and correction happens only after provider completion. | Give provider streaming an explicit abort result and prove the network/read loop stops before terminal completion. |
 | P1-6 | Shadow owners are documented as shipped | Provider capability cache has no runtime consumer; write-intent reserve/commit is test-only; memory quota counters are not updated. | Wire each through its canonical consumer or label it frontier. Do not preserve dead schemas as pretend capability. |
-| P1-7 | Ticket policy knobs do not govern execution | tickets.auto_assign, proactive_workpool, close_authority, and reopen_with_reasoning are parsed and documented but do not drive the scheduler state machine. Default help also says assignment starts an agent, contradicting queue admission. | Remove unused knobs or wire them into the one ticket state machine. Correct help before claiming policy. |
+| P1-7 | Ticket policy knobs do not govern execution | **Closed 2026-08-13.** The unused `tickets` object, four keys, loader, validation, and false public examples are deleted. Direct assignment probes retain two queued tickets with zero claims or sessions. | Keep assignment non-configurable and ledger-only. Use `agent_routes.max_concurrency` as the sole capacity setting. Do not restore an assignment-to-launch branch. |
 | P1-8 | Work state has parallel owners | Tickets are declared canonical, but todo_slice, session_record, .var/todos, and changelog are also model-facing lifecycle surfaces. | Tickets own work state. Plans, research, summaries, and changelog become ticket-linked artifacts, not independent task systems. |
 | P1-9 | Prompt duplicates native tool schema and doctrine | The builder renders the full catalog while the provider request also sends native tool definitions. The operating prompt repeats repository doctrine and carries contradictions. | Keep native schemas as API truth. Inject only policy deltas and demand-load examples/help through skill_info or catalog lookup. |
 | P1-10 | Search is unavailable on the installed owner path | search_files requires iex; the machine has ix.exe but no iex executable, and installed tools reports the capability unavailable. | Choose one executable identity and resolve it once in installation/config. Do not add rg or grep as hidden fallback. |
@@ -301,7 +314,7 @@ VANTARI currently owns FailureReceipt and part of ExactInputRerun. It does not y
 |---|---|---|---|
 | 021 Codex subscription auth | 021a-b archived; 021c-f pending | Live chain at 021c. It overlaps provider/auth owners and must precede any 035 installed provider proof that changes the same surfaces. | Open; unchanged by this audit. |
 | 035 provider cost and compat | 035a-f archived; 035g-h pending | Cost/telemetry client code exists and source tests cover it. The current artifact is installed, but no current live provider event plus installed /status proof exists. | Implemented in source, not closed. Keep 035g/h pending. |
-| 036 ticket pool and repair | 036a-g archived; parent remains in pending with status complete | In-process queue and UI projection exist. Process survival and inter-process lease safety are unproven and contradicted by source. | Historical closeout is overclaimed. Reopen through P0 findings before parent archival. |
+| 036 ticket pool and repair | 036a-g archived; parent remains pending | Process-persistent pool, process-exclusive scheduler leadership, serialized claim/child admission, and queue-only assignment now pass in source. Durable agent mail and active-turn owner-crash reconciliation remain open. | Historical closeout remains superseded. Continue with moves 26–30 before parent archival. |
 | PLUG plugin socket | Parent and PLUGa-h pending; no archived units | Unstarted chain. Built-ins remain the only default capability surface. | Open, lower priority than integrity findings. |
 | Full access mode | Default false; one shared resolver and ExecutionContext projection | Source tests are green. Installed `config/set` flipped the key to true in an isolated workspace and returned `var1.config_set.v1` in 5 ms. | Installed and source proof complete for the setting path. |
 | TUI footer and child summary | Source implements compact telemetry, surface tint hierarchy, Agents completed/total, and bounded child summary | Focused TUI tests pass 61/61 and the current source binary is installed. | Functional source proof complete; installed visual matrix remains pending. |
@@ -312,7 +325,7 @@ VANTARI currently owns FailureReceipt and part of ExactInputRerun. It does not y
 | Probe | Result |
 |---|---|
 | apps/backend ReleaseFast build | 9/9 steps succeeded. |
-| Canonical isolated graph | 19/19 steps; 1,958/1,958 tests across integration, executable, TUI, memory, chain 035, and host lanes. |
+| Canonical isolated graph | 19/19 steps; 1,933/1,933 tests across integration, executable, TUI, memory, chain 035, and host lanes. One loop executes all 53 registry cases; 45 wrappers that left ten cases undiscovered are removed. |
 | Backend TUI lane | 61/61 passed, including exact same-millisecond render identity, gap catch-up, observed-run cancellation, settings open/apply/close/reopen/timeout, and remote-error handling. |
 | Host lifecycle lane | 238/238 passed, including atomic same-session admission, session-keyed buffer projection, exact-generation cancellation, single terminal settlement, cancellation-before-join shutdown, deadlines, and Job Object ownership. |
 | Admission and buffer races | 100 contenders produced one turn owner and 99 non-starters; a losing prompt was retained as a steer. A→B buffer switching rejected late A state. |
@@ -325,8 +338,9 @@ VANTARI currently owns FailureReceipt and part of ExactInputRerun. It does not y
 | Installed generation cancellation | The move-18 race returned `stale_run` for observed sequences 1 and 6 while newer work survived; exact sequence 11 returned `requested`, then the kernel exited 0 with zero processes. Its legacy terminal writer is superseded by move 19. |
 | Direct-test isolation | Wrapper rerun kept 99,960 files / 693,051,144 bytes and config/auth hashes unchanged; one generated cache-owned home; zero VANTARI processes. |
 | git diff --check | Exit 0; line-ending warnings only. |
-| Last installed-proven ReleaseFast SHA-256 | Move-19 source/installed artifact `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`; exact match at that gate. Current source is `DF57FB34112E0D1125D50620995EDF2683711D546B359226F504D2C4A03C6C00`; replacement remains blocked by the preserved operator pair. |
+| Last installed-proven ReleaseFast SHA-256 | Move-19 source/installed artifact `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`; exact match at that gate. Current source is `77A2B111DCA35AA08E4D33973D83AB2FB9783E6C4D423A09611D24F0EE3142FD`; replacement remains blocked by the preserved operator pair. |
 | Scheduler and ticket admission | Barrier race: one guard/one unavailable. Native two-kernel proof: one unique attempt, one ticket claim, one matching child session, one nonzero generation shared by scheduler and ticket, empty stderr, final zero. Evidence root `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1`. |
+| Ticket assignment and policy | Create-as-assigned plus transition-to-assigned produce two queued tickets, zero claims, zero active sessions, and zero session records. Four dead policy keys are deleted. The 94-segment GGUF audit found one import/declaration adjacency candidate, zero exact pairs, and no duplicate queue or execution owner. |
 | Installed settings transport | `initialize` plus `config/set` returned in 5 ms; isolated runtime removed; live config/auth/lease and full tree metrics unchanged; zero processes. |
 | Installed process boundary | Forced parent termination also removed its kernel child through the shared Windows Job Object; zero VANTARI processes remained. |
 | Smoke-harness correction | The first settings smoke inherited live `VANTARI_HOME` and rotated only the expired scheduler `lease.json` (one-byte timestamp-width change). Config, auth, summaries, and process inventory were unchanged. The retained script now pins a disposable workspace and proves the live lease hash unchanged. |
@@ -385,28 +399,29 @@ root byte/count/hash identical.
 
 1. Protect state: **closed** — tests are isolated, incident rows are quarantined, and legacy runtime-shaped owners are archived without merge.
 2. Fix host lifetime: **closed** — bounded executor, deadlines, atomic session admission, synchronized buffer routing, cancellation-before-join stress, and child-process cleanup all pass.
-3. Fix persistent arbitration: **owner, scheduler, and ticket-admission source slices
+3. Fix persistent arbitration: **owner, scheduler, ticket-admission, and assignment source slices
    closed** — presentation detach, duplicate exclusion, graceful/crash owner
    lifecycle, process-exclusive scheduler generation, process-serialized ticket
-   claims, deterministic child identity, and cleanup pass. Exactly-once active-turn
-   recovery remains.
+   claims, deterministic child identity, queue-only assignment, and cleanup pass.
+   Exactly-once active-turn recovery remains.
 4. Fix ledgers and replay: **closed** — summary/message mutation, binary-safe
    payload, common prefix salvage, and six synchronized 100-way admission,
    ledger, tracked-TUI replay, and shutdown probes pass four consecutive graphs.
-5. Restore capability truth: persistent eval, composable DAP, real TTSR abort, one search executable identity, and removal of dead policy surfaces.
+5. Restore capability truth: dead ticket policy is **closed**; persistent eval, composable DAP, real TTSR abort, and one search executable identity remain.
 6. Close existing chains in order: 021 frontier, 035 live installed proof, reopened 036 re-review, then PLUG.
 7. Promote only after isolated broad tests, adversarial multi-process tests, installed source-hash equality, live provider/tool evidence, and clean child/process exit.
 
 ## Residual boundary
 
-This audit plus moves 21–24 proves the current checkout, one reconnectable source
+This audit plus moves 21–25 proves the current checkout, one reconnectable source
 execution owner, 20-way cross-process client convergence, duplicate exclusion,
 graceful/crash generation recovery, 100-way atomic same-session admission,
 100-way event/message/summary ownership, a 100-owner shutdown fence, 100-event
 tracked-TUI replay, ReleaseFast installed binary, disposable summary migration,
 isolated settings transport, exact TUI event suffix catch-up, and Windows child
 cleanup on this machine. It also proves one scheduler winner, one ticket claim,
-and one matching child session across two complete source kernels. It does not
+ and one matching child session across two complete source kernels, plus
+ ledger-only assignment with no execution-policy branch. It does not
 prove the current owner path through the installed
 binary, a clean clone, another host, a multi-process session writer,
 exactly-once mid-turn owner recovery, or a live external-provider turn on this

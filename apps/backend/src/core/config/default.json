@@ -324,17 +324,5 @@
     "MAX_STEPS": null,
     "MAX_TOOL_CALLS_PER_TURN": null,
     "MAX_TOOL_CALLS_PER_SESSION": null
-  },
-  "tickets": {
-    "_help": {
-      "auto_assign": "When true, an assigned ticket automatically starts a specialist subagent with the ticket context (id, location, objective, method). When false, tickets wait for an explicit launch.",
-      "proactive_workpool": "When false (default), agents never claim open tickets on their own - they wait for VANTARI to assign, then execute. When true, idle specialists may claim unassigned tickets from the pool.",
-      "close_authority": "Who may transition a ticket to closed. Agents are ALWAYS forbidden to close tickets regardless of this value (structural, not configurable). kernel (default) = the kernel closes after reviewing completes; operator = the operator prompt explicitly closes.",
-      "reopen_with_reasoning": "When true, every close/reopen/reassign decision carries written reasoning, and a reopened ticket is re-assigned immediately to a fresh specialist."
-    },
-    "auto_assign": true,
-    "proactive_workpool": false,
-    "close_authority": "kernel",
-    "reopen_with_reasoning": true
   }
 }

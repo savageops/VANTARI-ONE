@@ -33,6 +33,8 @@ second runtime owner.
 - `.var/sessions/<id>/` is source truth. Read `messages.jsonl`, `context.jsonl`,
   `events.jsonl`, `session.json`, and `output.txt` as separate owners.
 - Assignment admits ticket work to the queue. It does not launch an agent.
+- `agent_routes.max_concurrency` is the sole ticket execution capacity knob.
+  Do not invent or restore a `tickets` execution-policy section.
 - Change behavior through prompt layers. Keep kernel logic for capability truth,
   durability, budgets, evidence, recovery, and irreversible-action gates.
 

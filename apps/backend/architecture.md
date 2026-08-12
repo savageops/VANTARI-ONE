@@ -137,7 +137,10 @@ log_ticket transition(assigned)
   -> terminal evidence + ticket reconciliation
 ```
 
-There is no second worker registry. `tickets.proactive_workpool` is opt-in; the default is a configured pool of available specialists waiting for explicit assignment. Health and client projections expose pool/queue pressure without taking ownership of scheduling.
+There is no second worker registry or ticket execution policy. Assignment is
+always a ledger-only admission; `agent_routes.max_concurrency` is the sole
+configured capacity ceiling. Health and client projections expose pool/queue
+pressure without taking ownership of scheduling.
 
 ## Session message flow
 
@@ -382,11 +385,13 @@ Every session directory contains:
 The project-local execution owner keeps this sole service/pool/scheduler
 composition alive across TUI and CLI detach. It does not make in-memory child
 work crash-resumable: owner death still requires the generation-fenced
-reconciliation assigned to moves 25–30. Move 23 closes scheduler leadership.
+reconciliation assigned to moves 26–30. Move 23 closes scheduler leadership.
 Move 24 closes ticket admission split-brain: `core/tickets` holds one shared
 process lock across projection, validation, and append; the winning claim row
 commits worker generation, lease, attempt, capability hash, and a deterministic
 child-session id before `AgentService` can create or submit that session.
+Move 25 proves every assignment path is ledger-only and deletes the unused
+ticket execution-policy surface.
 
 `core/executor/loop.zig` parks a waiting parent on the supervisor condition without a provider call. The first unconsumed terminal child wakes the parent; the service appends that child's convergence record exactly once, rebuilds through the context compiler, and permits the next routing/synthesis turn while unfinished siblings remain supervised. A parent cannot emit terminal output while any owned child remains active. Full specialists execute as ordinary isolated VAR1 child sessions. Tool-free `model_task` specialists use one provider turn and validate their supplied output schema without acquiring a second transcript or tool runtime.
 
@@ -531,7 +536,10 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-13:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Isolated broad test graph -> 19/19 steps and 1976/1976 tests passed.
+- Isolated broad test graph -> 19/19 steps and 1933/1933 tests passed. The lower
+  total is intentional: 45 one-case registry wrappers were replaced by one loop
+  that executes every one of the 53 declared cases, including ten that had no
+  test declaration.
 - Focused backend TUI -> 61/61 passed.
 - Host lifecycle lane passes, including atomic same-session admission,
   session-keyed buffer state, exact-generation cancellation,
@@ -542,10 +550,16 @@ Latest local Windows validation on 2026-08-13:
   one deterministic child session, one shared nonzero worker generation, and
   zero proof-owned survivors. Evidence root:
   `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1`.
+- Direct create-as-assigned and transition-to-assigned probes retain two queued
+  tickets with zero claims, active sessions, or session records. The unused
+  four-key `tickets` policy surface is deleted; `agent_routes.max_concurrency`
+  remains the sole capacity setting. A 94-segment GGUF audit found one adjacent
+  import/declaration candidate, zero exact pairs, and no second queue or
+  execution owner.
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Current source SHA-256 is
-  `DF57FB34112E0D1125D50620995EDF2683711D546B359226F504D2C4A03C6C00`.
+  `77A2B111DCA35AA08E4D33973D83AB2FB9783E6C4D423A09611D24F0EE3142FD`.
   Installed move-19 SHA-256 remains
   `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
   replacement waits for operator-owned PIDs 12028/14452 to exit naturally.

@@ -21,6 +21,9 @@ validation, and append; one winning row commits generation, lease, capability,
 attempt, and deterministic child identity before materialization. Child results still reach
 parents through convergence-specific code; no general durable direct/group/parent
 mailbox exists for restart-safe peer delivery.
+Move 25 closes assignment ambiguity: create-as-assigned and
+transition-to-assigned append queue state only, and the dead ticket execution
+policy is deleted.
 
 ## Evidence
 
@@ -41,6 +44,9 @@ mailbox exists for restart-safe peer delivery.
 - [agents/service.zig](../../../apps/backend/src/core/agents/service.zig) derives
   the child identity from the durable claim key and creates it only after the
   winning append.
+- [log_ticket.zig](../../../apps/backend/src/core/tools/builtin/log_ticket.zig)
+  proves both assignment paths leave zero claims, active-session ids, and session
+  records. `agent_routes.max_concurrency` remains the sole capacity setting.
 - [roadmap move 21](../../roadmap/21-persistent-execution-owner.md) proves one
   owner/kernel generation across client detach, 20 concurrent clients,
   duplicate-start pressure, graceful stop, forced crash, and zero cleanup.
@@ -73,7 +79,8 @@ registry, shared transcript, or message-created work lifecycle.
 Current receipt: TUI/CLI detach, duplicate-start exclusion, graceful owner stop,
 forced owner-tree cleanup, one-generation recovery, deletion of the dead
 per-session executor, two-kernel scheduler fencing, and one-claim/one-child ticket
-admission pass in source. Installed replacement, active-turn owner-crash
+admission pass in source. Queue-only assignment and deletion of the unused ticket
+policy also pass. Installed replacement, active-turn owner-crash
 reconciliation, and mailbox delivery remain open; this finding stays pending.
 
 ## Source and salvage

@@ -31,8 +31,7 @@ pub const AgentSpec = struct {
     /// stale-owner-reconciliation cold-start-replayable.
     doctrine_tags: []const u8,
     /// Agent may transition states of tickets it owns (assigned→in_progress→
-    /// complete). Agents NEVER close tickets — close authority is kernel-only
-    /// (tickets.close_authority). No config knob exists to widen this.
+    /// complete). Agents NEVER close tickets; no config knob widens this.
     ticket_ownership: bool,
     /// Live checkpoint contract the agent must keep current while working
     /// (>=3-sentence summary row) so the parent, siblings, and cold-start

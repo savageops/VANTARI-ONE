@@ -241,13 +241,16 @@ Every row above compounds the parent ratchet.
 
 [`../findings/11-persistent-agent-worker-and-scheduler-arbitration.md`](../findings/11-persistent-agent-worker-and-scheduler-arbitration.md)
 
-Move 24 is closed in source. One shared ticket-ledger process lock now serializes
+Moves 24–25 are closed in source. One shared ticket-ledger process lock serializes
 projection, revision validation, and append; the winning row commits lease,
 generation, capability, attempt, and deterministic child identity before one
 child is materialized. The two-kernel proof at
 `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1` records one claim
-and one matching child. Move 25 is next: preserve and pressure-test assignment as
-side-effect-free queue admission across every caller and projection.
+and one matching child. Direct create-as-assigned and transition-to-assigned
+retain two queued tickets with zero claims or sessions. The unused four-key
+ticket policy is deleted; `agent_routes.max_concurrency` is the sole capacity
+setting. Move 26 is next: add one bounded sequence-addressed direct/group/parent
+mailbox on the existing session/event spine.
 
 ## Stop Condition
 

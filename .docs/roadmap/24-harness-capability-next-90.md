@@ -70,8 +70,9 @@ advance the queue until the real installed consumer path proves it.
 | 22 | delete/consolidate | closed | Deleted the uncalled per-session `run-session` executor, parser, and false capability help: 138 production lines removed. Canonical `run --session-id -> LocalClient -> /owner/rpc -> session/send` remains. Source tests prove the retired command is absent and submission reaches one kernel transport with observable `session_started -> assistant_response`; graph 1,970/1,970, ReleaseFast 9/9, unknown-command smoke, and owner tracer pass. |
 | 23 | consolidate/add-tests | closed | Replaced scheduler `lease.json` read/check/write leadership with the one shared crash-released process-lock primitive. A guard spans the full tick; the lease projection carries a random nonzero generation and is read back before dispatch. Barrier contention yields one winner; two complete source `kernel-stdio` processes against one due job produced one attempt ID, one reserved row, one completed row, and zero survivors. The graph passes 1,973/1,973, ReleaseFast 9/9, and the 34-segment ownership audit finds zero candidate/exact pairs. |
 | 24 | consolidate/add-tests | closed | `core/tickets` now holds one shared process lock across projection, revision validation, and append. The winning claim row atomically commits worker generation, lease, attempt, capability hash, and deterministic child-session identity before `AgentService` materializes or submits that child. The 1,976/1,976 graph passes; the extended two-kernel Windows proof records one claim, one matching child session, one shared generation, and zero survivors at `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1`; the 76-segment GGUF audit finds zero candidate/exact pairs. |
+| 25 | delete/add-tests | closed | Assignment remains a ledger-only transition for both create-as-assigned and unassigned-to-assigned paths: two assigned tickets produce zero claims, active sessions, or session records. Removed the four dead `tickets` execution-policy keys, loader, validation, and docs; `agent_routes.max_concurrency` is the sole capacity setting. One registry loop now executes all 53 declared cases instead of silently omitting ten. The graph passes 1,933/1,933; ReleaseFast is 9/9; the 94-segment audit found one adjacent import/declaration candidate, zero exact pairs, and no duplicate queue or execution owner. |
 | 31 | delete/consolidate | closed | Retired prompt leak and brittle prose assertions removed; broad graph green. |
-| 38 | consolidate | reopened/pending | Historical install proof passed for an earlier artifact. Current ReleaseFast is `DF57FB34112E0D1125D50620995EDF2683711D546B359226F504D2C4A03C6C00`; installed remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`. Replace and rerun installed smokes only after operator-owned PIDs 12028/14452 exit naturally. |
+| 38 | consolidate | reopened/pending | Historical install proof passed for an earlier artifact. Current ReleaseFast is `77A2B111DCA35AA08E4D33973D83AB2FB9783E6C4D423A09611D24F0EE3142FD`; installed remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`. Replace and rerun installed smokes only after operator-owned PIDs 12028/14452 exit naturally. |
 
 ## Competitive basis
 
@@ -232,8 +233,8 @@ advance the queue until the real installed consumer path proves it.
 
 ## Immediate frontier
 
-Start at move 25. Moves 1-20 and 22-24 are closed; move 21 is source-complete
-and blocked only at installed replacement. Moves 25-30 finish assignment
-semantics, durable agent mail, capacity truth, and crash reconciliation.
+Start at move 26. Moves 1-20 and 22-25 are closed; move 21 is source-complete
+and blocked only at installed replacement. Moves 26-30 finish durable agent
+mail, capacity truth, and crash reconciliation.
 Do not spend implementation time on PLUG, context sharding, or autonomous repair
 while that band remains red.

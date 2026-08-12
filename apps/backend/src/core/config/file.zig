@@ -48,27 +48,6 @@ pub const AgentPolicy = struct {
     orchestrator_only: bool = true,
 };
 
-/// Ticket lifecycle policy (AGENTS.md §VI ticket doctrine). Agents own the
-/// states of their tickets (assigned→in_progress→complete) but NEVER close;
-/// close/reopen/reassign authority is the kernel's, exercised by the operator
-/// prompt. Value type — no allocations.
-pub const TicketPolicy = struct {
-    /// When true, an assigned ticket automatically starts a specialist
-    /// subagent with the ticket context (id, location, objective, method).
-    auto_assign: bool = true,
-    /// When false (default), agents never claim open tickets on their own —
-    /// they wait for the kernel to assign, then execute. When true, a
-    /// workpool of idle specialists may claim unassigned tickets.
-    proactive_workpool: bool = false,
-    /// Who may transition a ticket to closed. Agents are always forbidden;
-    /// this knob only narrows the kernel surface. "kernel" (default) or
-    /// "operator" (the operator prompt explicitly closes).
-    close_authority: []const u8 = "kernel",
-    /// When true, every close/reopen decision carries written reasoning and a
-    /// reopened ticket is re-assigned immediately to a fresh specialist.
-    reopen_with_reasoning: bool = true,
-};
-
 pub const default_document = @embedFile("default.json");
 
 pub fn path(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
@@ -217,24 +196,6 @@ pub fn loadAgentPolicy(allocator: std.mem.Allocator, workspace_root: []const u8)
     };
 }
 
-/// Load the ticket lifecycle policy (auto-assign, workpool, close authority,
-/// reopen reasoning). Pure value read; invalid values are rejected at
-/// document validation before this loader ever runs.
-pub fn loadTicketPolicy(allocator: std.mem.Allocator, workspace_root: []const u8) !TicketPolicy {
-    var parsed = try parseDocument(allocator, workspace_root);
-    defer parsed.deinit();
-    const tickets = objectField(parsed.value.object, "tickets") orelse return .{};
-    return .{
-        .auto_assign = try optionalBool(tickets, "auto_assign", true),
-        .proactive_workpool = try optionalBool(tickets, "proactive_workpool", false),
-        .close_authority = if (tickets.get("close_authority")) |value|
-            (if (value == .string) value.string else "kernel")
-        else
-            "kernel",
-        .reopen_with_reasoning = try optionalBool(tickets, "reopen_with_reasoning", true),
-    };
-}
-
 /// Load one role override without turning config.json into a credential store.
 pub fn loadAgentRouteOverride(
     allocator: std.mem.Allocator,
@@ -378,7 +339,7 @@ fn parseDocument(allocator: std.mem.Allocator, workspace_root: []const u8) !std.
 }
 
 fn validateDocumentShape(root: std.json.ObjectMap) !void {
-    try rejectUnknownKeys(root, &.{ "_about", "_help", "version", "runtime", "provider", "agent_routes", "agents", "tickets", "context", "prompts", "draft", "buffer", "memory", "environment" });
+    try rejectUnknownKeys(root, &.{ "_about", "_help", "version", "runtime", "provider", "agent_routes", "agents", "context", "prompts", "draft", "buffer", "memory", "environment" });
     try validateAbout(root);
     try validateHelp(root, &.{"version"});
     if (try validatedObjectField(root, "runtime")) |value| {
@@ -475,16 +436,6 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
                 const max_children = try optionalUsize(definition, "max_children", 0);
                 if (max_steps == 0 or max_steps > 4096 or max_tool_calls > 4096 or max_children > 64) return Error.InvalidConfig;
             }
-        }
-    }
-    if (try validatedObjectField(root, "tickets")) |value| {
-        try rejectUnknownKeys(value, &.{ "_help", "auto_assign", "proactive_workpool", "close_authority", "reopen_with_reasoning" });
-        try validateHelp(value, &.{ "auto_assign", "proactive_workpool", "close_authority", "reopen_with_reasoning" });
-        _ = try optionalBool(value, "auto_assign", true);
-        _ = try optionalBool(value, "proactive_workpool", false);
-        _ = try optionalBool(value, "reopen_with_reasoning", true);
-        if (value.get("close_authority")) |authority| {
-            if (authority != .null and (authority != .string or !isKnownCloseAuthority(authority.string))) return Error.InvalidConfig;
         }
     }
     if (try validatedObjectField(root, "context")) |value| {
@@ -700,12 +651,6 @@ fn isValidAutonomyValue(value: []const u8) bool {
         std.mem.eql(u8, value, "self_directed");
 }
 
-/// Close authority is kernel or operator — agents never appear here because
-/// agent ticket-close is structurally forbidden, not configurable.
-fn isKnownCloseAuthority(value: []const u8) bool {
-    return std.mem.eql(u8, value, "kernel") or std.mem.eql(u8, value, "operator");
-}
-
 fn optionalU16(object: std.json.ObjectMap, key: []const u8, default: u16) !u16 {
     const value = object.get(key) orelse return default;
     if (value == .null) return default;
@@ -765,7 +710,7 @@ test "default config documents every persistent value" {
     defer parsed.deinit();
     try validateDocumentShape(parsed.value.object);
 
-    const sections = [_][]const u8{ "runtime", "provider", "agent_routes", "agents", "tickets", "context", "prompts", "memory", "environment" };
+    const sections = [_][]const u8{ "runtime", "provider", "agent_routes", "agents", "context", "prompts", "memory", "environment" };
     for (&sections) |section_name| {
         const section = objectField(parsed.value.object, section_name).?;
         const help = objectField(section, "_help").?;
@@ -777,6 +722,15 @@ test "default config documents every persistent value" {
     }
     try std.testing.expect(std.mem.indexOf(u8, default_document, "VANTARI_HOME is intentionally not configurable here") != null);
     try std.testing.expect(std.mem.indexOf(u8, default_document, "belong in the sibling auth.json") != null);
+}
+
+test "ticket execution policy is not a config surface" {
+    const document =
+        \\{"version":1,"tickets":{"auto_assign":true,"proactive_workpool":true}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
+    defer parsed.deinit();
+    try std.testing.expectError(Error.InvalidConfig, validateDocumentShape(parsed.value.object));
 }
 
 test "config file is created beside runtime state and loads typed defaults" {

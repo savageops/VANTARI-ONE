@@ -108,9 +108,11 @@ log_ticket create/transition
 ```
 
 Assignment is queue admission. It does not launch a child session directly.
-The scheduler claims only when configured capacity is available, then uses the
-existing `AgentService` and `Supervisor` owners. There is no second worker
-registry or background status bus. The fixed pool now lives in one persistent
+The scheduler claims only when `agent_routes.max_concurrency` reports capacity,
+then uses the existing `AgentService` and `Supervisor` owners. Ticket execution
+has no policy branch; the removed `auto_assign`, `proactive_workpool`,
+`close_authority`, and `reopen_with_reasoning` keys had no runtime consumer.
+There is no second worker registry or background status bus. The fixed pool now lives in one persistent
 owner tree and survives TUI/CLI exit. Scheduler leadership now holds one
 crash-released OS lock through the full tick and reads back a random nonzero
 generation before dispatch. Ticket mutation holds `.var/tickets/ledger.lock`
@@ -147,7 +149,9 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,976/1,976 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,933/1,933 tests with zero skips.
+  The reduced total is intentional: one registry loop executes all 53 declared
+  cases and replaces 45 one-case wrappers that left ten cases undiscovered.
   Its host lane executes the stdio child, owner state/client, shared process
   lock, bridge, and process-tree contracts; the integration lane includes
   exact owner route, lease, stalled-loopback deadline, and explicit-workspace
@@ -161,6 +165,10 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   child session, one shared nonzero generation, and zero proof-owned processes.
   The move-24 76-segment GGUF audit reports zero candidate and exact pairs across
   ticket, agent-service, session-store, and shared-lock owners.
+- Direct create-as-assigned and transition-to-assigned probes retain two queued
+  tickets with zero claims, active sessions, or session records. The move-25
+  94-segment audit found one import/declaration adjacency candidate, zero exact
+  pairs, and no duplicate ticket policy, queue, or execution owner.
 - Parent-shell production-home probes kept 99,960 files, 693,051,144 bytes,
   config/auth hashes, and process inventory unchanged across graph and direct
   proof.
@@ -243,7 +251,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - The last installed-proven move-19 artifact remains SHA-256
   `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
   Current source ReleaseFast is
-  `DF57FB34112E0D1125D50620995EDF2683711D546B359226F504D2C4A03C6C00`.
+  `77A2B111DCA35AA08E4D33973D83AB2FB9783E6C4D423A09611D24F0EE3142FD`.
   Replacement is blocked while operator-owned installed PIDs 12028 and 14452
   remain active; source/installed equality is not claimed.
 - Installed `session/send` against a disposable local provider imported all
@@ -262,13 +270,13 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
   returned `requested` and exited with zero process. Its legacy terminal name is
   retained only as historical proof; move 19 removed that writer.
-- Moves 5–20 and 22–24 plus findings 10 and 13 are closed. Move 21 is source-complete
+- Moves 5–20 and 22–25 plus findings 10 and 13 are closed. Move 21 is source-complete
   and awaits the installed replacement gate. Six synchronized 100-way probes cover
   admission, summary, message, event, tracked-TUI replay, and shutdown. The
-  latest canonical graph passes 1,976/1,976. The native two-kernel admission
+  latest canonical graph passes 1,933/1,933. The native two-kernel admission
   proof retains one schedule attempt, one ticket claim, and one matching child
   session under one nonzero generation; mid-turn owner-crash recovery remains P0.
-- The hive direction is assigned to moves 25–30 and finding 11. The target is
+- The hive direction is assigned to moves 26–30 and finding 11. The target is
   one durable direct/group/parent mailbox over session/event ownership,
   selective summary/artifact awareness, and nested normal sessions. No general
   mailbox, restart-safe unread cursor, or peer wake path is shipped yet.

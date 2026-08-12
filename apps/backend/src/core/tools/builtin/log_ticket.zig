@@ -285,7 +285,7 @@ test "log_ticket rejects empty fields and unsupported severity" {
     try std.testing.expectError(module.Error.InvalidArguments, execute(allocator, ctx, "{\"action\":\"create\",\"title\":\"t\",\"description\":\"d\",\"category\":\"bug\",\"severity\":\"critical\"}"));
 }
 
-test "log_ticket assignment is queue admission and direct in_progress is rejected" {
+test "log_ticket assignment paths append queue state without a child session" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -306,11 +306,31 @@ test "log_ticket assignment is queue admission and direct in_progress is rejecte
     try std.testing.expect(std.mem.indexOf(u8, assigned_output, "transitioned_to") != null);
     try std.testing.expect(std.mem.indexOf(u8, assigned_output, "assigned") != null);
 
+    const direct_assigned_output = try execute(allocator, ctx, "{\"action\":\"create\",\"title\":\"direct queue\",\"description\":\"wait too\",\"category\":\"task\",\"status\":\"assigned\"}");
+    defer allocator.free(direct_assigned_output);
+    var direct_envelope = try std.json.parseFromSlice(struct {
+        ok: bool,
+        content: []const u8,
+    }, allocator, direct_assigned_output, .{ .ignore_unknown_fields = true });
+    defer direct_envelope.deinit();
+    try std.testing.expect(direct_envelope.value.ok);
+    try std.testing.expect(std.mem.indexOf(u8, direct_envelope.value.content, "\"queued\":true") != null);
+
     try std.testing.expectError(module.Error.InvalidArguments, execute(allocator, ctx, "{\"action\":\"transition\",\"ticket_id\":\"missing\",\"status\":\"in_progress\",\"transition_reason\":\"start\"}"));
     const list_output = try execute(allocator, ctx, "{\"action\":\"list\",\"limit\":10}");
     defer allocator.free(list_output);
     try std.testing.expect(std.mem.indexOf(u8, list_output, "[assigned]") != null);
     try std.testing.expect(std.mem.indexOf(u8, list_output, "claim=waiting") != null);
+
+    var assigned_projection = try (tickets.TicketStore.init(allocator, workspace)).readProjection();
+    defer assigned_projection.deinit();
+    try std.testing.expectEqual(@as(usize, 3), assigned_projection.valid_events);
+    try std.testing.expectEqual(@as(usize, 2), assigned_projection.tickets.items.len);
+    for (assigned_projection.tickets.items) |ticket| {
+        try std.testing.expectEqual(Status.assigned, ticket.status);
+        try std.testing.expect(!ticket.claim_complete);
+        try std.testing.expectEqual(@as(usize, 0), ticket.active_session_id.len);
+    }
 
     const sessions = try session_store.listSessionRecords(allocator, workspace);
     defer types.deinitSessionRecords(allocator, sessions);

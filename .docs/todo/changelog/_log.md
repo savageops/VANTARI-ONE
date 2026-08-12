@@ -1992,3 +1992,50 @@ mail, and installed replacement remain later gates.
 
 **Next todo:** move 25 — prove every assignment caller mutates only the ticket
 ledger and starts no session, provider turn, or Supervisor task.
+
+## 2026-08-13 - Roadmap move 25 assignment made queue-only
+
+**Changed:**
+
+- Deleted the unused `tickets` config object, its four execution-policy keys,
+  `TicketPolicy`, loader, validation, close-authority parser, default sample, and
+  public documentation. `agent_routes.max_concurrency` is now the sole capacity
+  setting.
+- Strengthened the canonical `log_ticket` probe across create-as-assigned and
+  unassigned-to-assigned. Two assigned tickets retain zero claims, active-session
+  ids, and session records; direct `in_progress` still fails before side effects.
+- Replaced 45 one-case agent-registry wrappers with one loop over every declared
+  case. This exposed ten previously undiscovered cases; all 53 now execute.
+- Corrected the hidden invalid-autonomy case to expect the canonical config
+  boundary instead of an unreachable downstream parser error.
+
+**Proof:**
+
+- Canonical graph: 19/19 steps, 1,933/1,933 tests. The lower total removes 45
+  duplicate wrappers while increasing registry coverage from 46/56 declarations
+  to 53/53.
+- ReleaseFast: 9/9; source SHA-256
+  `77A2B111DCA35AA08E4D33973D83AB2FB9783E6C4D423A09611D24F0EE3142FD`.
+- The first falsification run caught malformed negative-test JSON, an assertion
+  against an escaped outer tool envelope, the hidden stale registry expectation,
+  and duplicate case declarations. The corrected graph passes all four seams.
+- GGUF duplicate-owner audit: five owner-adjacent files, 94 segments, one
+  scheduler/agent-service import-and-declaration adjacency candidate, zero exact
+  pairs, and no duplicate ticket policy, queue, or execution owner.
+- Project, user, and legacy user config projections contain no `tickets` object.
+  Installed SHA-256 remains
+  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
+  operator-owned PIDs 12028 and 14452 remain untouched.
+
+**Competitive decision:** Temporal, Eve, Celery, BullMQ, and Codex confirm the
+admission-before-capacity-claim boundary. Flue confirms deterministic child
+identity. Pi, Oh My Pi, Scion, NullClaw, and KrillClaw expose only direct or
+in-process launch pressure. VANTARI keeps the durable split without their
+database, broker, daemon, or assignment-to-launch branch.
+
+**Boundary:** Move 25 is closed in source. Assignment semantics are invariant,
+not configurable. Durable agent mail, active-turn owner-crash reconciliation,
+and installed replacement remain open.
+
+**Next todo:** move 26 — route bounded direct, current-group, and parent messages
+through one sequence-addressed mailbox on the existing session/event spine.

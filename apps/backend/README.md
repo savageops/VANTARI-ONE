@@ -107,7 +107,12 @@ unassigned → assigned → in_progress → blocked → completed → closed
 
 The `log_ticket` tool supports `create`, `transition` (with reason), and `list`. Every non-trivial task gets a ticket before work starts. Mutations are durable records in `.var/tickets/tickets.jsonl` with schema `var1.ticket_event.v2`. Long tasks must have ticket tracking for accuracy, recovery, and audit.
 
-Assignment is queue admission. It does not launch an agent directly. The scheduler claims assigned tickets only when the configured capacity has a free slot, then calls the existing `AgentService` and fixed-pool `Supervisor` path. Heartbeats, leases, stale-owner requeue, terminal reconciliation, and repair evidence remain durable scheduler/ticket state. `tickets.proactive_workpool` is opt-in; the default is a configured pool waiting for explicit assignment.
+Assignment is queue admission. It does not launch an agent directly. The
+scheduler claims assigned tickets only when `agent_routes.max_concurrency`
+reports a free slot, then calls the existing `AgentService` and fixed-pool
+`Supervisor` path. No `tickets` config branch changes this state machine.
+Heartbeats, leases, stale-owner requeue, terminal reconciliation, and repair
+evidence remain durable scheduler/ticket state.
 
 Scheduler leadership is inter-process exclusive in source. One shared OS-owned
 lock spans the full tick; `lease.json` carries a random nonzero generation that

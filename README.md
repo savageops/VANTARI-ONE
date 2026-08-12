@@ -676,16 +676,11 @@ The setting is hot-loaded for the next turn and is available through the TUI Set
 
 Agent definitions may tune persona, route role, ticket ownership, checkpoint contract, autonomy, effort, and temperature. Omitted or `null` effort/temperature leaves the decision with VANTARI and the resolved route; configuration exposes capability, it does not replace the kernel's orchestration judgment.
 
-```json
-"tickets": {
-  "auto_assign": true,
-  "proactive_workpool": false,
-  "close_authority": "kernel",
-  "reopen_with_reasoning": true
-}
-```
-
-`assigned` is queue admission only. The scheduler claims work through the configured fixed pool, and agents may complete owned tickets but never close them. Lease expiry, stale-owner requeue, and repair promotion remain durable evidence rather than hidden status changes.
+Ticket execution has no policy toggle. `assigned` appends queue state only; the
+scheduler may claim work after `agent_routes.max_concurrency` reports a free
+fixed-pool slot. Agent prompts can decide what work to admit and how to
+orchestrate it, but they cannot skip the claim, lease, session, or terminal
+evidence boundary. Agents may complete owned tickets but never close them.
 
 ### Prompt Policy
 

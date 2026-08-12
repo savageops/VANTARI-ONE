@@ -37,6 +37,8 @@ Rules:
 - Client exit does not stop the owner. Foreground serve and automatic owner start
   share one lease.
 - Tickets own work lifecycle. Assignment is queue admission, not execution.
+- agent_routes.max_concurrency is the sole ticket execution capacity setting;
+  there is no tickets execution-policy branch.
 - messages.jsonl remains complete and append-only. context.jsonl is a model-visible
   checkpoint ledger, not a transcript.
 - Use typed tools and advertised availability. search_files requires iex.

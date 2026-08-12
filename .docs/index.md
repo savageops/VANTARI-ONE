@@ -2,7 +2,7 @@
 type: documentation-index
 id: docs/index
 status: current
-updated: 2026-08-12
+updated: 2026-08-13
 ---
 
 # VANTARI documentation index
@@ -38,6 +38,6 @@ This directory contains project records, research, planning chains, and complete
 - [`research/2026-08-09-tui-status-surface-and-repair-loop.md`](research/2026-08-09-tui-status-surface-and-repair-loop.md) — compact TUI telemetry, durable summary projection, and repair-loop boundary.
 - [`research/2026-08-10-ticket-agent-pool-and-repair-queue.md`](research/2026-08-10-ticket-agent-pool-and-repair-queue.md) — buffered ticket admission, fixed agent capacity, leases, and stale-owner repair.
 - Runtime access boundary — `runtime.full_access_mode` is default-off, validated, and projected through one shared path resolver; the technical owner is recorded in [`technical_summary.md`](technical_summary.md) and [`workspace.json`](workspace.json).
-- [`todo/changelog/036g-ticket-agent-pool-and-repair.md`](todo/changelog/036g-ticket-agent-pool-and-repair.md) — historical ticket/pool closeout receipt. The 2026-08-12 audit supersedes its production-complete conclusion: owner-crash recovery, durable agent messaging, installed parity, and remaining multi-process writer proof remain open. Moves 21–24 now close presentation persistence, scheduler leadership, and ticket admission in source.
+- [`todo/changelog/036g-ticket-agent-pool-and-repair.md`](todo/changelog/036g-ticket-agent-pool-and-repair.md) — historical ticket/pool closeout receipt. The 2026-08-12 audit supersedes its production-complete conclusion: owner-crash recovery, durable agent messaging, installed parity, and remaining multi-process writer proof remain open. Moves 21–25 now close presentation persistence, scheduler leadership, ticket admission, and queue-only assignment in source.
 
 Historical or nested archival records remain in place. Do not treat them as the current owner when a source module or this index names a newer contract.

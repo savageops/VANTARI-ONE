@@ -38,6 +38,9 @@ only when consolidation or deletion cannot close the canonical consumer path.
 - An explicit execution-owner workspace is authoritative through `config.loadDefaultForExplicitWorkspace`; inherited `VANTARI_WORKSPACE`, `.env` `WORKSPACE`, and config workspace entries must not redirect its config, auth, ledgers, or owner projection.
 - Owner RPC/event/shutdown routes remain loopback-only, token-gated, generation-bound, and exact. Browser routes remain separately token-gated and redacted. A presentation client exit must not change owner lifetime.
 - `apps/backend/src/core/tickets/` is the canonical ticket ledger and queue projection. `assigned` admits work; it does not launch a child session.
+- Ticket execution semantics are not configurable. `agent_routes.max_concurrency`
+  is the sole capacity setting; do not restore `tickets.auto_assign`,
+  `tickets.proactive_workpool`, or another assignment-to-launch branch.
 - `apps/backend/src/core/scheduler/` claims assigned tickets only when `apps/backend/src/core/agents/supervisor.zig` reports fixed-pool capacity, then routes through `core/agents/service.zig`. Do not add a second worker registry or direct assignment launcher.
 - `apps/backend/src/shared/process_lock.zig` owns crash-released inter-process exclusion. A scheduler tick holds `.var/schedules/lease.lock`, publishes and reads back one nonzero generation in `lease.json`, and releases only after scheduled-job and ticket mutations finish. Do not restore read/check/write leadership or add a scheduler-local lock primitive.
 - `apps/backend/src/core/tickets/index.zig` serializes every ticket projection and mutation through `.var/tickets/ledger.lock`. One claim row commits revision, worker generation, lease, attempt, capability hash, and deterministic child-session identity before session materialization. Do not create a child before the winning claim append or add a second admission ledger.
