@@ -2,11 +2,12 @@
 
 **Priority: P0**
 
-**Current delta (2026-08-12):** Event rows already carry writer-assigned `seq`,
+**Current delta (2026-08-12):** Event rows carry writer-assigned `seq`,
 `appendEvent` uses the shared bounded-tail `nextLedgerSeq` initializer, and
-`readEventsAfterSeq` exists. The live gap is transport: move 14 carries that
-stored sequence through `SessionEventNotification`; moves 16–17 retain the
-binary/prefix-integrity work. The source map below is the original baseline.
+`readEventsAfterSeq` exists. Move 14 now carries the exact stored sequence through
+`var1.session_event_notification.v1` after persistence. Move 15 must make every
+client consume that identity; moves 16–17 retain binary/prefix-integrity work.
+The source map below is the original baseline.
 
 ## The seam
 
@@ -27,7 +28,7 @@ This theme owns the **storage substrate**: the frame format, the sequence contra
 - **A monotonic cursor exists, but it is non-durable.** `stdio_rpc.zig:227` keeps `next_notification_sequence: u64 = 1` in `ClientState`, assigns one per notification (`:273`), caps the backlog at 512 (`:29`), and tails via `takeNotificationAfter(after_sequence)` (`:1277`). This is the correct cursor shape — but it lives only in process memory, resets on restart, and is decoupled from `events.jsonl`. The durable log has no cursor; the cursor has no durability. They never meet.
 - **`messages.jsonl` supplied the sequence pattern.** It now has a stronger owner: every message role shares one per-session append state and `nextLedgerSeq` initializes from a bounded valid tail. The event ledger uses the same primitive.
 
-**Gap at capture:** the durable event spine was timestamp-keyed and the cursor was in-memory. Storage sequence has since landed; the notification envelope and client replay cursor remain incomplete.
+**Gap at capture:** the durable event spine was timestamp-keyed and the cursor was in-memory. Storage sequence and the versioned notification envelope have since landed; the client replay cursor remains incomplete.
 
 ## What the competitor does
 

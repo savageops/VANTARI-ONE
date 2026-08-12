@@ -374,6 +374,7 @@ const Server = struct {
     fn emitSessionEvent(
         self: *Server,
         session_id: []const u8,
+        seq: u64,
         event_type: []const u8,
         message: []const u8,
         status: []const u8,
@@ -381,6 +382,7 @@ const Server = struct {
     ) !void {
         const params_json = try renderJsonAlloc(self.allocator, protocol_types.SessionEventNotification{
             .session_id = session_id,
+            .seq = seq,
             .event_type = event_type,
             .message = message,
             .status = status,
@@ -406,13 +408,13 @@ const Server = struct {
         status: []const u8,
         timestamp_ms: i64,
     ) !void {
-        try store.appendEvent(self.allocator, self.config.workspace_root, session_id, .{
+        const seq = try store.appendEventWithSeq(self.allocator, self.config.workspace_root, session_id, .{
             .event_type = event_type,
             .message = message,
             .timestamp_ms = timestamp_ms,
         });
         try store.touchSessionUpdatedAt(self.allocator, self.config.workspace_root, session_id, timestamp_ms);
-        try self.emitSessionEvent(session_id, event_type, message, status, timestamp_ms);
+        try self.emitSessionEvent(session_id, seq, event_type, message, status, timestamp_ms);
     }
 
     fn writePayload(self: *Server, payload: []const u8) !void {
@@ -485,6 +487,7 @@ pub fn serveKernel(
 fn onAgentParentEvent(
     ctx: ?*anyopaque,
     parent_session_id: []const u8,
+    seq: u64,
     event_type: []const u8,
     message: []const u8,
     timestamp_ms: i64,
@@ -493,7 +496,7 @@ fn onAgentParentEvent(
     // Live notification is a read model over the durable event spine
     // (AGENTS.md §IV). A slow/broken TUI pipe must never corrupt a child
     // agent delegation turn.
-    server.emitSessionEvent(parent_session_id, event_type, message, "running", timestamp_ms) catch {};
+    server.emitSessionEvent(parent_session_id, seq, event_type, message, "running", timestamp_ms) catch {};
 }
 
 fn runSchedulerService(service: *scheduler.Service) void {
@@ -505,7 +508,7 @@ fn runSchedulerService(service: *scheduler.Service) void {
 fn onBufferPreview(ctx: ?*anyopaque, session_id: []const u8, preview: []const u8) void {
     const server: *Server = @ptrCast(@alignCast(ctx.?));
     if (!(server.buffer_projection.store(server.allocator, session_id, preview) catch false)) return;
-    server.emitSessionEvent(session_id, "buffer_preview", preview, "running", std.time.milliTimestamp()) catch {};
+    server.recordAndEmitSessionEvent(session_id, "buffer_preview", preview, "running", std.time.milliTimestamp()) catch {};
 }
 
 fn runBufferService(service: *buffer_service.Service) void {
@@ -765,7 +768,7 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         // instead of rejecting useful steering or starting a second turn. The
         // loop persists the tagged message when it drains the bounded queue.
         if (next_prompt) |prompt| {
-            server.emitSessionEvent(session.id, "user_message_queued", prompt, "running", std.time.milliTimestamp()) catch {};
+            server.recordAndEmitSessionEvent(session.id, "user_message_queued", prompt, "running", std.time.milliTimestamp()) catch {};
         }
         const current_output = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
         defer if (current_output) |value| server.allocator.free(value);
@@ -1370,6 +1373,7 @@ fn onLoopSessionInitialized(ctx: ?*anyopaque, session_id: []const u8) anyerror!v
 fn onLoopSessionEvent(
     ctx: ?*anyopaque,
     session_id: []const u8,
+    seq: u64,
     event_type: []const u8,
     message: []const u8,
     status: []const u8,
@@ -1382,7 +1386,7 @@ fn onLoopSessionEvent(
     // slow/broken TUI pipe must never corrupt the provider turn. Swallowing
     // WriteFailed here breaks the producer-consumer coupling that bricked
     // sessions under sustained streaming when the TUI fell behind.
-    server.emitSessionEvent(session_id, event_type, message, status, timestamp_ms) catch {};
+    server.emitSessionEvent(session_id, seq, event_type, message, status, timestamp_ms) catch {};
 }
 
 fn onLoopShouldCancel(ctx: ?*anyopaque, session_id: []const u8) bool {
@@ -1694,6 +1698,47 @@ fn attachTestStdout(tmp: *std.testing.TmpDir, server: *Server, name: []const u8)
     const file = try tmp.dir.createFile(name, .{ .read = true });
     server.stdout_file = file;
     return file;
+}
+
+test "session event notification carries the exact stored sequence" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    var session = try store.initSession(std.testing.allocator, workspace_root, "prove event identity");
+    defer session.deinit(std.testing.allocator);
+    const timestamp_ms: i64 = 123_456_789;
+
+    var first_capture = try attachTestStdout(&tmp, &server, "event-sequence-1.bin");
+    defer first_capture.close();
+    try server.recordAndEmitSessionEvent(session.id, "assistant_delta", "same", "running", timestamp_ms);
+    try first_capture.seekTo(0);
+    const first_output = try first_capture.readToEndAlloc(std.testing.allocator, 8 * 1024);
+    defer std.testing.allocator.free(first_output);
+
+    var second_capture = try attachTestStdout(&tmp, &server, "event-sequence-2.bin");
+    defer second_capture.close();
+    try server.recordAndEmitSessionEvent(session.id, "assistant_delta", "same", "running", timestamp_ms);
+    try second_capture.seekTo(0);
+    const second_output = try second_capture.readToEndAlloc(std.testing.allocator, 8 * 1024);
+    defer std.testing.allocator.free(second_output);
+
+    const events = try store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer types.deinitSessionEvents(std.testing.allocator, events);
+    try std.testing.expectEqual(@as(usize, 2), events.len);
+    try std.testing.expectEqual(@as(u64, 1), events[0].seq);
+    try std.testing.expectEqual(@as(u64, 2), events[1].seq);
+
+    try std.testing.expect(std.mem.indexOf(u8, first_output, "\"schema\":\"var1.session_event_notification.v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first_output, "\"seq\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second_output, "\"schema\":\"var1.session_event_notification.v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second_output, "\"seq\":2") != null);
 }
 
 test "request executor drains admitted frames before server teardown" {

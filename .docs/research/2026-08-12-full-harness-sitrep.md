@@ -12,7 +12,7 @@ scope: full-harness
 
 VANTARI has a strong kernel thesis and several unusually good local mechanisms: one context compiler, append-only transcript and event ledgers, typed tool review and dispatch, bounded Windows process execution, provider-wire separation, fixed in-process agent capacity, and a compact TUI read model. The architecture is materially better than a chat-wrapper harness.
 
-The current checkout is not production-ready for persistent autonomous execution. Its critical gap is not model intelligence or UI polish. Agent process ownership, inter-process scheduler arbitration, and client replay identity still stop at the process boundary. Host request lifetime, test isolation, append-only summary mutation, and per-session message sequencing are now closed with installed proof; the fixed agent pool and event notification cursor still prevent crash-surviving autonomous execution. Chain 036 closed over in-process proof while the user requirement was persistent execution through process failure.
+The current checkout is not production-ready for persistent autonomous execution. Its critical gap is not model intelligence or UI polish. Agent process ownership, inter-process scheduler arbitration, and client replay identity still stop at the process boundary. Host request lifetime, test isolation, append-only summary mutation, per-session message sequencing, and exact event sequence transport are now closed with installed proof; the fixed agent pool and client replay cursor still prevent crash-surviving autonomous execution. Chain 036 closed over in-process proof while the user requirement was persistent execution through process failure.
 
 Current classification:
 
@@ -20,11 +20,11 @@ Current classification:
 |---|---|---|
 | Build | Pass | ReleaseFast builds 9/9 with Zig 0.15.1. |
 | Focused TUI | Pass | Backend TUI 58/58 with zero skips. |
-| Broad tests | Pass | Canonical isolated graph is 19/19 and 1,931/1,931 with zero skips. |
-| Installed proof | Pass for moves 1–13 | Source and installed ReleaseFast share SHA-256 `3E1B87D8AFD02FA37AE08396B89288E95DB7329D35C1683725B087E2929F124A`; disposable settings and session-ledger probes exit with zero processes. |
+| Broad tests | Pass | Canonical isolated graph is 19/19 and 1,932/1,932 with zero skips. |
+| Installed proof | Pass for moves 1–14 | Source and installed ReleaseFast share SHA-256 `475F156803BE7E74883EB474E844137E6249868110971750AE8205FD7ED8D11F`; disposable settings and session-ledger probes exit with zero processes. |
 | Agent pool | In-process only | A process restart converts running receipts to StaleAgentOwner; no detached worker launch is wired. |
 | Ticket persistence | Partial | Ticket events persist, but leader lease acquisition is read/check/write without an inter-process compare-and-swap. |
-| Event replay | Partial | Stored events have sequence numbers; stdio notifications discard them and the TUI deduplicates by timestamp, type, and text. |
+| Event replay | Partial | `var1.session_event_notification.v1` carries the exact stored sequence after persistence; the TUI/CLI still ignore it and deduplicate by transport ordinal plus timestamp/type/text. |
 | Self-repair | Evidence floor only | Trace, diagnostics, and rerun substrate exist; causal diagnosis, approved patching, exact-input replay, and regression locking do not form one runtime loop. |
 
 No broad runtime rewrite was made during this audit. The worktree already contains 55 modified tracked files plus a large untracked implementation set, and the installed process is active. Current findings are converted into the executable ledger at [../todo/findings/00-INDEX.md](../todo/findings/00-INDEX.md).
@@ -179,7 +179,7 @@ The current footer direction is correct:
 - Use the bounded child turn summary as the child row label; tool phases are state markers only.
 - Put per-agent model, effort, elapsed time, token/cost detail, tools, and receipts in an on-demand Agent Hub, not the footer.
 
-The replay contract is currently weaker than the UI text suggests. SessionEventNotification omits the stored event sequence ([types.zig](../../apps/backend/src/shared/protocol/types.zig#L68)); the TUI therefore deduplicates by timestamp, event type, and message ([tui_chat.zig](../../apps/backend/src/clients/tui_chat.zig#L666)). Identical same-millisecond events can disappear.
+The producer/transport replay contract now carries exact identity: `SessionEventNotification` is versioned and includes the stored event sequence ([types.zig](../../apps/backend/src/shared/protocol/types.zig#L68)), and every producer persists before emission. The TUI still ignores that field and deduplicates by timestamp, event type, and message ([tui_chat.zig](../../apps/backend/src/clients/tui_chat.zig)). Identical same-millisecond events can therefore still disappear at the client boundary.
 
 ## What is already strong
 
@@ -212,7 +212,7 @@ The replay contract is currently weaker than the UI text suggests. SessionEventN
 
 | ID | Concern | Evidence and effect | Smallest durable correction |
 |---|---|---|---|
-| P1-1 | Event sequence is dropped before clients | Stored SessionEvent includes seq, but stdio emits only timestamp/type/message/status. Replay suppression is therefore probabilistic. | Define one versioned event notification carrying ledger seq and optional byte payload; make every client cursor seq-based. |
+| P1-1 | Clients ignore exact event sequence | **Transport half closed 2026-08-12.** Stored SessionEvent sequence now survives the versioned stdio/browser notification after persist-first emission. TUI/CLI replay still substitutes a transport-local ordinal and timestamp/type/text suppression. | Consume the stored sequence in every client and delete heuristic identity; optional binary payload remains move 16. |
 | P1-2 | Message append was O(N²) and not serialized | **Closed 2026-08-12.** Every message role now routes through one per-session ledger state. Cold start scans backward from a 4 KiB tail window and expands only when no complete valid row exists; append failure invalidates the cached cursor. | The removed whole-transcript sequencer and empty-file rewrite stay deleted. Multi-process writer authority remains part of the persistent-host boundary, not a second message lock. |
 | P1-3 | eval advertises a capability it does not provide | eval claims persistent Python/Bun, but creates and destroys a kernel per call; Bun is one-shot and ignores timeout. Pipe draining can deadlock. | Gate only the unsafe execution point while keeping the implementation obligation. Rebuild it on the canonical process supervisor and a session-owned kernel registry. |
 | P1-4 | DAP calls are non-composable | dap_attach destroys its client before returning; stacktrace and variables spawn fresh unattached adapters, despite usage hints that they continue the attach session. Reads have no deadline. | Make one session-scoped DAP client with request IDs, timeouts, cancellation, and teardown evidence. |
@@ -283,17 +283,17 @@ VANTARI currently owns FailureReceipt and part of ExactInputRerun. It does not y
 | Probe | Result |
 |---|---|
 | apps/backend ReleaseFast build | 9/9 steps succeeded. |
-| Canonical isolated graph | 19/19 steps; 1,931/1,931 tests across integration, executable, TUI, memory, chain 035, and host lanes. |
+| Canonical isolated graph | 19/19 steps; 1,932/1,932 tests across integration, executable, TUI, memory, chain 035, and host lanes. |
 | Backend TUI lane | 58/58 passed, including settings open/apply/close/reopen/timeout and remote-error handling. |
 | Host lifecycle lane | 224/224 passed, including atomic same-session admission, session-keyed buffer projection, cancellation-before-join shutdown, deadlines, and Job Object ownership. |
 | Admission and buffer races | 100 contenders produced one turn owner and 99 non-starters; a losing prompt was retained as a steer. A→B buffer switching rejected late A state. |
 | Summary concurrency | 100 synchronized upserts retained every session with unique sequences; latest-row projection, poisoned-suffix continuation, v1 import, and shared JSONL append passed. Dupe audit found zero candidate pairs across summary/store/fsutil owners. |
 | Message append concurrency | 100 synchronized mixed-role appends retained 100 unique monotonic rows. A 32,768-line poisoned prefix followed by valid seq 900 continued at seq 901 through bounded tail initialization. The 37-segment GGUF audit found zero candidate pairs across store and summary owners. |
-| Installed session ledgers | Disposable `VANTARI_HOME` imported 1,176/1,176 legacy summary rows, appended one terminal summary through `session/send`, retained 1,177 unique summary sequences, wrote contiguous unique `user,assistant` messages, preserved the live legacy SHA-256, and exited with zero VANTARI processes. |
+| Installed session ledgers | Disposable `VANTARI_HOME` imported 1,176/1,176 legacy summary rows, appended one terminal summary through `session/send`, retained 1,177 unique summary sequences, wrote contiguous unique `user,assistant` messages, emitted four unique monotonic event notifications ending on the stored `turn_finished` sequence, preserved the live legacy SHA-256, and exited with zero VANTARI processes. |
 | Active shutdown | A real blocked provider request observed cancellation before join, persisted exactly one `session_cancelled` event, returned `cancelled`, fenced late starts, and passed 20 repeats. |
 | Direct-test isolation | Wrapper rerun kept 99,960 files / 693,051,144 bytes and config/auth hashes unchanged; one generated cache-owned home; zero VANTARI processes. |
 | git diff --check | Exit 0; line-ending warnings only. |
-| Built and installed ReleaseFast SHA-256 | `3E1B87D8AFD02FA37AE08396B89288E95DB7329D35C1683725B087E2929F124A`; exact match. |
+| Built and installed ReleaseFast SHA-256 | `475F156803BE7E74883EB474E844137E6249868110971750AE8205FD7ED8D11F`; exact match. |
 | Installed settings transport | `initialize` plus `config/set` returned in 5 ms; isolated runtime removed; live config/auth/lease and full tree metrics unchanged; zero processes. |
 | Installed process boundary | Forced parent termination also removed its kernel child through the shared Windows Job Object; zero VANTARI processes remained. |
 | Smoke-harness correction | The first settings smoke inherited live `VANTARI_HOME` and rotated only the expired scheduler `lease.json` (one-byte timestamp-width change). Config, auth, summaries, and process inventory were unchanged. The retained script now pins a disposable workspace and proves the live lease hash unchanged. |
@@ -341,7 +341,7 @@ root byte/count/hash identical.
 
 1. **Closed:** one bounded host executor, atomic session admission, session-keyed buffer projection, and cancellation-before-join shutdown replace detached threads, check/set races, and lifetime ambiguity.
 2. **Closed for summaries and messages:** append-only summary revisions and one per-session message writer replace whole-object rewrites, global contention, and transcript-length sequence scans.
-3. Carry one versioned event envelope from disk to every client. Delete timestamp/text replay heuristics.
+3. **Closed through transport:** one persist-first versioned event envelope carries the stored sequence through stdio and browser projections. Move 15 deletes timestamp/text replay heuristics in every client.
 4. Move hidden kernel and worker process entries out of the user CLI switch into narrow host entry modules.
 5. Remove model-facing todo_slice and session_record lifecycle duplication. Keep tickets as work truth and summaries as handoff truth.
 6. Stop rendering the full tool catalog into every prompt when native tool definitions are already sent. Demand-load examples and unavailable-dependency detail.

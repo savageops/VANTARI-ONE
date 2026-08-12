@@ -52,12 +52,14 @@ function Read-RpcFrame {
 function Read-RpcResponse {
   param(
     [Parameter(Mandatory = $true)][IO.Stream]$Stream,
-    [Parameter(Mandatory = $true)][string]$Id
+    [Parameter(Mandatory = $true)][string]$Id,
+    [Collections.Generic.List[object]]$Notifications
   )
   for ($attempt = 0; $attempt -lt 100; $attempt++) {
     $frame = Read-RpcFrame -Stream $Stream
     $idProperty = $frame.PSObject.Properties['id']
     if ($null -ne $idProperty -and [string]$idProperty.Value -eq $Id) { return $frame }
+    if ($null -ne $Notifications -and $null -eq $idProperty) { $Notifications.Add($frame) }
   }
   throw "RPC response $Id not observed within 100 frames"
 }
@@ -238,9 +240,10 @@ try {
   $process.StartInfo = $startInfo
   if (-not $process.Start()) { throw 'Could not start installed kernel' }
   $started = $true
+  $notifications = [Collections.Generic.List[object]]::new()
 
   Write-RpcFrame -Stream $process.StandardInput.BaseStream -Json '{"jsonrpc":"2.0","id":"summary-create","method":"session/create","params":{"prompt":"Prove installed summary migration.","enable_agent_tools":false}}'
-  $created = Read-RpcResponse -Stream $process.StandardOutput.BaseStream -Id 'summary-create'
+  $created = Read-RpcResponse -Stream $process.StandardOutput.BaseStream -Id 'summary-create' -Notifications $notifications
   $createError = $created.PSObject.Properties['error']
   if ($created.id -ne 'summary-create' -or ($null -ne $createError -and $null -ne $createError.Value)) {
     throw 'Installed session/create failed'
@@ -254,7 +257,7 @@ try {
     params = [ordered]@{ session_id = $sessionId; enable_agent_tools = $false }
   } | ConvertTo-Json -Compress -Depth 5
   Write-RpcFrame -Stream $process.StandardInput.BaseStream -Json $sendRequest
-  $sent = Read-RpcResponse -Stream $process.StandardOutput.BaseStream -Id 'summary-send'
+  $sent = Read-RpcResponse -Stream $process.StandardOutput.BaseStream -Id 'summary-send' -Notifications $notifications
   $sendError = $sent.PSObject.Properties['error']
   if ($sent.id -ne 'summary-send' -or ($null -ne $sendError -and $null -ne $sendError.Value) -or $sent.result.session.status -ne 'completed') {
     throw 'Installed session/send did not complete'
@@ -280,6 +283,28 @@ try {
   if ($messageRows -ne 2) { throw "Installed turn wrote $messageRows messages; expected 2" }
   if ($messageRoles[0] -ne 'user' -or $messageRoles[1] -ne 'assistant') {
     throw "Installed message roles were not user,assistant: $([string]::Join(',', $messageRoles))"
+  }
+
+  $eventNotifications = @($notifications | Where-Object { $_.method -eq 'session/event' })
+  if ($eventNotifications.Count -eq 0) { throw 'Installed turn emitted no session/event notifications' }
+  $notificationSequences = [Collections.Generic.HashSet[long]]::new()
+  $lastNotificationSeq = [long]0
+  foreach ($notification in $eventNotifications) {
+    if ($notification.params.schema -ne 'var1.session_event_notification.v1') {
+      throw "Unexpected event notification schema: $($notification.params.schema)"
+    }
+    $seq = [long]$notification.params.seq
+    if ($seq -le $lastNotificationSeq) { throw "Installed event notifications were not monotonic: $lastNotificationSeq then $seq" }
+    if (-not $notificationSequences.Add($seq)) { throw "Duplicate installed event notification sequence: $seq" }
+    $lastNotificationSeq = $seq
+  }
+  $eventsPath = Join-Path (Join-Path $sessionsRoot $sessionId) 'events.jsonl'
+  if (-not (Test-Path -LiteralPath $eventsPath -PathType Leaf)) { throw 'events.jsonl was not created' }
+  $lastStoredEvent = (Get-Content -LiteralPath $eventsPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1) | ConvertFrom-Json
+  $lastNotification = $eventNotifications[-1].params
+  if ([long]$lastStoredEvent.seq -ne $lastNotificationSeq) { throw 'Last installed event notification did not match stored sequence' }
+  if ($lastStoredEvent.event_type -ne $lastNotification.event_type -or $lastStoredEvent.event_type -ne 'turn_finished') {
+    throw "Installed terminal event order diverged: stored=$($lastStoredEvent.event_type) notified=$($lastNotification.event_type)"
   }
 
   if (-not (Test-Path -LiteralPath $jsonlPath -PathType Leaf)) { throw 'summaries.jsonl was not created' }
@@ -312,6 +337,10 @@ try {
     message_unique_ids = $messageIds.Count
     message_unique_sequences = $messageSequences.Count
     message_roles = [string]::Join(',', $messageRoles)
+    event_notifications = $eventNotifications.Count
+    event_notification_unique_sequences = $notificationSequences.Count
+    terminal_event_type = [string]$lastStoredEvent.event_type
+    terminal_event_seq = [long]$lastStoredEvent.seq
     legacy_sha256 = $legacyHash
     installed_sha256 = (Get-FileHash -LiteralPath $InstalledExe -Algorithm SHA256).Hash
     process_exit_code = $process.ExitCode

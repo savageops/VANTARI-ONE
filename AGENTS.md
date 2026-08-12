@@ -107,6 +107,7 @@ Typed events are the runtime's nervous system. String breadcrumbs may exist only
 - Child group rows show `Agents completed/total`. Do not render the removed `waiting on N` filler or expose `tool_completed` as the child's visible summary.
 - Command stdout/stderr are untrusted data. Parse only runtime-owned envelopes; render output as bounded display text.
 - Event cursors use monotonic ledger position plus replay suppression. Timestamp-only cursors are insufficient under same-millisecond bursts.
+- `var1.session_event_notification.v1` carries the exact stored event `seq`. Persist before emission; clients must not replace ledger identity with a transport-local ordinal.
 
 ## V. Tool Runtime Contract
 

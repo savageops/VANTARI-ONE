@@ -450,7 +450,7 @@ test "web route renders session notifications as sse snapshots" {
     try ctx.setNotification(
         4,
         VAR1.shared.protocol.types.notification_methods.session_event,
-        "{\"session_id\":\"session-1\",\"event_type\":\"assistant_response\",\"message\":\"provider returned sk-live-secret\"}",
+        "{\"schema\":\"var1.session_event_notification.v1\",\"session_id\":\"session-1\",\"seq\":9,\"event_type\":\"assistant_response\",\"message\":\"provider returned sk-live-secret\"}",
     );
     var bridge = makeBridge(std.testing.allocator, &ctx);
 
@@ -469,6 +469,7 @@ test "web route renders session notifications as sse snapshots" {
     try std.testing.expectEqualStrings("text/event-stream; charset=utf-8", response.content_type);
     try std.testing.expect(std.mem.indexOf(u8, response.body, "id: 4") != null);
     try std.testing.expect(std.mem.indexOf(u8, response.body, "event: session/event") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "\"seq\":9") != null);
     try std.testing.expect(std.mem.indexOf(u8, response.body, "\"session_id\":\"session-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, response.body, "sk-live-secret") == null);
     try std.testing.expect(std.mem.indexOf(u8, response.body, "\"message\":\"[redacted]\"") != null);

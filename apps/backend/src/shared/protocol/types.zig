@@ -66,7 +66,9 @@ pub const SessionSummary = struct {
 };
 
 pub const SessionEventNotification = struct {
+    schema: []const u8 = "var1.session_event_notification.v1",
     session_id: []const u8,
+    seq: u64,
     event_type: []const u8,
     message: []const u8,
     status: []const u8,

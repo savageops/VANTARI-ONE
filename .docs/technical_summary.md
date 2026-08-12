@@ -104,7 +104,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,931/1,931 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,932/1,932 tests with zero skips.
   Its 224-test host lane executes the formerly dormant stdio client/server and
   shared process-tree tests; the backend TUI lane passes 58/58.
 - Parent-shell production-home probes kept 99,960 files, 693,051,144 bytes,
@@ -142,18 +142,25 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   One hundred mixed concurrent writers retained 100 unique monotonic rows, and
   cold-start sequence initialization reads the valid bounded tail instead of the
   full transcript.
+- Every live `session/event` producer persists first and emits
+  `var1.session_event_notification.v1` with the exact stored event sequence. Two
+  identical same-millisecond events retained distinct envelope identities. The
+  TUI/CLI replay cursor still consumes a process-local notification ordinal and
+  timestamp/type/text suppression; move 15 owns that remaining client boundary.
 - Built and installed ReleaseFast SHA-256 both equal
-  `3E1B87D8AFD02FA37AE08396B89288E95DB7329D35C1683725B087E2929F124A`.
+  `475F156803BE7E74883EB474E844137E6249868110971750AE8205FD7ED8D11F`.
 - Installed `session/send` against a disposable local provider imported all
   1,176 legacy summary rows, appended one terminal v2 row, retained 1,177
-  unique sequences, wrote contiguous unique `user,assistant` message rows,
-  preserved the live legacy hash, and left zero process.
+  unique sequences, wrote contiguous unique `user,assistant` message rows, and
+  emitted four unique monotonic event notifications. The final notification and
+  ledger row were both `turn_finished` at sequence 4; the live legacy hash was
+  preserved and zero process remained.
 - The installed settings smoke flips `runtime.full_access_mode` to `true` in a
   disposable workspace, receives `var1.config_set.v1` in 5 ms, removes the
   isolated runtime, preserves the complete live root, and leaves zero process.
-- Moves 5–13 and finding 10 are closed. Finding 13 is narrowed to exact event
-  transport/replay identity and shared byte-integrity work; persistent agent
-  execution and inter-process scheduler arbitration remain P0.
+- Moves 5–14 and finding 10 are closed. Finding 13 is narrowed to client replay
+  identity and shared byte-integrity work; persistent agent execution and
+  inter-process scheduler arbitration remain P0.
 - The hive direction is assigned to moves 21–30 and finding 11. The target is
   one durable direct/group/parent mailbox over session/event ownership,
   selective summary/artifact awareness, and nested normal sessions. No general

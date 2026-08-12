@@ -11,7 +11,7 @@ source: ../../research/2026-08-12-full-harness-sitrep.md
 
 ## Finding
 
-Session summary mutation and per-session message append are now serialized and append-only. Stdio still drops stored event sequence before TUI replay, and the ledger readers do not yet share the complete byte-integrity contract. The remaining defect is consumer identity and common recovery, not message sequence allocation.
+Session summary mutation and per-session message append are serialized and append-only. Stdio now carries exact stored event sequence, but TUI/CLI replay still substitutes a transport-local cursor and timestamp/type/text suppression. The ledger readers also do not yet share the complete byte-integrity contract. The remaining defect is consumer identity and common recovery, not producer sequence allocation.
 
 ## Evidence
 
@@ -20,8 +20,8 @@ Session summary mutation and per-session message append are now serialized and a
   imports the v1 object once without retaining a fallback reader.
 - Closed move 13: `store.zig` routes every message role through one per-session
   ledger state and initializes its cursor from the last valid bounded tail row.
-- [protocol/types.zig:68](../../../apps/backend/src/shared/protocol/types.zig#L68) omits seq from SessionEventNotification.
-- [tui_chat.zig:666](../../../apps/backend/src/clients/tui_chat.zig#L666) deduplicates by timestamp, type, and message.
+- Closed move 14: [protocol/types.zig:68](../../../apps/backend/src/shared/protocol/types.zig#L68) defines `var1.session_event_notification.v1` with the exact stored `seq`; all live producers persist before emitting it.
+- [tui_chat.zig](../../../apps/backend/src/clients/tui_chat.zig) still deduplicates by timestamp, type, and message instead of consuming that sequence.
 
 ## Required mechanism
 
@@ -31,6 +31,7 @@ Carry the exact stored event sequence and byte payload through one versioned pro
 
 - [x] 100 concurrent summary upserts retain the latest row for every session.
 - [x] 100 concurrent message appends produce unique monotonic sequence values.
+- [x] Duplicate same-millisecond events with identical text retain distinct stored and RPC sequence values.
 - [ ] Duplicate same-millisecond events with identical text all render once and only once.
 - [ ] Torn suffix recovery preserves valid prefix state across all three ledgers.
 - [x] Long-session append initialization is not proportional to total message count.
@@ -48,12 +49,13 @@ Carry the exact stored event sequence and byte payload through one versioned pro
 - 100 synchronized mixed-role message appends retained 100 rows with unique
   monotonic sequences; a 32,768-line poisoned-prefix fixture continued from the
   valid tail row without the removed full-transcript sequencer.
-- The complete graph passes 1,931/1,931. Installed `session/send` wrote two
-  contiguous unique message rows, source/installed SHA-256 match, and zero
-  VANTARI processes remain.
+- The complete graph passes 1,932/1,932. Installed `session/send` wrote two
+  contiguous unique message rows and emitted four unique monotonic event
+  notifications ending on the stored `turn_finished` sequence. Source/installed
+  SHA-256 match and zero VANTARI processes remain.
 - Packaged GGUF dupe audit: 37 segments and zero candidate or exact pairs across
   `store.zig` and `summaries.zig`.
-- Finding remains pending for moves 14–17 and 20.
+- Finding remains pending for moves 15–17 and 20.
 
 ## Out of scope
 

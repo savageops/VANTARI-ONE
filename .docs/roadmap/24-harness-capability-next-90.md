@@ -59,8 +59,9 @@ advance the queue until the real installed consumer path proves it.
 | 11 | consolidate | closed | Source TUI tests cover open/apply/close/reopen/timeout; installed `config/set` flipped `full_access_mode` in 5 ms through the real host transport, removed its isolated runtime, and left zero processes. |
 | 12 | consolidate | closed | `summaries.jsonl` v2 appends stable sequenced revisions under one owner and projects the greatest sequence per session. V1 import, poison continuation, 100 synchronized writers/100 retained rows, 1,929-test graph, and zero-pair dupe audit pass. Installed `session/send` imported 1,176 legacy rows and appended one v2 row with 1,177 unique sequences. |
 | 13 | consolidate/delete | closed | Every message role routes through one per-session ledger state; cold start reads only the bounded tail and the empty-file rewrite/full-transcript sequencer are deleted. One hundred mixed concurrent writers retained 100 unique monotonic rows; the poisoned-prefix tail probe, 1,931-test graph, 37-segment zero-pair dupe audit, and installed `user,assistant` sequence proof pass. |
+| 14 | consolidate | closed | `var1.session_event_notification.v1` carries the exact stored `seq`; every live producer persists before emission. Two identical same-millisecond source events retained distinct envelope sequences, the 1,932-test graph and ReleaseFast 9/9 pass, and installed `session/send` emitted four unique monotonic notifications ending on the same stored `turn_finished` sequence. |
 | 31 | delete/consolidate | closed | Retired prompt leak and brittle prose assertions removed; broad graph green. |
-| 38 | consolidate | closed | ReleaseFast and `%LOCALAPPDATA%/Vantari/bin/vantari.exe` share SHA-256 `3E1B87D8AFD02FA37AE08396B89288E95DB7329D35C1683725B087E2929F124A`; installer and isolated installed smokes exit cleanly. |
+| 38 | consolidate | closed | ReleaseFast and `%LOCALAPPDATA%/Vantari/bin/vantari.exe` share SHA-256 `475F156803BE7E74883EB474E844137E6249868110971750AE8205FD7ED8D11F`; installer and isolated installed smokes exit cleanly. |
 
 ## Competitive basis
 

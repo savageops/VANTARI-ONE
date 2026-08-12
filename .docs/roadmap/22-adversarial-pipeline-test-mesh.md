@@ -2,10 +2,11 @@
 
 **Priority: P0**
 
-**Current delta (2026-08-12):** The isolated graph now passes 1,931/1,931 with
-zero skips. The message contention/tail probes are landed. Same-millisecond
-client replay still depends on move 14 carrying stored event sequence through
-RPC, followed by move 15 replacing timestamp/text suppression.
+**Current delta (2026-08-12):** The isolated graph now passes 1,932/1,932 with
+zero skips. The message contention/tail probes are landed. Move 14 proves two
+identical same-millisecond events retain distinct stored/RPC sequences and the
+installed terminal notification matches the final ledger row. Move 15 still
+must replace client timestamp/text suppression and prove render-once replay.
 
 ## The seam
 

@@ -27,6 +27,7 @@ pub const Hooks = struct {
     onSessionEventFn: ?*const fn (
         ctx: ?*anyopaque,
         session_id: []const u8,
+        seq: u64,
         event_type: []const u8,
         message: []const u8,
         status: []const u8,
@@ -46,13 +47,14 @@ pub const Hooks = struct {
     pub fn onSessionEvent(
         self: Hooks,
         session_id: []const u8,
+        seq: u64,
         event_type: []const u8,
         message: []const u8,
         status: []const u8,
         timestamp_ms: i64,
     ) !void {
         if (self.onSessionEventFn) |callback| {
-            try callback(self.context, session_id, event_type, message, status, timestamp_ms);
+            try callback(self.context, session_id, seq, event_type, message, status, timestamp_ms);
         }
     }
 
@@ -735,11 +737,19 @@ pub fn runPromptWithOptions(
                 final_output,
                 run_start_ms,
             );
-            try store.appendEvent(allocator, config.workspace_root, session.id, .{
+            const assistant_response_seq = try store.appendEventWithSeq(allocator, config.workspace_root, session.id, .{
                 .event_type = "assistant_response",
                 .message = final_output,
                 .timestamp_ms = final_timestamp,
             });
+            try options.hooks.onSessionEvent(
+                session.id,
+                assistant_response_seq,
+                "assistant_response",
+                final_output,
+                types.statusLabel(session.status),
+                final_timestamp,
+            );
             // Typed turn terminal evidence: every completed turn emits
             // turn_finished with measured token telemetry (AGENTS.md §IV, P0-3a).
             // Same ownership pattern as turn_started: allocate, persist, free.
@@ -762,13 +772,6 @@ pub fn runPromptWithOptions(
             // speed; the terminal assistant response must be durable before
             // the RPC returns (AGENTS.md §II durability gate at boundaries).
             store.syncSessionLedgers(allocator, config.workspace_root, session.id) catch {};
-            try options.hooks.onSessionEvent(
-                session.id,
-                "assistant_response",
-                final_output,
-                types.statusLabel(session.status),
-                final_timestamp,
-            );
             try docs_sync.completeSession(allocator, config.workspace_root, .{
                 .session_id = session.id,
                 .status = types.statusLabel(session.status),
@@ -808,13 +811,14 @@ pub fn runPromptWithOptions(
             final_output,
             run_start_ms,
         );
-        try store.appendEvent(allocator, config.workspace_root, session.id, .{
+        const assistant_response_seq = try store.appendEventWithSeq(allocator, config.workspace_root, session.id, .{
             .event_type = "assistant_response",
             .message = final_output,
             .timestamp_ms = final_timestamp,
         });
         try options.hooks.onSessionEvent(
             session.id,
+            assistant_response_seq,
             "assistant_response",
             final_output,
             types.statusLabel(session.status),
@@ -1620,7 +1624,7 @@ fn recordSessionEvent(
     status: types.SessionStatus,
 ) !void {
     const timestamp_ms = std.time.milliTimestamp();
-    try store.appendEvent(allocator, workspace_root, session_id, .{
+    const seq = try store.appendEventWithSeq(allocator, workspace_root, session_id, .{
         .event_type = event_type,
         .message = message,
         .timestamp_ms = timestamp_ms,
@@ -1629,5 +1633,5 @@ fn recordSessionEvent(
     // Live notification is a read model over the durable event spine
     // (AGENTS.md §IV). A slow/broken TUI pipe must never corrupt the
     // provider turn — the durable event has already been persisted above.
-    hooks.onSessionEvent(session_id, event_type, message, types.statusLabel(status), timestamp_ms) catch {};
+    hooks.onSessionEvent(session_id, seq, event_type, message, types.statusLabel(status), timestamp_ms) catch {};
 }

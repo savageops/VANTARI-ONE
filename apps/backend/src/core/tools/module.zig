@@ -235,6 +235,7 @@ pub const AgentEventSink = struct {
     notifyFn: ?*const fn (
         ctx: ?*anyopaque,
         parent_session_id: []const u8,
+        seq: u64,
         event_type: []const u8,
         message: []const u8,
         timestamp_ms: i64,
@@ -243,12 +244,13 @@ pub const AgentEventSink = struct {
     pub fn notify(
         self: AgentEventSink,
         parent_session_id: []const u8,
+        seq: u64,
         event_type: []const u8,
         message: []const u8,
         timestamp_ms: i64,
     ) !void {
         if (self.notifyFn) |callback| {
-            try callback(self.context, parent_session_id, event_type, message, timestamp_ms);
+            try callback(self.context, parent_session_id, seq, event_type, message, timestamp_ms);
         }
     }
 };

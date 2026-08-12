@@ -755,7 +755,7 @@ pub const Supervisor = struct {
 
     fn persistAndNotify(self: *Supervisor, group: *Group, event_type: []const u8, message: []const u8) !void {
         const timestamp_ms = std.time.milliTimestamp();
-        try store.appendEvent(allocator, group.workspace_root, group.parent_session_id, .{
+        const seq = try store.appendEventWithSeq(allocator, group.workspace_root, group.parent_session_id, .{
             .event_type = event_type,
             .message = message,
             .timestamp_ms = timestamp_ms,
@@ -763,7 +763,7 @@ pub const Supervisor = struct {
         self.mutex.lock();
         const sink = self.event_sink;
         self.mutex.unlock();
-        sink.notify(group.parent_session_id, event_type, message, timestamp_ms) catch {};
+        sink.notify(group.parent_session_id, seq, event_type, message, timestamp_ms) catch {};
     }
 
     fn finishTask(self: *Supervisor, task: *Task, lifecycle: TaskLifecycle, failure_class: ?[]const u8) void {
@@ -1036,6 +1036,7 @@ fn jsonTypeMatches(expected: []const u8, value: std.json.Value) bool {
 fn onChildSessionEvent(
     ctx: ?*anyopaque,
     _: []const u8,
+    _: u64,
     event_type: []const u8,
     message: []const u8,
     _: []const u8,

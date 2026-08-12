@@ -572,6 +572,17 @@ pub fn appendEvent(
     session_id: []const u8,
     event: types.SessionEvent,
 ) !void {
+    _ = try appendEventWithSeq(allocator, workspace_root, session_id, event);
+}
+
+/// Append one durable event and return the exact stored replay identity.
+/// Live transports must carry this value instead of inventing another cursor.
+pub fn appendEventWithSeq(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    event: types.SessionEvent,
+) !u64 {
     const events_path = try eventsFilePath(allocator, workspace_root, session_id);
     defer allocator.free(events_path);
 
@@ -598,6 +609,7 @@ pub fn appendEvent(
         return err;
     };
     seq_state.next_seq = following_seq;
+    return next_seq;
 }
 
 /// Return one process-local mutation owner for a session's append-only ledgers.

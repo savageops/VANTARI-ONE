@@ -134,6 +134,7 @@ const EventCapture = struct {
     allocator: std.mem.Allocator,
     last_event_type: ?[]u8 = null,
     last_status: ?[]u8 = null,
+    last_seq: u64 = 0,
 
     fn deinit(self: *EventCapture) void {
         if (self.last_event_type) |value| self.allocator.free(value);
@@ -144,6 +145,7 @@ const EventCapture = struct {
 fn captureSessionEvent(
     ctx: ?*anyopaque,
     _: []const u8,
+    seq: u64,
     event_type: []const u8,
     _: []const u8,
     status: []const u8,
@@ -154,6 +156,7 @@ fn captureSessionEvent(
     if (capture.last_status) |value| capture.allocator.free(value);
     capture.last_event_type = try capture.allocator.dupe(u8, event_type);
     capture.last_status = try capture.allocator.dupe(u8, status);
+    capture.last_seq = seq;
 }
 
 const LocalHttpServer = struct {
@@ -681,8 +684,13 @@ test "loop writes runtime state and archives docs on success" {
     defer result.deinit(std.testing.allocator);
 
     try std.testing.expect(std.mem.indexOf(u8, result.output, "3") != null);
-    try std.testing.expectEqualStrings("assistant_response", capture.last_event_type.?);
+    try std.testing.expectEqualStrings("turn_finished", capture.last_event_type.?);
     try std.testing.expectEqualStrings("completed", capture.last_status.?);
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, result.session_id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
+    try std.testing.expect(events.len > 0);
+    try std.testing.expectEqual(events[events.len - 1].seq, capture.last_seq);
+    try std.testing.expectEqualStrings(events[events.len - 1].event_type, capture.last_event_type.?);
 
     const changelog_path = try VAR1.core.docs_sync.changelogSlicePath(std.testing.allocator, workspace_root, result.session_id);
     defer std.testing.allocator.free(changelog_path);
@@ -1548,8 +1556,13 @@ fn seedParentAndBranch(
     const branch_summary = try std.fmt.allocPrint(allocator, "Branch 1 ({s}): {s}", .{ agent_name, branch_prompt });
     defer allocator.free(branch_summary);
     try VAR1.core.session_store.appendShardCheckpoint(
-        allocator, workspace_root, parent.id,
-        "parent-cp-1", 1, .open, branch_summary,
+        allocator,
+        workspace_root,
+        parent.id,
+        "parent-cp-1",
+        1,
+        .open,
+        branch_summary,
     );
 
     return .{

@@ -8,7 +8,7 @@ source: ../../research/2026-08-12-full-harness-sitrep.md
 
 # Harness readiness findings
 
-This ledger converts the full-harness SITREP into executable work. Closed work now owns request lifetime, test roots, summary writes, and per-session message sequencing. The remaining convergent root cause is process-local ownership presented as durable ownership: agent workers, scheduler leadership, multi-process writer authority, and client replay still lose exact ownership at a process boundary.
+This ledger converts the full-harness SITREP into executable work. Closed work now owns request lifetime, test roots, summary writes, per-session message sequencing, and exact event sequence transport. The remaining convergent root cause is process-local ownership presented as durable ownership: agent workers, scheduler leadership, multi-process writer authority, and client replay cursors still lose exact ownership at a process boundary.
 
 [`../../roadmap/24-harness-capability-next-90.md`](../../roadmap/24-harness-capability-next-90.md) expands this ledger into the current 90-move execution order. This findings index remains the immediate P0/P1/P2 authority; roadmap 24 sequences the downstream capability and friction-removal work behind it.
 

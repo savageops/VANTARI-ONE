@@ -1,5 +1,33 @@
 # Execution Log
 
+## 2026-08-12 - Stored event sequence through live RPC
+
+**Outcome:** Removed sequence loss between `events.jsonl` and every live
+`session/event` producer without adding another event bus or cursor owner.
+
+- `appendEventWithSeq` returns the writer-assigned ledger identity;
+  `var1.session_event_notification.v1` carries that exact value through loop,
+  agent-parent, stdio, and browser bridge paths.
+- Buffer previews and queued steer notices now persist before emission. Terminal
+  assistant and `turn_finished` notifications follow the same order as disk.
+- Two identical same-millisecond events persisted and emitted as distinct
+  sequences 1 and 2. The complete graph passes 19/19 and 1,932/1,932;
+  ReleaseFast passes 9/9.
+- Installed `session/send` emitted four unique monotonic notifications. Its last
+  notification and ledger row were both `turn_finished` at sequence 4. The
+  provider completed, the process exited 0, and zero VANTARI processes remain.
+- Source and installed SHA-256 match
+  `475F156803BE7E74883EB474E844137E6249868110971750AE8205FD7ED8D11F`;
+  the prior binary is retained at
+  `C:\Users\Savage\AppData\Local\Vantari\bin\vantari.exe.20260812-152648.bak`.
+- Harvest retained JSON-RPC's request/notification distinction, Codex's typed
+  item identity, and Eve's persist-first indexed stream. VANTARI uses one smaller
+  versioned envelope over the existing event ledger.
+- Dupe audit is deferred for this bounded signature/serializer plumbing: no
+  registry, writer, or parallel transport owner was introduced.
+- Next owner: move 15, consume stored sequence in TUI/CLI replay and delete
+  timestamp/type/text identity.
+
 ## 2026-08-12 - Per-session message ledger ownership
 
 **Outcome:** Replaced four partially independent transcript writers with one

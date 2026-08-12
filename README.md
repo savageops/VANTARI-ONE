@@ -439,7 +439,7 @@ The kernel exposes JSON-RPC 2.0 methods over stdio. The browser workbench reache
 | `schedule/list` | List scheduler jobs, optionally including deleted |
 | `models/list` | Discover available models from the active or a specified provider |
 | `tools/list` | Return the tool catalog in text or JSON format |
-| `events/subscribe` | Enable `session/event` notifications |
+| `events/subscribe` | Enable versioned `session/event` notifications carrying the exact persisted event sequence |
 
 <details>
 <summary><strong>Session execution sequence</strong></summary>
@@ -466,8 +466,8 @@ sequenceDiagram
   end
   Kernel->>Provider: model step
   Provider-->>Kernel: output or tool call
-  Kernel->>Store: append messages / events / output
-  Kernel-->>Host: session result + notifications
+  Kernel->>Store: append messages / sequenced events / output
+  Kernel-->>Host: session result + notifications carrying stored event sequence
   Host-->>Client: JSON-RPC response / SSE event
 ```
 
@@ -764,7 +764,7 @@ The session store uses the same durability model as database write-ahead logs:
 
 - `messages.jsonl` is the **immutable transcript** — it is never edited, only appended. Crash-interrupted partial rows are tolerated on re-read without rewriting history.
 - `context.jsonl` is the **checkpoint file** — structured summaries with sequence range coverage, used by the context builder to create model-visible windows without mutating the transcript.
-- `events.jsonl` is the **audit trail** — every state transition, tool lifecycle event, and bridge action is recorded with timestamps.
+- `events.jsonl` is the **audit trail** — every state transition, tool lifecycle event, and bridge action has a writer-assigned monotonic sequence. Live `session/event` notifications are emitted only after persistence and carry that exact sequence.
 
 This separation keeps recovery mechanical. Context compaction changes the model-visible projection, never transcript truth. Each session directory can be copied, inspected with ordinary text tools, or retained as execution evidence without a database export.
 
