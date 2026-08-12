@@ -172,7 +172,6 @@ const ChatState = struct {
     session_id: ?[]u8 = null,
     status: []const u8 = "READY",
     messages: std.ArrayList(Message) = .{},
-    seen_progress_events: std.ArrayList([]u8) = .{},
     scroll_offset: usize = 0,
     waiting: bool = false,
     cancel_requested: bool = false,
@@ -182,7 +181,11 @@ const ChatState = struct {
     /// are appended here and rendered as a single dimmed block, not
     /// one row per token.
     reasoning_buffer: std.ArrayList(u8) = .{},
-    last_notification_sequence: u64 = 0,
+    /// Process-local queue position used only to drain stdio notifications.
+    /// Durable render identity is `last_event_seq` below.
+    last_transport_sequence: u64 = 0,
+    /// Exact per-session events.jsonl replay cursor.
+    last_event_seq: u64 = 0,
     last_transcript_body_width: usize = 80,
     history_entries: std.ArrayList([]u8) = .{},
     history_cursor: usize = 0,
@@ -209,8 +212,6 @@ const ChatState = struct {
         if (self.session_id) |value| self.allocator.free(value);
         for (self.messages.items) |message| message.deinit(self.allocator);
         self.messages.deinit(self.allocator);
-        for (self.seen_progress_events.items) |event_key| self.allocator.free(event_key);
-        self.seen_progress_events.deinit(self.allocator);
         self.reasoning_buffer.deinit(self.allocator);
         for (self.history_entries.items) |entry| self.allocator.free(entry);
         self.history_entries.deinit(self.allocator);
@@ -345,9 +346,8 @@ const ChatState = struct {
 
         for (self.messages.items) |message| message.deinit(self.allocator);
         self.messages.clearRetainingCapacity();
-        for (self.seen_progress_events.items) |event_key| self.allocator.free(event_key);
-        self.seen_progress_events.clearRetainingCapacity();
-        self.last_notification_sequence = 0;
+        self.last_transport_sequence = 0;
+        self.last_event_seq = 0;
         self.scroll_offset = 0;
         self.waiting = false;
         self.cancel_requested = false;
@@ -357,7 +357,15 @@ const ChatState = struct {
 
         try self.hydrateTranscript(parsed_get.value.messages);
         for (parsed_get.value.events) |event| {
-            _ = try self.markProgressEventSeen(event.event_type, event.message, event.timestamp_ms);
+            // Legacy rows have no replay identity and cannot arrive again over
+            // the current versioned transport. Preserve their cold projection.
+            if (event.seq == 0) {
+                if (replayProgressEvent(event.event_type)) try self.addProgress(event.event_type, event.message);
+                continue;
+            }
+            if (event.seq <= self.last_event_seq) continue;
+            if (event.seq != try nextProgressSeq(self.last_event_seq)) return error.EventSequenceGap;
+            self.last_event_seq = event.seq;
             if (replayProgressEvent(event.event_type)) try self.addProgress(event.event_type, event.message);
         }
         self.jumpToBottom();
@@ -558,9 +566,16 @@ const ChatState = struct {
         }
         thread.join();
         if (try self.drainProgress(session_id, 0) > 0) redraw_pending = true;
+        if (send_job.err) |err| {
+            if (redraw_pending) try draw(vx, writer, self, input);
+            return err;
+        }
+        // Verify the transport tail once at the durable turn boundary. This
+        // recovers even when every active-session notification was evicted and
+        // no later frame remained to expose a sequence gap.
+        if (try self.syncProgressAfterSeq(session_id)) redraw_pending = true;
         if (redraw_pending) try draw(vx, writer, self, input);
 
-        if (send_job.err) |err| return err;
         const send_call = send_job.result orelse return error.InvalidRpcResponse;
         const send_result_json = try expectKernelResult(self.allocator, send_call);
         defer self.allocator.free(send_result_json);
@@ -582,13 +597,14 @@ const ChatState = struct {
         var processed: usize = 0;
         var wait_ms = timeout_ms;
         while (true) {
-            const notification = try self.client.waitForNotificationAfter(self.last_notification_sequence, wait_ms) orelse return changed;
-            self.last_notification_sequence = notification.sequence;
+            const notification = try self.client.waitForNotificationAfter(self.last_transport_sequence, wait_ms) orelse return changed;
+            const transport_sequence = notification.sequence;
             const notification_changed = self.recordProgressNotification(session_id, notification) catch |err| {
                 notification.deinit(self.allocator);
                 return err;
             };
             notification.deinit(self.allocator);
+            self.last_transport_sequence = transport_sequence;
             if (notification_changed) changed += 1;
 
             processed += 1;
@@ -604,12 +620,61 @@ const ChatState = struct {
         }) catch return false;
         defer parsed.deinit();
         if (!std.mem.eql(u8, parsed.value.session_id, session_id)) return false;
-        return try self.recordProgressEvent(parsed.value.event_type, parsed.value.message, parsed.value.timestamp_ms);
+        if (parsed.value.seq == 0 or parsed.value.seq <= self.last_event_seq) return false;
+
+        var changed = false;
+        if (parsed.value.seq != try nextProgressSeq(self.last_event_seq)) {
+            changed = try self.syncProgressAfterSeq(session_id);
+        }
+        if (parsed.value.seq <= self.last_event_seq) return changed;
+        const notification_changed = try self.recordProgressEvent(parsed.value.seq, parsed.value.event_type, parsed.value.message);
+        return changed or notification_changed;
     }
 
-    fn recordProgressEvent(self: *ChatState, event_type: []const u8, message: []const u8, timestamp_ms: i64) !bool {
-        if (!try self.markProgressEventSeen(event_type, message, timestamp_ms)) return false;
+    /// Recover a dropped or physically reordered live notification from the
+    /// existing durable tail. This is demand-driven: the normal contiguous path
+    /// performs no RPC and no disk replay.
+    fn syncProgressAfterSeq(self: *ChatState, session_id: []const u8) !bool {
+        const params = try renderJsonAlloc(self.allocator, .{
+            .session_id = session_id,
+            .after_seq = self.last_event_seq,
+            .events_only = true,
+        });
+        defer self.allocator.free(params);
 
+        const get_call = try self.client.call(protocol.methods.session_get, params);
+        defer get_call.deinit(self.allocator);
+        const get_result_json = try expectKernelResult(self.allocator, get_call);
+        defer self.allocator.free(get_result_json);
+
+        var parsed = try std.json.parseFromSlice(protocol.SessionGetResult, self.allocator, get_result_json, .{
+            .ignore_unknown_fields = true,
+        });
+        defer parsed.deinit();
+
+        return self.recordProgressEvents(parsed.value.events);
+    }
+
+    fn recordProgressEvents(self: *ChatState, events: []const VAR1.shared.types.SessionEvent) !bool {
+        var changed = false;
+        for (events) |event| {
+            if (event.seq == 0 or event.seq <= self.last_event_seq) continue;
+            const event_changed = try self.recordProgressEvent(event.seq, event.event_type, event.message);
+            changed = changed or event_changed;
+        }
+        return changed;
+    }
+
+    fn recordProgressEvent(self: *ChatState, seq: u64, event_type: []const u8, message: []const u8) !bool {
+        if (seq == 0 or seq <= self.last_event_seq) return false;
+        if (seq != try nextProgressSeq(self.last_event_seq)) return error.EventSequenceGap;
+
+        const changed = try self.applyProgressEvent(event_type, message);
+        self.last_event_seq = seq;
+        return changed;
+    }
+
+    fn applyProgressEvent(self: *ChatState, event_type: []const u8, message: []const u8) !bool {
         if (try self.recordTurnTelemetry(event_type, message)) return true;
         if (std.mem.eql(u8, event_type, "assistant_delta")) {
             try self.addAssistantDelta(message);
@@ -659,25 +724,6 @@ const ChatState = struct {
                 self.session_cost_usd += cost;
                 self.has_session_cost = true;
             }
-        }
-        return true;
-    }
-
-    fn markProgressEventSeen(self: *ChatState, event_type: []const u8, message: []const u8, timestamp_ms: i64) !bool {
-        const key = try std.fmt.allocPrint(self.allocator, "{d}\x1f{s}\x1f{s}", .{ timestamp_ms, event_type, message });
-        errdefer self.allocator.free(key);
-
-        for (self.seen_progress_events.items) |seen| {
-            if (std.mem.eql(u8, seen, key)) {
-                self.allocator.free(key);
-                return false;
-            }
-        }
-
-        try self.seen_progress_events.append(self.allocator, key);
-        if (self.seen_progress_events.items.len > max_seen_progress_events) {
-            const dropped = self.seen_progress_events.orderedRemove(0);
-            self.allocator.free(dropped);
         }
         return true;
     }
@@ -2915,7 +2961,11 @@ fn basename(path: []const u8) []const u8 {
 const max_progress_message_bytes: usize = 220;
 const max_tool_output_preview_bytes: usize = 180;
 const max_tool_output_payload_bytes: usize = 180;
-const max_seen_progress_events: usize = 512;
+
+fn nextProgressSeq(seq: u64) !u64 {
+    if (seq == std.math.maxInt(u64)) return error.EventSequenceOverflow;
+    return seq + 1;
+}
 
 fn formatProgress(allocator: std.mem.Allocator, event_type: []const u8, message: []const u8) !?[]u8 {
     if (std.mem.eql(u8, event_type, "tool_requested")) return formatToolRequested(allocator, message);
@@ -3731,7 +3781,7 @@ test "tui chat removes pending assistant placeholder when tool progress arrives 
     try std.testing.expectEqualStrings("Done.", state.messages.items[1].text);
 }
 
-test "tui progress event cursor preserves same timestamp bursts and rejects replays" {
+test "tui durable event cursor preserves identical same timestamp bursts and rejects replays" {
     var state = ChatState{
         .allocator = std.testing.allocator,
         .client = undefined,
@@ -3744,14 +3794,64 @@ test "tui progress event cursor preserves same timestamp bursts and rejects repl
     };
     defer state.deinit();
 
-    const first_output = "{\"schema\":\"var1.tool_output_delta.v1\",\"tool\":\"shell_exec\",\"tool_call_id\":\"call_1\",\"stream\":\"stdout\",\"chunk_b64\":\"b25l\",\"cap_reached\":false}";
-    const second_output = "{\"schema\":\"var1.tool_output_delta.v1\",\"tool\":\"shell_exec\",\"tool_call_id\":\"call_1\",\"stream\":\"stdout\",\"chunk_b64\":\"dHdv\",\"cap_reached\":false}";
-    try std.testing.expect(try state.recordProgressEvent("tool_output_delta", first_output, 42));
-    try std.testing.expect(try state.recordProgressEvent("tool_output_delta", second_output, 42));
-    try std.testing.expect(!try state.recordProgressEvent("tool_output_delta", second_output, 42));
+    const Fixture = struct {
+        fn init(allocator: std.mem.Allocator, transport_seq: u64, event_seq: u64) !stdio_rpc.Notification {
+            const method = try allocator.dupe(u8, protocol.notification_methods.session_event);
+            errdefer allocator.free(method);
+            return .{
+                .sequence = transport_seq,
+                .method = method,
+                .params_json = try std.fmt.allocPrint(
+                    allocator,
+                    "{{\"schema\":\"var1.session_event_notification.v1\",\"session_id\":\"session-one\",\"seq\":{d},\"event_type\":\"assistant_delta\",\"message\":\"same\",\"status\":\"running\",\"timestamp_ms\":42}}",
+                    .{event_seq},
+                ),
+            };
+        }
+    };
+
+    var first = try Fixture.init(std.testing.allocator, 40, 1);
+    defer first.deinit(std.testing.allocator);
+    var second = try Fixture.init(std.testing.allocator, 41, 2);
+    defer second.deinit(std.testing.allocator);
+    var replay = try Fixture.init(std.testing.allocator, 42, 2);
+    defer replay.deinit(std.testing.allocator);
+
+    try state.startAssistantPlaceholder();
+    try std.testing.expect(try state.recordProgressNotification("session-one", first));
+    try std.testing.expect(try state.recordProgressNotification("session-one", second));
+    try std.testing.expect(!try state.recordProgressNotification("session-one", replay));
 
     try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
-    try std.testing.expectEqualStrings("stdout: one | two", state.messages.items[0].text);
+    try std.testing.expectEqualStrings("samesame", state.messages.items[0].text);
+    try std.testing.expectEqual(@as(u64, 2), state.last_event_seq);
+}
+
+test "tui durable catch-up applies an exact missing suffix in ledger order" {
+    var state = ChatState{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "glm-5.1",
+        .base_url = "https://api.z.ai/api/coding/paas/v4",
+        .auth_provider = "zai",
+        .plan = "coding",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    try state.startAssistantPlaceholder();
+    try std.testing.expect(try state.recordProgressEvent(1, "assistant_delta", "one"));
+    const durable_suffix = [_]VAR1.shared.types.SessionEvent{
+        .{ .seq = 1, .event_type = "assistant_delta", .message = "one", .timestamp_ms = 42 },
+        .{ .seq = 2, .event_type = "assistant_delta", .message = "two", .timestamp_ms = 42 },
+        .{ .seq = 3, .event_type = "assistant_delta", .message = "three", .timestamp_ms = 42 },
+    };
+    try std.testing.expect(try state.recordProgressEvents(&durable_suffix));
+
+    try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
+    try std.testing.expectEqualStrings("onetwothree", state.messages.items[0].text);
+    try std.testing.expectEqual(@as(u64, 3), state.last_event_seq);
 }
 
 test "tui scrollback keeps transcript navigable without mutating input state" {
@@ -4258,9 +4358,9 @@ test "tui footer projects context telemetry and live agent cardinality" {
     defer state.deinit();
 
     try std.testing.expect(try state.recordProgressEvent(
+        1,
         "turn_started",
         "{\"schema\":\"var1.turn_started.v1\",\"window_tokens\":5000}",
-        1,
     ));
     try state.upsertActivityProgress("agent-1", "recon - running", .item, .running, "group-1");
     try state.upsertActivityProgress("agent-2", "review - queued", .item, .pending, "group-1");
@@ -4463,9 +4563,9 @@ test "tui reasoning events project only into the dock while progress stays in tr
     defer state.deinit();
 
     try state.startAssistantPlaceholder();
-    try std.testing.expect(try state.recordProgressEvent("reasoning_delta", "checking the first seam", 1));
-    try std.testing.expect(try state.recordProgressEvent("session_waiting", "child group", 2));
-    try std.testing.expect(try state.recordProgressEvent("reasoning_delta", " and now the newest words", 3));
+    try std.testing.expect(try state.recordProgressEvent(1, "reasoning_delta", "checking the first seam"));
+    try std.testing.expect(try state.recordProgressEvent(2, "session_waiting", "child group"));
+    try std.testing.expect(try state.recordProgressEvent(3, "reasoning_delta", " and now the newest words"));
 
     const win = Window{
         .x_off = 0,

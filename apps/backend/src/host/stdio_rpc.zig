@@ -980,9 +980,8 @@ fn handleSessionGet(server: *Server, params: ?std.json.Value) ![]u8 {
         break :blk optionalU64FromObject(&v.object, "after_seq") catch return Error.InvalidParams;
     } else null;
 
-    // events_only: skip re-reading and serializing messages. During streaming
-    // the TUI polls session/get every ~100ms; serializing the full message
-    // array on every poll is the dominant cost. The TUI only needs events.
+    // events_only skips transcript serialization during demand-driven client
+    // cursor catch-up. The live contiguous path uses notifications only.
     const events_only: bool = if (params) |v| blk: {
         if (v != .object) break :blk false;
         if (v.object.get("events_only")) |field| {
@@ -1006,11 +1005,9 @@ fn handleSessionGet(server: *Server, params: ?std.json.Value) ![]u8 {
     const latest_event = try store.readLatestEvent(server.allocator, server.config.workspace_root, session.id);
     defer if (latest_event) |value| value.deinit(server.allocator);
 
-    // When after_seq is provided, use the incremental tail-read path.
-    // This reads ONLY new events from disk (backward scan from EOF) instead
-    // of reading + parsing the entire events.jsonl on every TUI poll.
-    // This is the critical streaming-performance fix: O(k) where k is the
-    // number of NEW events, not O(n) where n is the total event count.
+    // When after_seq is provided, parse only the durable suffix newer than the
+    // client's exact ledger cursor. `readEventsAfterSeq` still reads current
+    // file bytes once; it avoids parsing the already-consumed prefix.
     const events = if (after_seq) |min_seq| blk: {
         break :blk try store.readEventsAfterSeq(server.allocator, server.config.workspace_root, session.id, min_seq);
     } else blk: {

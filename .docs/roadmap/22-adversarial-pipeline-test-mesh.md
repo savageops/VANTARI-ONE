@@ -2,11 +2,11 @@
 
 **Priority: P0**
 
-**Current delta (2026-08-12):** The isolated graph now passes 1,932/1,932 with
-zero skips. The message contention/tail probes are landed. Move 14 proves two
-identical same-millisecond events retain distinct stored/RPC sequences and the
-installed terminal notification matches the final ledger row. Move 15 still
-must replace client timestamp/text suppression and prove render-once replay.
+**Current delta (2026-08-12):** The isolated graph now passes 1,934/1,934 with
+zero skips. The message contention/tail probes are landed. Moves 14–15 prove two
+identical same-millisecond events retain distinct stored/RPC sequences, each
+renders once, replay does not duplicate either event, and a gap returns the exact
+durable suffix. The installed binary returned sequences 2–4 after `after_seq=1`.
 
 ## The seam
 

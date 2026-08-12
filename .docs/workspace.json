@@ -45,21 +45,22 @@
   "proof": {
     "zig": "C:/Users/Savage/AppData/Local/VANTARI-ONE/toolchains/zig-x86_64-windows-0.15.1/zig.exe",
     "release_fast": "9/9 steps succeeded",
-    "focused_tui": "58/58 passed; 0 skipped",
+    "focused_tui": "59/59 passed; 0 skipped",
     "host_lifecycle": "224/224 passed; atomic admission, session-keyed buffer projection, cancellation-before-join shutdown, deadlines, and Job Object ownership",
-    "isolated_broad": "19/19 steps; 1932/1932 passed; 0 skipped",
+    "isolated_broad": "19/19 steps; 1934/1934 passed; 0 skipped",
     "test_runtime_isolation": "six build artifacts plus direct zig test receive generated VANTARI_HOME and VANTARI_TEST_ROOT; direct proof kept 99960 files and 693051144 bytes unchanged",
     "installed_binary": "C:/Users/Savage/AppData/Local/Vantari/bin/vantari.exe",
     "install_script": "apps/backend/scripts/install_windows.ps1",
-    "built_sha256": "475F156803BE7E74883EB474E844137E6249868110971750AE8205FD7ED8D11F",
-    "installed_sha256": "475F156803BE7E74883EB474E844137E6249868110971750AE8205FD7ED8D11F",
+    "built_sha256": "134D8600777C8ECAD7BF4B87AFF4BEB4D3ECD50BC72CF0A14C5BFB8CE19AF6DD",
+    "installed_sha256": "134D8600777C8ECAD7BF4B87AFF4BEB4D3ECD50BC72CF0A14C5BFB8CE19AF6DD",
     "installed_hash_matches": true,
     "installed_settings_smoke": "initialize ok; config/set var1.config_set.v1 in 5 ms; isolated runtime removed; live root unchanged; zero processes",
     "host_shutdown": "blocked provider request observed cancellation before join, persisted exactly one session_cancelled event, returned cancelled, and passed 20 repeat runs",
     "summary_ledger": "summaries.jsonl v2; stable seq; latest-row projection; v1 import; poisoned suffix continuation; 100/100 concurrent rows retained; dupe audit zero pairs",
     "message_ledger": "one process-local per-session append owner; every message role; 100/100 concurrent rows unique and monotonic; bounded valid-tail initialization; 37-segment dupe audit zero pairs",
     "event_notification_transport": "var1.session_event_notification.v1 persists before emission and carries exact stored seq; identical same-millisecond source events retained seq 1 and 2",
-    "installed_summary_migration": "disposable VANTARI_HOME imported 1176/1176 legacy rows, appended one terminal summary through session/send, retained 1177 unique summary sequences, wrote two contiguous unique user/assistant message rows, emitted four unique monotonic event notifications ending on stored turn_finished seq 4, preserved live legacy SHA-256 5D3FF92999B433FF90CA65D1C68A9A960AB24F11979893360DB58710C41BBF1B, and left zero processes",
+    "event_client_replay": "tracked TUI uses exact events.jsonl seq, renders identical same-millisecond events once each, suppresses exact replay, repairs gaps with session/get events_only suffix, and performs one terminal suffix check",
+    "installed_summary_migration": "disposable VANTARI_HOME imported 1176/1176 legacy rows, appended one terminal summary through session/send, retained 1177 unique summary sequences, wrote two contiguous unique user/assistant message rows, emitted four unique monotonic event notifications, returned exactly event seq 2-4 after after_seq 1, ended on stored turn_finished seq 4, preserved live legacy SHA-256 5D3FF92999B433FF90CA65D1C68A9A960AB24F11979893360DB58710C41BBF1B, and left zero processes",
     "active_installed_processes_preserved": []
   },
   "wip": {
@@ -71,7 +72,7 @@
   "residuals": [
     "Both test-isolation incidents and legacy backend owners are repaired reversibly; quarantine/archive manifests and rollback paths remain retained evidence.",
     "Agent execution is process-local, scheduler leader acquisition is not inter-process atomic, and no durable direct/group/parent mailbox or unread cursor is shipped.",
-    "RPC notifications carry exact stored event seq, but TUI/CLI replay still uses a process-local transport cursor and timestamp/type/text suppression; multi-process writer ownership remains coupled to persistent-host arbitration.",
+    "The tracked TUI consumes exact stored event seq; the HTTP bridge keeps a compatibility transport SSE id for ignored browser prototypes, and multi-process writer ownership remains coupled to persistent-host arbitration.",
     "Autonomous repair remains a gated evidence workflow, not an implicit background mutator."
   ]
 }

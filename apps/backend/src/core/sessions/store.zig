@@ -720,11 +720,10 @@ pub fn readEvents(
     return events.toOwnedSlice();
 }
 
-/// Read only events with seq > after_seq. This is the incremental poll path
-/// used by the TUI during streaming. Instead of reading + parsing the ENTIRE
-/// events.jsonl on every poll (O(n) per poll), this reads backward from the
-/// end of the file, collecting events until it finds one with seq <= after_seq.
-/// This is O(k) where k is the number of NEW events since the last poll.
+/// Read only events with seq > after_seq for demand-driven client catch-up.
+/// The current text owner reads the file bytes once, then parses backward only
+/// through the new suffix. Parsing is O(k); file I/O remains O(n) until a
+/// measured index or seekable frame owner replaces `readTextAlloc`.
 pub fn readEventsAfterSeq(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,

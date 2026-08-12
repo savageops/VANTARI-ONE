@@ -108,6 +108,7 @@ Typed events are the runtime's nervous system. String breadcrumbs may exist only
 - Command stdout/stderr are untrusted data. Parse only runtime-owned envelopes; render output as bounded display text.
 - Event cursors use monotonic ledger position plus replay suppression. Timestamp-only cursors are insufficient under same-millisecond bursts.
 - `var1.session_event_notification.v1` carries the exact stored event `seq`. Persist before emission; clients must not replace ledger identity with a transport-local ordinal.
+- A client uses stored `seq` as its sole render identity. A transport ordinal drains only its process-local queue; a sequence gap requests the durable `session/get` suffix. Do not add timestamp/text caches or periodic full-event polling.
 
 ## V. Tool Runtime Contract
 

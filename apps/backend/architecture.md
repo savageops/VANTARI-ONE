@@ -150,7 +150,7 @@ sequenceDiagram
   E->>S: append messages and events
   E->>S: write output and status
   E-->>K: session result
-  E-->>K: session/event notifications
+  E-->>K: persist-first session/event notifications with stored seq
   K-->>B: JSON-RPC result
   B-->>C: response or UI refresh
 ```
@@ -336,7 +336,7 @@ Every session directory contains:
 - `events.jsonl`
 - `output.txt`
 
-`messages.jsonl` is the complete append-only transcript. One process-local per-session ledger state serializes user, assistant, assistant-tool-call, tool-result, and idempotent convergence appends. It initializes sequence from the last valid bounded tail row instead of reparsing transcript history; append failure invalidates the cached cursor before retry. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested.
+`messages.jsonl` is the complete append-only transcript. One process-local per-session ledger state serializes user, assistant, assistant-tool-call, tool-result, and idempotent convergence appends. It initializes sequence from the last valid bounded tail row instead of reparsing transcript history; append failure invalidates the cached cursor before retry. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested. `events.jsonl` assigns the sole durable render identity. Live notifications carry that stored sequence after append; the tracked TUI requests `session/get { after_seq, events_only }` only when it detects a gap and once after turn completion.
 
 `$VANTARI_HOME/config.json` is the canonical non-secret policy file. Its typed sections own runtime limits, wire API selection, role routing, editable agent definitions, context policy, prompt paths, and supported environment-style overrides. Built-in agent rows may tune persona/condition/route/budgets or be disabled; custom ids must inherit a compiled capability floor. `$VANTARI_HOME/auth.json` is the sibling credential/provider ledger. API keys, OAuth tokens, account identity, and active-provider state never move into config output. Nested/AppData auth paths are one-time migration inputs; `settings.toml` is no longer a runtime reader. The Windows installer preserves valid config byte-for-byte and backs up plus materializes the current schema only when the retained file fails validation.
 
@@ -436,7 +436,7 @@ all sibling transcripts or create a generic topic/subscription broker.
 - `src/clients/cli.zig`
   thin protocol-backed CLI
 - `src/clients/tui_chat.zig`
-  terminal projection over monotonic `session/event` notifications with burst draining and adaptive frame backpressure
+  terminal projection over exact `events.jsonl` sequence with live burst draining, demand-driven suffix repair, and adaptive frame backpressure
 - `apps/frontend/var1-client`
   external static browser client over `/api/health`, `/rpc`, and `/events`
 
@@ -487,18 +487,20 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-12:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Isolated broad test graph -> 19/19 steps and 1929/1929 tests passed.
-- Focused backend TUI -> 58/58 passed.
+- Isolated broad test graph -> 19/19 steps and 1934/1934 tests passed.
+- Focused backend TUI -> 59/59 passed.
 - Host lifecycle -> 224/224 passed, including atomic same-session admission,
   session-keyed buffer state, cancellation-before-join shutdown, RPC deadlines,
   late-response retirement, and Windows Job Object ownership.
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Built and installed SHA-256 both equal
-  `6E6DFC9688F3B2763487C7A379586E17376546784F16AEC736493EF7F602CB4A`.
+  `134D8600777C8ECAD7BF4B87AFF4BEB4D3ECD50BC72CF0A14C5BFB8CE19AF6DD`.
 - Installed settings transport flipped `runtime.full_access_mode` in an isolated
   workspace, removed all generated state, preserved the live root, and left
   zero VANTARI process.
+- Installed event catch-up after sequence 1 returned only stored sequences 2–4;
+  the last row and live notification were both `turn_finished` at sequence 4.
 
 ## Cognitive architecture (frontier capabilities)
 

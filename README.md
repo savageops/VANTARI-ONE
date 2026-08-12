@@ -92,7 +92,7 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
 | **Kernel surface** | 109 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 1,929 passing backend cases across source and adversarial pipeline suites |
+| **Proof surface** | 1,934 passing backend cases across source and adversarial pipeline suites |
 | **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
 | **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |
@@ -333,7 +333,8 @@ The installed `vantari` client renders a full terminal interface with:
 - **Bounded command output** — `shell_exec` stdout/stderr streams into the TUI with configurable caps
 - **Scrollback** — Page Up/Down, Ctrl+Home/End for full transcript navigation
 - **Session continuation** — `vantari -c` resumes the latest session with full transcript hydration
-- **Concurrent execution model** — RPC runs on a background thread; the main thread handles UI events, polls notifications at 60ms, and syncs durable state at 350ms intervals
+- **Exact event replay** — the TUI renders by the persisted per-session event sequence; a gap fetches only the missing suffix and a completed turn performs one final suffix check
+- **Concurrent execution model** — RPC runs on a background thread while the main thread handles UI events and drains live notifications without owning transcript or event truth
 
 ### Scoped Delegation
 

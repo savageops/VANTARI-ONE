@@ -1,5 +1,35 @@
 # Execution Log
 
+## 2026-08-12 - Exact TUI event replay identity
+
+**Outcome:** Deleted client-owned event identity and made the persisted per-session
+sequence the tracked TUI's sole render and replay cursor.
+
+- Removed the 512-entry timestamp/type/text cache and periodic full-event
+  reconciliation. The transport ordinal now drains only the stdio queue.
+- Contiguous live notifications perform no replay RPC. A sequence gap calls the
+  existing `session/get { after_seq, events_only }` suffix reader; one post-turn
+  suffix check recovers even when the complete live tail was evicted.
+- Two identical events at one timestamp rendered as `samesame`; replay of the
+  second sequence rendered nothing twice. A missing suffix produced
+  `onetwothree` in exact sequence order.
+- The focused TUI lane passes 59/59; the canonical graph passes 19/19 and
+  1,934/1,934; ReleaseFast passes 9/9.
+- Installed catch-up after sequence 1 returned only sequences 2–4. Four live
+  notification sequences were unique, the final stored/notified event was
+  `turn_finished` at sequence 4, the provider completed, and zero processes remain.
+- Source and installed SHA-256 match
+  `134D8600777C8ECAD7BF4B87AFF4BEB4D3ECD50BC72CF0A14C5BFB8CE19AF6DD`;
+  the prior binary is retained at
+  `C:\\Users\\Savage\\AppData\\Local\\Vantari\\bin\\vantari.exe.20260812-154856.bak`.
+- Harvest retained Eve's persisted absolute stream index, Codex's typed item
+  identity, and SSE reconnect semantics. VANTARI uses one smaller durable cursor
+  and the existing suffix reader; no subscriber registry or replay cache was added.
+- Dupe audit is deferred for this bounded deletion/consolidation slice: it adds no
+  new owner and removes the only heuristic identity cache.
+- Next owner: move 16, preserve arbitrary stdout/stderr bytes with one canonical
+  versioned event envelope and explicit stream/cap evidence.
+
 ## 2026-08-12 - Stored event sequence through live RPC
 
 **Outcome:** Removed sequence loss between `events.jsonl` and every live

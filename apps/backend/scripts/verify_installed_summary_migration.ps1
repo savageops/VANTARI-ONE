@@ -262,6 +262,29 @@ try {
   if ($sent.id -ne 'summary-send' -or ($null -ne $sendError -and $null -ne $sendError.Value) -or $sent.result.session.status -ne 'completed') {
     throw 'Installed session/send did not complete'
   }
+
+  $catchUpRequest = [ordered]@{
+    jsonrpc = '2.0'
+    id = 'event-catch-up'
+    method = 'session/get'
+    params = [ordered]@{ session_id = $sessionId; after_seq = 1; events_only = $true }
+  } | ConvertTo-Json -Compress -Depth 5
+  Write-RpcFrame -Stream $process.StandardInput.BaseStream -Json $catchUpRequest
+  $caughtUp = Read-RpcResponse -Stream $process.StandardOutput.BaseStream -Id 'event-catch-up' -Notifications $notifications
+  $catchUpError = $caughtUp.PSObject.Properties['error']
+  if ($caughtUp.id -ne 'event-catch-up' -or ($null -ne $catchUpError -and $null -ne $catchUpError.Value)) {
+    throw 'Installed event catch-up failed'
+  }
+  $catchUpMessages = @($caughtUp.result.messages)
+  $catchUpEvents = @($caughtUp.result.events)
+  if ($catchUpMessages.Count -ne 0) { throw 'Installed events_only catch-up returned transcript rows' }
+  if ($catchUpEvents.Count -ne 3) { throw "Installed event catch-up returned $($catchUpEvents.Count) rows; expected 3" }
+  for ($index = 0; $index -lt $catchUpEvents.Count; $index++) {
+    $expectedSeq = $index + 2
+    if ([long]$catchUpEvents[$index].seq -ne $expectedSeq) {
+      throw "Installed event catch-up sequence diverged: expected $expectedSeq, got $($catchUpEvents[$index].seq)"
+    }
+  }
   $process.StandardInput.Close()
   if (-not $process.WaitForExit(5000)) { throw 'Installed kernel did not exit after EOF' }
   if ($process.ExitCode -ne 0) { throw "Installed kernel exited $($process.ExitCode): $($process.StandardError.ReadToEnd())" }
@@ -339,6 +362,10 @@ try {
     message_roles = [string]::Join(',', $messageRoles)
     event_notifications = $eventNotifications.Count
     event_notification_unique_sequences = $notificationSequences.Count
+    catch_up_after_seq = 1
+    catch_up_event_rows = $catchUpEvents.Count
+    catch_up_first_seq = [long]$catchUpEvents[0].seq
+    catch_up_last_seq = [long]$catchUpEvents[-1].seq
     terminal_event_type = [string]$lastStoredEvent.event_type
     terminal_event_seq = [long]$lastStoredEvent.seq
     legacy_sha256 = $legacyHash
