@@ -304,6 +304,34 @@ test "loadDefault canonicalizes relative workspace root to an absolute current d
     try std.testing.expectEqualStrings(expected_root, config.workspace_root);
 }
 
+test "explicit workspace remains authoritative over configured redirection" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+    const decoy_root = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, "decoy" });
+    defer std.testing.allocator.free(decoy_root);
+    try std.fs.cwd().makePath(decoy_root);
+
+    const env_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".env" });
+    defer std.testing.allocator.free(env_path);
+    try VAR1.shared.fsutil.writeText(env_path,
+        \\BASE_URL=https://example.invalid/v1
+        \\API_KEY=test-key
+        \\MODEL=test-model
+        \\WORKSPACE=decoy
+        \\
+    );
+
+    const expected_root = try std.fs.cwd().realpathAlloc(std.testing.allocator, workspace_root);
+    defer std.testing.allocator.free(expected_root);
+    const config = try VAR1.core.config.loadDefaultForExplicitWorkspace(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings(expected_root, config.workspace_root);
+}
+
 test "loadDefault seeds canonical auth state from env and then prefers auth ledger" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

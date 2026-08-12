@@ -444,6 +444,214 @@ test "web route redacts secret-shaped values from rpc output" {
     try std.testing.expect(std.mem.indexOf(u8, response.body, "\"authorization\":\"[redacted]\"") != null);
 }
 
+test "owner rpc requires its private token and preserves exact kernel output" {
+    var ctx = MockKernelContext.init(std.testing.allocator);
+    defer ctx.deinit();
+    var bridge = makeBridge(std.testing.allocator, &ctx);
+
+    const body = "{\"jsonrpc\":\"2.0\",\"id\":\"owner-1\",\"method\":\"auth/status\",\"params\":{}}";
+    const denied = try VAR1.host.http_bridge.routeWithOwnerAccess(
+        std.testing.allocator,
+        &bridge,
+        .POST,
+        "/owner/rpc",
+        body,
+        null,
+        VAR1.host.http_bridge.test_bridge_token,
+        null,
+    );
+    defer denied.deinit(std.testing.allocator);
+    try std.testing.expectEqual(std.http.Status.unauthorized, denied.status);
+    try std.testing.expect(std.mem.indexOf(u8, denied.body, "OwnerTokenRequired") != null);
+
+    const response = try VAR1.host.http_bridge.routeWithOwnerAccess(
+        std.testing.allocator,
+        &bridge,
+        .POST,
+        "/owner/rpc",
+        body,
+        null,
+        null,
+        VAR1.host.http_bridge.test_owner_token,
+    );
+    defer response.deinit(std.testing.allocator);
+    try std.testing.expectEqual(std.http.Status.ok, response.status);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "sk-live-secret") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "Bearer abc.def.ghi") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "[redacted]") == null);
+}
+
+test "owner health proves generation and workspace without exposing either token" {
+    var ctx = MockKernelContext.init(std.testing.allocator);
+    defer ctx.deinit();
+    var bridge = makeBridgeWithWorkspace(std.testing.allocator, &ctx, "E:/isolated-owner-workspace");
+
+    const response = try VAR1.host.http_bridge.routeWithOwnerAccess(
+        std.testing.allocator,
+        &bridge,
+        .GET,
+        "/owner/health",
+        "",
+        null,
+        null,
+        VAR1.host.http_bridge.test_owner_token,
+    );
+    defer response.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(std.http.Status.ok, response.status);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, VAR1.host.http_bridge.owner_schema_version) != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, VAR1.host.http_bridge.owner_protocol_version) != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, VAR1.host.http_bridge.test_owner_generation) != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "E:/isolated-owner-workspace") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "gemma-4-26b-a4b-it-apex") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, VAR1.host.http_bridge.test_owner_token) == null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, VAR1.host.http_bridge.test_bridge_token) == null);
+}
+
+test "owner shutdown is token-gated and carries one generation-bound stop intent" {
+    var ctx = MockKernelContext.init(std.testing.allocator);
+    defer ctx.deinit();
+    var bridge = makeBridge(std.testing.allocator, &ctx);
+
+    const denied = try VAR1.host.http_bridge.routeWithOwnerAccess(
+        std.testing.allocator,
+        &bridge,
+        .POST,
+        "/owner/shutdown",
+        "",
+        null,
+        null,
+        null,
+    );
+    defer denied.deinit(std.testing.allocator);
+    try std.testing.expectEqual(std.http.Status.unauthorized, denied.status);
+    try std.testing.expect(!denied.shutdown);
+
+    const response = try VAR1.host.http_bridge.routeWithOwnerAccess(
+        std.testing.allocator,
+        &bridge,
+        .POST,
+        "/owner/shutdown",
+        "",
+        null,
+        null,
+        VAR1.host.http_bridge.test_owner_token,
+    );
+    defer response.deinit(std.testing.allocator);
+    try std.testing.expectEqual(std.http.Status.accepted, response.status);
+    try std.testing.expect(response.shutdown);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "var1.owner_shutdown.v1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, VAR1.host.http_bridge.test_owner_generation) != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, VAR1.host.http_bridge.test_owner_token) == null);
+}
+
+test "owner ready projection is atomic project-local state" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    try VAR1.host.owner_state.write(std.testing.allocator, .{
+        .generation = "generation-a",
+        .pid = 42,
+        .port = 4311,
+        .token = "owner-token-a",
+        .workspace_root = workspace_root,
+        .executable_path = "E:/bin/vantari.exe",
+        .started_at_ms = 100,
+    });
+    try VAR1.host.owner_state.write(std.testing.allocator, .{
+        .generation = "generation-b",
+        .pid = 43,
+        .port = 4312,
+        .token = "owner-token-b",
+        .workspace_root = workspace_root,
+        .executable_path = "E:/bin/vantari.exe",
+        .started_at_ms = 101,
+    });
+
+    const path = try VAR1.host.owner_state.statePath(std.testing.allocator, workspace_root);
+    defer std.testing.allocator.free(path);
+    try std.testing.expect(std.mem.indexOf(u8, path, ".var") != null);
+    try std.testing.expect(std.mem.indexOf(u8, path, VAR1.host.owner_state.state_filename) != null);
+
+    const snapshot = try VAR1.host.owner_state.read(std.testing.allocator, workspace_root);
+    defer snapshot.deinit();
+    try std.testing.expectEqualStrings("generation-b", snapshot.generation);
+    try std.testing.expectEqual(@as(u32, 43), snapshot.pid);
+    try std.testing.expectEqual(@as(u16, 4312), snapshot.port);
+    try std.testing.expectEqualStrings("owner-token-b", snapshot.token);
+    try std.testing.expectEqualStrings(workspace_root, snapshot.workspace_root);
+}
+
+test "owner lifetime lease rejects a duplicate owner and releases on close" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var lease = try VAR1.host.owner_state.acquireOwnerLease(std.testing.allocator, workspace_root, 0);
+    try std.testing.expect(!try VAR1.host.owner_state.ownerLeaseAvailable(std.testing.allocator, workspace_root));
+    lease.deinit();
+    try std.testing.expect(try VAR1.host.owner_state.ownerLeaseAvailable(std.testing.allocator, workspace_root));
+}
+
+test "owner client parses exact typed event and rejects synthetic keepalive" {
+    const notification = (try VAR1.host.owner_client.testing_hooks.parseEvent(
+        std.testing.allocator,
+        "id: 17\nevent: session/event\ndata: {\"message\":\"exact\"}\n\n",
+    )).?;
+    defer notification.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(u64, 17), notification.sequence);
+    try std.testing.expectEqualStrings("session/event", notification.method);
+    try std.testing.expectEqualStrings("{\"message\":\"exact\"}", notification.params_json);
+    try std.testing.expect((try VAR1.host.owner_client.testing_hooks.parseEvent(
+        std.testing.allocator,
+        ": keepalive\n\n",
+    )) == null);
+}
+
+fn stallOwnerResponse(server: *std.net.Server) void {
+    var connection = server.accept() catch return;
+    defer connection.stream.close();
+    std.Thread.sleep(300 * std.time.ns_per_ms);
+}
+
+test "owner loopback response wait obeys its socket deadline" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+
+    const address = try std.net.Address.parseIp4("127.0.0.1", 0);
+    var server = try address.listen(.{ .reuse_address = true });
+    defer server.deinit();
+    const server_thread = try std.Thread.spawn(.{}, stallOwnerResponse, .{&server});
+    defer server_thread.join();
+
+    const allocator = std.testing.allocator;
+    var snapshot = VAR1.host.owner_state.Snapshot{
+        .allocator = allocator,
+        .generation = try allocator.dupe(u8, "stalled-generation"),
+        .pid = 1,
+        .port = server.listen_address.getPort(),
+        .token = try allocator.dupe(u8, "stalled-token"),
+        .workspace_root = try allocator.dupe(u8, "stalled-workspace"),
+        .executable_path = try allocator.dupe(u8, "stalled-vantari.exe"),
+        .started_at_ms = 1,
+    };
+    defer snapshot.deinit();
+
+    var timer = try std.time.Timer.start();
+    try std.testing.expectError(
+        error.OwnerUnavailable,
+        VAR1.host.owner_client.testing_hooks.requestWithTimeout(
+            allocator,
+            snapshot,
+            "/owner/health",
+            25,
+        ),
+    );
+    try std.testing.expect(timer.read() < 2 * std.time.ns_per_s);
+}
+
 test "web route renders session notifications as sse snapshots" {
     var ctx = MockKernelContext.init(std.testing.allocator);
     defer ctx.deinit();
@@ -473,6 +681,34 @@ test "web route renders session notifications as sse snapshots" {
     try std.testing.expect(std.mem.indexOf(u8, response.body, "\"session_id\":\"session-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, response.body, "sk-live-secret") == null);
     try std.testing.expect(std.mem.indexOf(u8, response.body, "\"message\":\"[redacted]\"") != null);
+}
+
+test "owner event lane preserves exact notification payload" {
+    var ctx = MockKernelContext.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.setNotification(
+        7,
+        VAR1.shared.protocol.types.notification_methods.session_event,
+        "{\"schema\":\"var1.session_event_notification.v1\",\"message\":\"provider returned sk-live-secret\"}",
+    );
+    var bridge = makeBridge(std.testing.allocator, &ctx);
+
+    const response = try VAR1.host.http_bridge.routeWithOwnerAccess(
+        std.testing.allocator,
+        &bridge,
+        .GET,
+        "/owner/events?since=0",
+        "",
+        null,
+        null,
+        VAR1.host.http_bridge.test_owner_token,
+    );
+    defer response.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(std.http.Status.ok, response.status);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "id: 7") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "sk-live-secret") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "[redacted]") == null);
 }
 
 test "web route rejects unapproved browser origins" {

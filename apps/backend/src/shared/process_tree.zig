@@ -114,10 +114,15 @@ pub fn cancelThreadIo(thread: std.Thread) void {
 
 pub fn closeUnreapedChildHandles(child: *std.process.Child) void {
     if (builtin.os.tag != .windows) return;
-    _ = win.CloseHandle(child.id);
-    _ = win.CloseHandle(child.thread_handle);
+    closeProcessHandles(child.id, child.thread_handle);
     child.id = undefined;
     child.thread_handle = undefined;
+}
+
+pub fn closeProcessHandles(process_handle: win.HANDLE, thread_handle: win.HANDLE) void {
+    if (builtin.os.tag != .windows) return;
+    _ = win.CloseHandle(process_handle);
+    _ = win.CloseHandle(thread_handle);
 }
 
 test "kill-on-close job has one idempotent owner" {

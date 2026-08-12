@@ -11,7 +11,13 @@ source: ../../research/2026-08-12-full-harness-sitrep.md
 
 ## Finding
 
-The fixed agent pool is process-local and the scheduler leader lease is not an inter-process claim. Ticket events survive, but the executor that must run a ticket to terminal state does not survive TUI/kernel exit. Two kernels can also both believe they hold the scheduler lease. Child results reach parents through convergence-specific code, but no general durable direct/group/parent mailbox exists for peer coordination or restart-safe unread delivery.
+Move 21 now places the fixed agent pool in one project-local execution-owner
+tree, so it survives TUI and short-lived CLI exit. The remaining failure boundary
+is owner-process death: in-memory work is marked stale rather than resumed or
+requeued exactly once. The scheduler leader lease is still not an inter-process
+claim, so two independently started kernels can both believe they lead. Child
+results still reach parents through convergence-specific code; no general durable
+direct/group/parent mailbox exists for restart-safe peer delivery.
 
 ## Evidence
 
@@ -20,10 +26,17 @@ The fixed agent pool is process-local and the scheduler leader lease is not an i
 - [service.zig:925](../../../apps/backend/src/core/agents/service.zig#L925) states that process restart converts running receipts to StaleAgentOwner.
 - [cli.zig:643](../../../apps/backend/src/clients/cli.zig#L643) defines run-session, but source ownership search found no launcher.
 - [store.zig:266](../../../apps/backend/src/core/scheduler/store.zig#L266) performs lease read/check/write without CAS or an inter-process lock.
+- [roadmap move 21](../../roadmap/21-persistent-execution-owner.md) proves one
+  owner/kernel generation across client detach, 20 concurrent clients,
+  duplicate-start pressure, graceful stop, forced crash, and zero cleanup.
 
 ## Required mechanism
 
-Make one daemon or detached worker process the long-lived execution owner. Keep AgentService route validation, Supervisor capacity, ticket claims, receipts, and event ledgers as the existing primitives; do not create a parallel pool. Claim scheduler leadership with an inter-process exclusive primitive and verify owner generation before dispatch.
+Retain the shipped-source execution owner and its sole `AgentService`/
+`Supervisor` composition. Wire or delete the dead `run-session` surface, claim
+scheduler leadership with an inter-process exclusive primitive, serialize ticket
+claim plus lease issuance, and verify owner generation before dispatch. Do not
+create a parallel pool.
 
 Use that same owner for one sequence-addressed agent mailbox. Resolve direct,
 parent, and current-group targets from session receipts. Queue bounded messages
@@ -42,6 +55,12 @@ registry, shared transcript, or message-created work lifecycle.
 - Directed, group, parent, and nested-parent messages survive worker restart,
   deliver once, expose an operator-auditable receipt, and never duplicate sibling
   transcripts into recipient context.
+
+Current receipt: TUI/CLI detach, duplicate-start exclusion, graceful owner stop,
+forced owner-tree cleanup, and one-generation recovery pass in source. Installed
+replacement, active-turn owner-crash reconciliation, scheduler fencing, ticket
+claim serialization, and mailbox delivery remain open; this finding stays
+pending.
 
 ## Source and salvage
 

@@ -21,6 +21,8 @@ test {
     std.testing.refAllDeclsRecursive(VAR1.core.auth_store);
     std.testing.refAllDeclsRecursive(VAR1.core.scheduler);
     std.testing.refAllDeclsRecursive(VAR1.host.stdio_rpc);
+    std.testing.refAllDeclsRecursive(VAR1.host.owner_client);
+    std.testing.refAllDeclsRecursive(VAR1.host.owner_state);
     std.testing.refAllDeclsRecursive(VAR1.core.tickets);
     // Value references force src-file tests into the suite (Zig 0.15: a file's
     // tests run only when the module value is referenced inside a test block).
@@ -28,4 +30,6 @@ test {
     _ = VAR1.core.provider_compat;
     _ = VAR1.core.turn_payload;
     _ = VAR1.core.config_file;
+    _ = VAR1.host.owner_client;
+    _ = VAR1.host.owner_state;
 }

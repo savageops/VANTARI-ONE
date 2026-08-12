@@ -82,23 +82,38 @@ pub fn loadFromEnvFile(allocator: std.mem.Allocator, env_path: []const u8) !type
 }
 
 pub fn loadDefault(allocator: std.mem.Allocator, workspace_root: []const u8) !types.Config {
+    return loadDefaultWithOptions(allocator, workspace_root, .{});
+}
+
+/// Compile configuration inside an explicitly selected workspace. Provider and
+/// runtime settings still load normally, but WORKSPACE/VANTARI_WORKSPACE cannot
+/// redirect state after the caller has selected the owner boundary.
+pub fn loadDefaultForExplicitWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8) !types.Config {
+    return loadDefaultWithOptions(allocator, workspace_root, .{ .allow_workspace_override = false });
+}
+
+const LoadOptions = struct {
+    allow_workspace_override: bool = true,
+};
+
+fn loadDefaultWithOptions(allocator: std.mem.Allocator, workspace_root: []const u8, options: LoadOptions) !types.Config {
     const env_path = try std.fs.path.join(allocator, &.{ workspace_root, ".env" });
     defer allocator.free(env_path);
 
     var config = loadFromEnvFile(allocator, env_path) catch |err| switch (err) {
-        error.FileNotFound, Error.MissingKey => try loadDefaultFromAuthOnly(allocator, workspace_root),
+        error.FileNotFound, Error.MissingKey => try loadDefaultFromAuthOnly(allocator, workspace_root, options),
         else => return err,
     };
     errdefer config.deinit(allocator);
 
     var runtime_policy = try config_file.loadRuntimePolicy(allocator, workspace_root);
     defer runtime_policy.deinit(allocator);
-    try applyRuntimePolicy(allocator, &config, runtime_policy);
+    try applyRuntimePolicy(allocator, &config, runtime_policy, options.allow_workspace_override);
 
     const canonical_workspace_root = try canonicalizeWorkspaceRoot(
         allocator,
         workspace_root,
-        config.workspace_root,
+        if (options.allow_workspace_override) config.workspace_root else ".",
     );
     allocator.free(config.workspace_root);
     config.workspace_root = canonical_workspace_root;
@@ -124,7 +139,7 @@ pub fn loadDefault(allocator: std.mem.Allocator, workspace_root: []const u8) !ty
     return config;
 }
 
-fn loadDefaultFromAuthOnly(allocator: std.mem.Allocator, workspace_root: []const u8) !types.Config {
+fn loadDefaultFromAuthOnly(allocator: std.mem.Allocator, workspace_root: []const u8, options: LoadOptions) !types.Config {
     const canonical_workspace_root = try canonicalizeWorkspaceRoot(allocator, workspace_root, ".");
     var root_owned = true;
     errdefer if (root_owned) allocator.free(canonical_workspace_root);
@@ -147,13 +162,13 @@ fn loadDefaultFromAuthOnly(allocator: std.mem.Allocator, workspace_root: []const
 
     var runtime_policy = try config_file.loadRuntimePolicy(allocator, workspace_root);
     defer runtime_policy.deinit(allocator);
-    try applyRuntimePolicy(allocator, &config, runtime_policy);
+    try applyRuntimePolicy(allocator, &config, runtime_policy, options.allow_workspace_override);
 
-    if (runtime_policy.workspace) |configured_workspace| {
+    if (options.allow_workspace_override) if (runtime_policy.workspace) |configured_workspace| {
         const canonical_workspace = try canonicalizeWorkspaceRoot(allocator, workspace_root, configured_workspace);
         allocator.free(config.workspace_root);
         config.workspace_root = canonical_workspace;
-    }
+    };
 
     config.context_policy = try settings.loadContextPolicy(allocator, config.workspace_root, config.context_policy);
     config.prompt_policy = try settings.loadPromptPolicy(allocator, config.workspace_root, config.prompt_policy);
@@ -165,16 +180,21 @@ fn loadDefaultFromAuthOnly(allocator: std.mem.Allocator, workspace_root: []const
 
 /// Apply non-secret runtime limits from config.json. Workspace is canonicalized
 /// by the caller because it depends on the invocation root.
-fn applyRuntimePolicy(allocator: std.mem.Allocator, config: *types.Config, policy: config_file.RuntimePolicy) !void {
+fn applyRuntimePolicy(
+    allocator: std.mem.Allocator,
+    config: *types.Config,
+    policy: config_file.RuntimePolicy,
+    allow_workspace_override: bool,
+) !void {
     config.max_steps = policy.max_steps;
     config.max_tool_calls_per_turn = policy.max_tool_calls_per_turn;
     config.max_tool_calls_per_session = policy.max_tool_calls_per_session;
     config.full_access_mode = policy.full_access_mode;
-    if (policy.workspace) |workspace| {
+    if (allow_workspace_override) if (policy.workspace) |workspace| {
         const replacement = try allocator.dupe(u8, workspace);
         allocator.free(config.workspace_root);
         config.workspace_root = replacement;
-    }
+    };
     if (policy.effort) |effort| {
         const owned = try allocator.dupe(u8, effort);
         if (config.effort_owned) |previous| allocator.free(previous);

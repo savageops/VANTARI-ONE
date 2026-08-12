@@ -1,9 +1,19 @@
+---
+type: architecture-contract
+id: roadmap-23-cli-tui-client-rendering-contract
+status: active
+updated: 2026-08-12
+owner: apps/backend/src/clients
+---
+
 # 23 — CLI/TUI Client Rendering Contract
 
 **Priority: P0**
 
 **Current delta (2026-08-12):** The tracked TUI now uses the exact persisted
-`events.jsonl` sequence as its only render/replay identity. Contiguous live events
+`events.jsonl` sequence as its only render/replay identity. Public `LocalClient`
+is now a reconnecting facade over one project-local execution owner; private
+`ChildClient` alone spawns `kernel-stdio`. Contiguous live events
 perform no replay read; gaps and the turn-completion boundary request only the
 durable suffix through existing `session/get`. The one-shot CLI has no event
 replay surface. The HTTP bridge still exposes a transport-local SSE id for ignored
@@ -13,7 +23,7 @@ browser prototypes, so the broader multi-client/browser contract remains open.
 
 > CLI/TUI/browser clients never assemble provider context, infer tool state, or maintain their own transcript truth. They render kernel-owned state.
 
-VAR1 owns the causal chain — transcript, context checkpoints, event spine, tool spans, provider turns, session lifecycle. Every client surface (interactive TUI, one-shot CLI, HTTP bridge for a browser, future desktop shell) is a thin read model over that owned state. The stdio JSON-RPC host is the single protocol surface; clients subscribe to a monotonic notification stream and render frames. No client is allowed to become a second kernel.
+VAR1 owns the causal chain — transcript, context checkpoints, event spine, tool spans, provider turns, session lifecycle. Every client surface (interactive TUI, one-shot CLI, HTTP bridge for a browser, future desktop shell) is a thin read model over that owned state. TUI and CLI use exact owner-only loopback JSON-RPC; the owner forwards to the sole kernel through private Content-Length stdio. Clients subscribe to a monotonic notification stream and render frames. No client is allowed to become a second kernel.
 
 This theme is the contract that keeps the kernel the only truth. It is what separates "a terminal that happens to show agent output" from "a terminal whose picture of the agent is provably the kernel's picture." Every frontier capability — live deltas, typed tool spans, cancellation, cold-start replay — is only real if the client renders it from kernel-owned evidence rather than from its own speculation.
 
@@ -26,7 +36,9 @@ This theme is the contract that keeps the kernel the only truth. It is what sepa
   - Methods are slash-namespaced and version-stable: `initialize`, `session/create`, `session/resume`, `session/send`, `session/compact`, `session/cancel`, `session/get`, `session/list`, `tools/list`, `events/subscribe`, `health/get`, `models/list`, `schedule/get`, `schedule/list` (`methods` struct, `types.zig` lines 8-23).
   - Exactly one notification method today: `session/event` (`notification_methods.session_event`, `types.zig` line 5).
 
-- **In-process `LocalClient`** (`stdio_rpc.zig`). Spawns the same binary with `kernel-stdio`, owns the stdin mutex, runs a reader thread that splits incoming frames into responses (matched by `id`) and notifications (queued with a monotonic transport `sequence`). `waitForNotificationAfter(after_sequence, timeout_ms)` drains that process-local queue; the versioned payload carries the separate durable per-session sequence.
+- **Reconnectable public `LocalClient`** (`apps/backend/src/host/owner_client.zig`). Resolves one workspace owner, validates its live generation/protocol/executable identity, and calls exact token-gated loopback routes. Deinit owns no process and does not stop execution.
+
+- **Private `ChildClient`** (`apps/backend/src/host/stdio_client.zig`). The resident owner alone spawns the same binary with `kernel-stdio`, owns the stdin mutex, runs the response/notification reader, and supervises one Windows Job Object. `waitForNotificationAfter(after_sequence, timeout_ms)` drains that owner-local queue; the versioned payload carries the separate durable per-session sequence.
 
 - **Typed event spine with stable IDs** (`apps/backend/src/shared/protocol/events.zig`, `apps/backend/src/core/executor/loop.zig` lines 725-849). Every tool lifecycle event carries a `schema` (`var1.tool_started.v1`, `var1.tool_output_delta.v1`, `var1.tool_finished.v1`) and a stable `tool_call_id`. The event grammar floor is `tool_requested -> tool_reviewed -> tool_started -> tool_output_delta* -> tool_finished -> tool_completed` (AGENTS.md §IV).
 
@@ -39,7 +51,7 @@ This theme is the contract that keeps the kernel the only truth. It is what sepa
 
 - **One-shot CLI** (`apps/backend/src/clients/cli.zig`). `executeRunViaKernel`/`executePromptTurn` (lines 712-838) drive the same `LocalClient` through `initialize` -> `session/create` -> `session/send`, render terminal output as bounded text, and emit `VAR1_STATUS`/`VAR1_ERROR` envelopes to stderr. The CLI never reconstructs context; it reads `session.output`.
 
-- **HTTP bridge for browser/desktop** (`apps/backend/src/host/http_bridge.zig`). `POST /rpc` forwards JSON-RPC verbatim to the same kernel `LocalClient`; `GET /events` is a long-poll SSE-style snapshot keyed on the compatibility transport `after_sequence`. The versioned event payload contains the exact stored sequence, but no tracked browser consumer ships in this checkout.
+- **Persistent owner plus browser bridge** (`apps/backend/src/host/http_bridge.zig`). Exact `/owner/rpc` and `/owner/events` routes serve TUI/CLI behind a separate owner token and generation. Redacted `POST /rpc` and `GET /events` retain the ignored browser prototype contract. Both forward to the same private `ChildClient`; no tracked browser consumer ships in this checkout.
 
 **Gap:** the protocol is real and the tracked TUI now renders by kernel-published durable sequence, but capability negotiation remains static. `initialize` advertises a default `Capabilities{}`; clients cannot negotiate event schemas, notification methods, or streaming behavior. Tool spans are single-row in the TUI but still key on provider `tool_call_id`; the kernel does not publish a span id that survives provider id gaps. The ignored browser prototypes long-poll by transport cursor instead of resuming by per-session ledger sequence.
 
@@ -54,7 +66,7 @@ Codex splits the world into an **app-server** (the kernel) and clients (TUI, exe
 - **Item lifecycle is `item/started` -> item-specific deltas -> `item/completed`** with a stable `item.id` (README "Turn events", "Items", lines 1046-1112). `item/agentMessage/delta` appends to the agent message; `item/commandExecution/outputDelta` streams stdout/stderr; the UI concatenates deltas for the same `itemId`. This is exactly VANTARI's single-keyed-row model — codex calls the key `item.id`, VANTARI calls it `tool_call_id`.
 - **Capability negotiation is real but coarse.** `initialize.params.capabilities.optOutNotificationMethods` lets a client suppress exact method names (e.g. `item/agentMessage/delta`) per connection (README "Notification opt-out", lines 1003-1015). `clientInfo.name` identifies the client for compliance logging. There is no per-schema version negotiation.
 - **Server-initiated requests for approvals** (README "Approvals", lines 1135-1187). The kernel sends a JSON-RPC *request* to the client to approve a command/file change; the client responds with a `decision`. This is bidirectional JSON-RPC — the same model LSP uses for `window/showMessage`.
-- **In-process typed fast path.** `app-server-client/README.md` documents that the TUI and `codex-exec` share an in-process client where the hot path is typed channels (`ClientRequest`/`ServerNotification`) and JSON is only materialized at external transport boundaries. This is the same shape as VANTARI's `LocalClient` living next to `serveKernel` in one binary.
+- **In-process typed fast path.** `app-server-client/README.md` documents that the TUI and `codex-exec` share typed channels (`ClientRequest`/`ServerNotification`) and JSON is materialized at external transport boundaries. VANTARI chooses a persistent loopback owner instead: client exit cannot destroy the fixed pool, while private stdio preserves the same typed kernel boundary.
 - **Backpressure is explicit.** Saturated ingress returns JSON-RPC `-32001 "Server overloaded; retry later."`; bounded queues; `Lagged` events when a client falls behind (app-server-client README "Backpressure and shutdown"). VANTARI's `max_notification_backlog = 512` (`stdio_rpc.zig` line 29) is the same idea but currently drops silently from the head rather than signaling lag.
 
 ### Vercel Eve — web only, no local client
@@ -67,7 +79,7 @@ pi-mono exposes a `--mode rpc` JSONL protocol over stdin/stdout (`.refs/badlogic
 
 ## Why VANTARI does it better
 
-1. **Local-first single binary, one protocol for every surface.** Codex ships app-server, TUI, and exec as separate Rust crates that can also run in-process; Eve has no local client at all. VANTARI is one Zig binary: `vantari` (TUI), `var run` (CLI), `vantari serve` (HTTP bridge), and `kernel-stdio` (host) are four entry points into the same `LocalClient` + `serveKernel` code. The browser (`/rpc` + `/events`) speaks the identical JSON-RPC the TUI speaks — there is no second API to drift. Mechanism: `http_bridge.forwardRpcRequest` calls `bridge.kernel.call(...)` with the verbatim method/params; `renderEventSnapshotResponse` calls the same `waitNotificationAfter` cursor the TUI uses. Proof: a method added to `protocol.types.methods` is instantly callable from CLI, TUI, and browser with zero per-client wiring.
+1. **Local-first single binary, one durable owner, one RPC method set.** Codex ships app-server, TUI, and exec as separate Rust crates that can also run in-process; Eve has no local client at all. VANTARI is one Zig binary: `vantari` (TUI), `run` (CLI), foreground `serve`, hidden `execution-owner`, and private `kernel-stdio` share one protocol definition. TUI/CLI exact routes and redacted browser routes call the same private kernel method set. Twenty concurrent clients converge on one source-built owner/kernel generation; client exit cannot destroy it.
 
 2. **LSP-grade framing, not ad-hoc JSONL.** pi-mono's docs spend a section warning that `readline` corrupts its stream on Unicode line separators. VANTARI's `Content-Length` framing (`stdio_rpc.zig` `writeFrame`/`readFrame`) is byte-exact and binary-safe — the same framing LSP, DAP, and MCP chose. A base64 `chunk_b64` field in `tool_output_delta` carries arbitrary stdout bytes through the same frame without escaping concerns. This is why the TUI can render live command output without a parallel raw-pipe channel.
 

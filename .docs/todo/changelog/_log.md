@@ -1799,3 +1799,60 @@ event-burst, and shutdown mesh.
 
 **Next todo:** move 21 — make one daemon or detached worker process the
 long-lived execution owner without adding a parallel pool.
+
+## 2026-08-12 - Roadmap move 21 source owner lifecycle closed
+
+**Changed:**
+
+- Promoted the existing loopback bridge into one project-local execution owner.
+  Public `LocalClient` now resolves or starts that owner; private `ChildClient`
+  alone spawns the sole `kernel-stdio` child and existing pool/scheduler tree.
+- Added one crash-released start lock, one lifetime lease, and one atomic
+  `.var/runtime/execution-owner.json` projection with workspace, generation,
+  protocol, token, executable, PID, port, and start identity.
+- Added exact token-gated owner RPC/event/health/shutdown routes without changing
+  the separately redacted browser routes or kernel JSON-RPC method set.
+- Disabled Windows handle inheritance during detached owner creation, removing
+  the capture-pipe lifetime that made Settings and short CLI calls hang.
+- Unified foreground `serve` and automatic `execution-owner` behind the same
+  lease; removed remote `--host` binding and rejected duplicate foreground
+  ownership with a typed operator envelope.
+- Reused one workspace resolver, bounded accepted owner connections at 64, and
+  drained all detached connection jobs before bridge/child teardown. No daemon
+  framework, second pool, queue, scheduler, transcript, or event bus was added.
+- Bound explicit owner startup to `loadDefaultForExplicitWorkspace`; inherited
+  `VANTARI_WORKSPACE`, `.env` `WORKSPACE`, and config workspace entries can no
+  longer redirect config, auth, ledgers, or the owner projection after selection.
+
+**Validation:**
+
+- Pinned Zig 0.15.1 graph: 19/19 steps and 1,968/1,968 tests, including
+  stalled-owner socket-deadline and explicit-workspace precedence probes. Final
+  ReleaseFast passed 9/9; both owner entry tracers and the 20-client lifecycle
+  proof then passed on that artifact.
+- `prove-owner-tracer.ps1` passes for hidden `execution-owner` and foreground
+  `serve`; two clients see one generation and duplicate foreground start is
+  rejected. The hidden tracer also proves explicit `--workspace .` defeats a
+  conflicting inherited workspace. Latest evidence roots:
+  `.zig-cache/owner-proofs/c7ac3f1fb3634ae6b2fb5e8787eb01b4` and
+  `.zig-cache/owner-proofs/568e7e6675f04b338820e88807762b95`.
+- `prove-owner-lifecycle.ps1 -ConcurrentClients 20` reports 20/20 successful
+  clients, one owner/kernel pair, accepted graceful shutdown, forced-crash tree
+  zero, one new generation on each recovery, and final zero processes. Evidence:
+  `.zig-cache/owner-proofs/a9035dcbf5e945c7942a46885c896458`.
+- GGUF duplicate-owner audit inspected 110 segments across nine owner-adjacent
+  files. Two import/declaration adjacency pairs surfaced, with zero exact
+  duplicates and no second lifecycle, workspace, transport, or process owner.
+- Source SHA-256 is
+  `3062D10908D9678793298BDD3982EF515A3D953C9085E1EE5C681856725EE00E`.
+  Installed SHA-256 remains
+  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
+  operator-owned PIDs 12028 and 14452 were preserved.
+
+**Boundary:** Move 21 is source-complete but remains open for installed equality.
+Move 22 owns the dead `run-session` surface. Moves 23–30 own inter-process
+scheduler/ticket claims, mailbox delivery, active-turn owner-crash
+reconciliation, and terminal installed proof.
+
+**Next todo:** move 22 — route `run-session` through the persistent owner or
+delete the dead launcher-shaped path.

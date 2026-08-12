@@ -10,9 +10,9 @@ scope: full-harness
 
 ## Executive verdict
 
-VANTARI has a strong kernel thesis and several unusually good local mechanisms: one context compiler, append-only transcript and event ledgers, typed tool review and dispatch, bounded Windows process execution, provider-wire separation, fixed in-process agent capacity, and a compact TUI read model. The architecture is materially better than a chat-wrapper harness.
+VANTARI has a strong kernel thesis and several unusually good local mechanisms: one context compiler, append-only transcript and event ledgers, typed tool review and dispatch, bounded Windows process execution, provider-wire separation, one project-local execution owner around fixed agent capacity, and a compact TUI read model. The architecture is materially better than a chat-wrapper harness.
 
-The current checkout is not production-ready for persistent autonomous execution. Its critical gap is not model intelligence or UI polish. Agent process ownership and inter-process scheduler arbitration still stop at the process boundary. Host request lifetime, test isolation, append-only summary mutation, per-session message sequencing, exact event sequence transport, and shipped-TUI replay are now closed with installed proof; the fixed agent pool still prevents crash-surviving autonomous execution. Chain 036 closed over in-process proof while the user requirement was persistent execution through process failure.
+The current checkout is not production-ready for persistent autonomous execution. Its critical gap is not model intelligence or UI polish. Move 21 now separates presentation lifetime from execution lifetime in source: TUI/CLI detach leaves one owner/kernel/pool generation alive. Exact active-turn reconciliation after owner death, inter-process scheduler/ticket claims, durable agent messaging, and installed artifact parity remain open. Host request lifetime, test isolation, append-only summary mutation, per-session message sequencing, exact event sequence transport, and shipped-TUI replay are closed. Chain 036 remains pending until moves 22–30 close the process-failure contract.
 
 Current classification:
 
@@ -20,14 +20,17 @@ Current classification:
 |---|---|---|
 | Build | Pass | ReleaseFast builds 9/9 with Zig 0.15.1. |
 | Focused TUI | Pass | Backend TUI 61/61 with zero skips. |
-| Broad tests | Pass | Canonical isolated graph is 19/19 and 1,950/1,950 with zero skips. |
-| Installed proof | Pass for moves 1–18 | Source and installed ReleaseFast share SHA-256 `B361AD2A66609590236E4967517718C7ECD3563E7474578D08009D09622E1FA4`; disposable settings, session-ledger, and delayed-cancellation probes exit with zero processes. |
-| Agent pool | In-process only | A process restart converts running receipts to StaleAgentOwner; no detached worker launch is wired. |
+| Broad tests | Pass | Canonical isolated graph is 19/19 and 1,968/1,968 with zero skips. |
+| Installed proof | Historical pass through move 20; current replacement blocked | Installed move-19 SHA-256 remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`; current source is `3062D10908D9678793298BDD3982EF515A3D953C9085E1EE5C681856725EE00E`. Operator PIDs 12028/14452 are preserved until natural exit. |
+| Execution owner | Source pass | `LocalClient` reconnects to one workspace owner; 20/20 concurrent clients converge, foreground duplicate start is rejected, explicit workspace defeats inherited redirection, graceful/crash recovery creates one new generation, and teardown leaves zero proof-owned processes. |
+| Agent pool | Presentation-persistent; owner-crash recovery open | The fixed pool survives TUI/CLI exit. Owner restart still converts running receipts to `StaleAgentOwner`; exactly-once resume/requeue is not wired. |
 | Ticket persistence | Partial | Ticket events persist, but leader lease acquisition is read/check/write without an inter-process compare-and-swap. |
 | Event replay | Pass for tracked TUI | `var1.session_event_notification.v1` carries exact stored sequence after persistence; the TUI advances by that sequence and requests only a missing durable suffix. Raw command bytes persist through one typed base64 envelope with stream/cap evidence. Ignored browser prototypes retain a compatibility SSE transport id. |
 | Self-repair | Evidence floor only | Trace, diagnostics, and rerun substrate exist; causal diagnosis, approved patching, exact-input replay, and regression locking do not form one runtime loop. |
 
-No broad runtime rewrite was made during this audit. The worktree already contains 55 modified tracked files plus a large untracked implementation set, and the installed process is active. Current findings are converted into the executable ledger at [../todo/findings/00-INDEX.md](../todo/findings/00-INDEX.md).
+Move 21 promoted the existing loopback bridge and private stdio child instead of
+adding a daemon framework, second scheduler, or worker registry. Current findings
+remain executable at [../todo/findings/00-INDEX.md](../todo/findings/00-INDEX.md).
 
 ## Product thesis and why
 
@@ -60,9 +63,11 @@ The design choices follow from that thesis:
 
 | Capability | Canonical source owner | Current role |
 |---|---|---|
-| Process entry | [main.zig](../../apps/backend/src/main.zig) | Selects TUI, continuation, CLI, or kernel-stdio mode. |
+| Process entry | [main.zig](../../apps/backend/src/main.zig) | Selects TUI, continuation, CLI, foreground serve, hidden execution-owner, or private kernel-stdio mode. |
+| Execution owner | [http_bridge.zig](../../apps/backend/src/host/http_bridge.zig), [owner_state.zig](../../apps/backend/src/host/owner_state.zig) | Holds the workspace lease, exact owner routes, atomic projection, one private child, and shutdown drain. |
 | Kernel composition | [stdio_rpc.zig](../../apps/backend/src/host/stdio_rpc.zig) | Composes session, executor, agents, scheduler, buffer, and JSON-RPC. |
-| Local client transport | [stdio_client.zig](../../apps/backend/src/host/stdio_client.zig) | Spawns the same executable in kernel-stdio mode and waits for framed replies. |
+| Public local client | [owner_client.zig](../../apps/backend/src/host/owner_client.zig) | Resolves/starts one owner, validates its live identity, and reconnects without owning process lifetime. |
+| Private child transport | [stdio_client.zig](../../apps/backend/src/host/stdio_client.zig) | Owner-only `ChildClient` spawns the same executable in kernel-stdio mode and supervises framed replies and process-tree cleanup. |
 | Turn execution | [loop.zig](../../apps/backend/src/core/executor/loop.zig) | Compiles context, streams provider output, reviews tools, emits events, and closes turns. |
 | Context | [context/](../../apps/backend/src/core/context/) | Sole transcript/checkpoint to provider-message compiler. |
 | Sessions | [sessions/](../../apps/backend/src/core/sessions/) | Session lifecycle, messages, checkpoints, events, output, and summaries. |
@@ -105,20 +110,27 @@ pass.
 sequenceDiagram
     participant U as Operator
     participant T as TUI process
+    participant O as execution owner
     participant K as kernel-stdio child
     participant H as Host services
     U->>T: vantari
-    T->>K: spawn same executable
+    T->>O: resolve/start and validate generation
+    O->>K: one private ChildClient
     K->>H: compose scheduler, buffer, agents, executor
-    T->>K: framed JSON-RPC
-    K-->>T: response and session/event notifications
+    T->>O: exact loopback JSON-RPC
+    O->>K: private Content-Length frame
+    K-->>O: response and session/event notifications
+    O-->>T: exact response/events
     U->>T: exit
-    T->>K: close stdin
-    T->>K: wait without timeout
-    K->>H: stop services and in-process pool
+    T--xO: detach only
+    O->>K: owner and services remain live
 ~~~
 
-The final two steps are the settings-hang failure class: [LocalClient.deinit](../../apps/backend/src/host/stdio_client.zig#L211) waits on the child without a deadline, and [waitForResponse](../../apps/backend/src/host/stdio_client.zig#L321) waits indefinitely unless a response or reader close arrives. This is a proven unbounded wait. The exact settings request that triggers the operator's hang still needs a captured RPC trace.
+The settings-hang class is closed in source. Public `LocalClient.deinit` owns no
+process. Every RPC has a method deadline; late response IDs are retired. The
+private child transport has bounded shutdown and one Job Object. Detached owner
+spawn sets `bInheritHandles = FALSE`, so a resident owner cannot retain the
+calling PowerShell/TUI capture pipe.
 
 ### Turn execution
 
@@ -130,7 +142,10 @@ The final two steps are the settings-hang failure class: [LocalClient.deinit](..
 6. Overflow rebuilds through the context compiler.
 7. The turn closes with a typed turn payload, terminal assistant response, output projection, and summary freshness gate.
 
-The turn pipeline is coherent. The unsafe boundary is host concurrency: session admission uses separate isRunning and setRunning operations in [stdio_rpc.zig](../../apps/backend/src/host/stdio_rpc.zig#L605), so two concurrent requests can pass the check before either sets the flag.
+The turn pipeline is coherent. Host concurrency now uses one atomic
+`tryStartSession` transition: 100 contenders produce one owner and bounded steer
+messages for losers. Admission-fenced shutdown settles one terminal event before
+state is freed.
 
 ### Agent execution
 
@@ -145,12 +160,20 @@ flowchart LR
     C --> Q["Terminal convergence or stale receipt"]
 ~~~
 
-The current Supervisor owns a process-local std.Thread.Pool ([supervisor.zig](../../apps/backend/src/core/agents/supervisor.zig#L164)) and dispatches work with pool.spawn ([supervisor.zig](../../apps/backend/src/core/agents/supervisor.zig#L379)). Cold recovery explicitly turns initialized or running receipts into StaleAgentOwner ([service.zig](../../apps/backend/src/core/agents/service.zig#L925)). The hidden run-session command exists ([cli.zig](../../apps/backend/src/clients/cli.zig#L643)), but no runtime caller launches it. Closing the TUI closes the kernel and cancels or waits for the same in-process pool.
+The Supervisor owns a `std.Thread.Pool` inside the persistent execution owner
+([supervisor.zig](../../apps/backend/src/core/agents/supervisor.zig#L164)) and
+dispatches with `pool.spawn`
+([supervisor.zig](../../apps/backend/src/core/agents/supervisor.zig#L379)). Closing
+the TUI no longer closes that owner/kernel tree. Cold recovery still turns
+initialized or running receipts into `StaleAgentOwner`
+([service.zig](../../apps/backend/src/core/agents/service.zig#L925)). The hidden
+`run-session` command exists, but no runtime caller launches it and owner death
+does not resume its in-memory work.
 
 Child completion currently reaches the parent through convergence-specific
 messages and control events. There is no general peer mailbox, group delivery,
 restart-safe unread cursor, or model-selected queue/wake path. The accepted
-direction for moves 21–30 is selective awareness: one sequence-addressed
+direction for moves 22–30 is selective awareness: one sequence-addressed
 direct/group/parent mailbox over the same session/event owner, canonical
 summaries and artifact references on demand, and no shared transcript or topic
 broker. Codex supplies queued versus wake-bearing delivery pressure; Claude Code
@@ -202,7 +225,7 @@ The producer/transport replay contract now carries exact identity: `SessionEvent
 |---|---|---|---|
 | P0-1 | Detached RPC workers outlive Server ownership | **Closed 2026-08-12.** The host formerly detached one thread per request and could free Server state first. | `Server` owns one bounded four-worker executor, caps admission at 32, returns typed overload, stops admission, fences late starts, signals active turns, joins, then frees services/state. A blocked provider request proved one terminal cancellation and no surviving worker. |
 | P0-2 | Session admission and buffer routing race | **Closed 2026-08-12.** The old check/set and split buffer identity surfaces could double-run a session or expose a freed/cross-session preview. | `Runtime.tryStartSession` is one atomic transition; losing prompts become bounded interjections. One `BufferProjection` owns session identity plus preview and rejects late prior-session callbacks. |
-| P0-3 | Agent persistence and collaboration are process-local | The fixed pool is in-process; restart reconciliation marks work stale. run-session is advertised but never launched. Completion has a special parent convergence path, but peers lack durable directed/group/parent mail and unread replay. | Make a daemon or detached worker the execution owner while preserving AgentService, Supervisor admission, receipts, and ledgers. Route completion and ordinary bounded mail through one sequence-addressed session/event mailbox. Do not add a second scheduler, shared transcript, or generic broker. |
+| P0-3 | Owner-crash recovery and agent collaboration are incomplete | **Move 21 source slice closed:** the fixed pool survives presentation detach in one owner tree. Owner restart still marks work stale; `run-session` is advertised but never launched. Completion has a special parent convergence path, but peers lack durable directed/group/parent mail and unread replay. | Retain the one execution owner. Route or delete `run-session`, add generation-fenced exactly-once resume/requeue, and replace convergence-only delivery with one sequence-addressed session/event mailbox. Do not add a second scheduler, shared transcript, or generic broker. |
 | P0-4 | Scheduler leader lease can split-brain | [tryAcquireLease](../../apps/backend/src/core/scheduler/store.zig#L266) performs read/check/write with no inter-process lock or CAS. Two kernels can claim leadership. | Claim with a Windows-safe exclusive lock or create/replace protocol that verifies the owner generation after write before dispatch. |
 | P0-5 | Summary ledger loses concurrent updates | **Closed 2026-08-12.** The keyed v1 object was last-writer-wins and rewrote the full live ledger. | `summaries.jsonl` v2 appends stable sequenced revisions under one host-process owner, projects the greatest sequence per session, isolates poisoned suffixes, and imports the legacy object once. One hundred concurrent writers retained 100 rows and unique sequences. |
 | P0-6 | Broad tests write into live runtime state | **Closed 2026-08-12.** The invalid broad run, a later direct-test wrapper bypass, and 877 older initialized context-poison fixtures reached the live root. | Six build artifacts and both direct wrappers now assign generated cache-owned homes plus the cache-root guard. All three fixture sets are backed up or quarantined with manifests and rollback. The post-repair scan covers 29,937 ledgers and 1,417,061 rows with zero integrity defects. |
@@ -355,7 +378,10 @@ root byte/count/hash identical.
 
 1. Protect state: **closed** — tests are isolated, incident rows are quarantined, and legacy runtime-shaped owners are archived without merge.
 2. Fix host lifetime: **closed** — bounded executor, deadlines, atomic session admission, synchronized buffer routing, cancellation-before-join stress, and child-process cleanup all pass.
-3. Fix persistent arbitration: one crash-surviving worker owner and inter-process scheduler lease claim.
+3. Fix persistent arbitration: **owner source slice closed** — presentation
+   detach, duplicate exclusion, graceful/crash owner lifecycle, and cleanup pass.
+   Inter-process scheduler/ticket claims and exactly-once active-turn recovery
+   remain.
 4. Fix ledgers and replay: **closed** — summary/message mutation, binary-safe
    payload, common prefix salvage, and six synchronized 100-way admission,
    ledger, tracked-TUI replay, and shutdown probes pass four consecutive graphs.
@@ -365,11 +391,14 @@ root byte/count/hash identical.
 
 ## Residual boundary
 
-This audit proves the current checkout, 100-way atomic same-session admission,
+This audit plus move 21 proves the current checkout, one reconnectable source
+execution owner, 20-way cross-process client convergence, duplicate exclusion,
+graceful/crash generation recovery, 100-way atomic same-session admission,
 100-way event/message/summary ownership, a 100-owner shutdown fence, 100-event
 tracked-TUI replay, ReleaseFast installed binary, disposable summary migration,
 isolated settings transport, exact TUI event suffix catch-up, and Windows child
-cleanup on this machine. It does not prove a clean
-clone, another host, a live multi-kernel scheduler race, a multi-process session
-writer, or a live external-provider turn on this ReleaseFast binary. Those remain
+cleanup on this machine. It does not prove the current owner path through the
+installed binary, a clean clone, another host, a live multi-kernel scheduler
+race, a multi-process session writer, exactly-once mid-turn owner recovery, or a
+live external-provider turn on this ReleaseFast binary. Those remain
 explicit promotion gates, not implied success.

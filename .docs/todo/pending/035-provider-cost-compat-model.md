@@ -99,3 +99,11 @@ Risk: 035e changes request payloads for non-zai endpoints — but the active z.a
 ## Global Queue Alignment
 
 Pending queue: 021 (codex subscription auth — touches auth/provider-adjacent but already in progress, distinct surface), PLUG (plugin socket — distinct). No live chain touches `providers/`, `shared/types.zig`, `executor/loop.zig`, or `agents/supervisor.zig`. Changelog 034 (TUI) is archived and touches `tui_chat.zig` — 035g touches the same file but is a disjoint region (`recordTurnTelemetry`/`renderStatus`) and the chain is sequential within itself. No overlap requiring cross-chain dependency. Enters cleanly at 035.
+
+## Closure audit (2026-08-12)
+
+The source implementation and broad graph are green, but the previous archive
+attempt exceeded its evidence. Unit 035g still requires the installed consumer
+proof already named in its contract: one priced and one unpriced provider turn,
+event-ledger readback, and `/status` confirmation through the installed TUI.
+Keep 035, 035g, and 035h pending until that proof exists.

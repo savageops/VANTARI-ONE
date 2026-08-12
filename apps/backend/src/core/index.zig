@@ -10,6 +10,7 @@ pub const auth_resolver = auth.resolver;
 pub const auth_store = auth.store;
 pub const config = @import("config/resolver.zig");
 pub const config_file = @import("config/file.zig");
+pub const workspace = @import("config/workspace.zig");
 pub const context = @import("context/index.zig");
 pub const docs_sync = @import("docs/sync.zig");
 pub const evaluation = @import("evaluation/index.zig");
@@ -38,6 +39,7 @@ pub const tool_runtime = tools.runtime;
 
 test "core namespace exposes executor and store" {
     std.testing.refAllDeclsRecursive(config_file);
+    std.testing.refAllDeclsRecursive(workspace);
     std.testing.refAllDeclsRecursive(agent_profile);
     std.testing.refAllDeclsRecursive(agent_scope);
     std.testing.refAllDeclsRecursive(agent_spec);
@@ -53,6 +55,7 @@ test "core namespace exposes executor and store" {
     try std.testing.expect(@hasDecl(@This(), "session_summaries"));
     try std.testing.expect(@hasDecl(@This(), "config"));
     try std.testing.expect(@hasDecl(@This(), "config_file"));
+    try std.testing.expect(@hasDecl(@This(), "workspace"));
     try std.testing.expect(@hasDecl(@This(), "auth_store"));
     try std.testing.expect(@hasDecl(@This(), "context"));
     try std.testing.expect(@hasDecl(@This(), "evaluation"));

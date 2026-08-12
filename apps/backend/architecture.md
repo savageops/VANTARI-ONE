@@ -6,10 +6,13 @@ This is the canonical architecture map for the current `VAR1` agent-session runt
 
 - one execution primitive: session
 - one durable source of truth: `.var/sessions/<id>/`
-- one canonical host protocol: JSON-RPC 2.0 over stdio with Content-Length framing
+- one presentation transport: exact JSON-RPC through owner-only loopback HTTP
+- one private child protocol: JSON-RPC 2.0 over stdio with Content-Length framing
+- one project-local execution owner: one lease, one projection, one kernel child
 - one local bridge surface for browser clients: `/rpc`, `/events`, `/api/health` with token-gated RPC/event access
 - one executable name: `VAR1`
-- one hidden host mode: `kernel-stdio`
+- two hidden process modes: `execution-owner` and `kernel-stdio`; foreground
+  `serve` acquires the same owner lease
 - browser bridge protocol is kernel source; apps/frontend is an ignored local
   prototype and is not a tracked client owner
 
@@ -17,8 +20,11 @@ This is the canonical architecture map for the current `VAR1` agent-session runt
 
 This document describes both current owners and target invariants. The
 [2026-08-12 full-harness SITREP](../../.docs/research/2026-08-12-full-harness-sitrep.md)
-is the current promotion boundary: agent execution is fixed-pool and
-process-local, and scheduler lease acquisition is not inter-process atomic.
+is the current promotion boundary. Source-built TUI and CLI clients now attach
+to one persistent workspace owner, so the fixed pool survives presentation
+exit. Owner-process crash still loses in-memory worker state, scheduler lease
+acquisition is not inter-process atomic, and exactly-once resume/requeue is not
+yet shipped.
 Exact stored event sequence transport, shipped-TUI replay, generation-bound
 interactive cancellation, host request ownership, same-session admission,
 buffer projection, shutdown cancellation, test-root isolation, append-only
@@ -29,13 +35,14 @@ remaining findings as authoritative over older shipped claims.
 
 ```mermaid
 flowchart TB
-  cli["VAR1 CLI"] --> client["src/clients/cli.zig"]
-  browser["ignored local browser prototype"] -.-> bridge["src/host/http_bridge.zig"]
-
-  client --> rpcClient["src/host/stdio_client.zig"]
-  bridge --> rpcClient
+  cli["VAR1 CLI/TUI"] --> client["src/host/owner_client.zig"]
+  client --> ownerHttp["owner-only loopback RPC/events"]
+  ownerHttp --> owner["execution-owner / foreground serve"]
+  browser["ignored local browser prototype"] -.-> bridge["redacted browser routes"]
+  bridge --> owner
+  owner --> rpcClient["private ChildClient"]
   rpcClient --> kernel["VAR1 kernel-stdio"]
-  bridge --> bridgeAccess["src/host/bridge_access.zig"]
+  owner --> bridgeAccess["src/host/bridge_access.zig"]
 
   kernel --> host["src/host/stdio_rpc.zig"]
   rpcClient --> wire["src/host/stdio_wire.zig"]
@@ -86,14 +93,22 @@ flowchart TB
 ## Host request lifecycle
 
 ```text
-Content-Length frame -> 32-request admission -> four-worker pool
+client -> owner projection -> live generation handshake -> exact loopback RPC
+  -> private Content-Length frame -> 32-request admission -> four-worker pool
   -> Runtime.tryStartSession (one owner or bounded steer)
   -> provider/tool loop -> durable terminal event -> response
 
-stdin EOF -> stop admission -> Runtime.beginShutdown
+client EOF/deinit -> owner and kernel remain alive
+
+owner shutdown -> drain accepted loopback connections -> close child stdin
+  -> stop admission -> Runtime.beginShutdown
   -> fence late starts + signal active turns -> join request pool
   -> stop scheduler/buffer services -> free projections/runtime
 ```
+
+Automatic discovery may consume `VANTARI_WORKSPACE`; an already explicit owner
+selection may not. `config.loadDefaultForExplicitWorkspace` pins config, auth,
+ledgers, and the owner projection to the selected root before child creation.
 
 `BufferProjection` binds session identity and preview under one mutex. Callbacks
 carry their originating session ID; late prior-session previews are discarded,
@@ -120,15 +135,15 @@ There is no second worker registry. `tickets.proactive_workpool` is opt-in; the 
 ```mermaid
 sequenceDiagram
   actor C as Client
-  participant B as Bridge or CLI
+  participant O as execution owner
   participant K as kernel-stdio
   participant E as loop.zig
   participant X as context builder
   participant S as store.zig
   participant P as provider.zig
 
-  C->>B: session/create or session/send
-  B->>K: JSON-RPC request
+  C->>O: exact loopback session/create or session/send
+  O->>K: private Content-Length JSON-RPC request
   K->>E: dispatch session lifecycle call
   E->>S: load or create session
   E->>X: build model-visible transcript view
@@ -152,8 +167,8 @@ sequenceDiagram
   E->>S: write output and status
   E-->>K: session result
   E-->>K: persist-first session/event notifications with stored seq
-  K-->>B: JSON-RPC result
-  B-->>C: response or UI refresh
+  K-->>O: JSON-RPC result
+  O-->>C: response or UI refresh
 ```
 
 ## Context compaction flow
@@ -337,7 +352,7 @@ Every session directory contains:
 - `events.jsonl`
 - `output.txt`
 
-`messages.jsonl` is the complete append-only transcript. One process-local per-session ledger state serializes user, assistant, assistant-tool-call, tool-result, and idempotent convergence appends. It initializes sequence from the last valid bounded tail row instead of reparsing transcript history; append failure invalidates the cached cursor before retry. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested. `events.jsonl` assigns the sole durable render identity. Live notifications carry that stored sequence after append; the tracked TUI requests `session/get { after_seq, events_only }` only when it detects a gap and once after turn completion. `shared/jsonl.zig:PrefixReader` is the one LF-framed read boundary for events, messages, context, intents, and summaries. It accepts a leading BOM, rejects invalid UTF-8/JSON/typed schema and non-increasing sequence rows, and ends every projection at the same valid prefix. `fsutil.appendJsonlRecord` validates the bounded current tail through that owner and refuses poison without truncating or appending behind it.
+`messages.jsonl` is the complete append-only transcript. One execution-owner-local per-session ledger state serializes user, assistant, assistant-tool-call, tool-result, and idempotent convergence appends. It initializes sequence from the last valid bounded tail row instead of reparsing transcript history; append failure invalidates the cached cursor before retry. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested. `events.jsonl` assigns the sole durable render identity. Live notifications carry that stored sequence after append; the tracked TUI requests `session/get { after_seq, events_only }` only when it detects a gap and once after turn completion. `shared/jsonl.zig:PrefixReader` is the one LF-framed read boundary for events, messages, context, intents, and summaries. It accepts a leading BOM, rejects invalid UTF-8/JSON/typed schema and non-increasing sequence rows, and ends every projection at the same valid prefix. `fsutil.appendJsonlRecord` validates the bounded current tail through that owner and refuses poison without truncating or appending behind it.
 
 `$VANTARI_HOME/config.json` is the canonical non-secret policy file. Its typed sections own runtime limits, wire API selection, role routing, editable agent definitions, context policy, prompt paths, and supported environment-style overrides. Built-in agent rows may tune persona/condition/route/budgets or be disabled; custom ids must inherit a compiled capability floor. `$VANTARI_HOME/auth.json` is the sibling credential/provider ledger. API keys, OAuth tokens, account identity, and active-provider state never move into config output. Nested/AppData auth paths are one-time migration inputs; `settings.toml` is no longer a runtime reader. The Windows installer preserves valid config byte-for-byte and backs up plus materializes the current schema only when the retained file fails validation.
 
@@ -347,7 +362,7 @@ Every session directory contains:
 
 `src/core/prompts/` owns the model-presented prompt envelope. When no project prompt override is configured, it uses compiled system/developer layers. When an override path is configured, the file must exist and contain non-whitespace content; missing or empty configured prompt layers fail closed. The builder then injects the hidden runtime guardrail layer and appends the live catalog plus a runtime-owned burst/checkpoint contract. Long work interleaves one bounded observable step, one tool/delegation action batch, evidence inspection, and one compact checkpoint naming changed state, proof, blocker or residual risk, and next action. The assistant checkpoint is persisted in `messages.jsonl`, included by later context rebuilds, and never requests private chain-of-thought. A checkpoint does not terminate the run; the loop continues until terminal proof or a named blocker. Provider transport remains OpenAI-compatible by sending the resulting envelope as a system-role message while preserving internal/system/developer/tool boundaries inside the prompt text.
 
-`store.ensureStoreReady(...)` creates the canonical sessions directory and initializes process-local sequence state. It never scans or rewrites existing `session.json` records. Explicit migrations own schema changes; this prevents startup cost from scaling with session count and prevents mixed-version processes from erasing additive fields they do not understand.
+`store.ensureStoreReady(...)` creates the canonical sessions directory and initializes execution-owner-local sequence state. It never scans or rewrites existing `session.json` records. Explicit migrations own schema changes; this prevents startup cost from scaling with session count and prevents mixed-version processes from erasing additive fields they do not understand.
 
 ## Role-routed agent execution
 
@@ -355,13 +370,18 @@ Every session directory contains:
 
 `core/agents/service.zig` validates one `{ context, tasks[] }` batch, resolves routes, persists secret-free execution receipts, then admits the group to `core/agents/supervisor.zig`. The supervisor owns one fixed `std.Thread.Pool`, O(1) group/parent indexes, a completion condition, cancellation, terminal-event ordering, and exactly-once convergence. Healthy wait/status paths do not scan `.var/sessions`; ledger traversal is an explicit cold-start recovery path.
 
+The project-local execution owner keeps this sole service/pool/scheduler
+composition alive across TUI and CLI detach. It does not make in-memory child
+work crash-resumable: owner death still requires the generation-fenced
+reconciliation assigned to moves 23–30.
+
 `core/executor/loop.zig` parks a waiting parent on the supervisor condition without a provider call. The first unconsumed terminal child wakes the parent; the service appends that child's convergence record exactly once, rebuilds through the context compiler, and permits the next routing/synthesis turn while unfinished siblings remain supervised. A parent cannot emit terminal output while any owned child remains active. Full specialists execute as ordinary isolated VAR1 child sessions. Tool-free `model_task` specialists use one provider turn and validate their supplied output schema without acquiring a second transcript or tool runtime.
 
 Child assistant/reasoning deltas and tool transcripts stay in the child ledger. The parent event spine receives only bounded control events: group start, admission, queue, start, material progress/wait, child terminal, group terminal, and convergence. Every child `session.json` keeps a heap-owned immutable execution receipt containing the secret-free resolved agent, route, model, wire API, budgets, group, and branch identity; explicit checked JSON decoding preserves that receipt across optimized status rewrites and cold recovery. CLI, stdio, and TUI consume the same projection. The TUI renders Search, Explore, Agents, and To-dos through one group/item grammar with `[ ]`, `[>]`, `[x]`, `[!]`, `[-]` markers and `|--` / `` `--`` child rails; tool lifecycle phases remain event metadata while the child row is replaced by the bounded `assistant_response` summary from `sessions/summaries.jsonl`. No second status bus exists.
 
 ### Planned selective agent awareness
 
-Moves 21–30 extend the persistent execution owner with one sequence-addressed
+Move 21 establishes the persistent execution owner in source. Moves 22–30 add one sequence-addressed
 mailbox through the existing agent/session/event lane. Every agent remains a
 normal session, including a child that becomes a bounded parent. The delivery
 surface resolves direct-session, parent, and current-group targets; carries a
@@ -394,6 +414,8 @@ all sibling transcripts or create a generic topic/subscription broker.
   provider-error classifier for explicit context-window overflow, excluding rate-limit and availability failures
 - `src/core/config/file.zig`
   canonical `$VANTARI_HOME/config.json` loader, default materialization, environment precedence, and validation
+- `src/core/config/workspace.zig`
+  sole workspace-resolution policy shared by presentation clients and owner startup
 - `src/core/config/settings.zig`
   retained TOML parser tests only; live policy reads route through `config/file.zig`
 - `src/core/prompts/builder.zig`
@@ -427,13 +449,17 @@ all sibling transcripts or create a generic topic/subscription broker.
 - `src/host/stdio_wire.zig`
   canonical Content-Length frame decoder/encoder and JSON-RPC envelope rendering
 - `src/host/stdio_client.zig`
-  local kernel child-process lifecycle, request/notification transport, response correlation, and monotonic notification queue
+  private `ChildClient` kernel process lifecycle, request/notification transport, response correlation, and monotonic notification queue
 - `src/host/stdio_rpc.zig`
   bounded kernel-side JSON-RPC dispatch, atomic turn admission, session-keyed buffer projection, exact-generation interactive cancellation, cancellation-before-join shutdown, subscriptions, and response emission
+- `src/host/owner_state.zig`
+  crash-released startup/lifetime leases and atomic project-local owner projection
+- `src/host/owner_client.zig`
+  public reconnecting `LocalClient` facade with live generation/protocol/executable handshake
 - `src/host/bridge_access.zig`
   local HTTP bridge access policy for origin checks, token validation, key-and-value redaction, audit classification, and durable audit event emission
 - `src/host/http_bridge.zig`
-  local HTTP bridge route transport for `/rpc`, `/events`, and `/api/health`
+  persistent owner lifecycle, exact owner-only routes, and separately redacted browser routes
 - `src/clients/cli.zig`
   thin protocol-backed CLI
 - `src/clients/tui_chat.zig`
@@ -547,7 +573,8 @@ buffer thread ticks (every interval_ms)
 ```
 
 **Owner:** `src/core/executor/buffer.zig` — `BufferPolicy` loader + `Service`
-(background thread with tick loop). Spawned in `host/stdio_rpc.zig` alongside
+(background thread with tick loop). Spawned in the resident owner's private
+`host/stdio_rpc.zig` kernel alongside
 the scheduler thread. `PreviewSink` carries the originating session ID into the
 host's mutex-owned `BufferProjection`; only matching callbacks emit
 `buffer_preview`. Root sessions only. Failures are advisory and silent.

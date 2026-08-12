@@ -23,12 +23,14 @@ This directory contains project records, research, planning chains, and complete
 | [`todo/changelog/_log.md`](todo/changelog/_log.md) | Completed-work index and closeout receipts |
 | [`handoff/`](handoff/) | Cold-start handoffs and continuity records |
 | [`roadmap/24-harness-capability-next-90.md`](roadmap/24-harness-capability-next-90.md) | Current value-ranked execution order for the next 90 harness moves |
+| [`roadmap/21-persistent-execution-owner.md`](roadmap/21-persistent-execution-owner.md) | Current owner-lifecycle decision, source proof, and installed promotion boundary |
 
 ## Current capability records
 
 - [`research/2026-08-12-full-harness-sitrep.md`](research/2026-08-12-full-harness-sitrep.md) — full design, owner, pipeline, method, proof, competitive harvest, readiness concerns, and WIP accountability.
 - [`todo/findings/00-INDEX.md`](todo/findings/00-INDEX.md) — executable P0/P1/P2 closure order; current authority over older completion claims.
 - [`roadmap/24-harness-capability-next-90.md`](roadmap/24-harness-capability-next-90.md) — 90 dependency-ordered moves ranked by operator value, capability leverage, integrity risk, and friction removed.
+- [`roadmap/21-persistent-execution-owner.md`](roadmap/21-persistent-execution-owner.md) — source-complete single-owner lifecycle: reconnect, duplicate exclusion, graceful/crash recovery, process cleanup, and blocked installed gate.
 - [`roadmap/20-adversarial-concurrency-mesh.md`](roadmap/20-adversarial-concurrency-mesh.md) — closed six-seam 100-way contention mesh with exact ledger, replay, and shutdown evidence and no new harness.
 - [`roadmap/19-single-terminal-event.md`](roadmap/19-single-terminal-event.md) — closed single-settlement contract, seven-source harvest, generation binding, cold-start validation, and installed Windows proof.
 - [`roadmap/18-generation-bound-cancellation.md`](roadmap/18-generation-bound-cancellation.md) — closed exact-run cancellation contract, seven-source harvest, stale-generation race, and installed Windows proof.

@@ -1,0 +1,299 @@
+const builtin = @import("builtin");
+const std = @import("std");
+const fsutil = @import("../shared/fsutil.zig");
+
+pub const schema_version = "var1.execution_owner.v1";
+pub const protocol_version = "var1.owner_http.v1";
+pub const state_filename = "execution-owner.json";
+pub const start_lock_filename = "execution-owner-start.lock";
+pub const lease_filename = "execution-owner-lease.lock";
+
+const lock_retry_ns = 10 * std.time.ns_per_ms;
+
+pub const Projection = struct {
+    type: []const u8 = schema_version,
+    protocol: []const u8 = protocol_version,
+    generation: []const u8,
+    pid: u32,
+    port: u16,
+    token: []const u8,
+    workspace_root: []const u8,
+    executable_path: []const u8,
+    started_at_ms: i64,
+};
+
+pub const Snapshot = struct {
+    allocator: std.mem.Allocator,
+    generation: []u8,
+    pid: u32,
+    port: u16,
+    token: []u8,
+    workspace_root: []u8,
+    executable_path: []u8,
+    started_at_ms: i64,
+
+    pub fn deinit(self: Snapshot) void {
+        self.allocator.free(self.generation);
+        self.allocator.free(self.token);
+        self.allocator.free(self.workspace_root);
+        self.allocator.free(self.executable_path);
+    }
+};
+
+/// Return the project-local execution-owner projection path. Owner state never
+/// relocates into a home-scoped runtime root.
+pub fn statePath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
+    return fsutil.join(allocator, &.{ workspace_root, ".var", "runtime", state_filename });
+}
+
+/// Return the project-local file used to serialize owner startup decisions.
+pub fn startLockPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
+    return fsutil.join(allocator, &.{ workspace_root, ".var", "runtime", start_lock_filename });
+}
+
+/// Return the project-local owner lifetime lease path. The operating system
+/// releases this lock on crash; the file itself is only an identity anchor.
+pub fn leasePath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
+    return fsutil.join(allocator, &.{ workspace_root, ".var", "runtime", lease_filename });
+}
+
+pub const FileLock = struct {
+    file: std.fs.File,
+
+    pub fn deinit(self: *FileLock) void {
+        self.file.unlock();
+        self.file.close();
+        self.* = undefined;
+    }
+};
+
+pub fn acquireStartLock(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    timeout_ms: usize,
+) !FileLock {
+    const path = try startLockPath(allocator, workspace_root);
+    defer allocator.free(path);
+    return acquireFileLock(path, timeout_ms);
+}
+
+pub fn acquireOwnerLease(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    timeout_ms: usize,
+) !FileLock {
+    const path = try leasePath(allocator, workspace_root);
+    defer allocator.free(path);
+    return acquireFileLock(path, timeout_ms);
+}
+
+/// Return true only when no owner process currently holds the lifetime lease.
+pub fn ownerLeaseAvailable(allocator: std.mem.Allocator, workspace_root: []const u8) !bool {
+    var lease = acquireOwnerLease(allocator, workspace_root, 0) catch |err| switch (err) {
+        error.OwnerLockUnavailable => return false,
+        else => return err,
+    };
+    lease.deinit();
+    return true;
+}
+
+fn acquireFileLock(path: []const u8, timeout_ms: usize) !FileLock {
+    try fsutil.ensureParent(path);
+    var file = try std.fs.cwd().createFile(path, .{
+        .read = true,
+        .truncate = false,
+    });
+    errdefer file.close();
+
+    var timer = try std.time.Timer.start();
+    const timeout_ns = std.math.mul(u64, @intCast(timeout_ms), std.time.ns_per_ms) catch std.math.maxInt(u64);
+    while (!try tryExclusiveLock(file)) {
+        if (timer.read() >= timeout_ns) return error.OwnerLockUnavailable;
+        std.Thread.sleep(lock_retry_ns);
+    }
+    return .{ .file = file };
+}
+
+/// Zig 0.15.1's Windows `File.tryLock` has a malformed `.none` return arm.
+/// Keep the same one-byte, crash-released file-lock contract while calling the
+/// underlying Windows primitive directly. Other platforms retain stdlib flock.
+fn tryExclusiveLock(file: std.fs.File) !bool {
+    if (builtin.os.tag == .windows) {
+        const windows = std.os.windows;
+        const range_off: windows.LARGE_INTEGER = 0;
+        const range_len: windows.LARGE_INTEGER = 1;
+        var io_status_block: windows.IO_STATUS_BLOCK = undefined;
+        windows.LockFile(
+            file.handle,
+            null,
+            null,
+            null,
+            &io_status_block,
+            &range_off,
+            &range_len,
+            null,
+            windows.TRUE,
+            windows.TRUE,
+        ) catch |err| switch (err) {
+            error.WouldBlock => return false,
+            else => return err,
+        };
+        return true;
+    }
+    return file.tryLock(.exclusive);
+}
+
+/// Atomically publish a ready execution owner. Call only after the listener and
+/// child kernel have completed a real health handshake.
+pub fn write(allocator: std.mem.Allocator, projection: Projection) !void {
+    const path = try statePath(allocator, projection.workspace_root);
+    defer allocator.free(path);
+
+    const payload = try std.fmt.allocPrint(allocator, "{f}\n", .{
+        std.json.fmt(projection, .{}),
+    });
+    defer allocator.free(payload);
+    try fsutil.writeText(path, payload);
+}
+
+/// Read and validate one owner projection. Schema or protocol drift fails
+/// closed so clients never attach to a transport with unknown semantics.
+pub fn read(allocator: std.mem.Allocator, workspace_root: []const u8) !Snapshot {
+    const path = try statePath(allocator, workspace_root);
+    defer allocator.free(path);
+    const payload = try fsutil.readTextAlloc(allocator, path);
+    defer allocator.free(payload);
+
+    var parsed = std.json.parseFromSlice(Projection, allocator, payload, .{}) catch {
+        return error.InvalidOwnerProjection;
+    };
+    defer parsed.deinit();
+    if (!std.mem.eql(u8, parsed.value.type, schema_version) or
+        !std.mem.eql(u8, parsed.value.protocol, protocol_version) or
+        parsed.value.generation.len == 0 or
+        parsed.value.token.len == 0 or
+        parsed.value.port == 0 or
+        !std.mem.eql(u8, parsed.value.workspace_root, workspace_root))
+    {
+        return error.InvalidOwnerProjection;
+    }
+
+    const generation = try allocator.dupe(u8, parsed.value.generation);
+    errdefer allocator.free(generation);
+    const token = try allocator.dupe(u8, parsed.value.token);
+    errdefer allocator.free(token);
+    const owned_workspace = try allocator.dupe(u8, parsed.value.workspace_root);
+    errdefer allocator.free(owned_workspace);
+    const executable_path = try allocator.dupe(u8, parsed.value.executable_path);
+    errdefer allocator.free(executable_path);
+
+    return .{
+        .allocator = allocator,
+        .generation = generation,
+        .pid = parsed.value.pid,
+        .port = parsed.value.port,
+        .token = token,
+        .workspace_root = owned_workspace,
+        .executable_path = executable_path,
+        .started_at_ms = parsed.value.started_at_ms,
+    };
+}
+
+pub fn currentPid() u32 {
+    return if (builtin.os.tag == .windows)
+        std.os.windows.GetCurrentProcessId()
+    else
+        @intCast(std.posix.getpid());
+}
+
+test "owner projection stays project local and round trips" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}",
+        .{tmp.sub_path},
+    );
+    defer std.testing.allocator.free(workspace_root);
+
+    const path = try statePath(std.testing.allocator, workspace_root);
+    defer std.testing.allocator.free(path);
+    try std.testing.expect(std.mem.endsWith(u8, path, ".var/runtime/" ++ state_filename) or
+        std.mem.endsWith(u8, path, ".var\\runtime\\" ++ state_filename));
+
+    try write(std.testing.allocator, .{
+        .generation = "generation-a",
+        .pid = 42,
+        .port = 4311,
+        .token = "owner-token-a",
+        .workspace_root = workspace_root,
+        .executable_path = "E:/bin/vantari.exe",
+        .started_at_ms = 100,
+    });
+
+    const snapshot = try read(std.testing.allocator, workspace_root);
+    defer snapshot.deinit();
+    try std.testing.expectEqualStrings("generation-a", snapshot.generation);
+    try std.testing.expectEqual(@as(u32, 42), snapshot.pid);
+    try std.testing.expectEqual(@as(u16, 4311), snapshot.port);
+    try std.testing.expectEqualStrings("owner-token-a", snapshot.token);
+    try std.testing.expectEqualStrings(workspace_root, snapshot.workspace_root);
+}
+
+test "owner projection replacement is atomic and latest generation wins" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}",
+        .{tmp.sub_path},
+    );
+    defer std.testing.allocator.free(workspace_root);
+
+    try write(std.testing.allocator, .{
+        .generation = "generation-old",
+        .pid = 1,
+        .port = 4311,
+        .token = "token-old",
+        .workspace_root = workspace_root,
+        .executable_path = "old.exe",
+        .started_at_ms = 1,
+    });
+    try write(std.testing.allocator, .{
+        .generation = "generation-new",
+        .pid = 2,
+        .port = 4312,
+        .token = "token-new",
+        .workspace_root = workspace_root,
+        .executable_path = "new.exe",
+        .started_at_ms = 2,
+    });
+
+    const snapshot = try read(std.testing.allocator, workspace_root);
+    defer snapshot.deinit();
+    try std.testing.expectEqualStrings("generation-new", snapshot.generation);
+    try std.testing.expectEqual(@as(u32, 2), snapshot.pid);
+    try std.testing.expectEqual(@as(u16, 4312), snapshot.port);
+}
+
+test "owner projection rejects protocol drift" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}",
+        .{tmp.sub_path},
+    );
+    defer std.testing.allocator.free(workspace_root);
+    const path = try statePath(std.testing.allocator, workspace_root);
+    defer std.testing.allocator.free(path);
+
+    const payload = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"type\":\"{s}\",\"protocol\":\"future\",\"generation\":\"g\",\"pid\":1,\"port\":4311,\"token\":\"t\",\"workspace_root\":{f},\"executable_path\":\"v.exe\",\"started_at_ms\":1}}",
+        .{ schema_version, std.json.fmt(workspace_root, .{}) },
+    );
+    defer std.testing.allocator.free(payload);
+    try fsutil.writeText(path, payload);
+    try std.testing.expectError(error.InvalidOwnerProjection, read(std.testing.allocator, workspace_root));
+}

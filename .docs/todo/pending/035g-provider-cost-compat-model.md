@@ -93,4 +93,19 @@ cd apps/backend && zig build test
 
 Test access: follow the existing pattern used for TUI unit tests — check how `commands.zig`/`tui_chat.zig` internals are tested today (grep for existing test blocks in those files); if the files have no test blocks, place the tests in the file that owns the function being tested (or `tests/all_tests.zig` style) using the same direct-call approach as the codebase's other client tests.
 
-**Manual proof (pipeline QC):** run the kernel-stdio flow (or TUI) against the z.ai provider, complete a turn, verify `turn_finished` event carries v2 fields in `events.jsonl`, and `/status` shows the cost line.
+**Manual proof (pipeline QC):** run the installed owner/TUI flow against the z.ai provider, complete a turn, verify `var1.turn_terminal.v1` carries the cost fields in `events.jsonl`, and `/status` shows the cost line.
+
+## Source evidence (installed proof pending, 2026-08-12)
+
+- Source gate cleared on committed HEAD `5323166`: the broad graph passes 19/19
+  steps and 1959/1959 tests. This does not clear the installed-provider proof
+  required by this unit.
+- The cost telemetry is wired through the move-19 unified terminal event: `loop.zig:771/835` call `turn_payload.completedTerminalInput(step, messages, model, completion.usage, output_bytes)`, so measured `usage` reaches `var1.turn_terminal.v1`.
+- TUI parses the unified terminal payload: `recordTurnTelemetry` captures `prompt_tokens/completion_tokens/cached_tokens/cost_total_usd` (tui_chat.zig); `/status` renders the session cost line (commands.zig `renderStatus`).
+- New TUI telemetry tests pass: priced-cost accumulation across two turns (0.0001 + 0.0002 = 0.0003), null-cost leaves `has_session_cost` false, `turn_started` refreshes window estimate without accumulating cost.
+
+**Remaining gate:** preserve the active installed owner pair, then install the
+matching ReleaseFast binary when that pair exits. Run one priced and one
+unpriced provider turn, read the unified terminal payload from `events.jsonl`,
+and confirm the accumulated `/status` projection. Do not archive on source-test
+evidence alone.

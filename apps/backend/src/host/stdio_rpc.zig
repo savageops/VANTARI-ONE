@@ -14,9 +14,11 @@ const auth_store = @import("../core/auth/store.zig");
 const tools = @import("../core/tools/runtime.zig");
 const types = @import("../shared/types.zig");
 const stdio_client = @import("stdio_client.zig");
+const owner_client = @import("owner_client.zig");
 const wire = @import("stdio_wire.zig");
 
-pub const LocalClient = stdio_client.LocalClient;
+pub const ChildClient = stdio_client.ChildClient;
+pub const LocalClient = owner_client.LocalClient;
 pub const Notification = stdio_client.Notification;
 pub const RpcCallResult = stdio_client.RpcCallResult;
 

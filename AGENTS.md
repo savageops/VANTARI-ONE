@@ -32,6 +32,10 @@ only when consolidation or deletion cannot close the canonical consumer path.
 - `.var/` is the only runtime/process state root. Do not add old runtime roots, old storage ownership, or fallback storage readers.
 - Project-local `.var/sessions/<session-id>/` is canonical. Do not copy global home-scoped Codex/Claude project-directory session IDs into this repo.
 - CLI/TUI/browser clients never assemble provider context, infer tool state, or maintain their own transcript truth. They render kernel-owned state.
+- `apps/backend/src/host/owner_client.zig` is the presentation-facing `LocalClient`. It resolves one project-local execution owner, validates its live workspace/generation/protocol/executable identity, and never owns or terminates a kernel child.
+- `execution-owner` and foreground `serve` acquire the same crash-released workspace lease and publish one atomic projection at `.var/runtime/execution-owner.json`. Only `apps/backend/src/host/http_bridge.zig` may construct the private `ChildClient` from `stdio_client.zig`; do not add another daemon, pool, scheduler, or reconnect transport.
+- An explicit execution-owner workspace is authoritative through `config.loadDefaultForExplicitWorkspace`; inherited `VANTARI_WORKSPACE`, `.env` `WORKSPACE`, and config workspace entries must not redirect its config, auth, ledgers, or owner projection.
+- Owner RPC/event/shutdown routes remain loopback-only, token-gated, generation-bound, and exact. Browser routes remain separately token-gated and redacted. A presentation client exit must not change owner lifetime.
 - `apps/backend/src/core/tickets/` is the canonical ticket ledger and queue projection. `assigned` admits work; it does not launch a child session.
 - `apps/backend/src/core/scheduler/` claims assigned tickets only when `apps/backend/src/core/agents/supervisor.zig` reports fixed-pool capacity, then routes through `core/agents/service.zig`. Do not add a second worker registry or direct assignment launcher.
 - `.docs/index.md`, `.docs/technical_summary.md`, `.docs/workspace.json`, and `.refs/index.md` are the current project-record indexes. Keep them aligned with shipped runtime truth.

@@ -28,6 +28,21 @@ user input → draft compilation (glm-5-turbo, optional)
 
 Every retained subsystem reduces ambiguity at the call site while increasing guarantees in the core. A session is correct only when the operator can observe the same causal chain the kernel will replay after cold start.
 
+### Persistent Execution Owner
+
+TUI and CLI use `host/owner_client.zig` as a reconnecting facade. The facade
+resolves one workspace owner from `.var/runtime/execution-owner.json`, validates
+workspace, protocol, generation, and executable identity through a live
+loopback handshake, then forwards the existing JSON-RPC contract. Client exit
+does not stop the owner.
+
+The owner process holds one crash-released workspace lease and one private
+`ChildClient`. That child starts the sole `kernel-stdio` process, which retains
+the existing `AgentService`, fixed pool, scheduler, buffer, sessions, tools, and
+event spine. Foreground `serve` and automatic `execution-owner` startup acquire
+the same lease; they cannot create parallel kernels. Browser routes stay
+redacted while owner routes are exact and token-gated.
+
 ## What Makes VAR1 Different
 
 ### Cockpit Orchestration (Context Preservation)
@@ -237,6 +252,8 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 .\scripts\zigw.ps1 build test --summary all
 .\scripts\health.ps1
 .\zig-out\bin\VAR1.exe run --prompt "Count the lowercase letter r in strawberry."
+.\scripts\prove-owner-tracer.ps1 -BinaryPath .\zig-out\bin\vantari.exe -EntryPoint serve
+.\scripts\prove-owner-lifecycle.ps1 -BinaryPath .\zig-out\bin\vantari.exe -ConcurrentClients 20
 ```
 
 ## Commands
@@ -248,6 +265,7 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 .\zig-out\bin\VAR1.exe tools --json
 .\zig-out\bin\VAR1.exe config validate
 .\zig-out\bin\VAR1.exe config show
+.\zig-out\bin\VAR1.exe serve --port 4310
 .\zig-out\bin\VAR1.exe -c
 ```
 
@@ -267,8 +285,13 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - `src/core/tools/runtime.zig` — tool dispatch and catalog
 - `src/core/tools/builtin/` — all built-in tools
 - `src/core/config/file.zig` — config schema validation and loading
+- `src/core/config/workspace.zig` — one workspace-resolution policy for clients and owners
 - `src/core/config/default.json` — complete config template with _help
 - `src/clients/tui_chat.zig` — TUI rendering, dock, input history
+- `src/host/owner_client.zig` — public reconnecting client facade
+- `src/host/owner_state.zig` — owner lease and atomic project-local projection
+- `src/host/http_bridge.zig` — resident owner routes plus redacted browser routes
+- `src/host/stdio_client.zig` — private supervised `kernel-stdio` child transport
 - `src/host/stdio_rpc.zig` — kernel host, scheduler + buffer thread spawn
 
 ## Current Posture
@@ -296,6 +319,8 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - Surgical precision work ethic
 - One generation-bound `turn_terminal` settlement for completed, failed,
   timed-out, and cancelled runs
+- One project-local execution owner that survives TUI/CLI detach and rejects
+  duplicate foreground or automatic starts
 
 ## Deep architecture — current capability truth
 
@@ -309,7 +334,8 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Single terminal settlement | **Source and installed proven** | `commitTurnTerminal` admits exactly one `var1.turn_terminal.v1` row per `session_started.seq`; repeated identical settlement is idempotent, conflicting or stale settlement is rejected, and legacy terminal names are read-only. |
 | Generation-bound cancellation | **Source and installed proven** | The tracked TUI sends the observed `session_started.seq` as `expected_run_seq`; missing, unobserved, and stale generations do not mutate a newer run. Shutdown retains an admission-fenced unconditional path. |
 | Message transcript writer | **Source and installed proven** | One per-session owner serializes every message role and initializes sequence from a bounded valid tail. Multi-process writer ownership remains coupled to the persistent-host work. |
-| Child branch/convergence | **In-process proven** | Fixed-pool convergence works while the kernel lives; process restart marks running receipts stale instead of resuming a worker. |
+| Persistent execution owner | **Source proven; install pending** | One workspace lease converges 20 concurrent clients on one owner/kernel tree. Explicit workspace selection defeats inherited/configured redirection. Client detach preserves the generation; graceful stop drains; forced owner death leaves zero descendants; the next client creates one new generation. The active installed operator pair blocks replacement only. |
+| Child branch/convergence | **Owner-lifetime proven** | Fixed-pool convergence now survives presentation-client exit. Owner-process death still marks running receipts stale instead of resuming a worker; scheduler fencing and exactly-once reconciliation remain open. |
 | Write-intent ledger | **Frontier scaffold** | Reserve/commit helpers and tests exist; write-capable tools do not call them on the canonical mutation path. |
 | Byte-level session integrity | **Source and installed proven** | One LF-only reader owns BOM, invalid-UTF-8, JSON/schema, duplicate, and non-monotonic boundaries across event/message/context/intent/summary projections. Append refuses a poisoned current tail without rewriting it; operator-facing corruption events remain a later diagnostics decision. |
 | Context compiler | **Shipped source path** | One builder compiles transcript plus checkpoint state and validates tool topology before provider dispatch. |

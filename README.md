@@ -12,7 +12,7 @@ One binary; one protocol; one owner for runtime truth.
 
 [![Release](https://img.shields.io/github/v/release/savageops/VANTARI-ONE?display_name=tag&sort=semver&label=Release&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/savageops/VANTARI-ONE/total?label=Downloads&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases)
-[![Tests](https://img.shields.io/badge/Tests-1%2C923%20cases-0f766e)](#validation)
+[![Tests](https://img.shields.io/badge/Tests-1%2C967%20cases-0f766e)](#validation)
 [![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-f7a41d?logo=zig)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-0f766e)](./LICENSE)
 
@@ -91,12 +91,12 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 | Metric | Value |
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
-| **Kernel surface** | 109 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 1,950 passing backend cases across source and adversarial pipeline suites |
+| **Kernel surface** | 115 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
+| **Proof surface** | 1,968 passing backend cases across source and adversarial pipeline suites |
 | **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
 | **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |
-| **Protocol** | JSON-RPC 2.0 over stdio with Content-Length framing |
+| **Protocol** | Exact JSON-RPC over owner-only loopback HTTP; private Content-Length stdio inside the owner tree |
 | **Session storage** | Filesystem JSONL ledgers at `.var/sessions/<id>/` |
 | **Platform** | Windows-native first class; Linux/macOS via Zig cross-compilation |
 
@@ -109,12 +109,13 @@ flowchart TB
   tui["TUI client<br/><sub>streaming terminal interface</sub>"]
   cli["CLI client<br/><sub>single-shot commands</sub>"]
   browser["Browser workbench<br/><sub>framework-free static client</sub>"]
-  tui --> stdio["JSON-RPC 2.0 over stdio<br/><sub>Content-Length framing</sub>"]
-  cli --> stdio
-  browser --> bridge["HTTP bridge<br/><sub>POST /rpc · GET /events · GET /api/health</sub>"]
-
-  bridge --> access["bridge access layer<br/><sub>origin guard · token gate · redaction · audit</sub>"]
-  access --> kernel
+  tui --> facade["owner client facade<br/><sub>resolve · handshake · reconnect</sub>"]
+  cli --> facade
+  facade --> owner["project-local execution owner<br/><sub>exact loopback RPC · generation lease</sub>"]
+  browser -.->|prototype| bridge["redacted browser routes<br/><sub>POST /rpc · GET /events · GET /api/health</sub>"]
+  bridge --> owner
+  owner --> child["private ChildClient<br/><sub>one supervised kernel child</sub>"]
+  child --> stdio["JSON-RPC 2.0 over stdio<br/><sub>Content-Length framing</sub>"]
   stdio --> kernel["VAR1 kernel"]
 
   subgraph core["kernel-owned runtime"]
@@ -135,7 +136,10 @@ flowchart TB
   provider --> events
 ```
 
-The two tracked client surfaces — TUI and CLI — enter the same kernel runtime.
+The two tracked client surfaces — TUI and CLI — attach to one project-local
+execution owner and enter the same kernel runtime. Closing either client leaves
+the owner, fixed pool, scheduler, and active sessions alive. The owner retains
+one private `kernel-stdio` child; it does not create a second runtime lane.
 Session state, context assembly, provider interaction, tool dispatch, capability
 governance, and event emission stay inside the Zig binary. The local browser
 workbench exists only as an ignored prototype in this checkout and is not a
@@ -149,11 +153,11 @@ The planned relay remains a client of the kernel over the existing stdio JSON-RP
 
 ```text
 Local (current):
-  CLI/TUI ──stdio──► kernel ──► .var/sessions/
+  CLI/TUI ──owner facade──► execution owner ──private stdio──► kernel ──► .var/sessions/
 
 Remote (planned):
   CLI/TUI ──┐
-  Browser ──┼──► relay ──stdio──► kernel ──► .var/sessions/
+  Browser ──┼──► relay ──owner protocol──► execution owner ──► kernel ──► .var/sessions/
   Dashboard ┘    (TLS · WebSocket · auth.vantari.one)
 ```
 
@@ -167,7 +171,7 @@ The promotion test is mechanical: kill the relay, start a fresh relay, and recov
 ┌──────────────────────────────────────────────────────────────────┐
 │  CLIENT LAYER              TUI · CLI                              │
 ├──────────────────────────────────────────────────────────────────┤
-│  HOST LAYER                stdio RPC · HTTP bridge · audit      │
+│  HOST LAYER                owner lease · loopback RPC · private stdio│
 ├──────────────────────────────────────────────────────────────────┤
 │  EXECUTOR LAYER            loop · step budget · cancel gate     │
 ├──────────────────────────────────────────────────────────────────┤
@@ -185,8 +189,8 @@ The promotion test is mechanical: kill the relay, start a fresh relay, and recov
 
 Each layer has a single canonical owner. The context engine never writes to the provider. The tool runtime never writes to the transcript. The provider never reads from the session store. Dependencies flow downward. State flows through explicit function parameters, never globals.
 
-The host layer is the outermost kernel surface: framed stdio RPC plus the
-loopback HTTP bridge. TUI and CLI are tracked clients. Browser and remote
+The host layer is the outermost kernel surface: one reconnectable loopback owner
+in front of one private framed-stdio kernel child. TUI and CLI are tracked clients. Browser and remote
 surfaces remain prototype or roadmap clients. Public networking and remote
 identity belong to the planned relay boundary, so local execution does not
 inherit deployment infrastructure.
@@ -387,6 +391,13 @@ Model discovery normalizes the common LM Studio, vLLM, and llama.cpp response sh
 
 Recovery is derived from persisted evidence. One LF-framed JSONL reader retains the same valid prefix across BOMs, invalid UTF-8, malformed or torn rows, invalid typed schemas, and duplicate or regressing sequence IDs. Append validates the bounded current tail and refuses to write behind poison without truncating evidence. Session reads reconcile stale `running` state when no execution owner remains. Provider overflow writes a checkpoint and rebuilds context from storage before one bounded retry. Command execution owns process spawn, pipe draining, output ceilings, timeout, cancellation, and termination as one state machine.
 
+Presentation lifetime is separate from execution lifetime. TUI and CLI clients
+validate `.var/runtime/execution-owner.json` through a live generation handshake;
+concurrent starts converge through one workspace lease. Graceful owner shutdown
+drains accepted connections before closing the child Job Object. A stale or
+crashed owner is rejected and replaced once by the next client. Scheduler claim
+fencing and mid-turn owner-crash reconciliation remain explicit roadmap gates.
+
 The invariant is cold-start legibility: after an interrupted process, the next client should be able to explain what completed, what did not, and which transition made that conclusion durable.
 
 ### Durable Scheduling
@@ -428,7 +439,12 @@ All tool definitions are schema-first. The registry resolves availability from m
 
 ## Protocol
 
-The kernel exposes JSON-RPC 2.0 methods over stdio. The browser workbench reaches the same methods through the loopback HTTP bridge. A future relay may project the protocol over authenticated WebSockets, but does not exist in the shipped runtime.
+TUI and CLI use exact JSON-RPC through the project-local owner's token-gated
+loopback routes. The owner forwards each call to the sole kernel over private
+Content-Length-framed stdio. The ignored browser prototype reaches the same
+methods through separately redacted bridge routes. A future relay may project
+the owner protocol over authenticated WebSockets, but does not exist in the
+shipped runtime.
 
 | Method | Operation |
 |---|---|
@@ -674,7 +690,7 @@ Agent definitions may tune persona, route role, ticket ownership, checkpoint con
 }
 ```
 
-Prompt paths remain workspace-relative. Missing or empty explicitly configured files fail closed. The `environment` object accepts `VANTARI_WORKSPACE`, `MAX_STEPS`, `MAX_TOOL_CALLS_PER_TURN`, and `MAX_TOOL_CALLS_PER_SESSION`; real process environment values have highest precedence. This prompt-file boundary is independent of `runtime.full_access_mode`.
+Prompt paths remain workspace-relative. Missing or empty explicitly configured files fail closed. The `environment` object accepts `VANTARI_WORKSPACE`, `MAX_STEPS`, `MAX_TOOL_CALLS_PER_TURN`, and `MAX_TOOL_CALLS_PER_SESSION`; real process environment values have highest precedence during automatic workspace selection. Once a client explicitly selects an execution-owner workspace, that root is authoritative for config, auth, and runtime state; inherited workspace variables cannot redirect it. This prompt-file boundary is independent of `runtime.full_access_mode`.
 
 <br/>
 

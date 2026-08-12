@@ -164,7 +164,9 @@ const ReaderContext = struct {
     state: *ClientState,
 };
 
-pub const LocalClient = struct {
+/// Private child-kernel transport. The persistent execution owner is its sole
+/// production owner; presentation clients must use the reconnecting facade.
+pub const ChildClient = struct {
     allocator: std.mem.Allocator,
     child: std.process.Child,
     process_job: process_tree.KillOnCloseJob,
@@ -173,11 +175,11 @@ pub const LocalClient = struct {
     reader_context: ?*ReaderContext = null,
     reader_thread: ?std.Thread = null,
 
-    pub fn init(allocator: std.mem.Allocator) !LocalClient {
+    pub fn init(allocator: std.mem.Allocator) !ChildClient {
         return initInWorkspace(allocator, null);
     }
 
-    pub fn initInWorkspace(allocator: std.mem.Allocator, workspace_root: ?[]const u8) !LocalClient {
+    pub fn initInWorkspace(allocator: std.mem.Allocator, workspace_root: ?[]const u8) !ChildClient {
         const exe_path = try std.fs.selfExePathAlloc(allocator);
         defer allocator.free(exe_path);
 
@@ -231,7 +233,7 @@ pub const LocalClient = struct {
         child.stdout = null;
         errdefer reader_context.stdout_file.close();
 
-        var client = LocalClient{
+        var client = ChildClient{
             .allocator = allocator,
             .child = child,
             .process_job = process_job,
@@ -244,11 +246,8 @@ pub const LocalClient = struct {
         return client;
     }
 
-    pub fn deinit(self: *LocalClient) void {
-        if (self.child.stdin) |*stdin_file| {
-            stdin_file.close();
-            self.child.stdin = null;
-        }
+    pub fn deinit(self: *ChildClient) void {
+        self.beginShutdown();
 
         const child_reaped = if (builtin.os.tag == .windows)
             self.finishWindowsChild()
@@ -286,7 +285,7 @@ pub const LocalClient = struct {
         }
     }
 
-    fn finishWindowsChild(self: *LocalClient) bool {
+    fn finishWindowsChild(self: *ChildClient) bool {
         if (process_tree.waitForProcess(self.child.id, child_graceful_exit_ms) catch false) {
             _ = self.child.wait() catch {};
             self.process_job.deinit();
@@ -304,13 +303,11 @@ pub const LocalClient = struct {
         return false;
     }
 
-    pub fn call(self: *LocalClient, method: []const u8, params_json: []const u8) !RpcCallResult {
+    pub fn call(self: *ChildClient, method: []const u8, params_json: []const u8) !RpcCallResult {
         return self.callWithTimeout(method, params_json, timeoutForMethod(method));
     }
 
-    pub fn callWithTimeout(self: *LocalClient, method: []const u8, params_json: []const u8, timeout_ms: usize) !RpcCallResult {
-        if (self.child.stdin == null) return Error.MissingChildPipes;
-
+    pub fn callWithTimeout(self: *ChildClient, method: []const u8, params_json: []const u8, timeout_ms: usize) !RpcCallResult {
         const request_number = self.state.nextRequestId();
         const request_id = try std.fmt.allocPrint(self.allocator, "req-{d}", .{request_number});
         defer self.allocator.free(request_id);
@@ -321,43 +318,38 @@ pub const LocalClient = struct {
         {
             self.stdin_mutex.lock();
             defer self.stdin_mutex.unlock();
-            try wire.writeFrame(self.child.stdin.?, request_payload);
+            const stdin_file = self.child.stdin orelse return Error.MissingChildPipes;
+            try wire.writeFrame(stdin_file, request_payload);
         }
 
         const response_payload = try waitForResponse(self.state, self.allocator, request_id, timeout_ms);
         defer self.allocator.free(response_payload);
-
-        var parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, response_payload, .{});
-        defer parsed.deinit();
-
-        if (parsed.value != .object) return Error.InvalidRpcResponse;
-        const object = parsed.value.object;
-
-        if (object.get("error")) |error_value| {
-            return .{
-                .error_json = try json.renderAlloc(self.allocator, error_value),
-            };
-        }
-
-        const result_value = object.get("result") orelse return Error.InvalidRpcResponse;
-        return .{
-            .result_json = try json.renderAlloc(self.allocator, result_value),
-        };
+        return parseRpcCallResult(self.allocator, response_payload);
     }
 
-    pub fn notify(self: *LocalClient, method: []const u8, params_json: []const u8) !void {
-        if (self.child.stdin == null) return Error.MissingChildPipes;
+    /// Close request admission while preserving the stdout reader so active
+    /// calls can receive the kernel's cancellation and terminal responses.
+    pub fn beginShutdown(self: *ChildClient) void {
+        self.stdin_mutex.lock();
+        defer self.stdin_mutex.unlock();
+        if (self.child.stdin) |*stdin_file| {
+            stdin_file.close();
+            self.child.stdin = null;
+        }
+    }
 
+    pub fn notify(self: *ChildClient, method: []const u8, params_json: []const u8) !void {
         const request_payload = try renderRpcNotification(self.allocator, method, params_json);
         defer self.allocator.free(request_payload);
 
         self.stdin_mutex.lock();
         defer self.stdin_mutex.unlock();
-        try wire.writeFrame(self.child.stdin.?, request_payload);
+        const stdin_file = self.child.stdin orelse return Error.MissingChildPipes;
+        try wire.writeFrame(stdin_file, request_payload);
     }
 
     pub fn waitForNotificationAfter(
-        self: *LocalClient,
+        self: *ChildClient,
         after_sequence: u64,
         timeout_ms: usize,
     ) !?Notification {
@@ -365,7 +357,7 @@ pub const LocalClient = struct {
     }
 };
 
-fn timeoutForMethod(method: []const u8) usize {
+pub fn timeoutForMethod(method: []const u8) usize {
     if (std.mem.eql(u8, method, protocol_types.methods.session_send)) return turn_rpc_timeout_ms;
     if (std.mem.eql(u8, method, protocol_types.methods.session_compact)) return compaction_rpc_timeout_ms;
     return default_rpc_timeout_ms;
@@ -389,7 +381,7 @@ pub fn renderRpcRequest(
     );
 }
 
-fn renderRpcNotification(
+pub fn renderRpcNotification(
     allocator: std.mem.Allocator,
     method: []const u8,
     params_json: []const u8,
@@ -402,6 +394,20 @@ fn renderRpcNotification(
         "{{\"jsonrpc\":\"2.0\",\"method\":{s},\"params\":{s}}}",
         .{ method_json, params_json },
     );
+}
+
+/// Parse the one JSON-RPC result shape shared by child and owner transports.
+pub fn parseRpcCallResult(allocator: std.mem.Allocator, response_payload: []const u8) !RpcCallResult {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response_payload, .{});
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return Error.InvalidRpcResponse;
+    const object = parsed.value.object;
+    if (object.get("error")) |error_value| {
+        return .{ .error_json = try json.renderAlloc(allocator, error_value) };
+    }
+    const result_value = object.get("result") orelse return Error.InvalidRpcResponse;
+    return .{ .result_json = try json.renderAlloc(allocator, result_value) };
 }
 
 fn waitForResponse(state: *ClientState, allocator: std.mem.Allocator, request_id: []const u8, timeout_ms: usize) ![]u8 {

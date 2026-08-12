@@ -68,6 +68,32 @@ duplicate or non-monotonic sequences, and stops every projection at the first
 defect. `fsutil.appendJsonlRecord` checks the current bounded tail through the
 same owner and refuses poison without truncating or appending behind it.
 
+## Persistent execution owner
+
+```text
+TUI / CLI LocalClient facade
+  -> .var/runtime/execution-owner.json
+  -> live workspace + generation + protocol + executable handshake
+  -> exact token-gated loopback RPC/events
+  -> one execution owner
+  -> one private ChildClient
+  -> one kernel-stdio process and fixed agent pool
+```
+
+`host/owner_client.zig` is presentation-facing and owns no kernel process.
+`host/http_bridge.zig` is the resident workspace owner and is the only module
+that constructs `stdio_client.ChildClient`. Automatic `execution-owner` startup
+and foreground `serve` hold the same crash-released lifetime lease. Client
+deinit leaves the owner alive; owner shutdown drains accepted connections before
+closing the child transport. Browser routes remain redacted and separate from
+the exact owner route/token.
+
+The owner projection is project-local and is published only after a real kernel
+health response. Clients reject stale state, protocol drift, workspace mismatch,
+generation mismatch, and another executable. This source path survives
+presentation detach and recovers once after graceful stop or owner crash. It
+does not yet make a running child turn resume exactly once after owner death.
+
 ## Buffered ticket execution
 
 ```text
@@ -84,10 +110,10 @@ log_ticket create/transition
 Assignment is queue admission. It does not launch a child session directly.
 The scheduler claims only when configured capacity is available, then uses the
 existing `AgentService` and `Supervisor` owners. There is no second worker
-registry or background status bus. Current execution remains process-local:
-closing the kernel stops the fixed thread pool, cold recovery marks running
-receipts stale, and scheduler leader acquisition is not an inter-process
-compare-and-swap. Chain 036 is therefore reopened by the current findings.
+registry or background status bus. The fixed pool now lives in one persistent
+owner tree and survives TUI/CLI exit. Owner-process death still stops that pool,
+cold recovery marks running receipts stale, and scheduler leader acquisition is
+not an inter-process compare-and-swap. Chain 036 therefore remains pending.
 
 ## TUI projection contract
 
@@ -117,9 +143,12 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,950/1,950 tests with zero skips.
-  Its 237-test host lane executes the formerly dormant stdio client/server and
-  shared process-tree tests; the backend TUI lane passes 61/61.
+- The complete graph passes 19/19 steps and 1,968/1,968 tests with zero skips.
+  Its 239-test host lane executes the stdio child, owner state/client, bridge,
+  and shared process-tree contracts; the 1,508-test integration lane includes
+  exact owner route, lease, stalled-loopback deadline, and explicit-workspace
+  precedence probes. The backend
+  TUI lane passes 61/61.
 - Parent-shell production-home probes kept 99,960 files, 693,051,144 bytes,
   config/auth hashes, and process inventory unchanged across graph and direct
   proof.
@@ -151,6 +180,15 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   method deadlines and discard late responses. One shared Windows Job Object
   owns child trees; graceful exit, forced termination, and reader drain are
   bounded.
+- The source ReleaseFast owner tracer validates one live generation through
+  `execution-owner` and foreground `serve`, preserves it across two client
+  detach/reattach cycles, and rejects a duplicate foreground owner. A 20-client
+  pressure run produced 20/20 successful clients against one owner/kernel pair.
+  Graceful stop, forced owner crash, one-generation recovery, connection drain,
+  and final zero proof-owned processes all pass. A conflicting inherited
+  `VANTARI_WORKSPACE` cannot redirect an explicit owner root. The 110-segment
+  GGUF owner audit found two declaration/import adjacency candidates, zero exact
+  duplicates, and no shadow lifecycle or transport owner.
 - Same-session admission is one atomic transition; losing prompts become bounded
   steer messages. Buffer identity and preview share one session-keyed projection.
   Shutdown fences late starts, signals active turns before join, and persisted
@@ -185,8 +223,12 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   and torn rows, and append refusal preserved the poisoned 107-byte ledger
   exactly. No CRC fields, sidecar quarantine ledger, auto-truncation path, or
   repair daemon was added.
-- Built and installed ReleaseFast SHA-256 both equal
+- The last installed-proven move-19 artifact remains SHA-256
   `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
+  Current source ReleaseFast is
+  `3062D10908D9678793298BDD3982EF515A3D953C9085E1EE5C681856725EE00E`.
+  Replacement is blocked while operator-owned installed PIDs 12028 and 14452
+  remain active; source/installed equality is not claimed.
 - Installed `session/send` against a disposable local provider imported all
   1,176 legacy summary rows, appended one terminal v2 row, retained 1,177
   unique sequences, wrote contiguous unique `user,assistant,tool,assistant`
@@ -203,12 +245,12 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
   returned `requested` and exited with zero process. Its legacy terminal name is
   retained only as historical proof; move 19 removed that writer.
-- Moves 5–20 plus findings 10 and 13 are closed. Six synchronized 100-way probes
-  cover admission, summary, message, event, tracked-TUI replay, and shutdown.
-  Four consecutive canonical graphs pass 1,959/1,959 without a new harness or
-  production mechanism. Persistent agent execution and inter-process scheduler
-  arbitration remain P0.
-- The hive direction is assigned to moves 21–30 and finding 11. The target is
+- Moves 5–20 plus findings 10 and 13 are closed. Move 21 is source-complete and
+  awaits the installed replacement gate. Six synchronized 100-way probes cover
+  admission, summary, message, event, tracked-TUI replay, and shutdown. The
+  latest canonical graph passes 1,968/1,968. Mid-turn owner-crash recovery and
+  inter-process scheduler arbitration remain P0.
+- The hive direction is assigned to moves 22–30 and finding 11. The target is
   one durable direct/group/parent mailbox over session/event ownership,
   selective summary/artifact awareness, and nested normal sessions. No general
   mailbox, restart-safe unread cursor, or peer wake path is shipped yet.
