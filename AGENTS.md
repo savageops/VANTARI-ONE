@@ -252,6 +252,11 @@ Rejection protocol:
 
 ## XIV. Testing Integrity
 
+Invoke every Zig test through `apps/backend/scripts/zigw.ps1` or
+`apps/backend/scripts/zigw.sh`. Both `zig build test` artifacts and direct
+`zig test` invocations must receive a generated `VANTARI_HOME` plus
+`VANTARI_TEST_ROOT`; no test process may inherit the production runtime root.
+
 Tests must behave like adversarial pipeline probes:
 
 - corrupted JSONL suffixes

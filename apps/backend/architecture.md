@@ -19,9 +19,10 @@ This document describes both current owners and target invariants. The
 [2026-08-12 full-harness SITREP](../../.docs/research/2026-08-12-full-harness-sitrep.md)
 is the current promotion boundary: agent execution is fixed-pool and
 process-local; scheduler lease acquisition is not inter-process atomic; stdio
-notifications drop stored event sequence values; summary upserts are
-last-writer-wins; and the broad suite has three genuine failures after test-root
-isolation. Treat those findings as authoritative over older shipped claims.
+notifications drop stored event sequence values; and summary upserts are
+last-writer-wins. Host request ownership, same-session admission, buffer
+projection, shutdown cancellation, and test-root isolation are closed. Treat the
+remaining findings as authoritative over older shipped claims.
 
 ## Runtime slice
 
@@ -80,6 +81,22 @@ flowchart TB
   scheduler --> scheduleRoot[".var/schedules/"]
   docs --> processRoot[".var/todos + .var/changelog + .var/research + .var/docs"]
 ```
+
+## Host request lifecycle
+
+```text
+Content-Length frame -> 32-request admission -> four-worker pool
+  -> Runtime.tryStartSession (one owner or bounded steer)
+  -> provider/tool loop -> durable terminal event -> response
+
+stdin EOF -> stop admission -> Runtime.beginShutdown
+  -> fence late starts + signal active turns -> join request pool
+  -> stop scheduler/buffer services -> free projections/runtime
+```
+
+`BufferProjection` binds session identity and preview under one mutex. Callbacks
+carry their originating session ID; late prior-session previews are discarded,
+and executor consumers receive owned exact-session copies.
 
 ## Ticket and buffered agent execution
 
@@ -396,7 +413,7 @@ Child assistant/reasoning deltas and tool transcripts stay in the child ledger. 
 - `src/host/stdio_client.zig`
   local kernel child-process lifecycle, request/notification transport, response correlation, and monotonic notification queue
 - `src/host/stdio_rpc.zig`
-  kernel-side JSON-RPC dispatch, request workers, session subscriptions, and response emission
+  bounded kernel-side JSON-RPC dispatch, atomic turn admission, session-keyed buffer projection, cancellation-before-join shutdown, subscriptions, and response emission
 - `src/host/bridge_access.zig`
   local HTTP bridge access policy for origin checks, token validation, key-and-value redaction, audit classification, and durable audit event emission
 - `src/host/http_bridge.zig`
@@ -455,14 +472,15 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-12:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Isolated broad test graph -> 19/19 steps and 1919/1919 tests passed.
+- Isolated broad test graph -> 19/19 steps and 1923/1923 tests passed.
 - Focused backend TUI -> 58/58 passed.
-- Host lifecycle -> 220/220 passed, including bounded executor admission/drain,
-  RPC deadlines, late-response retirement, and Windows Job Object ownership.
+- Host lifecycle -> 224/224 passed, including atomic same-session admission,
+  session-keyed buffer state, cancellation-before-join shutdown, RPC deadlines,
+  late-response retirement, and Windows Job Object ownership.
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Built and installed SHA-256 both equal
-  `E457855E8B971C02E9A06D807AE53BCD0822256B26B9CA5CBD7987F0C874C057`.
+  `6E6DFC9688F3B2763487C7A379586E17376546784F16AEC736493EF7F602CB4A`.
 - Installed settings transport flipped `runtime.full_access_mode` in an isolated
   workspace, removed all generated state, preserved the live root, and left
   zero VANTARI process.
@@ -497,7 +515,11 @@ buffer thread ticks (every interval_ms)
   → TUI dock switches to ◊ mode when heavyweight is idle
 ```
 
-**Owner:** `src/core/executor/buffer.zig` — `BufferPolicy` loader + `Service` (background thread with tick loop). Spawned in `host/stdio_rpc.zig` alongside the scheduler thread. `PreviewSink` callback emits `buffer_preview` events via `emitSessionEvent`. Root sessions only. Failures are silent.
+**Owner:** `src/core/executor/buffer.zig` — `BufferPolicy` loader + `Service`
+(background thread with tick loop). Spawned in `host/stdio_rpc.zig` alongside
+the scheduler thread. `PreviewSink` carries the originating session ID into the
+host's mutex-owned `BufferProjection`; only matching callbacks emit
+`buffer_preview`. Root sessions only. Failures are advisory and silent.
 
 **Architecture precedent:** Lookahead Reasoning (Hao AI Lab, NeurIPS 2025) — speculative decoding concepts lifted from token-level to reasoning-step level. The buffer is the "message from the future" — pre-computed guidance the heavyweight verifies or refines.
 

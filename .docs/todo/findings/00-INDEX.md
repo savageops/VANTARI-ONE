@@ -16,7 +16,7 @@ Execute one item at a time in priority and numeric order. Do not start PLUG, TUI
 
 | Order | Priority | Finding | Owner surface | Status |
 |---|---|---|---|---|
-| 10 | P0 | [Kernel lifetime and RPC admission](10-kernel-lifetime-and-rpc-admission.md) | host/stdio client and server | pending |
+| 10 | P0 | [Kernel lifetime and RPC admission](10-kernel-lifetime-and-rpc-admission.md) | host/stdio client and server | closed 2026-08-12 |
 | 11 | P0 | [Persistent agent worker and scheduler arbitration](11-persistent-agent-worker-and-scheduler-arbitration.md) | agents, scheduler, host | pending |
 | 12 | P0 | [Test isolation and runtime hygiene](12-test-isolation-and-runtime-hygiene.md) | build/test root, install/state hygiene | closed 2026-08-12 |
 | 13 | P0 | [Concurrent ledgers and replay identity](13-concurrent-ledgers-and-replay-identity.md) | sessions, protocol, TUI cursor | pending |

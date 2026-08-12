@@ -104,11 +104,12 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,919/1,919 tests with zero skips.
-  Its 220-test host lane executes the formerly dormant stdio client/server and
+- The complete graph passes 19/19 steps and 1,923/1,923 tests with zero skips.
+  Its 224-test host lane executes the formerly dormant stdio client/server and
   shared process-tree tests; the backend TUI lane passes 58/58.
-- Parent-shell production-home probes kept 99,960 files, 693,051,143 bytes,
-  config/auth/summary hashes, and process inventory unchanged across the graph.
+- Parent-shell production-home probes kept 99,960 files, 693,051,144 bytes,
+  config/auth hashes, and process inventory unchanged across graph and direct
+  proof.
 - The broad prompt/tool gate is closed: retired `todo_slice` policy no longer
   leaks into the normal provider payload, duplicate file-inspection prose is
   removed, and tests protect the semantic guardrail instead of capitalization.
@@ -119,17 +120,27 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Seven legacy backend runtime-shaped owners are archived without merge under
   `.var/backup/2026-08-12-legacy-backend-runtime`; automatic todo/changelog
   projections now write direct workspace `.var` owners.
+- A direct-test wrapper gap created 21 audit-owned shutdown-probe sessions. The
+  exact 84 files / 19,401 bytes had zero summary or changelog projection hits;
+  matching backup and quarantine payload digest
+  `67CAC4665502DE0ABEC1FA59783DDE09F792DF6BE684CEBBEBBC24868FFA7B2F`
+  plus rollback are retained. `zigw.ps1` and `zigw.sh` now isolate direct
+  `zig test` invocations as well as the build graph.
 - `Server` owns one bounded four-worker/32-request executor. Local RPC calls use
   method deadlines and discard late responses. One shared Windows Job Object
   owns child trees; graceful exit, forced termination, and reader drain are
   bounded.
+- Same-session admission is one atomic transition; losing prompts become bounded
+  steer messages. Buffer identity and preview share one session-keyed projection.
+  Shutdown fences late starts, signals active turns before join, and persisted
+  exactly one cancellation terminal event under a blocked provider request.
 - Built and installed ReleaseFast SHA-256 both equal
-  `E457855E8B971C02E9A06D807AE53BCD0822256B26B9CA5CBD7987F0C874C057`.
+  `6E6DFC9688F3B2763487C7A379586E17376546784F16AEC736493EF7F602CB4A`.
 - The installed settings smoke flips `runtime.full_access_mode` to `true` in a
   disposable workspace, receives `var1.config_set.v1` in 5 ms, removes the
   isolated runtime, preserves the complete live root, and leaves zero process.
-- Atomic same-session admission, synchronized buffer identity/preview state,
-  and full active-request shutdown stress remain moves 8–10.
+- Moves 5–11 and finding 10 are closed. The next P0 owner is persistent agent
+  execution and inter-process scheduler arbitration.
 - `git diff --check` exits 0 with line-ending warnings only.
 
 See [`research/2026-08-12-full-harness-sitrep.md`](research/2026-08-12-full-harness-sitrep.md)

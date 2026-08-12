@@ -1,7 +1,7 @@
 ---
 type: finding
 id: harness-finding-10
-status: pending
+status: closed
 priority: P0
 owner: apps/backend/src/host
 source: ../../research/2026-08-12-full-harness-sitrep.md
@@ -13,8 +13,8 @@ source: ../../research/2026-08-12-full-harness-sitrep.md
 
 The initial audit found detached request threads, a non-atomic session check/set,
 unsynchronized buffer identity/preview state, and unbounded client reply/exit
-waits. Moves 5–7 and 11 closed the detached-worker and settings-hang failure
-class. Moves 8–10 retain the admission, buffer, and full shutdown-stress work.
+waits. Moves 5–11 now close that complete failure class through existing host,
+runtime, buffer, and process owners.
 
 ## Evidence
 
@@ -23,8 +23,12 @@ class. Moves 8–10 retain the admission, buffer, and full shutdown-stress work.
 - `LocalClient` applies method deadlines, retires late request IDs, bounds
   graceful/forced exit plus reader drain, and owns its child through
   `shared/process_tree.zig`.
-- Session admission still checks and marks running in separate transitions.
-- Buffer session identity and preview remain separate synchronization surfaces.
+- `Runtime.tryStartSession` atomically selects one turn owner and queues a losing
+  prompt as a bounded interjection under the same mutex.
+- `BufferProjection` owns session identity and preview together; late callbacks
+  from a prior session are rejected and consumers receive owned copies.
+- `Runtime.beginShutdown` fences queued turns and marks every active session for
+  cancellation before the request pool joins.
 
 ## Required mechanism
 
@@ -40,16 +44,28 @@ Do not add another RPC server, running registry, or settings-specific workaround
 - Closed move 11: 58/58 TUI tests cover settings open/apply/close/reopen/timeout
   and remote errors. The installed transport flipped `full_access_mode` in an
   isolated workspace, returned in 5 ms, cleaned all state, and left zero process.
-- Remaining: move 8 atomic `tryStartSession`, move 9 one mutex-owned buffer
-  state object, and move 10 active-request shutdown stress/terminal-event proof.
+- Closed move 8: 100 synchronized contenders produced one turn owner and 99
+  non-starters; a separate probe proved the losing steer is retained.
+- Closed move 9: A→B session switching rejected a late A preview while preserving
+  the already-returned owned A copy and exposing only B state to B.
+- Closed move 10: a real provider transport remained blocked until EOF-driven
+  shutdown signalled cancellation. Join completed below two seconds, exactly one
+  `session_cancelled` event persisted, the RPC result reported `cancelled`, and
+  late admission failed as `ServerShuttingDown`. Twenty repeat runs passed.
+- Full pinned graph: 19/19 steps and 1,923/1,923 tests; host lane 224/224.
+- Installed ReleaseFast hash matches source at
+  `6E6DFC9688F3B2763487C7A379586E17376546784F16AEC736493EF7F602CB4A`;
+  installed settings transport remains 5 ms with zero surviving process.
 
 ## Acceptance
 
-- 100 concurrent sends for one session produce one admitted turn and 99 typed SessionRunning results.
-- Closing stdin during active requests exits without use-after-free, leaked worker, or lost terminal event.
+- 100 concurrent admissions produce one turn owner and 99 non-starters; losing
+  user prompts preserve the interjection contract instead of starting or dropping work.
+- Closing stdin during an active provider request exits without use-after-free,
+  leaked worker, or lost/duplicated terminal event.
 - A non-replying kernel returns a typed timeout; the TUI remains responsive.
 - Settings open/close is exercised through the real TUI-to-kernel transport.
-- Windows process inventory returns to the expected owner set after cancellation and exit.
+- Windows process inventory returns to zero after cancellation and exit.
 
 ## Source and salvage
 

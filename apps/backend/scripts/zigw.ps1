@@ -15,6 +15,7 @@ $installDir = Join-Path $toolchainRoot "zig-x86_64-windows-$zigVersion"
 $zigExe = Join-Path $installDir "zig.exe"
 $bundledArchive = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "..\.toolchain\zig-x86_64-windows-$zigVersion.zip"
 $downloadUrl = "https://ziglang.org/download/$zigVersion/zig-x86_64-windows-$zigVersion.zip"
+$backendRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 
 function Test-ZigArchive {
   param(
@@ -98,5 +99,33 @@ $env:ZIG_LOCAL_CACHE_DIR = Join-Path $env:TEMP "VANTARI-ONE-VAR1-local-cache"
 $env:ZIG_GLOBAL_CACHE_DIR = Join-Path $env:TEMP "VANTARI-ONE-VAR1-global-cache"
 New-Item -ItemType Directory -Force -Path $env:ZIG_LOCAL_CACHE_DIR, $env:ZIG_GLOBAL_CACHE_DIR | Out-Null
 
-& $zigExe @ZigArgs
-exit $LASTEXITCODE
+$directTestHome = $null
+$previousVantariHome = $null
+$previousTestRoot = $null
+if (@($ZigArgs).Count -gt 0 -and $ZigArgs[0] -eq 'test') {
+  $testRoot = [IO.Path]::GetFullPath((Join-Path $backendRoot '.zig-cache'))
+  $directTestHome = [IO.Path]::GetFullPath((Join-Path $testRoot ("direct-test-$PID-" + [Guid]::NewGuid().ToString('N'))))
+  $testPrefix = $testRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+  if (-not $directTestHome.StartsWith($testPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing unscoped direct-test runtime: $directTestHome"
+  }
+  New-Item -ItemType Directory -Force -Path $directTestHome | Out-Null
+  $previousVantariHome = [Environment]::GetEnvironmentVariable('VANTARI_HOME', 'Process')
+  $previousTestRoot = [Environment]::GetEnvironmentVariable('VANTARI_TEST_ROOT', 'Process')
+  $env:VANTARI_HOME = $directTestHome
+  $env:VANTARI_TEST_ROOT = $testRoot
+}
+
+$exitCode = 1
+try {
+  & $zigExe @ZigArgs
+  $exitCode = $LASTEXITCODE
+} finally {
+  if ($null -ne $directTestHome) {
+    if ($null -eq $previousVantariHome) { [void][Environment]::SetEnvironmentVariable('VANTARI_HOME', $null, 'Process') }
+    else { $env:VANTARI_HOME = $previousVantariHome }
+    if ($null -eq $previousTestRoot) { [void][Environment]::SetEnvironmentVariable('VANTARI_TEST_ROOT', $null, 'Process') }
+    else { $env:VANTARI_TEST_ROOT = $previousTestRoot }
+  }
+}
+exit $exitCode

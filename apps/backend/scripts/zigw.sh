@@ -17,4 +17,12 @@ if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || -n "${MSYSTEM:-}" ]]
 fi
 
 WRAPPER="$ROOT_DIR/.toolchain/zig/zig"
+if [[ "${1:-}" == "test" ]]; then
+  TEST_ROOT="$ROOT_DIR/.zig-cache"
+  DIRECT_TEST_HOME="$TEST_ROOT/direct-test-$$"
+  mkdir -p "$DIRECT_TEST_HOME"
+  export VANTARI_HOME="$DIRECT_TEST_HOME"
+  export VANTARI_TEST_ROOT="$TEST_ROOT"
+fi
+
 exec "$WRAPPER" "$@"

@@ -331,15 +331,16 @@ The one thing VANTARI has that oh-my-pi (the closest competitor with async job o
 
 ## Engineering Stories
 
-### The Config/Auth Drift (5 recurrences, permanently fixed)
+### The Test Runtime Drift (build and direct lanes closed)
 
 A subtle bug let test fixtures inherit production `VANTARI_HOME` and reach the
 global config/auth/session owners. Skip guards hid coverage and did not solve the
 owner error. The build now assigns every one of six test artifacts a generated
-home, and a compile-gated `VANTARI_TEST_ROOT` guard rejects cache-root escape.
-The obsolete skip guards are deleted; the 1,919-test graph executes every lane
-while the live runtime root remains unchanged. The one contaminated audit run is
-held in a reversible quarantine with manifest and rollback.
+home; `zigw.ps1` and `zigw.sh` do the same for direct `zig test`; and a
+compile-gated `VANTARI_TEST_ROOT` rejects cache-root escape. The obsolete skip
+guards are deleted; the 1,923-test graph executes every lane while the live
+runtime root remains unchanged. Both audit-owned incident sets are held in
+reversible quarantine with backup, manifest, and rollback.
 
 ### The Parallel-System Detection
 

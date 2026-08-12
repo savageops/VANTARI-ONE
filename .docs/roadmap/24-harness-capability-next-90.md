@@ -43,16 +43,19 @@ advance the queue until the real installed consumer path proves it.
 
 | Move | Decision | State | Proof or gate |
 |---:|---|---|---|
-| 1 | consolidate | closed | Six generated test homes; 1,919/1,919 pass; live file count, bytes, config/auth/summary hashes unchanged. |
+| 1 | consolidate | closed | Six build-graph homes plus direct-wrapper isolation; 1,923/1,923 pass. Direct `zig test` keeps the live root at 99,960 files / 693,051,144 bytes with config/auth hashes unchanged. |
 | 2 | add | closed | Test-only cache-root guard rejects escape; ReleaseFast remains 9/9. |
 | 3 | consolidate | closed | 129 generated sessions, 16 changelog directories, 18 summary keys, and 64 known test rows quarantined with rollback at `C:/Users/Savage/.vantari-quarantine/2026-08-12-test-isolation-incident`; retained live state read back cleanly. |
 | 4 | delete/consolidate | closed | Seven legacy backend owners archived without merge under `.var/backup/2026-08-12-legacy-backend-runtime`; 2,252 files retained reversibly and automatic todo/changelog sync now writes direct workspace `.var` owners. |
-| 5 | consolidate | closed | `Server` owns one four-worker executor with 32-request admission, typed overload, drain, and 220/220 host-lifecycle tests. |
+| 5 | consolidate | closed | `Server` owns one four-worker executor with 32-request admission, typed overload, drain, and 224/224 host-lifecycle tests. |
 | 6 | consolidate | closed | Every local RPC has a method deadline, `RpcTimeout`, and late-response retirement; settings renders timeout and remote errors without hanging. |
 | 7 | consolidate | closed | One shared Windows Job Object owns child trees; graceful/forced exit and reader drain are bounded, and installed parent termination left zero VANTARI processes. |
+| 8 | consolidate | closed | Atomic `tryStartSession` admits one of 100 contenders; 99 do not start a second turn. A losing prompt becomes one bounded steer message under the same lock. |
+| 9 | consolidate | closed | One session-keyed `BufferProjection` owns identity plus preview; A→B switching rejects late A callbacks and returns only owned exact-session copies. |
+| 10 | consolidate | closed | Shutdown stops admission, fences late turns, signals active sessions, then joins. A real blocked provider turn persisted exactly one `session_cancelled` event and a cancelled RPC result; 20 repeated focused runs passed. |
 | 11 | consolidate | closed | Source TUI tests cover open/apply/close/reopen/timeout; installed `config/set` flipped `full_access_mode` in 5 ms through the real host transport, removed its isolated runtime, and left zero processes. |
 | 31 | delete/consolidate | closed | Retired prompt leak and brittle prose assertions removed; broad graph green. |
-| 38 | consolidate | closed | ReleaseFast and `%LOCALAPPDATA%/Vantari/bin/vantari.exe` share SHA-256 `E457855E8B971C02E9A06D807AE53BCD0822256B26B9CA5CBD7987F0C874C057`; installer and isolated installed smoke both exit cleanly. |
+| 38 | consolidate | closed | ReleaseFast and `%LOCALAPPDATA%/Vantari/bin/vantari.exe` share SHA-256 `6E6DFC9688F3B2763487C7A379586E17376546784F16AEC736493EF7F602CB4A`; installer and isolated installed smoke both exit cleanly. |
 
 ## Competitive basis
 

@@ -12,7 +12,7 @@ One binary; one protocol; one owner for runtime truth.
 
 [![Release](https://img.shields.io/github/v/release/savageops/VANTARI-ONE?display_name=tag&sort=semver&label=Release&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/savageops/VANTARI-ONE/total?label=Downloads&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases)
-[![Tests](https://img.shields.io/badge/Tests-1%2C680%2B%20cases-0f766e)](#validation)
+[![Tests](https://img.shields.io/badge/Tests-1%2C923%20cases-0f766e)](#validation)
 [![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-f7a41d?logo=zig)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-0f766e)](./LICENSE)
 
@@ -92,7 +92,7 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
 | **Kernel surface** | 109 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 1,680+ declared backend test cases across source and adversarial pipeline suites |
+| **Proof surface** | 1,923 passing backend cases across source and adversarial pipeline suites |
 | **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
 | **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |
@@ -203,6 +203,10 @@ cd apps/backend
 .\scripts\health.ps1                            # verify provider readiness
 .\zig-out\bin\vantari.exe run --prompt "Count the lowercase letter r in strawberry."
 ```
+
+The pinned wrapper isolates both the build graph and direct `zig test`
+invocations under `apps/backend/.zig-cache`; tests never inherit the production
+`VANTARI_HOME`.
 
 ### Install VANTARI
 
@@ -855,13 +859,17 @@ vantari auth status|login|logout <provider>    identity and provider auth
 
 ## Validation
 
-The backend currently declares 1,680+ test cases across `apps/backend/src/` and `apps/backend/tests/`. They target state transitions, protocol edges, and failure pressure rather than line coverage:
+The pinned graph currently passes 1,923 test cases across `apps/backend/src/`
+and `apps/backend/tests/`. They target state transitions, protocol edges, and
+failure pressure rather than line coverage:
 
 - Corrupted JSONL suffixes, torn writes, BOMs, duplicated sequence IDs
 - Stale running sessions with no active kernel owner
 - Crash-interrupted tool batches and deterministic provider-window repair
 - Context overflow recovery without duplicate transcript entries
 - Command timeout, process locks, stdout/stderr cap markers
+- 100-way same-session admission with one turn owner and retained steer messages
+- Active-request shutdown with cancellation before join and one terminal event
 - Bridge token verification, origin guard, payload redaction
 - Delegation scope zero-value rejection and profile expansion validation
 

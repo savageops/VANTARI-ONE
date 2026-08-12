@@ -1,24 +1,35 @@
 # Execution Log
 
-## 2026-08-12 - Runtime isolation and bounded host lifecycle
+## 2026-08-12 - Runtime isolation and serialized host lifecycle
 
-**Outcome:** Closed the live-state incident, removed legacy runtime ownership,
-bounded the stdio host/client lifecycle, and proved the installed settings path
-without mutating operator state.
+**Outcome:** Closed both live-state incidents, removed legacy runtime ownership,
+serialized the stdio host/client lifecycle, and proved the installed settings
+path without retaining operator-state mutation.
 
-- Isolated six test artifacts under `apps/backend/.zig-cache`; the complete
-  graph passes 19/19 steps and 1,919/1,919 tests with zero skips.
+- Isolated six build artifacts and direct `zig test` under
+  `apps/backend/.zig-cache`; the complete graph passes 19/19 steps and
+  1,923/1,923 tests with zero skips.
 - Quarantined the exact 129-session incident set plus its summary/changelog
   projections with snapshot, manifest, rollback, and retained-state readback.
 - Archived seven legacy backend runtime owners (2,252 files) without merging
   fixtures; todo/changelog sync now writes direct workspace `.var` owners.
 - Replaced detached RPC request threads with one Server-owned four-worker pool,
   32-request admission, typed overload, and ordered drain.
+- Replaced the same-session check/set race with one atomic transition; losing
+  user prompts remain bounded interjections instead of duplicate turns.
+- Replaced split buffer identity/preview ownership with one session-keyed
+  projection that rejects late prior-session callbacks.
+- Shutdown now stops admission, fences late starts, signals active turns, and
+  joins before service/state teardown. A blocked provider probe persisted one
+  cancellation terminal event and passed 20 repeat runs.
 - Added per-method RPC deadlines, late-response retirement, settings timeout and
   remote-error states, and one shared Windows Job Object with bounded exit/drain.
-- Added 220 host-lifecycle tests and raised the focused TUI lane to 58/58.
+- Added 224 host-lifecycle tests and retained the focused TUI lane at 58/58.
+- Quarantined a 21-session direct-test incident with a matching backup digest,
+  manifest, and rollback; the repaired wrapper leaves production count, bytes,
+  config, auth, and process inventory unchanged.
 - Installed ReleaseFast hash
-  `E457855E8B971C02E9A06D807AE53BCD0822256B26B9CA5CBD7987F0C874C057`
+  `6E6DFC9688F3B2763487C7A379586E17376546784F16AEC736493EF7F602CB4A`
   matches source. Isolated installed `config/set` completed in 5 ms, removed its
   generated state, preserved the live root, and left zero VANTARI process.
 

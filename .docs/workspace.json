@@ -46,15 +46,16 @@
     "zig": "C:/Users/Savage/AppData/Local/VANTARI-ONE/toolchains/zig-x86_64-windows-0.15.1/zig.exe",
     "release_fast": "9/9 steps succeeded",
     "focused_tui": "58/58 passed; 0 skipped",
-    "host_lifecycle": "220/220 passed; bounded admission, overload, drain, deadlines, and Job Object ownership",
-    "isolated_broad": "19/19 steps; 1919/1919 passed; 0 skipped",
-    "test_runtime_isolation": "six test artifacts receive generated VANTARI_HOME; test-only VANTARI_TEST_ROOT rejects cache-root escape; live file count, bytes, config/auth/summary hashes unchanged",
+    "host_lifecycle": "224/224 passed; atomic admission, session-keyed buffer projection, cancellation-before-join shutdown, deadlines, and Job Object ownership",
+    "isolated_broad": "19/19 steps; 1923/1923 passed; 0 skipped",
+    "test_runtime_isolation": "six build artifacts plus direct zig test receive generated VANTARI_HOME and VANTARI_TEST_ROOT; direct proof kept 99960 files and 693051144 bytes unchanged",
     "installed_binary": "C:/Users/Savage/AppData/Local/Vantari/bin/vantari.exe",
     "install_script": "apps/backend/scripts/install_windows.ps1",
-    "built_sha256": "E457855E8B971C02E9A06D807AE53BCD0822256B26B9CA5CBD7987F0C874C057",
-    "installed_sha256": "E457855E8B971C02E9A06D807AE53BCD0822256B26B9CA5CBD7987F0C874C057",
+    "built_sha256": "6E6DFC9688F3B2763487C7A379586E17376546784F16AEC736493EF7F602CB4A",
+    "installed_sha256": "6E6DFC9688F3B2763487C7A379586E17376546784F16AEC736493EF7F602CB4A",
     "installed_hash_matches": true,
     "installed_settings_smoke": "initialize ok; config/set var1.config_set.v1 in 5 ms; isolated runtime removed; live root unchanged; zero processes",
+    "host_shutdown": "blocked provider request observed cancellation before join, persisted exactly one session_cancelled event, returned cancelled, and passed 20 repeat runs",
     "active_installed_processes_preserved": []
   },
   "wip": {
@@ -64,10 +65,9 @@
     "PLUG": "parent and PLUGa-h pending; unstarted"
   },
   "residuals": [
-    "Test-isolation incident and legacy backend owners are repaired reversibly; quarantine/archive manifests and rollback paths remain retained evidence.",
+    "Both test-isolation incidents and legacy backend owners are repaired reversibly; quarantine/archive manifests and rollback paths remain retained evidence.",
     "Agent execution is process-local and scheduler leader acquisition is not inter-process atomic.",
     "RPC notifications drop event seq; summaries and message sequence allocation are not concurrency-safe.",
-    "Atomic same-session admission, synchronized buffer identity/preview state, and active-request shutdown stress remain moves 8-10.",
     "Autonomous repair remains a gated evidence workflow, not an implicit background mutator."
   ]
 }

@@ -11,7 +11,10 @@ source: ../../research/2026-08-12-full-harness-sitrep.md
 
 ## Finding
 
-The broad test runner inherits production VANTARI_HOME. Tests then read installed auth and write sessions, summaries, todos, and changelog records into the live runtime root. Legacy state also exists unignored at apps/backend outside the canonical .var owner.
+The initial broad runner and a later direct `zig test` invocation inherited
+production VANTARI_HOME. Tests could then read installed auth or write sessions,
+summaries, todos, and changelog records into the live runtime root. Legacy state
+also existed unignored at apps/backend outside the canonical .var owner.
 
 ## Incident evidence
 
@@ -21,10 +24,16 @@ The broad test runner inherits production VANTARI_HOME. Tests then read installe
 - 130 session directories; 512 session files; 17 changelog files; 4 todo files; 535 files and 2,214,002 bytes touched.
 - [fsutil.zig:191](../../../apps/backend/src/shared/fsutil.zig#L191) gives VANTARI_HOME precedence over each test workspace.
 - Ignored `apps/backend/auth.json` contains credential-shaped provider fields.
+- Follow-up direct-test incident: 21 exact shutdown-probe sessions, 84 files, and
+  19,401 bytes; zero summary/changelog projection hits and unchanged config/auth.
 
 ## Required mechanism
 
-Set a generated isolated VANTARI_HOME on every test run artifact in build.zig. Add a test-mode guard that rejects runtime paths outside that root. Keep production environment behavior unchanged. Ignore legacy auth/config/session/todo/memory/changelog paths immediately, then migrate them to the canonical runtime root with explicit backup and readback.
+Set a generated isolated VANTARI_HOME on every build-graph artifact and direct
+wrapper test. Add a test-mode guard that rejects runtime paths outside that root.
+Keep production environment behavior unchanged. Ignore legacy
+auth/config/session/todo/memory/changelog paths immediately, then migrate them to
+the canonical runtime root with explicit backup and readback.
 
 For this incident: wait for the exact installed process pair to exit, snapshot C:\Users\Savage\.vantari, identify generated IDs from the recorded interval and fixture content, move them to a dated quarantine, rebuild summary/changelog projections, and verify retained rows. Do not delete by timestamp alone.
 
@@ -40,7 +49,7 @@ For this incident: wait for the exact installed process pair to exit, snapshot C
 
 - Moves 1–2: all six test artifacts use `addIsolatedTestRun`; child homes and
   `std.testing.tmpDir` stay under `apps/backend/.zig-cache`, and the test-only
-  guard rejects escape. The graph passes 1,919/1,919 with zero skips while the
+  guard rejects escape. The graph passes 1,923/1,923 with zero skips while the
   live root remains byte/count/hash identical.
 - Move 3: the pre-repair snapshot remains at
   `C:\Users\Savage\.vantari-backups\2026-08-12-test-isolation-incident-pre-repair`.
@@ -57,6 +66,14 @@ For this incident: wait for the exact installed process pair to exit, snapshot C
 - Move 31 removed the retired `todo_slice` prompt instruction, duplicate
   file-inspection prose, and brittle wording assertions without weakening the
   enforced write-before-inspect contract.
+- Follow-up closure: `scripts/zigw.ps1` and `scripts/zigw.sh` now assign direct
+  `zig test` invocations a generated cache-owned `VANTARI_HOME` and
+  `VANTARI_TEST_ROOT`. The 21 exact shutdown-probe sessions are copied under
+  `C:\Users\Savage\.vantari-backups\2026-08-12-host-shutdown-stress-incident-pre-repair`
+  and quarantined under
+  `C:\Users\Savage\.vantari-quarantine\2026-08-12-host-shutdown-stress-incident`
+  with matching payload digest, manifest, and rollback. A direct rerun kept the
+  live root at 99,960 files / 693,051,144 bytes with config/auth unchanged.
 
 No generated fixture was merged into operator state. This finding is closed.
 

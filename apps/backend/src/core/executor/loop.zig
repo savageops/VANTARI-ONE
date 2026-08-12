@@ -35,7 +35,7 @@ pub const Hooks = struct {
     shouldCancelFn: ?*const fn (ctx: ?*anyopaque, session_id: []const u8) bool = null,
     drainPendingMessagesFn: ?*const fn (ctx: ?*anyopaque, session_id: []const u8) ?[][]u8 = null,
     hasPendingMessagesFn: ?*const fn (ctx: ?*anyopaque, session_id: []const u8) bool = null,
-    peekBufferPreviewFn: ?*const fn (ctx: ?*anyopaque) ?[]const u8 = null,
+    copyBufferPreviewFn: ?*const fn (ctx: ?*anyopaque, allocator: std.mem.Allocator, session_id: []const u8) ?[]u8 = null,
 
     pub fn onSessionInitialized(self: Hooks, session_id: []const u8) !void {
         if (self.onSessionInitializedFn) |callback| {
@@ -80,11 +80,11 @@ pub const Hooks = struct {
         return false;
     }
 
-    /// Peek the latest buffer model preview for advisory injection. Returns
-    /// a borrowed slice (caller must not free). Null if no preview available.
-    pub fn peekBufferPreview(self: Hooks) ?[]const u8 {
-        if (self.peekBufferPreviewFn) |callback| {
-            return callback(self.context);
+    /// Copy the latest preview for this exact session. The caller owns the
+    /// returned slice. Null means no matching preview is available.
+    pub fn copyBufferPreview(self: Hooks, allocator: std.mem.Allocator, session_id: []const u8) ?[]u8 {
+        if (self.copyBufferPreviewFn) |callback| {
+            return callback(self.context, allocator, session_id);
         }
         return null;
     }
@@ -356,8 +356,10 @@ pub fn runPromptWithOptions(
         // Buffer speculation injection: if the buffer model produced a navigation
         // preview, inject it as an advisory system message before the provider
         // call. The model sees it as pre-computed guidance — it can use it or
-        // ignore it. Advisory only, never blocks. Borrowed slice — do not free.
-        if (options.hooks.peekBufferPreview()) |preview| {
+        // ignore it. Advisory only, never blocks. The copy is session-keyed so
+        // concurrent root turns cannot consume each other's preview.
+        if (options.hooks.copyBufferPreview(allocator, session.id)) |preview| {
+            defer allocator.free(preview);
             if (preview.len > 0) {
                 const advisory = std.fmt.allocPrint(allocator, "BUFFER_INSIGHT (advisory, from lightweight model):\n{s}", .{preview}) catch null;
                 if (advisory) |text| {

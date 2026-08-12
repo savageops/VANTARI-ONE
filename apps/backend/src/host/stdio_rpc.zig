@@ -37,6 +37,7 @@ pub const Error = error{
     MissingChildPipes,
     InvalidRpcResponse,
     RpcRemoteError,
+    ServerShuttingDown,
 };
 
 /// Stale-running reconciliation window. A session is considered stale when
@@ -52,6 +53,11 @@ const SessionRuntimeState = struct {
     cancel_requested: bool = false,
     running: bool = false,
     pending_messages: std.ArrayListUnmanaged([]u8) = .{},
+};
+
+const SessionStartAdmission = enum {
+    started,
+    already_running,
 };
 
 const max_pending_messages = 5;
@@ -95,6 +101,7 @@ const RequestAdmission = struct {
 const Runtime = struct {
     mutex: std.Thread.Mutex = .{},
     sessions: std.StringHashMapUnmanaged(SessionRuntimeState) = .{},
+    shutting_down: bool = false,
 
     fn deinit(self: *Runtime, allocator: std.mem.Allocator) void {
         var iterator = self.sessions.iterator();
@@ -125,14 +132,35 @@ const Runtime = struct {
         });
     }
 
-    fn setRunning(self: *Runtime, session_id: []const u8, running: bool) void {
+    /// Atomically choose the one provider-turn owner for a session. A prompt
+    /// that loses admission becomes a bounded interjection under the same lock,
+    /// so it cannot fall between a stale running check and queue insertion.
+    fn tryStartSession(
+        self: *Runtime,
+        allocator: std.mem.Allocator,
+        session_id: []const u8,
+        pending_message: ?[]const u8,
+    ) !SessionStartAdmission {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        if (self.sessions.getPtr(session_id)) |state| {
-            state.running = running;
-            if (running) state.cancel_requested = false;
+        if (self.shutting_down) return Error.ServerShuttingDown;
+        const state = self.sessions.getPtr(session_id) orelse return Error.SessionNotFound;
+        if (state.running) {
+            if (pending_message) |message| try appendPendingMessageLocked(state, allocator, message);
+            return .already_running;
         }
+
+        state.running = true;
+        state.cancel_requested = false;
+        return .started;
+    }
+
+    fn finishSession(self: *Runtime, session_id: []const u8) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.sessions.getPtr(session_id)) |state| state.running = false;
     }
 
     fn isRunning(self: *Runtime, session_id: []const u8) bool {
@@ -156,27 +184,30 @@ const Runtime = struct {
         return false;
     }
 
+    /// Fence new turns and signal every active owner in one runtime transition.
+    /// Queued RPC jobs observe the fence in tryStartSession instead of starting
+    /// after the shutdown cancellation sweep.
+    fn beginShutdown(self: *Runtime) usize {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.shutting_down = true;
+        var cancelled: usize = 0;
+        var iterator = self.sessions.iterator();
+        while (iterator.next()) |entry| {
+            if (!entry.value_ptr.running) continue;
+            entry.value_ptr.cancel_requested = true;
+            cancelled += 1;
+        }
+        return cancelled;
+    }
+
     fn shouldCancel(self: *Runtime, session_id: []const u8) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         if (self.sessions.get(session_id)) |state| return state.cancel_requested;
         return false;
-    }
-
-    /// Queue a user message for mid-turn injection. Bounded at max_pending_messages;
-    /// oldest is dropped on overflow. The caller owns the message slice; we dupe it.
-    fn queuePendingMessage(self: *Runtime, allocator: std.mem.Allocator, session_id: []const u8, message: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        if (self.sessions.getPtr(session_id)) |state| {
-            if (state.pending_messages.items.len >= max_pending_messages) {
-                const oldest = state.pending_messages.orderedRemove(0);
-                allocator.free(oldest);
-            }
-            try state.pending_messages.append(allocator, try allocator.dupe(u8, message));
-        }
     }
 
     /// Drain all pending messages for a session. Returns an owned slice of owned
@@ -213,6 +244,65 @@ const Runtime = struct {
     }
 };
 
+fn appendPendingMessageLocked(state: *SessionRuntimeState, allocator: std.mem.Allocator, message: []const u8) !void {
+    const owned = try allocator.dupe(u8, message);
+    errdefer allocator.free(owned);
+    try state.pending_messages.ensureUnusedCapacity(allocator, 1);
+    if (state.pending_messages.items.len >= max_pending_messages) {
+        const oldest = state.pending_messages.orderedRemove(0);
+        allocator.free(oldest);
+    }
+    state.pending_messages.appendAssumeCapacity(owned);
+}
+
+const BufferProjection = struct {
+    mutex: std.Thread.Mutex = .{},
+    session_id: ?[]u8 = null,
+    preview: ?[]u8 = null,
+
+    fn deinit(self: *BufferProjection, allocator: std.mem.Allocator) void {
+        if (self.session_id) |value| allocator.free(value);
+        if (self.preview) |value| allocator.free(value);
+        self.* = .{};
+    }
+
+    fn activate(self: *BufferProjection, allocator: std.mem.Allocator, session_id: []const u8) !void {
+        const owned = try allocator.dupe(u8, session_id);
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (self.session_id) |value| allocator.free(value);
+        if (self.preview) |value| allocator.free(value);
+        self.session_id = owned;
+        self.preview = null;
+    }
+
+    fn store(self: *BufferProjection, allocator: std.mem.Allocator, session_id: []const u8, preview: []const u8) !bool {
+        const owned = try allocator.dupe(u8, preview);
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const current = self.session_id orelse {
+            allocator.free(owned);
+            return false;
+        };
+        if (!std.mem.eql(u8, current, session_id)) {
+            allocator.free(owned);
+            return false;
+        }
+        if (self.preview) |value| allocator.free(value);
+        self.preview = owned;
+        return true;
+    }
+
+    fn copy(self: *BufferProjection, allocator: std.mem.Allocator, session_id: []const u8) ?[]u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const current = self.session_id orelse return null;
+        if (!std.mem.eql(u8, current, session_id)) return null;
+        const preview = self.preview orelse return null;
+        return allocator.dupe(u8, preview) catch null;
+    }
+};
+
 const Server = struct {
     allocator: std.mem.Allocator,
     config: *const types.Config,
@@ -228,14 +318,9 @@ const Server = struct {
     scheduler_thread: ?std.Thread = null,
     buffer_srv: ?buffer_service.Service = null,
     buffer_thread: ?std.Thread = null,
-    /// Active root session id for the buffer preview callback. Heap-owned
-    /// (duped) because the session record is freed when the request handler
-    /// returns — a borrowed pointer would dangle.
-    buffer_session_id: ?[]u8 = null,
-    /// Latest buffer preview text — written by the buffer thread callback,
-    /// read by the executor via peekBufferPreview hook. Mutex-guarded swap.
-    buffer_preview_mutex: std.Thread.Mutex = .{},
-    buffer_preview_text: ?[]u8 = null,
+    /// One session-keyed projection prevents late buffer callbacks and
+    /// concurrent root turns from crossing identity or preview ownership.
+    buffer_projection: BufferProjection = .{},
 
     fn startRequestExecutor(self: *Server) !void {
         try self.request_pool.init(.{
@@ -248,6 +333,7 @@ const Server = struct {
 
     fn stopRequestExecutor(self: *Server) void {
         self.request_admission.stop();
+        _ = self.runtime.beginShutdown();
         if (!self.request_pool_started) return;
         self.request_pool.deinit();
         self.request_pool_started = false;
@@ -281,8 +367,7 @@ const Server = struct {
             if (self.buffer_thread) |thread| thread.join();
             bsrv.deinit();
         }
-        if (self.buffer_session_id) |sid| self.allocator.free(sid);
-        if (self.buffer_preview_text) |text| self.allocator.free(text);
+        self.buffer_projection.deinit(self.allocator);
         self.runtime.deinit(self.allocator);
     }
 
@@ -417,19 +502,9 @@ fn runSchedulerService(service: *scheduler.Service) void {
 
 /// Buffer preview callback — stores the latest preview for executor injection
 /// and emits a buffer_preview session event to the TUI.
-fn onBufferPreview(ctx: ?*anyopaque, preview: []const u8) void {
+fn onBufferPreview(ctx: ?*anyopaque, session_id: []const u8, preview: []const u8) void {
     const server: *Server = @ptrCast(@alignCast(ctx.?));
-
-    // Store for executor injection (thread-safe swap)
-    {
-        server.buffer_preview_mutex.lock();
-        defer server.buffer_preview_mutex.unlock();
-        if (server.buffer_preview_text) |old| server.allocator.free(old);
-        server.buffer_preview_text = server.allocator.dupe(u8, preview) catch null;
-    }
-
-    // Emit to TUI
-    const session_id = server.buffer_session_id orelse return;
+    if (!(server.buffer_projection.store(server.allocator, session_id, preview) catch false)) return;
     server.emitSessionEvent(session_id, "buffer_preview", preview, "running", std.time.milliTimestamp()) catch {};
 }
 
@@ -504,6 +579,7 @@ fn processRequest(server: *Server, request_payload: []const u8) !?[]u8 {
         Error.SessionNotFound => return errorResponseOrNull(server.allocator, id, -32001, "Session not found"),
         Error.ScheduleNotFound => return errorResponseOrNull(server.allocator, id, -32004, "Schedule not found"),
         Error.SessionRunning => return errorResponseOrNull(server.allocator, id, -32002, "Session already running"),
+        Error.ServerShuttingDown => return errorResponseOrNull(server.allocator, id, rpc_server_busy_code, "Server shutting down"),
         Error.ExecutionFailed => return errorResponseOrNull(server.allocator, id, -32000, "Execution failed"),
         else => return errorResponseOrNull(server.allocator, id, -32603, "Internal error"),
     };
@@ -669,18 +745,13 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
     // (roadmap P0-4b)
     _ = server.agent_service.reconcile(server.allocator, session.id) catch 0;
 
-    if (parsed.value.prompt) |next_prompt_raw| {
+    const next_prompt: ?[]const u8 = if (parsed.value.prompt) |next_prompt_raw| blk: {
         const next_prompt = std.mem.trim(u8, next_prompt_raw, " \t\r\n");
         if (next_prompt.len == 0) return Error.InvalidParams;
-        const timestamp_ms = std.time.milliTimestamp();
-        // Don't persist to transcript yet if the session is running — the
-        // interjection drain in loop.zig will persist the tagged version.
-        // For non-running sessions, persist now (normal submit path).
-        if (!server.runtime.isRunning(session.id)) {
-            try store.appendSessionMessage(server.allocator, server.config.workspace_root, session.id, .user, next_prompt, timestamp_ms);
-            try store.setSessionPrompt(server.allocator, server.config.workspace_root, &session, next_prompt, .initialized);
-        }
-    } else if (session.status == .completed or session.status == .failed or session.status == .cancelled) {
+        break :blk next_prompt;
+    } else null;
+
+    if (next_prompt == null and (session.status == .completed or session.status == .failed or session.status == .cancelled)) {
         const current_output = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
         defer if (current_output) |value| server.allocator.free(value);
         return renderJsonAlloc(server.allocator, protocol_types.SessionSendResult{
@@ -688,13 +759,12 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         });
     }
 
-    if (server.runtime.isRunning(session.id)) {
+    const admission = try server.runtime.tryStartSession(server.allocator, session.id, next_prompt);
+    if (admission == .already_running) {
         // Interjection protocol: queue the message for mid-turn injection
-        // instead of silently returning stale state. The message is already
-        // persisted to the transcript at line 549. Emit a user_message_queued
-        // event so the TUI acknowledges receipt in the reasoning dock.
-        if (parsed.value.prompt) |prompt| {
-            server.runtime.queuePendingMessage(server.allocator, session.id, prompt) catch {};
+        // instead of rejecting useful steering or starting a second turn. The
+        // loop persists the tagged message when it drains the bounded queue.
+        if (next_prompt) |prompt| {
             server.emitSessionEvent(session.id, "user_message_queued", prompt, "running", std.time.milliTimestamp()) catch {};
         }
         const current_output = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
@@ -703,9 +773,13 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
             .session = makeSessionSummary(session, current_output),
         });
     }
+    defer server.runtime.finishSession(session.id);
 
-    server.runtime.setRunning(session.id, true);
-    defer server.runtime.setRunning(session.id, false);
+    if (next_prompt) |prompt| {
+        const timestamp_ms = std.time.milliTimestamp();
+        try store.appendSessionMessage(server.allocator, server.config.workspace_root, session.id, .user, prompt, timestamp_ms);
+        try store.setSessionPrompt(server.allocator, server.config.workspace_root, &session, prompt, .initialized);
+    }
 
     // Apply per-invocation provider overrides to a local config copy. The
     // server's canonical config is untouched — overrides live only for this
@@ -732,7 +806,7 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         .shouldCancelFn = onLoopShouldCancel,
         .drainPendingMessagesFn = onLoopDrainPendingMessages,
         .hasPendingMessagesFn = onLoopHasPendingMessages,
-        .peekBufferPreviewFn = onLoopPeekBufferPreview,
+        .copyBufferPreviewFn = onLoopCopyBufferPreview,
     };
 
     // Set the buffer service's active session context for root sessions.
@@ -741,15 +815,8 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
     // durable session summary ledger (.var/sessions/summaries.json) — the
     // orchestrator's mandatory pre-turn-end update, not a raw transcript tail.
     if (server.buffer_srv != null and session.parent_session_id == null) {
-        // Dupe session.id because session.deinit will free it when the
-        // request handler returns. The buffer preview callback reads
-        // buffer_session_id on a background thread after that point.
-        if (server.buffer_session_id) |old| server.allocator.free(old);
-        server.buffer_session_id = server.allocator.dupe(u8, session.id) catch null;
-        server.buffer_srv.?.setSessionId(session.id);
-        if (parsed.value.prompt) |prompt| {
-            server.buffer_srv.?.setActivePrompt(prompt);
-        }
+        try server.buffer_projection.activate(server.allocator, session.id);
+        server.buffer_srv.?.setActiveSession(session.id, next_prompt);
     }
 
     const result = loop.runPromptWithOptions(server.allocator, effective_config, "", .{
@@ -1335,13 +1402,10 @@ fn onLoopHasPendingMessages(ctx: ?*anyopaque, session_id: []const u8) bool {
     return server.runtime.hasPendingMessages(session_id);
 }
 
-/// Peek the latest buffer model preview for advisory injection.
-/// Returns a borrowed slice — caller must not free.
-fn onLoopPeekBufferPreview(ctx: ?*anyopaque) ?[]const u8 {
+/// Return an owned preview only when its session identity matches this loop.
+fn onLoopCopyBufferPreview(ctx: ?*anyopaque, allocator: std.mem.Allocator, session_id: []const u8) ?[]u8 {
     const server: *Server = @ptrCast(@alignCast(ctx.?));
-    server.buffer_preview_mutex.lock();
-    defer server.buffer_preview_mutex.unlock();
-    return server.buffer_preview_text;
+    return server.buffer_projection.copy(allocator, session_id);
 }
 
 fn makeSessionSummary(session: types.SessionRecord, output: ?[]const u8) protocol_types.SessionSummary {
@@ -1405,6 +1469,98 @@ test "request admission is bounded and closes before shutdown" {
     for (0..max_admitted_requests) |_| admission.release();
     admission.stop();
     try std.testing.expect(!admission.tryAcquire());
+}
+
+test "100 concurrent session sends admit one turn owner" {
+    const Race = struct {
+        runtime: *Runtime,
+        mutex: std.Thread.Mutex = .{},
+        condition: std.Thread.Condition = .{},
+        ready: usize = 0,
+        open: bool = false,
+
+        fn run(self: *@This(), outcome: *SessionStartAdmission) void {
+            self.mutex.lock();
+            self.ready += 1;
+            self.condition.broadcast();
+            while (!self.open) self.condition.wait(&self.mutex);
+            self.mutex.unlock();
+
+            outcome.* = self.runtime.tryStartSession(std.testing.allocator, "session-race", null) catch unreachable;
+        }
+
+        fn release(self: *@This(), expected: usize) void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            while (self.ready < expected) self.condition.wait(&self.mutex);
+            self.open = true;
+            self.condition.broadcast();
+        }
+    };
+
+    var runtime = Runtime{};
+    defer runtime.deinit(std.testing.allocator);
+    try runtime.ensureSession(std.testing.allocator, "session-race", null);
+
+    var race = Race{ .runtime = &runtime };
+    var outcomes: [100]SessionStartAdmission = undefined;
+    var threads: [100]std.Thread = undefined;
+    for (&threads, 0..) |*thread, index| {
+        thread.* = try std.Thread.spawn(.{}, Race.run, .{ &race, &outcomes[index] });
+    }
+    race.release(threads.len);
+    for (threads) |thread| thread.join();
+
+    var started: usize = 0;
+    var already_running: usize = 0;
+    for (outcomes) |outcome| switch (outcome) {
+        .started => started += 1,
+        .already_running => already_running += 1,
+    };
+    try std.testing.expectEqual(@as(usize, 1), started);
+    try std.testing.expectEqual(@as(usize, 99), already_running);
+    try std.testing.expect(runtime.isRunning("session-race"));
+    runtime.finishSession("session-race");
+    try std.testing.expect(!runtime.isRunning("session-race"));
+}
+
+test "losing session send atomically queues the steer message" {
+    var runtime = Runtime{};
+    defer runtime.deinit(std.testing.allocator);
+    try runtime.ensureSession(std.testing.allocator, "session-steer", null);
+
+    try std.testing.expectEqual(SessionStartAdmission.started, try runtime.tryStartSession(std.testing.allocator, "session-steer", null));
+    try std.testing.expectEqual(SessionStartAdmission.already_running, try runtime.tryStartSession(std.testing.allocator, "session-steer", "change direction"));
+
+    const pending = runtime.drainPendingMessages(std.testing.allocator, "session-steer").?;
+    defer {
+        for (pending) |message| std.testing.allocator.free(message);
+        std.testing.allocator.free(pending);
+    }
+    try std.testing.expectEqual(@as(usize, 1), pending.len);
+    try std.testing.expectEqualStrings("change direction", pending[0]);
+    runtime.finishSession("session-steer");
+}
+
+test "buffer projection rejects a late preview from the previous session" {
+    var projection = BufferProjection{};
+    defer projection.deinit(std.testing.allocator);
+
+    try projection.activate(std.testing.allocator, "session-a");
+    try std.testing.expect(try projection.store(std.testing.allocator, "session-a", "preview-a"));
+    const copy_a = projection.copy(std.testing.allocator, "session-a").?;
+    defer std.testing.allocator.free(copy_a);
+
+    try projection.activate(std.testing.allocator, "session-b");
+    try std.testing.expect(!try projection.store(std.testing.allocator, "session-a", "late-a"));
+    try std.testing.expect(projection.copy(std.testing.allocator, "session-a") == null);
+    try std.testing.expect(projection.copy(std.testing.allocator, "session-b") == null);
+    try std.testing.expectEqualStrings("preview-a", copy_a);
+
+    try std.testing.expect(try projection.store(std.testing.allocator, "session-b", "preview-b"));
+    const copy_b = projection.copy(std.testing.allocator, "session-b").?;
+    defer std.testing.allocator.free(copy_b);
+    try std.testing.expectEqualStrings("preview-b", copy_b);
 }
 
 test "request overload preserves request id and ignores notifications" {
@@ -1560,6 +1716,115 @@ test "request executor drains admitted frames before server teardown" {
     defer std.testing.allocator.free(output);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"id\":\"drain-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "VAR1-kernel-stdio-v2") != null);
+}
+
+test "active request shutdown cancels before join and persists one terminal event" {
+    const ShutdownTransport = struct {
+        server: ?*Server = null,
+        session_id: []const u8,
+        mutex: std.Thread.Mutex = .{},
+        entered: bool = false,
+        saw_cancel: bool = false,
+        timed_out: bool = false,
+
+        fn send(
+            ctx: ?*anyopaque,
+            allocator: std.mem.Allocator,
+            _: []const u8,
+            _: []const u8,
+            _: []const u8,
+        ) anyerror![]u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.mutex.lock();
+            self.entered = true;
+            self.mutex.unlock();
+
+            var timer = try std.time.Timer.start();
+            while (timer.read() < 5_000 * std.time.ns_per_ms) {
+                if (self.server.?.runtime.shouldCancel(self.session_id)) {
+                    self.saw_cancel = true;
+                    return allocator.dupe(u8, "{\"choices\":[{\"message\":{\"content\":\"shutdown probe\"}}]}");
+                }
+                std.Thread.sleep(std.time.ns_per_ms);
+            }
+
+            self.timed_out = true;
+            return allocator.dupe(u8, "{\"choices\":[{\"message\":{\"content\":\"shutdown probe timed out\"}}]}");
+        }
+
+        fn waitUntilEntered(self: *@This(), timeout_ms: u64) !bool {
+            var timer = try std.time.Timer.start();
+            while (timer.read() < timeout_ms * std.time.ns_per_ms) {
+                self.mutex.lock();
+                const ready = self.entered;
+                self.mutex.unlock();
+                if (ready) return true;
+                std.Thread.sleep(std.time.ns_per_ms);
+            }
+            return false;
+        }
+    };
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var session = try store.initSession(std.testing.allocator, workspace_root, "stay active until shutdown");
+    defer session.deinit(std.testing.allocator);
+
+    var shutdown_transport = ShutdownTransport{ .session_id = session.id };
+    var server = makeTestServer();
+    server.config = &config;
+    server.transport = .{ .context = &shutdown_transport, .sendFn = ShutdownTransport.send };
+    shutdown_transport.server = &server;
+    defer server.deinit();
+    const stdout_file = try attachTestStdout(&tmp, &server, "shutdown-rpc-output.bin");
+    defer stdout_file.close();
+
+    try server.startRequestExecutor();
+    const request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"shutdown-1\",\"method\":\"session/send\",\"params\":{{\"session_id\":\"{s}\"}}}}",
+        .{session.id},
+    );
+    const submitted = server.submitRequest(request) catch |err| {
+        std.testing.allocator.free(request);
+        return err;
+    };
+    if (!submitted) std.testing.allocator.free(request);
+    try std.testing.expect(submitted);
+    try std.testing.expect(try shutdown_transport.waitUntilEntered(2_000));
+
+    var shutdown_timer = try std.time.Timer.start();
+    server.stopRequestExecutor();
+    const shutdown_ns = shutdown_timer.read();
+
+    try std.testing.expect(shutdown_transport.saw_cancel);
+    try std.testing.expect(!shutdown_transport.timed_out);
+    try std.testing.expect(shutdown_ns < 2_000 * std.time.ns_per_ms);
+    try std.testing.expectEqual(@as(usize, 0), server.request_admission.admitted);
+    try std.testing.expectError(Error.ServerShuttingDown, server.runtime.tryStartSession(std.testing.allocator, session.id, null));
+
+    var persisted = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
+    defer persisted.deinit(std.testing.allocator);
+    try std.testing.expectEqual(types.SessionStatus.cancelled, persisted.status);
+
+    const events = try store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer types.deinitSessionEvents(std.testing.allocator, events);
+    var terminal_events: usize = 0;
+    for (events) |event| {
+        if (std.mem.eql(u8, event.event_type, "session_cancelled")) terminal_events += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), terminal_events);
+
+    try stdout_file.seekTo(0);
+    const output = try stdout_file.readToEndAlloc(std.testing.allocator, 64 * 1024);
+    defer std.testing.allocator.free(output);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"id\":\"shutdown-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"status\":\"cancelled\"") != null);
 }
 
 fn appendStaleStartedEvent(workspace_root: []const u8, session_id: []const u8) !void {

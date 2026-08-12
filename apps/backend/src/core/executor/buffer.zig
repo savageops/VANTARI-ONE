@@ -29,11 +29,12 @@ pub const BufferPolicy = struct {
     }
 };
 
-/// Callback invoked when the buffer model produces a preview. The callee
-/// owns the preview slice and must free it.
+/// Callback invoked when the buffer model produces a preview. The session id
+/// identifies the input snapshot that produced it, so a late result cannot be
+/// projected onto whichever session happens to be active at callback time.
 pub const PreviewSink = struct {
     context: ?*anyopaque,
-    onPreviewFn: *const fn (ctx: ?*anyopaque, preview: []const u8) void,
+    onPreviewFn: *const fn (ctx: ?*anyopaque, session_id: []const u8, preview: []const u8) void,
 };
 
 const buffer_prompt_template =
@@ -93,21 +94,24 @@ pub const Service = struct {
         self.stop_requested.store(true, .release);
     }
 
-    /// Store a heap-owned copy of the prompt. The caller's slice may be
-    /// freed when the request handler returns — we dupe to survive.
-    pub fn setActivePrompt(self: *Service, prompt: ?[]const u8) void {
-        self.state_mutex.lock();
-        defer self.state_mutex.unlock();
-        if (self.active_prompt) |old| self.allocator.free(old);
-        self.active_prompt = if (prompt) |p| self.allocator.dupe(u8, p) catch null else null;
-    }
+    /// Replace session identity and prompt in one transition. Both input slices
+    /// may be freed when the request handler returns. Context is session-bound,
+    /// so switching identity also invalidates the previous summary snapshot.
+    pub fn setActiveSession(self: *Service, session_id: []const u8, prompt: ?[]const u8) void {
+        const next_session = self.allocator.dupe(u8, session_id) catch return;
+        const next_prompt = if (prompt) |value| self.allocator.dupe(u8, value) catch {
+            self.allocator.free(next_session);
+            return;
+        } else null;
 
-    /// Store a heap-owned copy of the session id. Same lifetime rule.
-    pub fn setSessionId(self: *Service, session_id: ?[]const u8) void {
         self.state_mutex.lock();
         defer self.state_mutex.unlock();
         if (self.active_session_id) |old| self.allocator.free(old);
-        self.active_session_id = if (session_id) |s| self.allocator.dupe(u8, s) catch null else null;
+        if (self.active_prompt) |old| self.allocator.free(old);
+        if (self.context_text) |old| self.allocator.free(old);
+        self.active_session_id = next_session;
+        self.active_prompt = next_prompt;
+        self.context_text = null;
     }
 
     pub fn run(self: *Service) void {
@@ -124,9 +128,8 @@ pub const Service = struct {
 
         if (!policy.enabled) return;
 
-        // Snapshot the active prompt + session id under the lock. The request
-        // handler may call setActivePrompt/setSessionId concurrently, freeing
-        // the previous values — reading without the lock is a data race.
+        // Snapshot active prompt + session under the lock. The request handler
+        // may replace both concurrently, freeing the previous owned values.
         var prompt_copy: ?[]u8 = null;
         defer if (prompt_copy) |p| self.allocator.free(p);
         var session_copy: ?[]u8 = null;
@@ -138,6 +141,7 @@ pub const Service = struct {
             if (self.active_session_id) |s| session_copy = self.allocator.dupe(u8, s) catch null;
         }
         if (prompt_copy == null) return;
+        if (session_copy == null) return;
         if (now_ms - self.last_tick_ms < @as(i64, @intCast(policy.interval_ms))) return;
 
         self.last_tick_ms = now_ms;
@@ -146,20 +150,20 @@ pub const Service = struct {
         // the orchestrator's mandatory pre-turn-end update — never a raw
         // transcript tail. Refreshed per tick so the preview tracks the
         // latest summary without host plumbing.
-        if (session_copy) |sid| {
-            var maybe_row = summaries.readSummary(self.allocator, self.parent_config.workspace_root, sid) catch null;
-            if (maybe_row) |*row| {
-                defer row.deinit(self.allocator);
-                const fresh = blk: {
-                    self.state_mutex.lock();
-                    defer self.state_mutex.unlock();
-                    break :blk if (self.context_text) |cur| !std.mem.eql(u8, cur, row.summary) else true;
-                };
-                if (fresh) {
-                    self.state_mutex.lock();
-                    defer self.state_mutex.unlock();
+        const session_id = session_copy.?;
+        var maybe_row = summaries.readSummary(self.allocator, self.parent_config.workspace_root, session_id) catch null;
+        if (maybe_row) |*row| {
+            defer row.deinit(self.allocator);
+            const next_context = self.allocator.dupe(u8, row.summary) catch null;
+            if (next_context) |owned| {
+                self.state_mutex.lock();
+                defer self.state_mutex.unlock();
+                const still_current = if (self.active_session_id) |current| std.mem.eql(u8, current, session_id) else false;
+                if (still_current) {
                     if (self.context_text) |old| self.allocator.free(old);
-                    self.context_text = self.allocator.dupe(u8, row.summary) catch null;
+                    self.context_text = owned;
+                } else {
+                    self.allocator.free(owned);
                 }
             }
         }
@@ -182,7 +186,7 @@ pub const Service = struct {
 
         if (runBufferModel(self.allocator, self.parent_config, policy, combined, self.transport)) |text| {
             defer self.allocator.free(text);
-            self.sink.onPreviewFn(self.sink.context, text);
+            self.sink.onPreviewFn(self.sink.context, session_id, text);
         }
     }
 };
