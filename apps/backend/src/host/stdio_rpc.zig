@@ -52,12 +52,26 @@ const SessionRuntimeState = struct {
     enable_agent_tools: bool = true,
     cancel_requested: bool = false,
     running: bool = false,
+    active_run_seq: u64 = 0,
     pending_messages: std.ArrayListUnmanaged([]u8) = .{},
 };
 
 const SessionStartAdmission = enum {
     started,
     already_running,
+};
+
+const RuntimeCancelOutcome = enum {
+    requested,
+    not_running,
+    run_not_observed,
+    generation_required,
+    stale_run,
+};
+
+const RuntimeCancelResult = struct {
+    outcome: RuntimeCancelOutcome,
+    active_run_seq: ?u64 = null,
 };
 
 const max_pending_messages = 5;
@@ -153,6 +167,7 @@ const Runtime = struct {
 
         state.running = true;
         state.cancel_requested = false;
+        state.active_run_seq = 0;
         return .started;
     }
 
@@ -160,7 +175,11 @@ const Runtime = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        if (self.sessions.getPtr(session_id)) |state| state.running = false;
+        if (self.sessions.getPtr(session_id)) |state| {
+            state.running = false;
+            state.cancel_requested = false;
+            state.active_run_seq = 0;
+        }
     }
 
     fn isRunning(self: *Runtime, session_id: []const u8) bool {
@@ -171,17 +190,45 @@ const Runtime = struct {
         return false;
     }
 
-    fn requestCancel(self: *Runtime, session_id: []const u8) bool {
+    /// Bind the durable session_started event sequence to the admitted run.
+    /// Duplicate observation is idempotent; a second generation cannot replace
+    /// the active owner before finishSession clears it.
+    fn observeRunStart(self: *Runtime, session_id: []const u8, run_seq: u64) bool {
+        if (run_seq == 0) return false;
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const state = self.sessions.getPtr(session_id) orelse return false;
+        if (!state.running) return false;
+        if (state.active_run_seq != 0 and state.active_run_seq != run_seq) return false;
+        state.active_run_seq = run_seq;
+        return true;
+    }
+
+    fn requestCancel(self: *Runtime, session_id: []const u8, expected_run_seq: ?u64) RuntimeCancelResult {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         if (self.sessions.getPtr(session_id)) |state| {
-            if (!state.running) return false;
+            if (!state.running) return .{ .outcome = .not_running };
+            if (state.active_run_seq == 0) return .{ .outcome = .run_not_observed };
+            const active_run_seq = state.active_run_seq;
+            const expected = expected_run_seq orelse return .{
+                .outcome = .generation_required,
+                .active_run_seq = active_run_seq,
+            };
+            if (expected != active_run_seq) return .{
+                .outcome = .stale_run,
+                .active_run_seq = active_run_seq,
+            };
             state.cancel_requested = true;
-            return true;
+            return .{
+                .outcome = .requested,
+                .active_run_seq = active_run_seq,
+            };
         }
 
-        return false;
+        return .{ .outcome = .not_running };
     }
 
     /// Fence new turns and signal every active owner in one runtime transition.
@@ -921,6 +968,9 @@ fn handleSessionCancel(server: *Server, params: ?std.json.Value) ![]u8 {
         session_id: []const u8,
     };
 
+    const params_value = params orelse return Error.InvalidParams;
+    if (params_value != .object) return Error.InvalidParams;
+    const expected_run_seq = try optionalU64FromObject(&params_value.object, "expected_run_seq");
     var parsed = try parseParams(Args, server.allocator, params);
     defer parsed.deinit();
 
@@ -932,9 +982,12 @@ fn handleSessionCancel(server: *Server, params: ?std.json.Value) ![]u8 {
     try server.runtime.ensureSession(server.allocator, session.id, null);
 
     var cancellation_requested = false;
+    var outcome: []const u8 = "not_cancellable";
+    var active_run_seq: ?u64 = null;
     if (session.status == .initialized) {
         try store.setSessionStatus(server.allocator, server.config.workspace_root, &session, .cancelled);
         cancellation_requested = true;
+        outcome = "cancelled_before_start";
         server.recordAndEmitSessionEvent(
             session.id,
             "session_cancelled",
@@ -943,11 +996,21 @@ fn handleSessionCancel(server: *Server, params: ?std.json.Value) ![]u8 {
             session.updated_at_ms,
         ) catch {};
     } else if (session.status == .running) {
-        if (server.runtime.requestCancel(session.id)) {
+        const request = server.runtime.requestCancel(session.id, expected_run_seq);
+        active_run_seq = request.active_run_seq;
+        outcome = switch (request.outcome) {
+            .requested => "requested",
+            .not_running => "not_running",
+            .run_not_observed => "run_not_observed",
+            .generation_required => "generation_required",
+            .stale_run => "stale_run",
+        };
+        if (request.outcome == .requested) {
             cancellation_requested = true;
-        } else if (try isStaleUnownedRunningSession(server, &session)) {
+        } else if (request.outcome == .not_running and try isStaleUnownedRunningSession(server, &session)) {
             try store.setSessionStatus(server.allocator, server.config.workspace_root, &session, .cancelled);
             cancellation_requested = true;
+            outcome = "stale_owner_cancelled";
             server.recordAndEmitSessionEvent(
                 session.id,
                 "session_cancelled",
@@ -962,6 +1025,8 @@ fn handleSessionCancel(server: *Server, params: ?std.json.Value) ![]u8 {
         .session_id = session.id,
         .status = types.statusLabel(session.status),
         .cancellation_requested = cancellation_requested,
+        .outcome = outcome,
+        .active_run_seq = active_run_seq,
     });
 }
 
@@ -1377,6 +1442,9 @@ fn onLoopSessionEvent(
     timestamp_ms: i64,
 ) anyerror!void {
     const server: *Server = @ptrCast(@alignCast(ctx.?));
+    if (std.mem.eql(u8, event_type, "session_started")) {
+        _ = server.runtime.observeRunStart(session_id, seq);
+    }
     // The live notification is a read model over events.jsonl (AGENTS.md §IV).
     // The durable event has already been appended to the event spine by
     // recordSessionEvent before this hook fires — losing a live frame to a
@@ -1523,6 +1591,37 @@ test "100 concurrent session sends admit one turn owner" {
     try std.testing.expect(runtime.isRunning("session-race"));
     runtime.finishSession("session-race");
     try std.testing.expect(!runtime.isRunning("session-race"));
+}
+
+test "stale cancel generation cannot stop a newer session run" {
+    var runtime = Runtime{};
+    defer runtime.deinit(std.testing.allocator);
+    try runtime.ensureSession(std.testing.allocator, "session-cancel-generation", null);
+
+    try std.testing.expectEqual(SessionStartAdmission.started, try runtime.tryStartSession(std.testing.allocator, "session-cancel-generation", null));
+    const not_observed = runtime.requestCancel("session-cancel-generation", 11);
+    try std.testing.expectEqual(RuntimeCancelOutcome.run_not_observed, not_observed.outcome);
+    try std.testing.expect(!runtime.shouldCancel("session-cancel-generation"));
+    try std.testing.expect(runtime.observeRunStart("session-cancel-generation", 11));
+    runtime.finishSession("session-cancel-generation");
+
+    try std.testing.expectEqual(SessionStartAdmission.started, try runtime.tryStartSession(std.testing.allocator, "session-cancel-generation", null));
+    try std.testing.expect(runtime.observeRunStart("session-cancel-generation", 22));
+
+    const missing = runtime.requestCancel("session-cancel-generation", null);
+    try std.testing.expectEqual(RuntimeCancelOutcome.generation_required, missing.outcome);
+    try std.testing.expectEqual(@as(?u64, 22), missing.active_run_seq);
+    try std.testing.expect(!runtime.shouldCancel("session-cancel-generation"));
+
+    const stale = runtime.requestCancel("session-cancel-generation", 11);
+    try std.testing.expectEqual(RuntimeCancelOutcome.stale_run, stale.outcome);
+    try std.testing.expectEqual(@as(?u64, 22), stale.active_run_seq);
+    try std.testing.expect(!runtime.shouldCancel("session-cancel-generation"));
+
+    const current = runtime.requestCancel("session-cancel-generation", 22);
+    try std.testing.expectEqual(RuntimeCancelOutcome.requested, current.outcome);
+    try std.testing.expectEqual(@as(?u64, 22), current.active_run_seq);
+    try std.testing.expect(runtime.shouldCancel("session-cancel-generation"));
 }
 
 test "losing session send atomically queues the steer message" {
@@ -2346,6 +2445,69 @@ test "session/cancel persists initialized-session cancellation events" {
     try std.testing.expect(latest_event != null);
     try std.testing.expectEqualStrings("session_cancelled", latest_event.?.event_type);
     try std.testing.expect(std.mem.indexOf(u8, latest_event.?.message, "before execution started") != null);
+}
+
+test "session/cancel rejects a stale run generation before accepting the active one" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "cancel exact run", .{
+        .status = .running,
+    });
+    defer session.deinit(std.testing.allocator);
+    try server.runtime.ensureSession(std.testing.allocator, session.id, null);
+    try std.testing.expectEqual(SessionStartAdmission.started, try server.runtime.tryStartSession(std.testing.allocator, session.id, null));
+    try std.testing.expect(server.runtime.observeRunStart(session.id, 22));
+
+    const unguarded_request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-cancel-unguarded\",\"method\":\"session/cancel\",\"params\":{{\"session_id\":\"{s}\"}}}}",
+        .{session.id},
+    );
+    defer std.testing.allocator.free(unguarded_request);
+    const unguarded_response = (try processRequest(&server, unguarded_request)).?;
+    defer std.testing.allocator.free(unguarded_response);
+
+    try std.testing.expect(std.mem.indexOf(u8, unguarded_response, "\"cancellation_requested\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unguarded_response, "\"outcome\":\"generation_required\"") != null);
+    try std.testing.expect(!server.runtime.shouldCancel(session.id));
+
+    const stale_request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-cancel-old-run\",\"method\":\"session/cancel\",\"params\":{{\"session_id\":\"{s}\",\"expected_run_seq\":11}}}}",
+        .{session.id},
+    );
+    defer std.testing.allocator.free(stale_request);
+    const stale_response = (try processRequest(&server, stale_request)).?;
+    defer std.testing.allocator.free(stale_response);
+
+    try std.testing.expect(std.mem.indexOf(u8, stale_response, "\"cancellation_requested\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stale_response, "\"outcome\":\"stale_run\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stale_response, "\"active_run_seq\":22") != null);
+    try std.testing.expect(!server.runtime.shouldCancel(session.id));
+
+    const active_request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-cancel-active-run\",\"method\":\"session/cancel\",\"params\":{{\"session_id\":\"{s}\",\"expected_run_seq\":22}}}}",
+        .{session.id},
+    );
+    defer std.testing.allocator.free(active_request);
+    const active_response = (try processRequest(&server, active_request)).?;
+    defer std.testing.allocator.free(active_response);
+
+    try std.testing.expect(std.mem.indexOf(u8, active_response, "\"cancellation_requested\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, active_response, "\"outcome\":\"requested\"") != null);
+    try std.testing.expect(server.runtime.shouldCancel(session.id));
 }
 
 test "session/cancel closes stale running sessions without live owner" {

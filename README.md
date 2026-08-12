@@ -92,7 +92,7 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
 | **Kernel surface** | 109 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 1,936 passing backend cases across source and adversarial pipeline suites |
+| **Proof surface** | 1,950 passing backend cases across source and adversarial pipeline suites |
 | **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
 | **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |
@@ -433,7 +433,7 @@ The kernel exposes JSON-RPC 2.0 methods over stdio. The browser workbench reache
 | `session/resume` | Load an existing session into runtime state |
 | `session/send` | Append user input, compile context, auto-compact if needed, and advance execution |
 | `session/compact` | Write a manual context checkpoint from stable message sequence ranges |
-| `session/cancel` | Mark cancellation intent for a running session |
+| `session/cancel` | Cancel only the run identified by the observed `session_started` sequence; stale generations are no-ops |
 | `session/get` | Return session summary, messages, and events |
 | `session/list` | Return known session summaries |
 | `schedule/get` | Read a durable scheduler job by ID |

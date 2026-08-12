@@ -102,6 +102,7 @@ Typed events are the runtime's nervous system. String breadcrumbs may exist only
 ### Directives
 
 - Provider streaming is a kernel contract. If a provider supports SSE deltas, deltas must persist before the final assistant response.
+- Interactive `session/cancel` carries `expected_run_seq` equal to the exact observed `session_started.seq`. Missing, unobserved, or stale generations are typed no-ops; shutdown may cancel without a generation only after it fences new admission.
 - TUI progress is a read model over `events.jsonl`, not a separate speculative status bus.
 - Tool spans update a single keyed row in clients. Do not append request/start/done rows for one tool invocation.
 - Child activity uses one keyed `group_id + task_id` row. Tool phases update its typed state marker; the `assistant_response` boundary supplies the bounded child turn summary from `sessions/summaries.jsonl`.

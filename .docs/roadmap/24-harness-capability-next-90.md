@@ -63,8 +63,9 @@ advance the queue until the real installed consumer path proves it.
 | 15 | delete/consolidate | closed | The tracked TUI advances only by exact `events.jsonl` sequence; the 512-entry timestamp/type/text cache and periodic full-event reconciliation are deleted. Identical events at one timestamp render twice, replay renders neither twice, sequence gaps fetch only the durable suffix, the 1,934-test graph and ReleaseFast 9/9 pass, and the installed binary returns exactly sequences 2–4 after `after_seq=1`. |
 | 16 | delete/consolidate | closed | One typed serializer owns raw command-byte encoding; the hand-rendered output JSON and unused top-level `bytes_b64` path are deleted. The 1,936-test graph and ReleaseFast 9/9 pass. Installed replay returned contiguous event sequences 2–12, reconstructed stdout `0080E280A8FF` and capped stderr `FF010080E280A8FE`, decoded the ledger as strict UTF-8, and left zero processes. No spill-file subsystem was added. |
 | 17 | delete/consolidate | closed | One shared LF-only `PrefixReader` now owns BOM, UTF-8, JSON/schema, and strictly increasing sequence boundaries for events, messages, context, intents, and summaries; append refuses a poisoned current suffix without rewriting bytes. The graph passes 19/19 and 1,944/1,944; ReleaseFast and installed SHA-256 equal `86724BD0346E6B6079BFBA2DD64A2559C359DAED7DA9C7B5D69B98705983C344`. Installed `session/get` returned one-row event/message prefixes before duplicate/torn rows, and cancellation could not append behind poison. A full live-root audit found and reversibly quarantined 877 legacy test-fixture sessions, then verified 29,937 ledgers / 1,417,061 rows / 235,074,120 bytes with zero integrity defects. CRC, sidecars, auto-truncation, and a repair daemon were deleted from the design. |
+| 18 | consolidate | closed | Interactive cancellation now targets the exact observed `session_started.seq`; missing, unobserved, and stale generations are typed no-ops, while admission-fenced shutdown remains unconditional. A delayed installed race proved stale sequences 1 and 6 could not kill newer runs, exact sequence 11 produced `session_cancelled`, and the kernel exited cleanly. The graph passes 19/19 and 1,950/1,950; ReleaseFast and installed SHA-256 equal `B361AD2A66609590236E4967517718C7ECD3563E7474578D08009D09622E1FA4`; the 130-segment GGUF audit found zero candidate or exact pairs. |
 | 31 | delete/consolidate | closed | Retired prompt leak and brittle prose assertions removed; broad graph green. |
-| 38 | consolidate | closed | Latest ReleaseFast and `%LOCALAPPDATA%/Vantari/bin/vantari.exe` share SHA-256 `86724BD0346E6B6079BFBA2DD64A2559C359DAED7DA9C7B5D69B98705983C344`; installer and isolated installed smokes exit cleanly. Historical replacement hashes remain in the changelog. |
+| 38 | consolidate | closed | Latest ReleaseFast and `%LOCALAPPDATA%/Vantari/bin/vantari.exe` share SHA-256 `B361AD2A66609590236E4967517718C7ECD3563E7474578D08009D09622E1FA4`; installer and isolated installed smokes exit cleanly. Historical replacement hashes remain in the changelog. |
 
 ## Competitive basis
 
@@ -224,7 +225,7 @@ advance the queue until the real installed consumer path proves it.
 
 ## Immediate frontier
 
-Start at move 18. Moves 1-20 are the non-negotiable integrity floor. Moves 21-30
+Start at move 19. Moves 1-20 are the non-negotiable integrity floor. Moves 21-30
 turn the current in-process pool into the persistent system the operator asked
 for. Do not spend implementation time on PLUG, context sharding, or autonomous
 repair while either band remains red.

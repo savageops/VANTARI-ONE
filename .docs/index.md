@@ -29,6 +29,7 @@ This directory contains project records, research, planning chains, and complete
 - [`research/2026-08-12-full-harness-sitrep.md`](research/2026-08-12-full-harness-sitrep.md) — full design, owner, pipeline, method, proof, competitive harvest, readiness concerns, and WIP accountability.
 - [`todo/findings/00-INDEX.md`](todo/findings/00-INDEX.md) — executable P0/P1/P2 closure order; current authority over older completion claims.
 - [`roadmap/24-harness-capability-next-90.md`](roadmap/24-harness-capability-next-90.md) — 90 dependency-ordered moves ranked by operator value, capability leverage, integrity risk, and friction removed.
+- [`roadmap/18-generation-bound-cancellation.md`](roadmap/18-generation-bound-cancellation.md) — closed exact-run cancellation contract, seven-source harvest, stale-generation race, and installed Windows proof.
 - [`roadmap/17-byte-level-session-integrity.md`](roadmap/17-byte-level-session-integrity.md) — closed valid-prefix and poisoned-tail append contract, six-source storage harvest, installed proof, and reversible production-state reconciliation.
 - [`research/2026-08-09-tui-status-surface-and-repair-loop.md`](research/2026-08-09-tui-status-surface-and-repair-loop.md) — compact TUI telemetry, durable summary projection, and repair-loop boundary.
 - [`research/2026-08-10-ticket-agent-pool-and-repair-queue.md`](research/2026-08-10-ticket-agent-pool-and-repair-queue.md) — buffered ticket admission, fixed agent capacity, leases, and stale-owner repair.

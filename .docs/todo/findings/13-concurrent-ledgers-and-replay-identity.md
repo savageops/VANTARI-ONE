@@ -11,7 +11,7 @@ source: ../../research/2026-08-12-full-harness-sitrep.md
 
 ## Finding
 
-Session summary mutation and per-session message append are serialized and append-only. Stdio carries exact stored event sequence and the tracked TUI consumes it directly with demand-driven suffix repair. One shared reader now owns the valid-prefix byte and sequence boundary across ledgers. The remaining defect is adversarial scale, not producer, recovery, or shipped-client identity.
+Session summary mutation and per-session message append are serialized and append-only. Stdio carries exact stored event sequence and the tracked TUI consumes it directly with demand-driven suffix repair. One shared reader now owns the valid-prefix byte and sequence boundary across ledgers. Interactive cancellation also binds to the observed run sequence, so a delayed request cannot mutate newer work. The remaining defect is adversarial scale, not producer, recovery, cancellation identity, or shipped-client identity.
 
 ## Evidence
 
@@ -27,6 +27,9 @@ Session summary mutation and per-session message append are serialized and appen
   LF framing, BOM handling, UTF-8/JSON/schema admission, and strictly increasing
   sequence boundaries for event, message, context, intent, and summary readers.
   `appendJsonlRecord` refuses a poisoned current suffix without changing bytes.
+- Closed move 18: [stdio_rpc.zig](../../../apps/backend/src/host/stdio_rpc.zig)
+  binds one admitted run to its durable `session_started.seq`; the TUI carries
+  that sequence as `expected_run_seq`, and stale generations are typed no-ops.
 
 ## Required mechanism
 
@@ -55,7 +58,7 @@ Carry the exact stored event sequence and byte payload through one versioned pro
 - 100 synchronized mixed-role message appends retained 100 rows with unique
   monotonic sequences; a 32,768-line poisoned-prefix fixture continued from the
   valid tail row without the removed full-transcript sequencer.
-- The complete graph passes 1,944/1,944. Installed `session/send` wrote four
+- The complete graph passes 1,950/1,950. Installed `session/send` wrote four
   contiguous unique `user,assistant,tool,assistant` rows and emitted 12 unique
   monotonic event notifications ending on the stored `turn_finished` sequence.
   Installed `session/get` after sequence 1 returned contiguous sequences 2–12;
@@ -72,6 +75,12 @@ Carry the exact stored event sequence and byte payload through one versioned pro
 - Move 17's broader GGUF audit inspected 124 segments. Three candidate pairs
   were adjacent scenario setup in tests; zero exact pair and no duplicate
   production owner were found.
+- Move 18's installed delayed race observed sequences 1, 6, and 11. Stale
+  cancels for 1 and 6 did not stop newer work; exact 11 produced
+  `session_cancelled`. Source and installed hashes equal
+  `B361AD2A66609590236E4967517718C7ECD3563E7474578D08009D09622E1FA4`; the
+  130-segment GGUF audit found zero candidate or exact pairs, and zero process
+  remained.
 - Finding remains pending only for move 20's 100-way adversarial mesh.
 
 ## Out of scope

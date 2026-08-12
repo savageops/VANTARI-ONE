@@ -1,5 +1,28 @@
 # Execution Log
 
+## 2026-08-12 - Generation-bound cancellation
+
+**Outcome:** Closed move 18 by binding interactive cancellation to the exact
+durable run generation already observed on the event spine.
+
+- `session_started.seq` is the run identity. The host binds it before event
+  emission; the tracked TUI reuses it as `expected_run_seq` for replay and live
+  cancellation.
+- Missing, unobserved, and stale generations return typed no-op outcomes. Only
+  the matching active generation sets `cancel_requested`. Shutdown still fences
+  admission before unconditional active-run cancellation.
+- Harvested exact-execution identity from OpenAI Codex, Vercel Eve, LangGraph,
+  AutoGen, OpenAI Agents SDK, Temporal, and pi. A random UUID, cancellation
+  ledger, watcher, and provider-specific abort path were rejected.
+- The graph passes 19/19 and 1,950/1,950; ReleaseFast passes 9/9. The packaged
+  GGUF audit inspected 130 segments and found zero candidate or exact pairs.
+- Source and installed SHA-256 match
+  `B361AD2A66609590236E4967517718C7ECD3563E7474578D08009D09622E1FA4`.
+  The installed race observed sequences 1, 6, and 11: stale sequences 1 and 6
+  could not cancel newer work; exact 11 returned `requested` and persisted
+  `session_cancelled`. The kernel exited 0 and zero VANTARI process remained.
+- Next owner: move 19, require one typed terminal event for every terminal path.
+
 ## 2026-08-12 - Shared JSONL valid-prefix contract
 
 **Outcome:** Closed move 17 by consolidating event, message, context, intent, and

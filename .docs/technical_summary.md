@@ -117,9 +117,9 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,944/1,944 tests with zero skips.
-  Its 224-test host lane executes the formerly dormant stdio client/server and
-  shared process-tree tests; the backend TUI lane passes 59/59.
+- The complete graph passes 19/19 steps and 1,950/1,950 tests with zero skips.
+  Its 237-test host lane executes the formerly dormant stdio client/server and
+  shared process-tree tests; the backend TUI lane passes 61/61.
 - Parent-shell production-home probes kept 99,960 files, 693,051,144 bytes,
   config/auth hashes, and process inventory unchanged across graph and direct
   proof.
@@ -155,6 +155,9 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   steer messages. Buffer identity and preview share one session-keyed projection.
   Shutdown fences late starts, signals active turns before join, and persisted
   exactly one cancellation terminal event under a blocked provider request.
+- Interactive cancellation binds to the durable `session_started.seq` observed by
+  the client. Missing, unobserved, and stale `expected_run_seq` values are typed
+  no-ops; shutdown remains unconditional only after admission is fenced.
 - Session summaries are append-only v2 rows with stable sequence identity,
   latest-row projection, poisoned-suffix continuation, and one-time v1 import.
   One hundred concurrent writers retained all 100 rows; the local GGUF dupe
@@ -178,7 +181,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   exactly. No CRC fields, sidecar quarantine ledger, auto-truncation path, or
   repair daemon was added.
 - Built and installed ReleaseFast SHA-256 both equal
-  `86724BD0346E6B6079BFBA2DD64A2559C359DAED7DA9C7B5D69B98705983C344`.
+  `B361AD2A66609590236E4967517718C7ECD3563E7474578D08009D09622E1FA4`.
 - Installed `session/send` against a disposable local provider imported all
   1,176 legacy summary rows, appended one terminal v2 row, retained 1,177
   unique sequences, wrote contiguous unique `user,assistant,tool,assistant`
@@ -190,7 +193,10 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - The installed settings smoke flips `runtime.full_access_mode` to `true` in a
   disposable workspace, receives `var1.config_set.v1` in 5 ms, removes the
   isolated runtime, preserves the complete live root, and leaves zero process.
-- Moves 5–17 and finding 10 are closed. Finding 13 is narrowed to move 20's
+- The installed cancellation race observed run sequences 1, 6, and 11. Delayed
+  cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
+  returned `requested`, produced `session_cancelled`, and exited with zero process.
+- Moves 5–18 and finding 10 are closed. Finding 13 is narrowed to move 20's
   adversarial burst mesh; persistent agent execution and inter-process scheduler
   arbitration remain P0.
 - The hive direction is assigned to moves 21–30 and finding 11. The target is

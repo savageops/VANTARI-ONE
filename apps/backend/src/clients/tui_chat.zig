@@ -186,6 +186,8 @@ const ChatState = struct {
     last_transport_sequence: u64 = 0,
     /// Exact per-session events.jsonl replay cursor.
     last_event_seq: u64 = 0,
+    /// Exact session_started event sequence for the run this TUI observed.
+    active_run_seq: u64 = 0,
     last_transcript_body_width: usize = 80,
     history_entries: std.ArrayList([]u8) = .{},
     history_cursor: usize = 0,
@@ -348,6 +350,7 @@ const ChatState = struct {
         self.messages.clearRetainingCapacity();
         self.last_transport_sequence = 0;
         self.last_event_seq = 0;
+        self.active_run_seq = 0;
         self.scroll_offset = 0;
         self.waiting = false;
         self.cancel_requested = false;
@@ -365,6 +368,7 @@ const ChatState = struct {
             }
             if (event.seq <= self.last_event_seq) continue;
             if (event.seq != try nextProgressSeq(self.last_event_seq)) return error.EventSequenceGap;
+            self.trackRunEvent(event.seq, event.event_type);
             self.last_event_seq = event.seq;
             if (replayProgressEvent(event.event_type)) try self.addProgress(event.event_type, event.message);
         }
@@ -433,6 +437,7 @@ const ChatState = struct {
         self.status = "RUNNING";
         self.waiting = true;
         self.cancel_requested = false;
+        self.active_run_seq = 0;
         self.received_assistant_delta = false;
         try self.startAssistantPlaceholder();
         input.clearAndFree();
@@ -670,8 +675,22 @@ const ChatState = struct {
         if (seq != try nextProgressSeq(self.last_event_seq)) return error.EventSequenceGap;
 
         const changed = try self.applyProgressEvent(event_type, message);
+        self.trackRunEvent(seq, event_type);
         self.last_event_seq = seq;
         return changed;
+    }
+
+    fn trackRunEvent(self: *ChatState, seq: u64, event_type: []const u8) void {
+        if (std.mem.eql(u8, event_type, "session_started")) {
+            self.active_run_seq = seq;
+            return;
+        }
+        if (std.mem.eql(u8, event_type, "assistant_response") or
+            std.mem.eql(u8, event_type, "session_cancelled") or
+            std.mem.eql(u8, event_type, "session_failed"))
+        {
+            self.active_run_seq = 0;
+        }
     }
 
     fn applyProgressEvent(self: *ChatState, event_type: []const u8, message: []const u8) !bool {
@@ -1224,12 +1243,36 @@ const ChatState = struct {
 
     fn requestCancel(self: *ChatState, session_id: []const u8) !void {
         if (self.cancel_requested) return;
+        if (self.active_run_seq == 0) {
+            _ = self.syncProgressAfterSeq(session_id) catch false;
+        }
+        if (self.active_run_seq == 0) {
+            try self.add(.system, "No active run to cancel.");
+            return;
+        }
+
+        const params = try renderCancelParams(self.allocator, session_id, self.active_run_seq);
+        defer self.allocator.free(params);
+        const call = try self.client.call(protocol.methods.session_cancel, params);
+        defer call.deinit(self.allocator);
+        const result_json = try expectKernelResult(self.allocator, call);
+        defer self.allocator.free(result_json);
+        var parsed = try std.json.parseFromSlice(protocol.SessionCancelResult, self.allocator, result_json, .{
+            .ignore_unknown_fields = true,
+        });
+        defer parsed.deinit();
+
+        if (!parsed.value.cancellation_requested) {
+            if (std.mem.eql(u8, parsed.value.outcome, "stale_run")) {
+                try self.add(.system, "Cancel ignored: the active run changed.");
+            } else {
+                try self.add(.system, "No active run was cancelled.");
+            }
+            return;
+        }
+
         self.cancel_requested = true;
         self.status = "CANCELLING";
-        const params = try renderJsonAlloc(self.allocator, .{ .session_id = session_id });
-        defer self.allocator.free(params);
-        const call = self.client.call(protocol.methods.session_cancel, params) catch return;
-        call.deinit(self.allocator);
         try self.add(.progress, "cancelling");
     }
 
@@ -3338,6 +3381,46 @@ fn expectKernelResult(allocator: std.mem.Allocator, call: stdio_rpc.RpcCallResul
 
 fn renderJsonAlloc(allocator: std.mem.Allocator, value: anytype) ![]u8 {
     return std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(value, .{})});
+}
+
+fn renderCancelParams(allocator: std.mem.Allocator, session_id: []const u8, expected_run_seq: u64) ![]u8 {
+    return renderJsonAlloc(allocator, .{
+        .session_id = session_id,
+        .expected_run_seq = expected_run_seq,
+    });
+}
+
+test "tui cancel params carry the exact observed run generation" {
+    const params = try renderCancelParams(std.testing.allocator, "session-one", 73);
+    defer std.testing.allocator.free(params);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, params, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("session-one", parsed.value.object.get("session_id").?.string);
+    try std.testing.expectEqual(@as(i64, 73), parsed.value.object.get("expected_run_seq").?.integer);
+}
+
+test "tui run generation follows session lifecycle events" {
+    var state = ChatState{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .workspace_root = "workspace",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    _ = try state.recordProgressEvent(1, "session_started", "");
+    try std.testing.expectEqual(@as(u64, 1), state.active_run_seq);
+    _ = try state.recordProgressEvent(2, "assistant_response", "done");
+    try std.testing.expectEqual(@as(u64, 0), state.active_run_seq);
+    _ = try state.recordProgressEvent(3, "session_started", "");
+    try std.testing.expectEqual(@as(u64, 3), state.active_run_seq);
+    _ = try state.recordProgressEvent(4, "session_failed", "failed");
+    try std.testing.expectEqual(@as(u64, 0), state.active_run_seq);
 }
 
 test "tui stream cadence coalesces bursts without delaying an idle first frame" {

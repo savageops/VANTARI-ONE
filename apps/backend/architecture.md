@@ -18,11 +18,12 @@ This is the canonical architecture map for the current `VAR1` agent-session runt
 This document describes both current owners and target invariants. The
 [2026-08-12 full-harness SITREP](../../.docs/research/2026-08-12-full-harness-sitrep.md)
 is the current promotion boundary: agent execution is fixed-pool and
-process-local; scheduler lease acquisition is not inter-process atomic; stdio
-notifications still drop stored event sequence values. Host request ownership,
-same-session admission, buffer projection, shutdown cancellation, test-root
-isolation, append-only summary revisions, and per-session message sequencing are
-closed. Treat the remaining findings as authoritative over older shipped claims.
+process-local, and scheduler lease acquisition is not inter-process atomic.
+Exact stored event sequence transport, shipped-TUI replay, generation-bound
+interactive cancellation, host request ownership, same-session admission,
+buffer projection, shutdown cancellation, test-root isolation, append-only
+summary revisions, and per-session message sequencing are closed. Treat the
+remaining findings as authoritative over older shipped claims.
 
 ## Runtime slice
 
@@ -428,7 +429,7 @@ all sibling transcripts or create a generic topic/subscription broker.
 - `src/host/stdio_client.zig`
   local kernel child-process lifecycle, request/notification transport, response correlation, and monotonic notification queue
 - `src/host/stdio_rpc.zig`
-  bounded kernel-side JSON-RPC dispatch, atomic turn admission, session-keyed buffer projection, cancellation-before-join shutdown, subscriptions, and response emission
+  bounded kernel-side JSON-RPC dispatch, atomic turn admission, session-keyed buffer projection, exact-generation interactive cancellation, cancellation-before-join shutdown, subscriptions, and response emission
 - `src/host/bridge_access.zig`
   local HTTP bridge access policy for origin checks, token validation, key-and-value redaction, audit classification, and durable audit event emission
 - `src/host/http_bridge.zig`
@@ -476,6 +477,7 @@ The current validation lane should always prove these slices together:
 - heartbeat/evaluator evidence appends redacted non-mutating events
 - auto and provider-overflow compaction write observable checkpoint/event records
 - session JSONL projections stop at one typed valid-prefix boundary, and append refuses malformed or partial current suffix rows without rewriting append-only history
+- interactive cancellation mutates only the run whose observed `session_started.seq` matches `expected_run_seq`; delayed generations are typed no-ops
 - context reconstruction reads `session.json`, latest valid `context.jsonl` checkpoint, and `messages.jsonl` through `core/context/builder.zig`
 - explicit prompt-layer configuration fails closed when the configured file is missing or empty
 - the runtime-owned burst/checkpoint/continuation contract survives project prompt overrides
@@ -487,18 +489,23 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-12:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Isolated broad test graph -> 19/19 steps and 1936/1936 tests passed.
-- Focused backend TUI -> 59/59 passed.
-- Host lifecycle -> 224/224 passed, including atomic same-session admission,
-  session-keyed buffer state, cancellation-before-join shutdown, RPC deadlines,
-  late-response retirement, and Windows Job Object ownership.
+- Isolated broad test graph -> 19/19 steps and 1950/1950 tests passed.
+- Focused backend TUI -> 61/61 passed.
+- Host lifecycle -> 237/237 passed, including atomic same-session admission,
+  session-keyed buffer state, exact-generation cancellation,
+  cancellation-before-join shutdown, RPC deadlines, late-response retirement,
+  and Windows Job Object ownership.
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Built and installed SHA-256 both equal
-  `86724BD0346E6B6079BFBA2DD64A2559C359DAED7DA9C7B5D69B98705983C344`.
+  `B361AD2A66609590236E4967517718C7ECD3563E7474578D08009D09622E1FA4`.
 - Installed settings transport flipped `runtime.full_access_mode` in an isolated
   workspace, removed all generated state, preserved the live root, and left
   zero VANTARI process.
+- Installed delayed-cancel proof observed run sequences 1, 6, and 11. Cancels
+  for sequences 1 and 6 returned `stale_run` without stopping newer work; the
+  exact sequence 11 returned `requested`, persisted `session_cancelled`, exited
+  the kernel cleanly, and left zero VANTARI process.
 - Installed tool-turn catch-up after sequence 1 returned contiguous stored
   sequences 2–12. Two `tool_output_delta` rows reconstructed stdout
   `0080E280A8FF` and capped stderr `FF010080E280A8FE`; the strict UTF-8 ledger

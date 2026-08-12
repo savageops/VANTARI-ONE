@@ -303,7 +303,8 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 
 | Mechanism | Current state | Exact boundary |
 |---|---|---|
-| Append-only event spine | **Source-proven, client replay partial** | events.jsonl stores monotonic sequence numbers; stdio notifications currently drop seq and the TUI falls back to timestamp/type/text deduplication. |
+| Append-only event spine | **Source and installed proven** | `events.jsonl` stores monotonic sequence numbers; stdio notifications carry the exact stored sequence and the tracked TUI advances only by that identity with demand-driven suffix repair. |
+| Generation-bound cancellation | **Source and installed proven** | The tracked TUI sends the observed `session_started.seq` as `expected_run_seq`; missing, unobserved, and stale generations do not mutate a newer run. Shutdown retains an admission-fenced unconditional path. |
 | Message transcript writer | **Source and installed proven** | One per-session owner serializes every message role and initializes sequence from a bounded valid tail. Multi-process writer ownership remains coupled to the persistent-host work. |
 | Child branch/convergence | **In-process proven** | Fixed-pool convergence works while the kernel lives; process restart marks running receipts stale instead of resuming a worker. |
 | Write-intent ledger | **Frontier scaffold** | Reserve/commit helpers and tests exist; write-capable tools do not call them on the canonical mutation path. |

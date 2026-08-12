@@ -109,6 +109,8 @@ pub const SessionCancelResult = struct {
     session_id: []const u8,
     status: []const u8,
     cancellation_requested: bool,
+    outcome: []const u8,
+    active_run_seq: ?u64 = null,
 };
 
 pub const ScheduleSummary = struct {
