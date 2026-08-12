@@ -109,6 +109,8 @@ owner shutdown -> drain accepted loopback connections -> close child stdin
 Automatic discovery may consume `VANTARI_WORKSPACE`; an already explicit owner
 selection may not. `config.loadDefaultForExplicitWorkspace` pins config, auth,
 ledgers, and the owner projection to the selected root before child creation.
+`run --session-id` submits through this owner. No per-session worker executable
+or second direct executor path exists.
 
 `BufferProjection` binds session identity and preview under one mutex. Callbacks
 carry their originating session ID; late prior-session previews are discarded,

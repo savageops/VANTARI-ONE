@@ -481,6 +481,33 @@ test "owner rpc requires its private token and preserves exact kernel output" {
     try std.testing.expect(std.mem.indexOf(u8, response.body, "[redacted]") == null);
 }
 
+test "owner rpc carries session submission through the sole kernel transport" {
+    var ctx = MockKernelContext.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.seedInitializedSession("session-owner-submit", "existing prompt");
+    var bridge = makeBridge(std.testing.allocator, &ctx);
+
+    const response = try VAR1.host.http_bridge.routeWithOwnerAccess(
+        std.testing.allocator,
+        &bridge,
+        .POST,
+        "/owner/rpc",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"owner-submit-1\",\"method\":\"session/send\",\"params\":{\"session_id\":\"session-owner-submit\"}}",
+        null,
+        null,
+        VAR1.host.http_bridge.test_owner_token,
+    );
+    defer response.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(std.http.Status.ok, response.status);
+    try std.testing.expectEqualStrings(VAR1.shared.protocol.types.methods.session_send, ctx.last_method.?);
+    try std.testing.expect(std.mem.indexOf(u8, ctx.last_params.?, "session-owner-submit") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "\"status\":\"completed\"") != null);
+    const session = ctx.findSession("session-owner-submit").?;
+    try std.testing.expectEqualStrings("session_started", session.events.items[0].event_type);
+    try std.testing.expectEqualStrings("assistant_response", session.events.items[1].event_type);
+}
+
 test "owner health proves generation and workspace without exposing either token" {
     var ctx = MockKernelContext.init(std.testing.allocator);
     defer ctx.deinit();

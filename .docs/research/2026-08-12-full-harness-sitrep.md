@@ -12,7 +12,7 @@ scope: full-harness
 
 VANTARI has a strong kernel thesis and several unusually good local mechanisms: one context compiler, append-only transcript and event ledgers, typed tool review and dispatch, bounded Windows process execution, provider-wire separation, one project-local execution owner around fixed agent capacity, and a compact TUI read model. The architecture is materially better than a chat-wrapper harness.
 
-The current checkout is not production-ready for persistent autonomous execution. Its critical gap is not model intelligence or UI polish. Move 21 now separates presentation lifetime from execution lifetime in source: TUI/CLI detach leaves one owner/kernel/pool generation alive. Exact active-turn reconciliation after owner death, inter-process scheduler/ticket claims, durable agent messaging, and installed artifact parity remain open. Host request lifetime, test isolation, append-only summary mutation, per-session message sequencing, exact event sequence transport, and shipped-TUI replay are closed. Chain 036 remains pending until moves 22–30 close the process-failure contract.
+The current checkout is not production-ready for persistent autonomous execution. Its critical gap is not model intelligence or UI polish. Move 21 now separates presentation lifetime from execution lifetime in source: TUI/CLI detach leaves one owner/kernel/pool generation alive. Move 22 removed the unused per-session executor that bypassed that owner. Exact active-turn reconciliation after owner death, inter-process scheduler/ticket claims, durable agent messaging, and installed artifact parity remain open. Host request lifetime, test isolation, append-only summary mutation, per-session message sequencing, exact event sequence transport, and shipped-TUI replay are closed. Chain 036 remains pending until moves 23–30 close the process-failure contract.
 
 Current classification:
 
@@ -20,8 +20,8 @@ Current classification:
 |---|---|---|
 | Build | Pass | ReleaseFast builds 9/9 with Zig 0.15.1. |
 | Focused TUI | Pass | Backend TUI 61/61 with zero skips. |
-| Broad tests | Pass | Canonical isolated graph is 19/19 and 1,968/1,968 with zero skips. |
-| Installed proof | Historical pass through move 20; current replacement blocked | Installed move-19 SHA-256 remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`; current source is `3062D10908D9678793298BDD3982EF515A3D953C9085E1EE5C681856725EE00E`. Operator PIDs 12028/14452 are preserved until natural exit. |
+| Broad tests | Pass | Canonical isolated graph is 19/19 and 1,970/1,970 with zero skips. |
+| Installed proof | Historical pass through move 20; current replacement blocked | Installed move-19 SHA-256 remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`; current source is `899B9F340C4151A8E2D7EFD26F5778312F1EE82C93C8E0804DC36F954B9B9CA2`. Operator PIDs 12028/14452 are preserved until natural exit. |
 | Execution owner | Source pass | `LocalClient` reconnects to one workspace owner; 20/20 concurrent clients converge, foreground duplicate start is rejected, explicit workspace defeats inherited redirection, graceful/crash recovery creates one new generation, and teardown leaves zero proof-owned processes. |
 | Agent pool | Presentation-persistent; owner-crash recovery open | The fixed pool survives TUI/CLI exit. Owner restart still converts running receipts to `StaleAgentOwner`; exactly-once resume/requeue is not wired. |
 | Ticket persistence | Partial | Ticket events persist, but leader lease acquisition is read/check/write without an inter-process compare-and-swap. |
@@ -166,14 +166,14 @@ dispatches with `pool.spawn`
 ([supervisor.zig](../../apps/backend/src/core/agents/supervisor.zig#L379)). Closing
 the TUI no longer closes that owner/kernel tree. Cold recovery still turns
 initialized or running receipts into `StaleAgentOwner`
-([service.zig](../../apps/backend/src/core/agents/service.zig#L925)). The hidden
-`run-session` command exists, but no runtime caller launches it and owner death
-does not resume its in-memory work.
+([service.zig](../../apps/backend/src/core/agents/service.zig#L925)). Move 22
+deleted the uncalled direct `run-session` executor; `run --session-id` now has no
+parallel continuation path around the owner.
 
 Child completion currently reaches the parent through convergence-specific
 messages and control events. There is no general peer mailbox, group delivery,
 restart-safe unread cursor, or model-selected queue/wake path. The accepted
-direction for moves 22–30 is selective awareness: one sequence-addressed
+direction for moves 23–30 is selective awareness: one sequence-addressed
 direct/group/parent mailbox over the same session/event owner, canonical
 summaries and artifact references on demand, and no shared transcript or topic
 broker. Codex supplies queued versus wake-bearing delivery pressure; Claude Code
@@ -225,7 +225,7 @@ The producer/transport replay contract now carries exact identity: `SessionEvent
 |---|---|---|---|
 | P0-1 | Detached RPC workers outlive Server ownership | **Closed 2026-08-12.** The host formerly detached one thread per request and could free Server state first. | `Server` owns one bounded four-worker executor, caps admission at 32, returns typed overload, stops admission, fences late starts, signals active turns, joins, then frees services/state. A blocked provider request proved one terminal cancellation and no surviving worker. |
 | P0-2 | Session admission and buffer routing race | **Closed 2026-08-12.** The old check/set and split buffer identity surfaces could double-run a session or expose a freed/cross-session preview. | `Runtime.tryStartSession` is one atomic transition; losing prompts become bounded interjections. One `BufferProjection` owns session identity plus preview and rejects late prior-session callbacks. |
-| P0-3 | Owner-crash recovery and agent collaboration are incomplete | **Move 21 source slice closed:** the fixed pool survives presentation detach in one owner tree. Owner restart still marks work stale; `run-session` is advertised but never launched. Completion has a special parent convergence path, but peers lack durable directed/group/parent mail and unread replay. | Retain the one execution owner. Route or delete `run-session`, add generation-fenced exactly-once resume/requeue, and replace convergence-only delivery with one sequence-addressed session/event mailbox. Do not add a second scheduler, shared transcript, or generic broker. |
+| P0-3 | Owner-crash recovery and agent collaboration are incomplete | **Moves 21–22 source slices closed:** the fixed pool survives presentation detach in one owner tree, and the dead per-session executor is deleted. Owner restart still marks work stale. Completion has a special parent convergence path, but peers lack durable directed/group/parent mail and unread replay. | Retain the one execution owner. Add generation-fenced exactly-once resume/requeue and replace convergence-only delivery with one sequence-addressed session/event mailbox. Do not add a second scheduler, shared transcript, or generic broker. |
 | P0-4 | Scheduler leader lease can split-brain | [tryAcquireLease](../../apps/backend/src/core/scheduler/store.zig#L266) performs read/check/write with no inter-process lock or CAS. Two kernels can claim leadership. | Claim with a Windows-safe exclusive lock or create/replace protocol that verifies the owner generation after write before dispatch. |
 | P0-5 | Summary ledger loses concurrent updates | **Closed 2026-08-12.** The keyed v1 object was last-writer-wins and rewrote the full live ledger. | `summaries.jsonl` v2 appends stable sequenced revisions under one host-process owner, projects the greatest sequence per session, isolates poisoned suffixes, and imports the legacy object once. One hundred concurrent writers retained 100 rows and unique sequences. |
 | P0-6 | Broad tests write into live runtime state | **Closed 2026-08-12.** The invalid broad run, a later direct-test wrapper bypass, and 877 older initialized context-poison fixtures reached the live root. | Six build artifacts and both direct wrappers now assign generated cache-owned homes plus the cache-root guard. All three fixture sets are backed up or quarantined with manifests and rollback. The post-repair scan covers 29,937 ledgers and 1,417,061 rows with zero integrity defects. |

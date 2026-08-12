@@ -1856,3 +1856,39 @@ reconciliation, and terminal installed proof.
 
 **Next todo:** move 22 — route `run-session` through the persistent owner or
 delete the dead launcher-shaped path.
+
+## 2026-08-12 - Roadmap move 22 dead per-session executor deleted
+
+**Changed:**
+
+- Deleted the uncalled `run-session` command, direct executor-loop branch,
+  parser, and detached-worker help from `clients/cli.zig`: 138 production lines
+  removed and no replacement abstraction added.
+- Kept one continuation path: `run --session-id -> LocalClient -> /owner/rpc ->
+  session/send`. This preserves the persistent owner's fixed pool, nested agent
+  service, admission gate, event spine, and process supervision.
+- Added one negative CLI contract and one exact owner-route submission probe.
+  The latter observes `session_started` then `assistant_response` through the
+  sole kernel transport.
+
+**Validation:**
+
+- Source ownership search finds no launcher or production `run-session` symbol.
+- Pinned Zig 0.15.1 graph: 19/19 steps and 1,970/1,970 tests. ReleaseFast: 9/9.
+- ReleaseFast `help run-session` exits 2 with `unknown command`; root help omits
+  the retired name.
+- Hidden execution-owner tracer passes on the final artifact with one generation,
+  two reconnects, explicit-workspace precedence, and cleanup. Evidence root:
+  `.zig-cache/owner-proofs/9de64f4dbfe9483684875605ad39de10`.
+- Source SHA-256 is
+  `899B9F340C4151A8E2D7EFD26F5778312F1EE82C93C8E0804DC36F954B9B9CA2`.
+  Installed SHA-256 remains
+  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
+  operator-owned PIDs 12028 and 14452 remain untouched.
+
+**Boundary:** Move 23 owns scheduler leadership fencing. Active-turn owner-crash
+reconciliation, ticket claim serialization, mailbox delivery, and installed
+replacement remain later explicit moves.
+
+**Next todo:** move 23 — replace scheduler read/check/write leadership with one
+inter-process exclusive claim and owner-generation fence.

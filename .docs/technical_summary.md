@@ -143,9 +143,9 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,968/1,968 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,970/1,970 tests with zero skips.
   Its 239-test host lane executes the stdio child, owner state/client, bridge,
-  and shared process-tree contracts; the 1,508-test integration lane includes
+  and shared process-tree contracts; the 1,510-test integration lane includes
   exact owner route, lease, stalled-loopback deadline, and explicit-workspace
   precedence probes. The backend
   TUI lane passes 61/61.
@@ -189,6 +189,11 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   `VANTARI_WORKSPACE` cannot redirect an explicit owner root. The 110-segment
   GGUF owner audit found two declaration/import adjacency candidates, zero exact
   duplicates, and no shadow lifecycle or transport owner.
+- The uncalled `run-session` direct executor is deleted with its parser and false
+  detached-worker help. `run --session-id` remains the only CLI continuation
+  path and submits through `LocalClient`, owner `/owner/rpc`, and kernel
+  `session/send`. An exact owner-route probe observes `session_started` then
+  `assistant_response`; ReleaseFast rejects `help run-session` as unknown.
 - Same-session admission is one atomic transition; losing prompts become bounded
   steer messages. Buffer identity and preview share one session-keyed projection.
   Shutdown fences late starts, signals active turns before join, and persisted
@@ -226,7 +231,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - The last installed-proven move-19 artifact remains SHA-256
   `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
   Current source ReleaseFast is
-  `3062D10908D9678793298BDD3982EF515A3D953C9085E1EE5C681856725EE00E`.
+  `899B9F340C4151A8E2D7EFD26F5778312F1EE82C93C8E0804DC36F954B9B9CA2`.
   Replacement is blocked while operator-owned installed PIDs 12028 and 14452
   remain active; source/installed equality is not claimed.
 - Installed `session/send` against a disposable local provider imported all
@@ -245,12 +250,12 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
   returned `requested` and exited with zero process. Its legacy terminal name is
   retained only as historical proof; move 19 removed that writer.
-- Moves 5–20 plus findings 10 and 13 are closed. Move 21 is source-complete and
-  awaits the installed replacement gate. Six synchronized 100-way probes cover
+- Moves 5–20 and 22 plus findings 10 and 13 are closed. Move 21 is source-complete
+  and awaits the installed replacement gate. Six synchronized 100-way probes cover
   admission, summary, message, event, tracked-TUI replay, and shutdown. The
-  latest canonical graph passes 1,968/1,968. Mid-turn owner-crash recovery and
+  latest canonical graph passes 1,970/1,970. Mid-turn owner-crash recovery and
   inter-process scheduler arbitration remain P0.
-- The hive direction is assigned to moves 22–30 and finding 11. The target is
+- The hive direction is assigned to moves 23–30 and finding 11. The target is
   one durable direct/group/parent mailbox over session/event ownership,
   selective summary/artifact awareness, and nested normal sessions. No general
   mailbox, restart-safe unread cursor, or peer wake path is shipped yet.

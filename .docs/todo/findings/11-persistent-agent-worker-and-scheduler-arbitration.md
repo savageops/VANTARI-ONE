@@ -24,7 +24,7 @@ direct/group/parent mailbox exists for restart-safe peer delivery.
 - [supervisor.zig:164](../../../apps/backend/src/core/agents/supervisor.zig#L164) owns std.Thread.Pool in-process.
 - [supervisor.zig:379](../../../apps/backend/src/core/agents/supervisor.zig#L379) dispatches with pool.spawn.
 - [service.zig:925](../../../apps/backend/src/core/agents/service.zig#L925) states that process restart converts running receipts to StaleAgentOwner.
-- [cli.zig:643](../../../apps/backend/src/clients/cli.zig#L643) defines run-session, but source ownership search found no launcher.
+- [cli.zig:814](../../../apps/backend/src/clients/cli.zig#L814) routes `run --session-id` through `LocalClient`; the dead direct `run-session` executor is removed.
 - [store.zig:266](../../../apps/backend/src/core/scheduler/store.zig#L266) performs lease read/check/write without CAS or an inter-process lock.
 - [roadmap move 21](../../roadmap/21-persistent-execution-owner.md) proves one
   owner/kernel generation across client detach, 20 concurrent clients,
@@ -33,8 +33,8 @@ direct/group/parent mailbox exists for restart-safe peer delivery.
 ## Required mechanism
 
 Retain the shipped-source execution owner and its sole `AgentService`/
-`Supervisor` composition. Wire or delete the dead `run-session` surface, claim
-scheduler leadership with an inter-process exclusive primitive, serialize ticket
+`Supervisor` composition. Claim scheduler leadership with an inter-process
+exclusive primitive, serialize ticket
 claim plus lease issuance, and verify owner generation before dispatch. Do not
 create a parallel pool.
 
@@ -57,7 +57,8 @@ registry, shared transcript, or message-created work lifecycle.
   transcripts into recipient context.
 
 Current receipt: TUI/CLI detach, duplicate-start exclusion, graceful owner stop,
-forced owner-tree cleanup, and one-generation recovery pass in source. Installed
+forced owner-tree cleanup, one-generation recovery, and deletion of the dead
+per-session executor pass in source. Installed
 replacement, active-turn owner-crash reconciliation, scheduler fencing, ticket
 claim serialization, and mailbox delivery remain open; this finding stays
 pending.

@@ -3,7 +3,6 @@ const agents = @import("../core/agents/service.zig");
 const config = @import("../core/config/resolver.zig");
 const config_file = @import("../core/config/file.zig");
 const workspace = @import("../core/config/workspace.zig");
-const loop = @import("../core/executor/loop.zig");
 const session_store = @import("../core/sessions/store.zig");
 const protocol_types = @import("../shared/protocol/types.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
@@ -686,90 +685,6 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
         defer agent_service.deinit();
         try stdio_rpc.serveKernel(allocator, &loaded_config, transport, agent_service.handle());
         return;
-    }
-
-    // run-session is the headless worker entry point. It loads an existing
-    // session by id and runs the executor loop in-process — no stdio RPC, no
-    // TUI, no client. This is the detached-subprocess primitive that lets a
-    // child agent survive its parent's crash: the parent spawns
-    // `vantari run-session --session-id <id> --workspace <root>` as a detached
-    // process, and the child runs to terminal status writing evidence to the
-    // shared session ledger. The parent monitors via ledger reads.
-    if (std.mem.eql(u8, command, "run-session")) {
-        const parsed = parseRunSessionArguments(iter) catch |err| {
-            try printInvalidArguments("run-session", run_session_help_text);
-            return err;
-        };
-        if (parsed.help_requested) {
-            try writeStdout(run_session_help_text);
-            return;
-        }
-        const workspace_root = try resolveWorkspaceRoot(allocator);
-        defer allocator.free(workspace_root);
-        try ensureKernelConfigAvailable(allocator, workspace_root);
-        const loaded_config = config.loadDefault(allocator, workspace_root) catch |err| {
-            try writeConfigLoadErrorEnvelope(err, workspace_root);
-            std.process.exit(1);
-        };
-        defer loaded_config.deinit(allocator);
-
-        const transport = provider.Transport{
-            .context = null,
-            .sendFn = provider.httpSend,
-            .streamFn = provider.httpSendStreaming,
-        };
-
-        // Verify the target session exists on disk before starting work.
-        var session = session_store.readSessionRecord(allocator, workspace_root, parsed.session_id) catch {
-            const envelope = try std.fmt.allocPrint(
-                allocator,
-                "VAR1_ERROR category=session code=NotFound message=\"session not found\" session_id={f}\n",
-                .{std.json.fmt(parsed.session_id, .{})},
-            );
-            defer allocator.free(envelope);
-            try writeStderr(envelope);
-            std.process.exit(1);
-        };
-        defer session.deinit(allocator);
-
-        // Emit a running status envelope so the parent (or operator) has a
-        // durable signal that the worker started.
-        const running_envelope = try renderSessionRunningEnvelope(allocator, parsed.session_id);
-        defer allocator.free(running_envelope);
-        try writeStderr(running_envelope);
-
-        // Run the executor loop in-process. This is the same loop the parent
-        // runs; the session_id makes it load the existing session rather than
-        // create a new one. Terminal status is persisted by the loop itself.
-        const result = loop.runPromptWithOptions(allocator, loaded_config, "", .{
-            .transport = transport,
-            .execution_context = .{
-                .workspace_root = loaded_config.workspace_root,
-            },
-            .session_id = parsed.session_id,
-        }) catch |err| {
-            const failure_reason = @errorName(err);
-            const failure_envelope = try renderSessionFailureEnvelope(allocator, parsed.session_id, failure_reason);
-            defer allocator.free(failure_envelope);
-            try writeStderr(failure_envelope);
-            // Map executor errors to exit codes: cancelled=2, other errors=1.
-            const exit_code: u8 = if (err == loop.Error.Cancelled) 2 else 1;
-            std.process.exit(exit_code);
-        };
-        defer result.deinit(allocator);
-
-        // Re-read the session to get the final terminal status for the exit code.
-        var terminal = session_store.readSessionRecord(allocator, workspace_root, parsed.session_id) catch {
-            std.process.exit(0);
-        };
-        defer terminal.deinit(allocator);
-        const exit_code: u8 = switch (terminal.status) {
-            .completed => 0,
-            .cancelled => 2,
-            .failed => 1,
-            else => 0,
-        };
-        std.process.exit(exit_code);
     }
 
     if (std.mem.eql(u8, command, "tools")) {
@@ -1490,7 +1405,6 @@ fn writeTruncated(writer: anytype, value: []const u8, max_bytes: usize) !void {
 pub fn helpText(command: ?[]const u8) ?[]const u8 {
     const name = command orelse return root_help_text;
     if (std.mem.eql(u8, name, "run")) return run_help_text;
-    if (std.mem.eql(u8, name, "run-session")) return run_session_help_text;
     if (std.mem.eql(u8, name, "c")) return sessions_help_text;
     if (std.mem.eql(u8, name, "continue")) return sessions_help_text;
     if (std.mem.eql(u8, name, "sessions")) return sessions_help_text;
@@ -1558,58 +1472,6 @@ fn parseRunArguments(iter: *std.process.ArgIterator) !ParsedRunArguments {
 
     if (parsed.help_requested) return parsed;
     if (prompt_source_count != 1) return error.InvalidArgs;
-    return parsed;
-}
-
-const ParsedRunSessionArguments = struct {
-    help_requested: bool = false,
-    session_id: []const u8 = "",
-};
-
-const run_session_help_text =
-    \\VAR1 run-session — headless worker for one session
-    \\
-    \\Loads an existing session by id and runs the executor loop in-process
-    \\without stdio RPC, TUI, or any client. Terminal status is persisted to
-    \\the session ledger; the process exit code reflects the outcome.
-    \\
-    \\This is the detached-subprocess primitive: a parent orchestrator spawns
-    \\`vantari run-session` as a detached process so the child survives a
-    \\parent crash and writes its evidence to the shared session ledger.
-    \\
-    \\Usage:
-    \\  VAR1 run-session --session-id <id>
-    \\
-    \\Flags:
-    \\  --session-id <id>   Required. The session to run to terminal status.
-    \\  -h, --help          Print this help.
-    \\
-    \\Exit codes:
-    \\  0  session completed successfully
-    \\  1  session failed
-    \\  2  session cancelled
-    \\  3  worker error (config, spawn, or transport)
-    \\
-;
-
-fn parseRunSessionArguments(iter: *std.process.ArgIterator) !ParsedRunSessionArguments {
-    var parsed = ParsedRunSessionArguments{};
-
-    while (iter.next()) |arg| {
-        if (parsed.help_requested) continue;
-        if (isHelpFlag(arg)) {
-            parsed.help_requested = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--session-id")) {
-            parsed.session_id = iter.next() orelse return error.InvalidArgs;
-            continue;
-        }
-        return error.InvalidArgs;
-    }
-
-    if (parsed.help_requested) return parsed;
-    if (parsed.session_id.len == 0) return error.InvalidArgs;
     return parsed;
 }
 

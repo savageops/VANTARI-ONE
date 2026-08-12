@@ -92,7 +92,7 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
 | **Kernel surface** | 115 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 1,968 passing backend cases across source and adversarial pipeline suites |
+| **Proof surface** | 1,970 passing backend cases across source and adversarial pipeline suites |
 | **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
 | **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |

@@ -669,3 +669,8 @@ test "cli session running envelope exposes started provider execution" {
         envelope,
     );
 }
+
+test "cli does not expose the retired per-session worker launcher" {
+    try std.testing.expect(VAR1.clients.cli.helpText("run-session") == null);
+    try expectNotContains(VAR1.clients.cli.root_help_text, "run-session");
+}
