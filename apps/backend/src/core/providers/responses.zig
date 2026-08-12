@@ -254,11 +254,40 @@ pub fn parseCompletionResponse(
 
     const model_str = if (root.get("model")) |m| (if (m == .string) m.string else configured_model) else configured_model;
 
+    var usage: types.Usage = .{};
+    captureResponsesUsage(root, &usage);
+    usage.reconcile();
+
     return .{
         .model = try allocator.dupe(u8, model_str),
         .content = if (content_buf.items.len > 0) try content_buf.toOwnedSlice() else null,
         .tool_calls = try tool_calls.toOwnedSlice(),
+        .usage = usage,
     };
+}
+
+/// Extract an OpenAI Responses usage object into the canonical Usage contract.
+/// `input_tokens_details.cached_tokens` becomes the cached bucket. Missing
+/// usage → fields unchanged (zeros by caller default). Why: the cost model
+/// must work for every wire protocol VANTARI speaks. Evidence: non-stream
+/// parse + response.completed stream event.
+fn captureResponsesUsage(root: std.json.ObjectMap, usage: *types.Usage) void {
+    const usage_value = root.get("usage") orelse return;
+    if (usage_value != .object) return;
+    const u = usage_value.object;
+    if (getU64(u, "input_tokens")) |value| usage.prompt_tokens = value;
+    if (getU64(u, "output_tokens")) |value| usage.completion_tokens = value;
+    if (getU64(u, "total_tokens")) |value| usage.total_tokens = value;
+    if (u.get("input_tokens_details")) |details| {
+        if (details == .object) {
+            if (getU64(details.object, "cached_tokens")) |value| usage.cached_tokens = value;
+        }
+    }
+}
+
+fn getU64(obj: std.json.ObjectMap, key: []const u8) ?u64 {
+    const value = obj.get(key) orelse return null;
+    return if (value == .integer) @intCast(value.integer) else null;
 }
 
 fn parseStreamResponse(
@@ -282,16 +311,18 @@ fn parseStreamResponse(
     }
 
     var cursor: usize = 0;
+    var usage: types.Usage = .{};
     while (cursor < response_body.len) {
         const remaining = response_body[cursor..];
         if (findSseBoundary(remaining)) |boundary| {
-            try parseSseEvent(allocator, remaining[0..boundary.event_end], &content, &tool_calls, &tc_accumulators);
+            try parseSseEvent(allocator, remaining[0..boundary.event_end], &content, &tool_calls, &tc_accumulators, &usage);
             cursor += boundary.remove_len;
             continue;
         }
-        try parseSseEvent(allocator, remaining, &content, &tool_calls, &tc_accumulators);
+        try parseSseEvent(allocator, remaining, &content, &tool_calls, &tc_accumulators, &usage);
         break;
     }
+    usage.reconcile();
 
     // Materialize accumulated tool calls.
     for (tc_accumulators.items) |acc| {
@@ -310,6 +341,7 @@ fn parseStreamResponse(
         .model = try allocator.dupe(u8, configured_model),
         .content = if (content.items.len > 0) try content.toOwnedSlice() else null,
         .tool_calls = try tool_calls.toOwnedSlice(),
+        .usage = usage,
     };
 }
 
@@ -340,6 +372,7 @@ fn parseSseEvent(
     content: *std.array_list.Managed(u8),
     tool_calls: *std.array_list.Managed(types.ToolCall),
     tc_accumulators: *std.array_list.Managed(TcAccumulator),
+    usage: *types.Usage,
 ) !void {
     _ = tool_calls;
     var event_data = std.array_list.Managed(u8).init(allocator);
@@ -369,6 +402,18 @@ fn parseSseEvent(
 
     // Response API streaming events: response.output_text.delta, response.function_call_arguments.delta, etc.
     const event_type = if (root.get("type")) |t| (if (t == .string) t.string else "") else "";
+
+    // Usage evidence: the terminal response.completed event carries the usage
+    // object at root, under response (standard), or under delta (some SDKs).
+    if (std.mem.eql(u8, event_type, "response.completed")) {
+        captureResponsesUsage(root, usage);
+        if (root.get("response")) |response| {
+            if (response == .object) captureResponsesUsage(response.object, usage);
+        }
+        if (root.get("delta")) |delta| {
+            if (delta == .object) captureResponsesUsage(delta.object, usage);
+        }
+    }
 
     if (std.mem.eql(u8, event_type, "response.output_text.delta") or
         std.mem.eql(u8, event_type, "response.output_text.added"))

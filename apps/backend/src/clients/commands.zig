@@ -164,8 +164,18 @@ pub fn renderHelp(allocator: std.mem.Allocator) ![]u8 {
     return output.toOwnedSlice();
 }
 
-/// Render the /status output as a string.
-pub fn renderStatus(allocator: std.mem.Allocator, workspace_root: []const u8, model: []const u8, session_id: ?[]const u8, effort: []const u8) ![]u8 {
+/// Session token/cost read model rendered by /status. Populated by the TUI
+/// from turn_finished v2 events (measured provider tokens + priced cost).
+pub const StatusTelemetry = struct {
+    prompt_tokens: u64 = 0,
+    completion_tokens: u64 = 0,
+    cached_tokens: u64 = 0,
+    cost_total_usd: ?f64 = null,
+};
+
+/// Render the /status output as a string. `telemetry` carries the session
+/// token/cost read model; null renders no telemetry lines.
+pub fn renderStatus(allocator: std.mem.Allocator, workspace_root: []const u8, model: []const u8, session_id: ?[]const u8, effort: []const u8, telemetry: ?StatusTelemetry) ![]u8 {
     var output = std.array_list.Managed(u8).init(allocator);
     errdefer output.deinit();
     const writer = output.writer();
@@ -179,8 +189,29 @@ pub fn renderStatus(allocator: std.mem.Allocator, workspace_root: []const u8, mo
     } else {
         try writer.writeAll("  Session:   (none)\n");
     }
+    if (telemetry) |t| {
+        var token_buf: [3][16]u8 = undefined;
+        try writer.print("  Tokens:    {s} in / {s} out / {s} cached\n", .{
+            formatTokens(&token_buf[0], t.prompt_tokens),
+            formatTokens(&token_buf[1], t.completion_tokens),
+            formatTokens(&token_buf[2], t.cached_tokens),
+        });
+        if (t.cost_total_usd) |cost| {
+            try writer.print("  Cost:      ${d:.6}\n", .{cost});
+        } else {
+            try writer.writeAll("  Cost:      (unpriced model)\n");
+        }
+    }
 
     return output.toOwnedSlice();
+}
+
+/// Render a token count with a k-suffix above 999 (1234 -> "1.2k").
+fn formatTokens(buf: *[16]u8, count: u64) []const u8 {
+    if (count < 1000) {
+        return std.fmt.bufPrint(buf, "{d}", .{count}) catch "?";
+    }
+    return std.fmt.bufPrint(buf, "{d:.1}k", .{@as(f64, @floatFromInt(count)) / 1000.0}) catch "?";
 }
 
 // ---------------------------------------------------------------------------
@@ -233,12 +264,46 @@ test "renderHelp groups commands by category" {
 
 test "renderStatus shows workspace model session" {
     const allocator = std.testing.allocator;
-    const status = try renderStatus(allocator, "/workspace", "glm-5-air", "sess-123", "high");
+    const status = try renderStatus(allocator, "/workspace", "glm-5-air", "sess-123", "high", null);
     defer allocator.free(status);
     try std.testing.expect(std.mem.indexOf(u8, status, "/workspace") != null);
     try std.testing.expect(std.mem.indexOf(u8, status, "glm-5-air") != null);
     try std.testing.expect(std.mem.indexOf(u8, status, "sess-123") != null);
     try std.testing.expect(std.mem.indexOf(u8, status, "high") != null);
+}
+
+test "renderStatus includes tokens and cost line when telemetry priced" {
+    const allocator = std.testing.allocator;
+    const status = try renderStatus(allocator, "/w", "deepseek-v4-flash", null, "high", .{
+        .prompt_tokens = 1234,
+        .completion_tokens = 5678,
+        .cached_tokens = 90,
+        .cost_total_usd = 0.001234,
+    });
+    defer allocator.free(status);
+    try std.testing.expect(std.mem.indexOf(u8, status, "1.2k in / 5.7k out / 90 cached") != null);
+    try std.testing.expect(std.mem.indexOf(u8, status, "$0.001234") != null);
+}
+
+test "renderStatus renders tokens-only line when cost unknown" {
+    const allocator = std.testing.allocator;
+    const status = try renderStatus(allocator, "/w", "custom-model", null, "high", .{
+        .prompt_tokens = 500,
+        .completion_tokens = 100,
+        .cached_tokens = 0,
+        .cost_total_usd = null,
+    });
+    defer allocator.free(status);
+    try std.testing.expect(std.mem.indexOf(u8, status, "500 in / 100 out / 0 cached") != null);
+    try std.testing.expect(std.mem.indexOf(u8, status, "(unpriced model)") != null);
+}
+
+test "formatTokens renders k-suffix above 999" {
+    var buf: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("999", formatTokens(&buf, 999));
+    try std.testing.expectEqualStrings("1.0k", formatTokens(&buf, 1000));
+    try std.testing.expectEqualStrings("12.3k", formatTokens(&buf, 12345));
+    try std.testing.expectEqualStrings("0", formatTokens(&buf, 0));
 }
 
 test "builtin_command_info has expected commands" {

@@ -85,9 +85,23 @@ pub fn build(b: *std.Build) void {
     });
     const run_memory_tests = b.addRunArtifact(memory_tests);
 
+    // Provider cost/compat src-file tests (pricing, compat, turn_payload,
+    // config) — Zig 0.15 runs a file's tests only inside the root module's
+    // own file tree, so src modules must be referenced from a src-rooted
+    // harness (same pattern as memory_tests.zig).
+    const chain035_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/chain035_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_chain035_tests = b.addRunArtifact(chain035_tests);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_integration_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_tui_chat_tests.step);
     test_step.dependOn(&run_memory_tests.step);
+    test_step.dependOn(&run_chain035_tests.step);
 }

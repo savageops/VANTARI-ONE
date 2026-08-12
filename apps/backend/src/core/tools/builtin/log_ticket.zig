@@ -1,35 +1,37 @@
 const std = @import("std");
 
-const fsutil = @import("../../../shared/fsutil.zig");
+const tickets = @import("../../tickets/index.zig");
+const session_store = @import("../../sessions/store.zig");
 const types = @import("../../../shared/types.zig");
 const module = @import("../module.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "log_ticket",
-    .description = "Create, transition, or list durable tickets in the workspace ticket ledger (.var/tickets/tickets.jsonl). Tickets track gaps, defects, tasks, and improvements through a full lifecycle: unassigned → assigned → in_progress → completed → closed. Use for long-task tracking, quality steps, and research-focused work.",
+    .description = "Create, queue, or list durable workspace tickets. Assignment admits work to the buffered queue; provider execution starts only after a scheduler claim and canonical session admission.",
     .review_risk = .write_capable,
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "action": { "type": "string", "enum": ["create", "transition", "list"], "description": "create appends a new ticket; transition moves an existing ticket to a new state; list reads recent tickets." },
+    \\    "action": { "type": "string", "enum": ["create", "transition", "list"], "description": "create adds a ticket; transition changes queue admission state; list reads projected current tickets." },
     \\    "title": { "type": "string", "minLength": 1, "maxLength": 256, "description": "One-line summary. Required for create." },
     \\    "description": { "type": "string", "minLength": 1, "maxLength": 8192, "description": "Full problem statement. Required for create." },
     \\    "category": { "type": "string", "enum": ["bug", "feature", "task", "refactor", "security", "architecture", "agent", "tool", "plugin", "performance", "docs"], "description": "Ticket classification. Required for create." },
-    \\    "severity": { "type": "string", "enum": ["blocker", "high", "medium", "low"], "description": "Impact level. Defaults to medium." },
+    \\    "severity": { "type": "string", "enum": ["blocker", "high", "medium", "low"], "description": "Impact level. Defaults to medium; critical is not a supported schema value." },
     \\    "evidence": { "type": "array", "items": { "type": "string" }, "description": "Exact paths, commands, or links that ground the ticket." },
-    \\    "proposed_owner": { "type": "string", "description": "Suggested owner path, module, or agent id." },
-    \\    "status": { "type": "string", "enum": ["unassigned", "assigned", "in_progress", "blocked", "completed", "closed"], "description": "Lifecycle state. Defaults to unassigned for create; required for transition." },
+    \\    "proposed_owner": { "type": "string", "description": "Suggested configured agent id or owner path. It is a routing hint, not an execution trigger." },
+    \\    "status": { "type": "string", "enum": ["unassigned", "assigned", "in_progress", "blocked", "completed", "closed"], "description": "Create defaults to unassigned. Public transition is queue admission/requeue only; execution and closure require typed evidence." },
     \\    "ticket_id": { "type": "string", "description": "Ticket id returned from create. Required for transition." },
-    \\    "transition_reason": { "type": "string", "description": "Why the ticket is transitioning. Required for transition." },
-    \\    "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Max tickets to return for list. Defaults to 20." }
+    \\    "transition_reason": { "type": "string", "description": "Why the ticket is entering or leaving the queue. Required for transition." },
+    \\    "idempotency_key": { "type": "string", "description": "Stable key for a retryable transition. Reusing it returns the original mutation without appending a duplicate." },
+    \\    "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Max projected tickets to return for list. Defaults to 20." }
     \\  },
     \\  "required": ["action"],
     \\  "additionalProperties": false
     \\}
     ,
-    .example_json = "{\"action\":\"create\",\"title\":\"search_files unavailable when iex missing\",\"description\":\"The iex dependency is unresolved on Windows.\",\"category\":\"tool\",\"severity\":\"high\"}",
-    .usage_hint = "Use create for new tickets, transition to move through lifecycle states (unassigned→assigned→in_progress→completed→closed), and list to review recent tickets. Every long task should be tracked as a ticket for accuracy and recovery. Never silently drop work items.",
+    .example_json = "{\"action\":\"create\",\"title\":\"search_files unavailable when iex missing\",\"description\":\"The iex dependency is unresolved on Windows installs.\",\"category\":\"tool\",\"severity\":\"high\"}",
+    .usage_hint = "Create work as unassigned, transition it to assigned when it is admitted to the queue, and let the scheduler claim it through the configured agent pool. Use list for projected current state. Never use a direct transition to pretend that a provider task or repair review completed.",
 };
 
 pub const availability = module.AvailabilitySpec{};
@@ -72,21 +74,7 @@ pub const Severity = enum {
     }
 };
 
-pub const Status = enum {
-    unassigned,
-    assigned,
-    in_progress,
-    blocked,
-    completed,
-    closed,
-
-    pub fn parse(value: []const u8) error{InvalidStatus}!Status {
-        inline for (@typeInfo(Status).@"enum".fields) |field| {
-            if (std.mem.eql(u8, value, field.name)) return @enumFromInt(field.value);
-        }
-        return error.InvalidStatus;
-    }
-};
+pub const Status = tickets.TicketStatus;
 
 const Args = struct {
     action: []const u8 = "create",
@@ -99,6 +87,7 @@ const Args = struct {
     status: ?[]const u8 = null,
     ticket_id: ?[]const u8 = null,
     transition_reason: ?[]const u8 = null,
+    idempotency_key: ?[]const u8 = null,
     limit: ?usize = null,
 };
 
@@ -111,15 +100,9 @@ pub fn execute(
     defer parsed.deinit();
     const args = parsed.value;
 
-    if (std.mem.eql(u8, args.action, "list")) {
-        return executeList(allocator, execution_context, args);
-    }
-
-    if (std.mem.eql(u8, args.action, "transition")) {
-        return executeTransition(allocator, execution_context, args);
-    }
-
-    // Default: create
+    if (std.mem.eql(u8, args.action, "list")) return executeList(allocator, execution_context, args);
+    if (std.mem.eql(u8, args.action, "transition")) return executeTransition(allocator, execution_context, args);
+    if (!std.mem.eql(u8, args.action, "create")) return module.Error.InvalidArguments;
     return executeCreate(allocator, execution_context, args);
 }
 
@@ -139,202 +122,135 @@ fn executeCreate(
     const category = Category.parse(args.category orelse return module.Error.InvalidArguments) catch return module.Error.InvalidArguments;
     const severity = if (args.severity) |value| Severity.parse(value) catch return module.Error.InvalidArguments else .medium;
     const status = if (args.status) |value| Status.parse(value) catch return module.Error.InvalidArguments else .unassigned;
+    const source_session_id = execution_context.session_id orelse execution_context.parent_session_id orelse "";
 
-    const now_ms = std.time.milliTimestamp();
-    const nonce = std.crypto.random.int(u64);
-    const ticket_id = try std.fmt.allocPrint(allocator, "ticket-{d}-{x}", .{ now_ms, nonce });
-    defer allocator.free(ticket_id);
+    const store = tickets.TicketStore.init(allocator, execution_context.workspace_root);
+    var receipt = store.create(.{
+        .title = title,
+        .description = description,
+        .category = @tagName(category),
+        .severity = @tagName(severity),
+        .status = status,
+        .evidence = args.evidence,
+        .proposed_owner = args.proposed_owner orelse "",
+        .workspace_root = execution_context.workspace_root,
+        .session_id = source_session_id,
+        .idempotency_key = args.idempotency_key orelse "",
+        .created_at_ms = std.time.milliTimestamp(),
+    }) catch |err| return mapStoreError(err);
+    defer receipt.deinit(allocator);
 
-    const record = try buildRecord(
-        allocator,
-        ticket_id,
-        title,
-        description,
-        category,
-        severity,
-        status,
-        args.evidence,
-        args.proposed_owner,
-        execution_context.workspace_root,
-        execution_context.parent_session_id,
-        now_ms,
-    );
-    defer allocator.free(record);
-
-    const ledger_path = try fsutil.join(allocator, &.{ execution_context.workspace_root, ".var", "tickets", "tickets.jsonl" });
+    const ledger_path = try store.ledgerPath();
     defer allocator.free(ledger_path);
-
-    var line = std.array_list.Managed(u8).init(allocator);
-    defer line.deinit();
-    try line.appendSlice(record);
-    try line.append('\n');
-    try fsutil.appendText(ledger_path, line.items);
-
-    const receipt = try buildReceipt(allocator, ticket_id, category, severity, status, ledger_path, record.len);
-    defer allocator.free(receipt);
-    return module.okEnvelope(allocator, "log_ticket", receipt);
+    const body = try std.fmt.allocPrint(allocator, "{{\"ticket_id\":{f},\"category\":{f},\"severity\":{f},\"status\":{f},\"revision\":{d},\"queued\":{s},\"ledger_path\":{f}}}", .{
+        std.json.fmt(receipt.ticket_id, .{}),
+        std.json.fmt(@tagName(category), .{}),
+        std.json.fmt(@tagName(severity), .{}),
+        std.json.fmt(@tagName(receipt.status), .{}),
+        receipt.revision,
+        if (receipt.status == .assigned) "true" else "false",
+        std.json.fmt(ledger_path, .{}),
+    });
+    defer allocator.free(body);
+    return module.okEnvelope(allocator, "log_ticket", body);
 }
 
-/// Transition a ticket to a new lifecycle state. Appends a transition record
-/// to the same ledger with the ticket_id, new status, reason, and timestamp.
 fn executeTransition(
     allocator: std.mem.Allocator,
     execution_context: module.ExecutionContext,
     args: Args,
 ) ![]u8 {
     const ticket_id = args.ticket_id orelse return module.Error.InvalidArguments;
-    const new_status = Status.parse(args.status orelse return module.Error.InvalidArguments) catch return module.Error.InvalidArguments;
-    const reason = args.transition_reason orelse return module.Error.InvalidArguments;
+    const status = Status.parse(args.status orelse return module.Error.InvalidArguments) catch return module.Error.InvalidArguments;
+    const reason = std.mem.trim(u8, args.transition_reason orelse return module.Error.InvalidArguments, " \t\r\n");
+    if (reason.len == 0) return module.Error.InvalidArguments;
 
-    const now_ms = std.time.milliTimestamp();
-    const record = try std.fmt.allocPrint(
-        allocator,
-        "{{\"schema\":\"var1.ticket_transition.v1\",\"ticket_id\":{f},\"status\":{f},\"reason\":{f},\"transitioned_at_ms\":{d},\"source\":\"agent\"}}",
-        .{
-            std.json.fmt(ticket_id, .{}),
-            std.json.fmt(@tagName(new_status), .{}),
-            std.json.fmt(reason, .{}),
-            now_ms,
-        },
-    );
-    defer allocator.free(record);
+    const store = tickets.TicketStore.init(allocator, execution_context.workspace_root);
+    var receipt = store.transition(.{
+        .ticket_id = ticket_id,
+        .status = status,
+        .reason = reason,
+        .idempotency_key = args.idempotency_key orelse "",
+        .transitioned_at_ms = std.time.milliTimestamp(),
+    }) catch |err| return mapStoreError(err);
+    defer receipt.deinit(allocator);
 
-    const ledger_path = try fsutil.join(allocator, &.{ execution_context.workspace_root, ".var", "tickets", "tickets.jsonl" });
-    defer allocator.free(ledger_path);
-
-    var line = std.array_list.Managed(u8).init(allocator);
-    defer line.deinit();
-    try line.appendSlice(record);
-    try line.append('\n');
-    try fsutil.appendText(ledger_path, line.items);
-
-    const receipt = try std.fmt.allocPrint(allocator, "{{\"ticket_id\":{f},\"transitioned_to\":{f},\"reason\":{f}}}", .{
-        std.json.fmt(ticket_id, .{}),
-        std.json.fmt(@tagName(new_status), .{}),
+    const body = try std.fmt.allocPrint(allocator, "{{\"ticket_id\":{f},\"transitioned_to\":{f},\"revision\":{d},\"appended\":{s},\"reason\":{f}}}", .{
+        std.json.fmt(receipt.ticket_id, .{}),
+        std.json.fmt(@tagName(receipt.status), .{}),
+        receipt.revision,
+        if (receipt.appended) "true" else "false",
         std.json.fmt(reason, .{}),
     });
-    defer allocator.free(receipt);
-    return module.okEnvelope(allocator, "log_ticket", receipt);
+    defer allocator.free(body);
+    return module.okEnvelope(allocator, "log_ticket", body);
 }
 
-/// List recent tickets from the ledger (most recent first).
 fn executeList(
     allocator: std.mem.Allocator,
     execution_context: module.ExecutionContext,
     args: Args,
 ) ![]u8 {
-    const limit = if (args.limit) |l| @min(@max(l, 1), 50) else 20;
-
-    const ledger_path = try fsutil.join(allocator, &.{ execution_context.workspace_root, ".var", "tickets", "tickets.jsonl" });
-    defer allocator.free(ledger_path);
-
-    const content = fsutil.readTextAlloc(allocator, ledger_path) catch |err| switch (err) {
-        error.FileNotFound => return module.okEnvelope(allocator, "log_ticket", "TICKETS empty\nREASON no ticket ledger found yet"),
-        else => return err,
-    };
-    defer allocator.free(content);
-
-    var lines = std.array_list.Managed([]const u8).init(allocator);
-    defer lines.deinit();
-    var iter = std.mem.splitScalar(u8, content, '\n');
-    while (iter.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len > 0) lines.append(trimmed) catch break;
-    }
-
-    const total = lines.items.len;
-    const start = if (total > limit) total - limit else 0;
-    const count = total - start;
+    const limit = if (args.limit) |value| @min(@max(value, 1), 50) else 20;
+    const store = tickets.TicketStore.init(allocator, execution_context.workspace_root);
+    var projection = store.readProjection() catch |err| return mapStoreError(err);
+    defer projection.deinit();
 
     var output = std.array_list.Managed(u8).init(allocator);
     defer output.deinit();
     const writer = output.writer();
-    try writer.print("TICKETS {d} of {d}\n", .{ count, total });
+    try writer.print("TICKETS {d} of {d} valid_events={d} poisoned_suffix={s}\n", .{
+        @min(projection.tickets.items.len, limit),
+        projection.tickets.items.len,
+        projection.valid_events,
+        if (projection.poisoned_suffix) "true" else "false",
+    });
 
-    var i: usize = total;
-    while (i > start) {
-        i -= 1;
-        try writer.print("- {s}\n", .{lines.items[i]});
+    var emitted: usize = 0;
+    var index = projection.tickets.items.len;
+    while (index > 0 and emitted < limit) {
+        index -= 1;
+        const ticket = projection.tickets.items[index];
+        try writer.print("- {s} [{s}] {s} severity={s} rev={d} agent={s} claim={s}\n", .{
+            ticket.id,
+            @tagName(ticket.status),
+            ticket.title,
+            ticket.severity,
+            ticket.revision,
+            ticket.agent_hint,
+            if (ticket.claim_complete) "active" else "waiting",
+        });
+        emitted += 1;
     }
 
     return module.okEnvelope(allocator, "log_ticket", output.items);
 }
 
-fn buildRecord(
-    allocator: std.mem.Allocator,
-    ticket_id: []const u8,
-    title: []const u8,
-    description: []const u8,
-    category: Category,
-    severity: Severity,
-    status: Status,
-    evidence: []const []const u8,
-    proposed_owner: ?[]const u8,
-    workspace_root: []const u8,
-    session_id: ?[]const u8,
-    created_at_ms: i64,
-) ![]u8 {
-    var evidence_list = std.array_list.Managed(u8).init(allocator);
-    defer evidence_list.deinit();
-    const ev_writer = evidence_list.writer();
-    try ev_writer.writeByte('[');
-    for (evidence, 0..) |item, index| {
-        if (index > 0) try ev_writer.writeByte(',');
-        try ev_writer.print("{f}", .{std.json.fmt(item, .{})});
-    }
-    try ev_writer.writeByte(']');
-
-    const owner_value = proposed_owner orelse "";
-
-    return std.fmt.allocPrint(
-        allocator,
-        "{{\"schema\":\"var1.ticket.v1\",\"id\":{f},\"title\":{f},\"description\":{f},\"category\":{f},\"severity\":{f},\"status\":{f},\"evidence\":{s},\"proposed_owner\":{f},\"workspace_root\":{f},\"session_id\":{f},\"created_at_ms\":{d},\"source\":\"agent\"}}",
-        .{
-            std.json.fmt(ticket_id, .{}),
-            std.json.fmt(title, .{}),
-            std.json.fmt(description, .{}),
-            std.json.fmt(@tagName(category), .{}),
-            std.json.fmt(@tagName(severity), .{}),
-            std.json.fmt(@tagName(status), .{}),
-            evidence_list.items,
-            std.json.fmt(owner_value, .{}),
-            std.json.fmt(workspace_root, .{}),
-            std.json.fmt(session_id orelse "", .{}),
-            created_at_ms,
-        },
-    );
+fn mapStoreError(err: anyerror) module.Error {
+    return switch (err) {
+        error.PoisonedSuffix => module.Error.ToolUnavailable,
+        error.InvalidArguments,
+        error.InvalidInitialStatus,
+        error.InvalidTransition,
+        error.InvalidClaim,
+        error.InvalidTerminalEvidence,
+        error.TicketNotFound,
+        error.RevisionConflict,
+        error.IdempotencyConflict,
+        error.NoopTransition,
+        error.LeaseNotExpired,
+        => module.Error.InvalidArguments,
+        else => module.Error.ToolUnavailable,
+    };
 }
 
-fn buildReceipt(
-    allocator: std.mem.Allocator,
-    ticket_id: []const u8,
-    category: Category,
-    severity: Severity,
-    status: Status,
-    ledger_path: []const u8,
-    record_bytes: usize,
-) ![]u8 {
-    return std.fmt.allocPrint(
-        allocator,
-        "{{\"ticket_id\":{f},\"category\":{f},\"severity\":{f},\"status\":{f},\"ledger_path\":{f},\"record_bytes\":{d}}}",
-        .{
-            std.json.fmt(ticket_id, .{}),
-            std.json.fmt(@tagName(category), .{}),
-            std.json.fmt(@tagName(severity), .{}),
-            std.json.fmt(@tagName(status), .{}),
-            std.json.fmt(ledger_path, .{}),
-            record_bytes,
-        },
-    );
-}
-
-test "log_ticket appends a durable schema-bound record to the workspace ledger" {
+test "log_ticket creates a durable projected queue record" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
     defer allocator.free(workspace);
-    const ctx = module.ExecutionContext{ .workspace_root = workspace };
+    const ctx = module.ExecutionContext{ .workspace_root = workspace, .session_id = "source-session" };
 
     const output = try execute(allocator, ctx,
         \\{"title":"search_files unavailable when iex missing","description":"The advertised iex dependency is unresolved on Windows installs.","category":"tool","severity":"high","evidence":["registry.zig:141","health --json"],"proposed_owner":"apps/backend/src/core/tools/registry.zig"}
@@ -344,21 +260,18 @@ test "log_ticket appends a durable schema-bound record to the workspace ledger" 
     try std.testing.expect(std.mem.indexOf(u8, output, "\"ok\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "log_ticket") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "ticket-") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "unassigned") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "queued") != null);
 
-    const ledger_path = try fsutil.join(allocator, &.{ workspace, ".var", "tickets", "tickets.jsonl" });
-    defer allocator.free(ledger_path);
-    try std.testing.expect(fsutil.fileExists(ledger_path));
-
-    const content = try fsutil.readTextAlloc(allocator, ledger_path);
-    defer allocator.free(content);
-    try std.testing.expect(std.mem.indexOf(u8, content, "var1.ticket.v1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "search_files unavailable when iex missing") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "\"category\":\"tool\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "\"severity\":\"high\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, content, "\"source\":\"agent\"") != null);
+    const store = tickets.TicketStore.init(allocator, workspace);
+    var projection = try store.readProjection();
+    defer projection.deinit();
+    try std.testing.expectEqual(@as(usize, 1), projection.tickets.items.len);
+    try std.testing.expectEqualStrings("source-session", projection.tickets.items[0].source_session_id);
+    try std.testing.expectEqualStrings("apps/backend/src/core/tools/registry.zig", projection.tickets.items[0].agent_hint);
 }
 
-test "log_ticket rejects empty title or description" {
+test "log_ticket rejects empty fields and unsupported severity" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -366,42 +279,52 @@ test "log_ticket rejects empty title or description" {
     defer allocator.free(workspace);
     const ctx = module.ExecutionContext{ .workspace_root = workspace };
 
-    try std.testing.expectError(
-        module.Error.InvalidArguments,
-        execute(allocator, ctx, "{\"title\":\"   \",\"description\":\"valid\",\"category\":\"bug\"}"),
-    );
-    try std.testing.expectError(
-        module.Error.InvalidArguments,
-        execute(allocator, ctx, "{\"title\":\"valid\",\"description\":\"\",\"category\":\"bug\"}"),
-    );
+    try std.testing.expectError(module.Error.InvalidArguments, execute(allocator, ctx, "{\"action\":\"create\",\"title\":\"   \",\"description\":\"valid\",\"category\":\"bug\"}"));
+    try std.testing.expectError(module.Error.InvalidArguments, execute(allocator, ctx, "{\"action\":\"create\",\"title\":\"valid\",\"description\":\"\",\"category\":\"bug\"}"));
+    try std.testing.expectError(module.Error.InvalidArguments, execute(allocator, ctx, "{\"action\":\"create\",\"title\":\"t\",\"description\":\"d\",\"category\":\"not_a_real_category\"}"));
+    try std.testing.expectError(module.Error.InvalidArguments, execute(allocator, ctx, "{\"action\":\"create\",\"title\":\"t\",\"description\":\"d\",\"category\":\"bug\",\"severity\":\"critical\"}"));
 }
 
-test "log_ticket rejects unknown category or severity" {
+test "log_ticket assignment is queue admission and direct in_progress is rejected" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
     defer allocator.free(workspace);
     const ctx = module.ExecutionContext{ .workspace_root = workspace };
+    const create_output = try execute(allocator, ctx, "{\"action\":\"create\",\"title\":\"queue\",\"description\":\"wait\",\"category\":\"feature\"}");
+    defer allocator.free(create_output);
 
-    try std.testing.expectError(
-        module.Error.InvalidArguments,
-        execute(allocator, ctx, "{\"title\":\"t\",\"description\":\"d\",\"category\":\"not_a_real_category\"}"),
-    );
-    try std.testing.expectError(
-        module.Error.InvalidArguments,
-        execute(allocator, ctx, "{\"title\":\"t\",\"description\":\"d\",\"category\":\"bug\",\"severity\":\"critical\"}"),
-    );
+    var projection = try (tickets.TicketStore.init(allocator, workspace)).readProjection();
+    const ticket_id = try allocator.dupe(u8, projection.tickets.items[0].id);
+    projection.deinit();
+    defer allocator.free(ticket_id);
+    const transition_input = try std.fmt.allocPrint(allocator, "{{\"action\":\"transition\",\"ticket_id\":{f},\"status\":\"assigned\",\"transition_reason\":\"admit\",\"idempotency_key\":\"tool-assign-1\"}}", .{std.json.fmt(ticket_id, .{})});
+    defer allocator.free(transition_input);
+    const assigned_output = try execute(allocator, ctx, transition_input);
+    defer allocator.free(assigned_output);
+    try std.testing.expect(std.mem.indexOf(u8, assigned_output, "transitioned_to") != null);
+    try std.testing.expect(std.mem.indexOf(u8, assigned_output, "assigned") != null);
+
+    try std.testing.expectError(module.Error.InvalidArguments, execute(allocator, ctx, "{\"action\":\"transition\",\"ticket_id\":\"missing\",\"status\":\"in_progress\",\"transition_reason\":\"start\"}"));
+    const list_output = try execute(allocator, ctx, "{\"action\":\"list\",\"limit\":10}");
+    defer allocator.free(list_output);
+    try std.testing.expect(std.mem.indexOf(u8, list_output, "[assigned]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, list_output, "claim=waiting") != null);
+
+    const sessions = try session_store.listSessionRecords(allocator, workspace);
+    defer types.deinitSessionRecords(allocator, sessions);
+    try std.testing.expectEqual(@as(usize, 0), sessions.len);
 }
 
-test "category severity and status enums map their full tag surface" {
+test "category severity and status enums map their supported tag surface" {
     try std.testing.expectEqualStrings("bug", @tagName(try Category.parse("bug")));
     try std.testing.expectEqualStrings("architecture", @tagName(try Category.parse("architecture")));
     try std.testing.expectEqualStrings("plugin", @tagName(try Category.parse("plugin")));
     try std.testing.expectEqualStrings("blocker", @tagName(try Severity.parse("blocker")));
     try std.testing.expectEqualStrings("low", @tagName(try Severity.parse("low")));
-    try std.testing.expectEqualStrings("resolved", @tagName(try Status.parse("resolved")));
+    try std.testing.expectEqualStrings("closed", @tagName(try Status.parse("closed")));
     try std.testing.expectError(error.InvalidCategory, Category.parse("unknown"));
     try std.testing.expectError(error.InvalidSeverity, Severity.parse("unknown"));
-    try std.testing.expectError(error.InvalidStatus, Status.parse("unknown"));
+    try std.testing.expectError(tickets.Error.InvalidArguments, Status.parse("resolved"));
 }

@@ -1,38 +1,13 @@
-# Changelog Guidelines
+---
+type: contract
+id: docs/changelog-claude-rules
+status: mirror
+updated: 2026-08-10
+---
 
-## File Naming
+# Changelog guidance
 
-- Format: `NNN-description.md` (e.g., `001-initial-setup.md`)
-- Sequential numbering
-- kebab-case description
-
-## Entry Format
-
-```markdown
-# Version NNN - [Title]
-
-**Date:** YYYY-MM-DD
-
-## Changes
-
-### Added
-- New feature X
-
-### Fixed
-- Bug Y
-
-### Changed
-- Updated Z
-
-## Impact
-
-Description of impact.
-```
-
-## Categories
-
-- **Added**: New features
-- **Fixed**: Bug fixes
-- **Changed**: Modifications
-- **Removed**: Deletions
-- **Deprecated**: Soon-to-be removed
+Use [`AGENTS.md`](AGENTS.md) as the canonical changelog contract. Completed
+planning units live in `../todo/changelog/` and are indexed by
+`../todo/changelog/_log.md`. Preserve source-message proof, exact validation,
+residual boundaries, and `next_todo: NONE` only for a genuinely closed chain.

@@ -10,14 +10,25 @@ This is the canonical architecture map for the current `VAR1` agent-session runt
 - one local bridge surface for browser clients: `/rpc`, `/events`, `/api/health` with token-gated RPC/event access
 - one executable name: `VAR1`
 - one hidden host mode: `kernel-stdio`
-- one external browser client: `apps/frontend/var1-client`
+- browser bridge protocol is kernel source; apps/frontend is an ignored local
+  prototype and is not a tracked client owner
+
+## Current readiness boundary
+
+This document describes both current owners and target invariants. The
+[2026-08-12 full-harness SITREP](../../.docs/research/2026-08-12-full-harness-sitrep.md)
+is the current promotion boundary: agent execution is fixed-pool and
+process-local; scheduler lease acquisition is not inter-process atomic; stdio
+notifications drop stored event sequence values; summary upserts are
+last-writer-wins; and the broad suite has three genuine failures after test-root
+isolation. Treat those findings as authoritative over older shipped claims.
 
 ## Runtime slice
 
 ```mermaid
 flowchart TB
   cli["VAR1 CLI"] --> client["src/clients/cli.zig"]
-  browser["apps/frontend/var1-client"] --> bridge["src/host/http_bridge.zig"]
+  browser["ignored local browser prototype"] -.-> bridge["src/host/http_bridge.zig"]
 
   client --> rpcClient["src/host/stdio_client.zig"]
   bridge --> rpcClient
@@ -29,6 +40,7 @@ flowchart TB
   host --> wire
   host --> executor["src/core/executor/loop.zig"]
   host --> compactor["src/core/context/compactor.zig"]
+  host --> scheduler["src/core/scheduler/service.zig"]
   executor --> context["src/core/context/builder.zig"]
   executor --> budget["src/core/context/budget.zig"]
   executor --> overflow["src/core/context/overflow.zig"]
@@ -42,6 +54,10 @@ flowchart TB
   tools --> toolModules["src/core/tools/builtin/*.zig"]
   tools --> agents["src/core/agents/service.zig"]
   agents --> supervisor["src/core/agents/supervisor.zig"]
+  scheduler --> tickets["src/core/tickets/index.zig"]
+  scheduler --> agents
+  tickets --> store
+  scheduler --> health["health_get projection"]
   agents --> specs["src/core/agents/spec.zig"]
   agents --> routes["src/core/providers/routes.zig"]
   specs --> profile["src/core/agents/profile.zig + scope.zig"]
@@ -60,8 +76,26 @@ flowchart TB
   evaluation --> store
   compactor --> store
   store --> sessionRoot[".var/sessions/<id>/session.json + messages.jsonl + memories.jsonl + context.jsonl + events.jsonl + output.txt"]
+  tickets --> ticketRoot[".var/tickets/tickets.jsonl"]
+  scheduler --> scheduleRoot[".var/schedules/"]
   docs --> processRoot[".var/todos + .var/changelog + .var/research + .var/docs"]
 ```
+
+## Ticket and buffered agent execution
+
+Ticket assignment is a durable queue transition, not a child-session launch. `core/tickets/index.zig` owns ticket records, queue projection, claim/lease state, heartbeat evidence, stale-owner repair, and terminal transitions. `core/scheduler/service.zig` claims assigned work only when the configured pool has capacity, then routes the ticket through the existing `core/agents/service.zig` and `core/agents/supervisor.zig` owners.
+
+```text
+log_ticket transition(assigned)
+  -> ticket queue projection
+  -> scheduler claim + lease
+  -> AgentService route/receipt
+  -> Supervisor fixed-pool slot
+  -> child session events and summary
+  -> terminal evidence + ticket reconciliation
+```
+
+There is no second worker registry. `tickets.proactive_workpool` is opt-in; the default is a configured pool of available specialists waiting for explicit assignment. Health and client projections expose pool/queue pressure without taking ownership of scheduling.
 
 ## Session message flow
 
@@ -289,6 +323,10 @@ Every session directory contains:
 
 `$VANTARI_HOME/config.json` is the canonical non-secret policy file. Its typed sections own runtime limits, wire API selection, role routing, editable agent definitions, context policy, prompt paths, and supported environment-style overrides. Built-in agent rows may tune persona/condition/route/budgets or be disabled; custom ids must inherit a compiled capability floor. `$VANTARI_HOME/auth.json` is the sibling credential/provider ledger. API keys, OAuth tokens, account identity, and active-provider state never move into config output. Nested/AppData auth paths are one-time migration inputs; `settings.toml` is no longer a runtime reader. The Windows installer preserves valid config byte-for-byte and backs up plus materializes the current schema only when the retained file fails validation.
 
+### Agent access boundary
+
+`runtime.full_access_mode` is owned by `core/config/file.zig`, defaults to `false`, and propagates through `types.Config`, resolved routes, draft/buffer configs, and `ExecutionContext`. The shared `fsutil.resolveWithAccessMode` primitive is the only path decision: restricted mode enforces workspace containment; explicit full access keeps relative paths workspace-rooted and permits absolute or traversing paths for file, search, LSP, and process tools. `.var` runtime state, session ledgers, and configured prompt files retain their canonical workspace/runtime owners. No tool may bypass the switch with a second resolver.
+
 `src/core/prompts/` owns the model-presented prompt envelope. When no project prompt override is configured, it uses compiled system/developer layers. When an override path is configured, the file must exist and contain non-whitespace content; missing or empty configured prompt layers fail closed. The builder then injects the hidden runtime guardrail layer and appends the live catalog plus a runtime-owned burst/checkpoint contract. Long work interleaves one bounded observable step, one tool/delegation action batch, evidence inspection, and one compact checkpoint naming changed state, proof, blocker or residual risk, and next action. The assistant checkpoint is persisted in `messages.jsonl`, included by later context rebuilds, and never requests private chain-of-thought. A checkpoint does not terminate the run; the loop continues until terminal proof or a named blocker. Provider transport remains OpenAI-compatible by sending the resulting envelope as a system-role message while preserving internal/system/developer/tool boundaries inside the prompt text.
 
 `store.ensureStoreReady(...)` creates the canonical sessions directory and initializes process-local sequence state. It never scans or rewrites existing `session.json` records. Explicit migrations own schema changes; this prevents startup cost from scaling with session count and prevents mixed-version processes from erasing additive fields they do not understand.
@@ -301,7 +339,7 @@ Every session directory contains:
 
 `core/executor/loop.zig` parks a waiting parent on the supervisor condition without a provider call. The first unconsumed terminal child wakes the parent; the service appends that child's convergence record exactly once, rebuilds through the context compiler, and permits the next routing/synthesis turn while unfinished siblings remain supervised. A parent cannot emit terminal output while any owned child remains active. Full specialists execute as ordinary isolated VAR1 child sessions. Tool-free `model_task` specialists use one provider turn and validate their supplied output schema without acquiring a second transcript or tool runtime.
 
-Child assistant/reasoning deltas and tool transcripts stay in the child ledger. The parent event spine receives only bounded control events: group start, admission, queue, start, material progress/wait, child terminal, group terminal, and convergence. Every child `session.json` keeps a heap-owned immutable execution receipt containing the secret-free resolved agent, route, model, wire API, budgets, group, and branch identity; explicit checked JSON decoding preserves that receipt across optimized status rewrites and cold recovery. CLI, stdio, and TUI consume the same projection. The TUI renders Search, Explore, Agents, and To-dos through one group/item grammar with `[ ]`, `[>]`, `[x]`, `[!]`, `[-]` markers and `|--` / `` `--`` child rails; no second status bus exists.
+Child assistant/reasoning deltas and tool transcripts stay in the child ledger. The parent event spine receives only bounded control events: group start, admission, queue, start, material progress/wait, child terminal, group terminal, and convergence. Every child `session.json` keeps a heap-owned immutable execution receipt containing the secret-free resolved agent, route, model, wire API, budgets, group, and branch identity; explicit checked JSON decoding preserves that receipt across optimized status rewrites and cold recovery. CLI, stdio, and TUI consume the same projection. The TUI renders Search, Explore, Agents, and To-dos through one group/item grammar with `[ ]`, `[>]`, `[x]`, `[!]`, `[-]` markers and `|--` / `` `--`` child rails; tool lifecycle phases remain event metadata while the child row is replaced by the bounded `assistant_response` summary from `sessions/summaries.json`. No second status bus exists.
 
 ## Module ownership
 
@@ -335,6 +373,12 @@ Child assistant/reasoning deltas and tool transcripts stay in the child ledger. 
   batch validation, route/receipt persistence, supervisor admission, cold recovery, and convergence integration
 - `src/core/agents/supervisor.zig`
   fixed-pool group execution, O(1) live indexes, condition-based wait, cancellation, terminal ordering, and exactly-once convergence
+- `src/core/tickets/index.zig`
+  canonical ticket ledger, queue projection, claims, leases, stale-owner repair, and terminal evidence
+- `src/core/scheduler/service.zig`
+  capacity-aware ticket dispatch, heartbeat, stale requeue, terminal reconciliation, and repair gating
+- `src/core/sessions/summaries.zig`
+  bounded durable session summaries used by session navigation and the child-agent TUI row
 - `src/core/agents/profile.zig` + `scope.zig`
   runtime-enforced tool-class profiles and scoped delegation validation
 - `src/core/providers/routes.zig`
@@ -394,7 +438,8 @@ The current validation lane should always prove these slices together:
 - role-routed agent batches prove bounded 1/5/20/100 admission, zero provider-spin waiting, O(1) healthy lookup, exact convergence, cancellation, and receipt recovery
 - parked parents wake on the first terminal child, compile each ready result once, and remain non-terminal while siblings are active
 - parent child-control events remain bounded while assistant/reasoning deltas stay in child ledgers
-- TUI activity families share one nested checkbox/rail projection driven by typed events
+- TUI activity families share one nested checkbox/rail projection driven by typed events; child rows show bounded turn summaries, not tool phase labels
+- ticket assignment queues work without direct launch; scheduler claims through the fixed pool and reconciles stale owners
 - derivative memory rejects transcript replay while citing source sequence ranges
 - heartbeat/evaluator evidence appends redacted non-mutating events
 - auto and provider-overflow compaction write observable checkpoint/event records
@@ -405,13 +450,19 @@ The current validation lane should always prove these slices together:
 - shared text-file reads are bounded by `fsutil.max_text_file_bytes` instead of inheriting unbounded allocator reads
 - shared text-file writes commit through Zig `AtomicFile`, so canonical metadata updates avoid truncate-before-write corruption windows
 - health preflights stale local `VAR1.exe` process diagnostics before build/test gates
-- external client exists at `apps/frontend/var1-client`
+- the HTTP bridge exists; no tracked browser client exists in this checkout
 
-Latest local Windows validation on 2026-05-08:
+Latest local Windows validation on 2026-08-12:
 
-- `.\scripts\zigw.ps1 build test --summary all` -> `416/416 tests passed`
-- `.\scripts\health.ps1` -> `status: ready`
-- `.\zig-out\bin\VAR1.exe tools --json` -> `search_files` includes `external_command` dependency availability for `iex`
+- ReleaseFast build -> 9/9 steps succeeded.
+- Isolated broad test graph -> 1690/1693 passed; three prompt/tool-contract
+  failures remain.
+- Focused backend TUI -> 54/56 passed, two skipped.
+- Vendored packages/tui -> 103/104 passed, one skipped.
+- Installed tools reports search_files unavailable because the required iex
+  executable is absent.
+- Built and installed hashes differ while an operator TUI and kernel-stdio
+  process remain active; no reinstall was attempted.
 
 ## Cognitive architecture (frontier capabilities)
 
@@ -473,6 +524,18 @@ The `Config` struct carries `effort` (`[]const u8`: low/medium/high/max) and `te
 
 The `ResolvedRoute` struct (`src/core/providers/routes.zig`) owns `effort_owned` alongside `thinking_mode_owned`. Route overrides take precedence over global defaults.
 
+### Wire protocol auto-detection and thinking format
+
+The `provider.wire_api` config floor is `"auto"`: `core/providers/compat.zig` resolves the concrete adapter from the base URL at dispatch time (`core/providers/dispatch.zig`). `api.anthropic.com` resolves to `anthropic_messages`; every other OpenAI-compatible endpoint (z.ai, deepseek, openai, LM Studio, Ollama) resolves to `chat_completions`. Explicit `wire_api` values (`chat_completions` / `responses` / `anthropic_messages`) always override detection — the config-first variant of prime-agent's provider-over-URL precedence rule.
+
+The same module owns the request thinking shape (`detectThinkingFormat`): z.ai endpoints emit the top-level `enable_thinking` boolean the coding paas endpoint requires; DeepSeek endpoints emit the nested `thinking: {type: enabled|disabled}` convention and echo prior `reasoning_content` on assistant messages; standard endpoints emit neither. The active z.ai operator lane is byte-identical to the pre-detection behavior — detection scoped the fix correctly instead of applying one convention everywhere.
+
+### Per-turn cost and token telemetry
+
+All three wire adapters fill `CompletionResponse.usage` with the provider-reported token buckets (prompt / completion / cached), including the streaming paths (chat_completions terminal `{"choices":[],"usage":...}` chunk, Anthropic `message_start` + `message_delta`, Responses `response.completed`). `core/providers/pricing.zig` owns the compiled per-model price table (harvested from prime-agent `models.generated.ts` plus published rates; provenance comments per row) and derives `Cost` with the prime formula `($/1M) × tokens`. Unknown models yield no price — cost is never fabricated; token accounting still flows.
+
+The typed event spine closes the turn with schema `var1.turn_finished.v2` (built by the single owner `core/executor/turn_payload.zig`, consumed by both the kernel loop and model-task supervisor): `prompt_tokens`, `completion_tokens`, `cached_tokens`, and `cost_total_usd` (number when priced, null otherwise) join the estimated `window_tokens` and `output_bytes`. The TUI renders the accumulated session cost in `/status`.
+
 ### Knowledge scaffolding
 
 The workspace knowledge surface under `.var/` provides structured persistence for agent findings:
@@ -496,7 +559,10 @@ Every `shell_exec` command appends a record (schema `var1.process.v1`) to `.var/
 
 ### Session summary ledger
 
-Every session — root orchestrator, subagents, past sessions — maintains a permanent ≤100-word summary as its handoff record. The ledger is a single JSON object at `.var/sessions/summaries.json` (schema `var1.session_summary.v1`), atomically rewritten on upsert:
+Every session — root orchestrator, subagents, past sessions — projects a
+≤100-word handoff summary into a single JSON object at
+`.var/sessions/summaries.json` (schema `var1.session_summary.v1`), atomically
+rewritten on upsert:
 
 ```text
 <session_id>: {
@@ -508,6 +574,12 @@ Every session — root orchestrator, subagents, past sessions — maintains a pe
 
 Ownership lives in `src/core/sessions/summaries.zig` (word counting, truncation, read/upsert, newest-first timeline, and the turn-end freshness gate). The executor loop binds `execution_context.session_id`, and every terminal exit runs `ensureFreshSummary`: if the agent did not update its row during the run, the kernel writes a deterministic fallback (status + 40-word objective + 40-word outcome) with `source: kernel_fallback` — the row itself is the durable enforcement evidence, so the typed event grammar is untouched.
 
+Atomic replacement prevents torn files but does not serialize concurrent
+read-modify-write cycles. Multiple agents can lose rows through last-writer-wins
+replacement, and the full object is rewritten on every turn. The current
+findings ledger requires append-only summary rows plus a latest-row projection
+before this surface can be called concurrency-safe.
+
 Two tools expose the ledger:
 
 | Tool | Risk | Contract |
@@ -515,7 +587,11 @@ Two tools expose the ledger:
 | `session_summaries` | read_only | Timeline of every session's last summary, newest first. `scope: project` (current workspace) vs `global` (all rows — spans workspaces when VANTARI_HOME is set); `session_id` returns the full single row; `query` filters title/topic/summary; 40-word previews by default, `full` for untruncated. |
 | `update_session_summary` | write_capable | MANDATORY pre-turn-end update. Rejects >100-word summaries; mirrors the live session status into the row; returns an effect receipt (session_id, words, turn_count, ledger_path, schema). |
 
-The buffer speculation service consumes the active session's summary row as its work-state context on every tick — the summary ledger is the single source of work-state truth for both the timeline tool and the buffer, never a raw transcript tail. The prompt envelope carries the "Session summary discipline" doctrine: update before the turn ends (subagents before their SITREP), and read `session_summaries` before delegating or continuing cross-session work.
+The buffer speculation service consumes the active session's summary row as
+handoff context on every tick, never a raw transcript tail. Tickets remain the
+intended work-lifecycle owner; summary rows are handoff projections, not ticket
+state. The current todo_slice/session_record surfaces still violate that
+intended separation and are tracked for consolidation.
 
 ### Prompt doctrine
 

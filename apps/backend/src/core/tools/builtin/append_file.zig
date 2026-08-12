@@ -5,13 +5,13 @@ const module = @import("../module.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "append_file",
-    .description = "Append text to a workspace file, creating it only when absent. Arguments require path and content. Use for additive logs, ledgers, long generated artifacts, and resumable chunks.",
+    .description = "Append text to a file, creating it only when absent. Arguments require path and content. Restricted mode keeps the target inside the workspace; runtime.full_access_mode=true permits an explicit external path. Use for additive logs, ledgers, long generated artifacts, and resumable chunks.",
     .review_risk = .write_capable,
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "path": { "type": "string", "description": "Required workspace-relative file path to append to." },
+    \\    "path": { "type": "string", "description": "Required file path to append to. Restricted mode requires a workspace-relative path; runtime.full_access_mode=true permits an explicit external path." },
     \\    "content": { "type": "string", "description": "Required text to append. Preferred for long generated artifacts, append-only ledgers, and resumable chunks split on recoverable boundaries." }
     \\  },
     \\  "required": ["path", "content"],
@@ -40,7 +40,7 @@ pub fn execute(
     });
     defer parsed.deinit();
 
-    const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
+    const file_path = try fsutil.resolveWithAccessMode(allocator, execution_context.workspace_root, parsed.value.path, execution_context.full_access_mode);
     defer allocator.free(file_path);
 
     var before_exists = true;

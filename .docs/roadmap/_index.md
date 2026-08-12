@@ -2,12 +2,14 @@
 type: index
 id: roadmap/index
 status: active
-updated: 2026-08-07
+updated: 2026-08-12
 ---
 
 # VANTARI Roadmap — Index
 
 > **North star:** *A harness that uses the least amount of tokens, where every message is a new context window, each window is a checkpoint (a "shard") of the parent chat, each step in the task process branches into its own context window, and all branches eventually converge and are reprocessed.*
+
+> **Current execution authority:** [`24-harness-capability-next-90.md`](./24-harness-capability-next-90.md) ranks the next 90 moves from installed-path integrity through durable agents, operator UX, capability truth, context efficiency, and gated repair. Its order supersedes the older strategic priority labels below when they conflict.
 
 This roadmap maps every item in the VANTARI pipeline, priced by value, and compares each against the harvested competitor surface (Vercel Eve, OpenAI Codex, pi-mono, Claude Code, Gemini CLI, OpenHands, Aider, Continue, Cursor, Windsurf, Cline, Roo Code). Every item must pass the VANTARI compression test: **fewer concepts at the call site, stronger guarantees in the core, lower runtime ambiguity, clearer recovery evidence.**
 
@@ -72,6 +74,7 @@ Each theme file follows the same shape:
 | 21 | [Plugin contract surface](./21-plugin-contract-surface.md) | **P1** | Eve extensions, Codex MCP, VS Code | Opt-in tool definition boundary |
 | 22 | [Adversarial pipeline test mesh](./22-adversarial-pipeline-test-mesh.md) | **P0** | Eve AppHarness, Codex rollout, Temporal replay | Falsification probes for every invariant |
 | 23 | [CLI/TUI client rendering contract](./23-cli-tui-client-rendering-contract.md) | **P0** | Codex app-server, pi-mono RPC, LSP/DAP | Client as read model over event spine |
+| 24 | [Harness capability — next 90 moves](./24-harness-capability-next-90.md) | **P0-P3 execution order** | 13-source 2026-08-12 refresh | Current dependency-ordered execution authority |
 
 ---
 

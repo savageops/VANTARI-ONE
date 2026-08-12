@@ -1,31 +1,14 @@
-# Todo Guidelines
+---
+type: contract
+id: docs/todo-claude-rules
+status: mirror
+updated: 2026-08-12
+---
 
-## File Naming
+# Planning guidance
 
-- Use kebab-case: `fix-auth-bug.md`, `add-dark-mode.md`
-- Be descriptive but concise
-
-## Todo Format
-
-```markdown
-# [Title]
-
-## Description
-
-Brief explanation of the task.
-
-## Acceptance Criteria
-
-- [ ] Criteria 1
-- [ ] Criteria 2
-
-## Notes
-
-Any additional context.
-```
-
-## Status Tracking
-
-- **Active**: File in `.docs/todo/`
-- **Done**: Move to `.docs/todo/done/`
-- **Archived**: Delete or move to archive
+Use [`AGENTS.md`](AGENTS.md) as the canonical planning contract. Active
+planning-spec v3 units live in `pending/`; completed units move once to
+`changelog/`. Current audit findings live in `findings/`; read
+`findings/00-INDEX.md` before feature work and execute P0 integrity findings
+first. Do not create or reference a `.docs/todo/done/` owner.

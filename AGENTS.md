@@ -14,13 +14,27 @@ input -> append-only transcript -> context compiler -> provider turn
 
 Every retained subsystem must reduce ambiguity at the call site while increasing guarantees in the core. If a feature cannot identify its owner, state machine, failure class, and recovery evidence, it is not a feature yet.
 
+Roadmap 24 also loads the applied prompt-led-autonomy and subtractive-capability
+extractions in `AGENTS.d/extractions/`. The model and prompt envelope own
+behavioral decisions; the kernel owns capability truth, durability, budgets,
+evidence, recovery, and explicit irreversible-action gates. Evaluate every
+roadmap item, but add code only when consolidation or deletion cannot close the
+canonical consumer path.
+
 ## I. Runtime Ownership
 
-- `apps/backend` is the only live code lane until another app/package has real runtime responsibility.
+- `apps/backend` is the only application/runtime owner. `packages/tui` is a
+  tracked vendored platform dependency consumed directly by the backend build;
+  validate it through its own test lane, but do not let it own session,
+  protocol, or executor state. `apps/frontend` is an ignored local prototype,
+  not a shipped client lane in the tracked checkout.
 - `VAR1` is the Zig agent-session kernel. CLI, browser, and future desktop shells are clients of the same runtime.
 - `.var/` is the only runtime/process state root. Do not add old runtime roots, old storage ownership, or fallback storage readers.
 - Project-local `.var/sessions/<session-id>/` is canonical. Do not copy global home-scoped Codex/Claude project-directory session IDs into this repo.
 - CLI/TUI/browser clients never assemble provider context, infer tool state, or maintain their own transcript truth. They render kernel-owned state.
+- `apps/backend/src/core/tickets/` is the canonical ticket ledger and queue projection. `assigned` admits work; it does not launch a child session.
+- `apps/backend/src/core/scheduler/` claims assigned tickets only when `apps/backend/src/core/agents/supervisor.zig` reports fixed-pool capacity, then routes through `core/agents/service.zig`. Do not add a second worker registry or direct assignment launcher.
+- `.docs/index.md`, `.docs/technical_summary.md`, `.docs/workspace.json`, and `.refs/index.md` are the current project-record indexes. Keep them aligned with shipped runtime truth.
 
 ## II. Session Storage Contract
 
@@ -89,6 +103,8 @@ Typed events are the runtime's nervous system. String breadcrumbs may exist only
 - Provider streaming is a kernel contract. If a provider supports SSE deltas, deltas must persist before the final assistant response.
 - TUI progress is a read model over `events.jsonl`, not a separate speculative status bus.
 - Tool spans update a single keyed row in clients. Do not append request/start/done rows for one tool invocation.
+- Child activity uses one keyed `group_id + task_id` row. Tool phases update its typed state marker; the `assistant_response` boundary supplies the bounded child turn summary from `sessions/summaries.json`.
+- Child group rows show `Agents completed/total`. Do not render the removed `waiting on N` filler or expose `tool_completed` as the child's visible summary.
 - Command stdout/stderr are untrusted data. Parse only runtime-owned envelopes; render output as bounded display text.
 - Event cursors use monotonic ledger position plus replay suppression. Timestamp-only cursors are insufficient under same-millisecond bursts.
 
@@ -111,7 +127,8 @@ definition + availability + review_risk + execute
 - Agent-facing tools and backend-only primitives share one module-owned capability boundary. A primitive becomes agent-reachable only through a registered tool definition, availability contract, review risk, and dispatch path.
 - Unknown tools, context-unavailable tools, invalid arguments, and unsupported capability profiles fail before side effects.
 - Write-capable tools must emit effect evidence: resolved path, byte counts, hashes where available, operation counts, and error class.
-- `shell_exec` is command execution, not shell-shaped convenience. It must preserve argv mode, workspace-contained cwd, timeout, output budgets, process termination, and stdout/stderr draining.
+- `shell_exec` is command execution, not shell-shaped convenience. It must preserve argv mode, timeout, output budgets, process termination, and stdout/stderr draining. Its cwd and every agent-facing file/search/LSP path stay workspace-contained unless the explicit `runtime.full_access_mode` setting is true; full access never relocates `.var` runtime state or session ledgers.
+- `runtime.full_access_mode` defaults to `false` in `core/config/default.json`. `fsutil.resolveWithAccessMode` is the shared resolver and `ExecutionContext.full_access_mode` is the runtime projection; do not add tool-local bypasses or a second access policy.
 - Search is IX/IEX-backed. `search_files` uses the native IX expression contract (`lit:needle`, `re:TODO|FIXME`, `lit:a || lit:b`) through the executable dependency currently advertised as `iex`. If that executable is unavailable, search capability is unavailable; do not add `rg`, `grep`, `sed`, or ad hoc readers as hidden substitutes.
 
 ## VI. Parent/Child Agent Orchestration
@@ -125,6 +142,7 @@ Sub-agents are normal VAR1 sessions launched by a parent and supervised through 
 - Use `list_agents` for inventory, `agent_status` for non-blocking progress, and `wait_agent` with explicit bounded `timeout_ms` when the parent is ready to collect a result. Avoid repeated tiny wait loops.
 - Do not delegate the immediate edit or decision if the parent needs that result before its next local action.
 - Child lifecycle state is append-only session/event evidence. Parent supervision must preserve heartbeat, terminal status, failure class, and resume-safe reconciliation.
+- Ticket assignment, scheduler claims, leases, heartbeat, stale-owner requeue, terminal reconciliation, and repair gating remain one typed queue-to-agent state machine; health fields are a read projection only.
 
 ## VII. Skill Routing Contract
 
@@ -294,9 +312,9 @@ Capability claims carry mechanism and proof. "Works" is not a mechanism. "Fast" 
 7. Deterministic context compiler: context assembly becomes a replayable compiler with diagnostics emitted as typed compile errors rather than late provider failures.
 8. Tool-result structural diffing: file mutation tools emit compact effect records with before/after metadata, byte counts, hashes, and optional localized hunks.
 9. Write-intent ledger: write-capable tools reserve intent records before mutation, commit effect records after mutation, and reconcile abandoned intents at cold start.
-10. Frontier TUI workbench: terminal renders live item graph, assistant token stream, tool spans, command output, cancellation affordance, session navigation, and optional raw event inspection.
+10. Frontier TUI workbench: terminal renders live item graph, bounded child turn summaries, assistant token stream, tool spans, command output, cancellation affordance, session navigation, pool/queue metadata, and optional raw event inspection.
 11. Provider capability probing: adapters cache verified streaming, tool-call shape, max payload, refusal/error envelopes, and context overflow signatures; unknown capability fails closed.
-12. Agent delegation supervision: parent sessions track child runs through typed edges, scoped capability profiles, heartbeat events, terminal status reconciliation, and resume-safe wait semantics.
+12. Agent delegation supervision: parent sessions track child runs through typed edges, scoped capability profiles, heartbeat events, terminal status reconciliation, and resume-safe wait semantics; ticket claims feed the same fixed pool without a second scheduler.
 13. Deep pipeline test mesh: adversarial suites for provider recovery, tool loops, context rebuilds, TUI event consumption, installed auth/workspace resolution, and Windows process behavior.
 14. Byte-level session integrity: JSONL append/read paths detect torn writes, BOMs, invalid UTF-8, duplicated sequence IDs, and poisoned trailing rows without corrupting valid prefix state.
 15. Local performance telemetry: measure token compilation, JSONL scan, event replay, terminal frame render, process spawn, and tool dispatch latencies with low-noise counters gated behind explicit commands.

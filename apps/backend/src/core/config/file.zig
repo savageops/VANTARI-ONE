@@ -12,6 +12,9 @@ pub const RuntimePolicy = struct {
     max_steps: usize = 4096,
     max_tool_calls_per_turn: usize = 16,
     max_tool_calls_per_session: usize = 96,
+    /// Permit agent-facing file and process paths outside the active workspace.
+    /// Restricted mode remains the default safety boundary.
+    full_access_mode: bool = false,
     effort: ?[]u8 = null,
     temperature: ?f64 = null,
 
@@ -43,6 +46,27 @@ pub const AgentPolicy = struct {
     /// Root sessions become orchestration-only and must discover the compact
     /// agent catalog before dispatching or mutating a specialist definition.
     orchestrator_only: bool = true,
+};
+
+/// Ticket lifecycle policy (AGENTS.md §VI ticket doctrine). Agents own the
+/// states of their tickets (assigned→in_progress→complete) but NEVER close;
+/// close/reopen/reassign authority is the kernel's, exercised by the operator
+/// prompt. Value type — no allocations.
+pub const TicketPolicy = struct {
+    /// When true, an assigned ticket automatically starts a specialist
+    /// subagent with the ticket context (id, location, objective, method).
+    auto_assign: bool = true,
+    /// When false (default), agents never claim open tickets on their own —
+    /// they wait for the kernel to assign, then execute. When true, a
+    /// workpool of idle specialists may claim unassigned tickets.
+    proactive_workpool: bool = false,
+    /// Who may transition a ticket to closed. Agents are always forbidden;
+    /// this knob only narrows the kernel surface. "kernel" (default) or
+    /// "operator" (the operator prompt explicitly closes).
+    close_authority: []const u8 = "kernel",
+    /// When true, every close/reopen decision carries written reasoning and a
+    /// reopened ticket is re-assigned immediately to a fresh specialist.
+    reopen_with_reasoning: bool = true,
 };
 
 pub const default_document = @embedFile("default.json");
@@ -147,6 +171,7 @@ pub fn loadRuntimePolicy(allocator: std.mem.Allocator, workspace_root: []const u
         result.max_steps = try optionalUsize(runtime, "max_steps", result.max_steps);
         result.max_tool_calls_per_turn = try optionalUsize(runtime, "max_tool_calls_per_turn", result.max_tool_calls_per_turn);
         result.max_tool_calls_per_session = try optionalUsize(runtime, "max_tool_calls_per_session", result.max_tool_calls_per_session);
+        result.full_access_mode = try optionalBool(runtime, "full_access_mode", result.full_access_mode);
         result.effort = try optionalStringClone(allocator, runtime, "effort");
         result.temperature = try optionalFloat(runtime, "temperature");
     }
@@ -189,6 +214,24 @@ pub fn loadAgentPolicy(allocator: std.mem.Allocator, workspace_root: []const u8)
     const agents = objectField(parsed.value.object, "agents") orelse return .{};
     return .{
         .orchestrator_only = try optionalBool(agents, "orchestrator_only", true),
+    };
+}
+
+/// Load the ticket lifecycle policy (auto-assign, workpool, close authority,
+/// reopen reasoning). Pure value read; invalid values are rejected at
+/// document validation before this loader ever runs.
+pub fn loadTicketPolicy(allocator: std.mem.Allocator, workspace_root: []const u8) !TicketPolicy {
+    var parsed = try parseDocument(allocator, workspace_root);
+    defer parsed.deinit();
+    const tickets = objectField(parsed.value.object, "tickets") orelse return .{};
+    return .{
+        .auto_assign = try optionalBool(tickets, "auto_assign", true),
+        .proactive_workpool = try optionalBool(tickets, "proactive_workpool", false),
+        .close_authority = if (tickets.get("close_authority")) |value|
+            (if (value == .string) value.string else "kernel")
+        else
+            "kernel",
+        .reopen_with_reasoning = try optionalBool(tickets, "reopen_with_reasoning", true),
     };
 }
 
@@ -335,17 +378,24 @@ fn parseDocument(allocator: std.mem.Allocator, workspace_root: []const u8) !std.
 }
 
 fn validateDocumentShape(root: std.json.ObjectMap) !void {
-    try rejectUnknownKeys(root, &.{ "_about", "_help", "version", "runtime", "provider", "agent_routes", "agents", "context", "prompts", "draft", "buffer", "memory", "environment" });
+    try rejectUnknownKeys(root, &.{ "_about", "_help", "version", "runtime", "provider", "agent_routes", "agents", "tickets", "context", "prompts", "draft", "buffer", "memory", "environment" });
     try validateAbout(root);
     try validateHelp(root, &.{"version"});
     if (try validatedObjectField(root, "runtime")) |value| {
-        const keys = &.{ "workspace", "max_steps", "max_tool_calls_per_turn", "max_tool_calls_per_session", "effort", "temperature" };
-        try rejectUnknownKeys(value, &.{ "_help", "workspace", "max_steps", "max_tool_calls_per_turn", "max_tool_calls_per_session", "effort", "temperature" });
+        const keys = &.{ "workspace", "max_steps", "max_tool_calls_per_turn", "max_tool_calls_per_session", "full_access_mode", "effort", "temperature" };
+        try rejectUnknownKeys(value, &.{ "_help", "workspace", "max_steps", "max_tool_calls_per_turn", "max_tool_calls_per_session", "full_access_mode", "effort", "temperature" });
         try validateHelp(value, keys);
+        _ = try optionalBool(value, "full_access_mode", false);
     }
     if (try validatedObjectField(root, "provider")) |value| {
         try rejectUnknownKeys(value, &.{ "_help", "wire_api" });
         try validateHelp(value, &.{"wire_api"});
+        // Validate the wire_api VALUE at document-shape time so config/set
+        // (validation-before-write) and every load path reject invented
+        // values before any mutation or runtime fallback.
+        if (value.get("wire_api")) |wire_api| {
+            if (wire_api != .string or types.WireApi.fromString(wire_api.string) == null) return Error.InvalidConfig;
+        }
     }
     if (try validatedObjectField(root, "agent_routes")) |value| {
         try rejectUnknownKeys(value, &.{ "_help", "max_concurrency", "roles" });
@@ -390,13 +440,33 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
                     "max_tool_calls",
                     "max_children",
                     "output_contract",
+                    "doctrine_tags",
+                    "ticket_ownership",
+                    "checkpoint_contract",
+                    "autonomy",
+                    "effort",
+                    "temperature",
                 });
                 try validateOptionalAgentString(definition, "extends", 64);
                 try validateOptionalAgentString(definition, "description", 512);
                 try validateOptionalAgentString(definition, "when_to_use", 512);
                 try validateOptionalAgentString(definition, "instruction", 16 * 1024);
                 try validateOptionalAgentString(definition, "output_contract", 256);
+                try validateOptionalAgentString(definition, "doctrine_tags", 1024);
+                try validateOptionalAgentString(definition, "checkpoint_contract", 256);
+                try validateOptionalAgentString(definition, "effort", 64);
                 _ = try optionalBool(definition, "enabled", true);
+                _ = try optionalBool(definition, "ticket_ownership", true);
+                if (definition.get("autonomy")) |autonomy| {
+                    if (autonomy != .null and (autonomy != .string or !isValidAutonomyValue(autonomy.string))) return Error.InvalidConfig;
+                }
+                if (definition.get("temperature")) |temperature| {
+                    if (temperature != .null) {
+                        if (temperature != .float and temperature != .integer) return Error.InvalidConfig;
+                        const temperature_value: f64 = if (temperature == .float) temperature.float else @floatFromInt(temperature.integer);
+                        if (temperature_value != -1 and (temperature_value < 0 or temperature_value > 2)) return Error.InvalidConfig;
+                    }
+                }
                 if (definition.get("route_role")) |role| {
                     if (role != .null and (role != .string or !isKnownAgentRouteRole(role.string))) return Error.InvalidConfig;
                 }
@@ -405,6 +475,16 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
                 const max_children = try optionalUsize(definition, "max_children", 0);
                 if (max_steps == 0 or max_steps > 4096 or max_tool_calls > 4096 or max_children > 64) return Error.InvalidConfig;
             }
+        }
+    }
+    if (try validatedObjectField(root, "tickets")) |value| {
+        try rejectUnknownKeys(value, &.{ "_help", "auto_assign", "proactive_workpool", "close_authority", "reopen_with_reasoning" });
+        try validateHelp(value, &.{ "auto_assign", "proactive_workpool", "close_authority", "reopen_with_reasoning" });
+        _ = try optionalBool(value, "auto_assign", true);
+        _ = try optionalBool(value, "proactive_workpool", false);
+        _ = try optionalBool(value, "reopen_with_reasoning", true);
+        if (value.get("close_authority")) |authority| {
+            if (authority != .null and (authority != .string or !isKnownCloseAuthority(authority.string))) return Error.InvalidConfig;
         }
     }
     if (try validatedObjectField(root, "context")) |value| {
@@ -469,15 +549,17 @@ fn validatedObjectField(root: std.json.ObjectMap, key: []const u8) !?std.json.Ob
 }
 
 /// Validate human-facing metadata without allowing it to become a second
-/// configuration surface. When `_help` is present, every sibling value must
-/// have one non-empty explanation and no undocumented help keys may drift in.
+/// configuration surface. Help entries are additive metadata: an older
+/// config may omit the explanation for a newer known key, but it may not add
+/// undocumented help keys or malformed explanations. The canonical template
+/// supplies the fallback text for settings consumers.
 fn validateHelp(owner: std.json.ObjectMap, configurable_keys: []const []const u8) !void {
     const help_value = owner.get("_help") orelse return;
     if (help_value != .object) return Error.InvalidConfig;
     try rejectUnknownKeys(help_value.object, configurable_keys);
     for (configurable_keys) |key| {
         if (owner.get(key) == null) continue;
-        const explanation = help_value.object.get(key) orelse return Error.InvalidConfig;
+        const explanation = help_value.object.get(key) orelse continue;
         if (explanation != .string or std.mem.trim(u8, explanation.string, " \t\r\n").len == 0) return Error.InvalidConfig;
     }
 }
@@ -610,6 +692,20 @@ fn isKnownAgentRouteRole(value: []const u8) bool {
     return false;
 }
 
+/// Autonomy vocabulary is closed (mirrors spec.zig): directed / bounded /
+/// self_directed. Anything else is a schema violation, not a fallback.
+fn isValidAutonomyValue(value: []const u8) bool {
+    return std.mem.eql(u8, value, "directed") or
+        std.mem.eql(u8, value, "bounded") or
+        std.mem.eql(u8, value, "self_directed");
+}
+
+/// Close authority is kernel or operator — agents never appear here because
+/// agent ticket-close is structurally forbidden, not configurable.
+fn isKnownCloseAuthority(value: []const u8) bool {
+    return std.mem.eql(u8, value, "kernel") or std.mem.eql(u8, value, "operator");
+}
+
 fn optionalU16(object: std.json.ObjectMap, key: []const u8, default: u16) !u16 {
     const value = object.get(key) orelse return default;
     if (value == .null) return default;
@@ -669,7 +765,7 @@ test "default config documents every persistent value" {
     defer parsed.deinit();
     try validateDocumentShape(parsed.value.object);
 
-    const sections = [_][]const u8{ "runtime", "provider", "agent_routes", "agents", "context", "prompts", "memory", "environment" };
+    const sections = [_][]const u8{ "runtime", "provider", "agent_routes", "agents", "tickets", "context", "prompts", "memory", "environment" };
     for (&sections) |section_name| {
         const section = objectField(parsed.value.object, section_name).?;
         const help = objectField(section, "_help").?;
@@ -694,6 +790,7 @@ test "config file is created beside runtime state and loads typed defaults" {
     defer policy.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 4096), policy.max_steps);
     try std.testing.expectEqual(@as(usize, 16), policy.max_tool_calls_per_turn);
+    try std.testing.expect(!policy.full_access_mode);
 
     const config_path = try path(std.testing.allocator, workspace);
     defer std.testing.allocator.free(config_path);
@@ -711,7 +808,7 @@ test "config environment values override runtime defaults and wire api is typed"
     defer std.testing.allocator.free(config_path);
     try fsutil.writeText(config_path,
         \\{"version":1,
-        \\ "runtime":{"max_steps":100,"max_tool_calls_per_turn":4,"max_tool_calls_per_session":20},
+        \\ "runtime":{"max_steps":100,"max_tool_calls_per_turn":4,"max_tool_calls_per_session":20,"full_access_mode":true},
         \\ "provider":{"wire_api":"responses"},
         \\ "environment":{"MAX_STEPS":"250"}}
     );
@@ -720,12 +817,51 @@ test "config environment values override runtime defaults and wire api is typed"
     defer policy.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 250), policy.max_steps);
     try std.testing.expectEqual(@as(usize, 4), policy.max_tool_calls_per_turn);
+    try std.testing.expect(policy.full_access_mode);
     try std.testing.expectEqual(types.WireApi.responses, (try loadWireApi(std.testing.allocator, workspace)).?);
 }
 
 test "comment metadata cannot drift from configurable values" {
     const document =
         \\{"version":1,"runtime":{"_help":{"max_steps":""},"max_steps":2}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
+    defer parsed.deinit();
+    try std.testing.expectError(Error.InvalidConfig, validateDocumentShape(parsed.value.object));
+}
+
+test "new config values remain valid when older help metadata omits them" {
+    const document =
+        \\{"version":1,"runtime":{"_help":{"max_steps":"Maximum steps."},"max_steps":2,"full_access_mode":true}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
+    defer parsed.deinit();
+    try validateDocumentShape(parsed.value.object);
+}
+
+test "wire api auto is a valid provider floor value" {
+    const document =
+        \\{"version":1,"provider":{"wire_api":"auto"}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
+    defer parsed.deinit();
+    try validateDocumentShape(parsed.value.object);
+    const provider_value = objectField(parsed.value.object, "provider").?;
+    try std.testing.expectEqual(types.WireApi.auto, types.WireApi.fromString(provider_value.get("wire_api").?.string).?);
+}
+
+test "wire api auto validates inside agent route overrides" {
+    const document =
+        \\{"version":1,"agent_routes":{"roles":{"recon":{"wire_api":"auto"}}}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
+    defer parsed.deinit();
+    try validateDocumentShape(parsed.value.object);
+}
+
+test "wire api rejects invented values at every validation path" {
+    const document =
+        \\{"version":1,"provider":{"wire_api":"telepathy"}}
     ;
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
     defer parsed.deinit();

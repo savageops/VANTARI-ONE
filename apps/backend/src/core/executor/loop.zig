@@ -5,6 +5,7 @@ const context_builder = @import("../context/index.zig");
 const context_stream_rules = @import("../context/stream_rules.zig");
 const prompts = @import("../prompts/index.zig");
 const draft = @import("draft.zig");
+const turn_payload = @import("turn_payload.zig");
 const provider = @import("../providers/openai_compatible.zig");
 const dispatch = @import("../providers/dispatch.zig");
 const store = @import("../sessions/store.zig");
@@ -175,6 +176,7 @@ pub fn runPromptWithOptions(
 
     var execution_context = options.execution_context;
     execution_context.workspace_root = config.workspace_root;
+    execution_context.full_access_mode = config.full_access_mode;
     execution_context.session_id = session.id;
     execution_context.memory_policy = config.memory_policy;
     if (execution_context.parent_session_id == null) {
@@ -317,7 +319,7 @@ pub fn runPromptWithOptions(
         // to the event spine before this scope returns; free it immediately
         // after recordSessionEvent serializes it into the durable ledger.
         {
-            const boundary_msg = turnBoundaryMessage(allocator, step, messages) catch "Provider turn started.";
+            const boundary_msg = turn_payload.turnStartedPayload(allocator, step, messages.items) catch "Provider turn started.";
             const owns_boundary = boundary_msg.ptr != "Provider turn started.".ptr;
             try recordSessionEvent(
                 allocator,
@@ -740,7 +742,7 @@ pub fn runPromptWithOptions(
             // turn_finished with measured token telemetry (AGENTS.md §IV, P0-3a).
             // Same ownership pattern as turn_started: allocate, persist, free.
             {
-                const finished_msg = turnFinishedMessage(allocator, step, messages, final_output.len) catch "Provider turn completed.";
+                const finished_msg = turn_payload.turnFinishedPayload(allocator, step, messages.items, completion.model, completion.usage, final_output.len) catch "Provider turn completed.";
                 const owns_finished = finished_msg.ptr != "Provider turn completed.".ptr;
                 try recordSessionEvent(
                     allocator,
@@ -1247,40 +1249,6 @@ fn renderToolStartedEvent(
             std.json.fmt(tool_call.name, .{}),
             timestamp_ms,
         },
-    );
-}
-
-/// Typed turn boundary message carrying the step index and measured token
-/// telemetry. Every provider turn emits turn_started with this payload so
-/// the event spine has per-turn ingress evidence AND token cost evidence
-/// (AGENTS.md §IV, roadmap P0-2b).
-fn turnBoundaryMessage(
-    allocator: std.mem.Allocator,
-    step: usize,
-    messages: std.array_list.Managed(types.ChatMessage),
-) ![]u8 {
-    const window_tokens = context_builder.budget.estimateChatMessages(messages.items);
-    return std.fmt.allocPrint(
-        allocator,
-        "{{\"schema\":\"var1.turn_started.v1\",\"step\":{d},\"window_tokens\":{d}}}",
-        .{ step, window_tokens },
-    );
-}
-
-/// Typed turn terminal message carrying the step index, window token count,
-/// and output byte count. Closes the turn lifecycle with measured evidence
-/// (AGENTS.md §IV, roadmap P0-3a).
-fn turnFinishedMessage(
-    allocator: std.mem.Allocator,
-    step: usize,
-    messages: std.array_list.Managed(types.ChatMessage),
-    output_bytes: usize,
-) ![]u8 {
-    const window_tokens = context_builder.budget.estimateChatMessages(messages.items);
-    return std.fmt.allocPrint(
-        allocator,
-        "{{\"schema\":\"var1.turn_finished.v1\",\"step\":{d},\"window_tokens\":{d},\"output_bytes\":{d}}}",
-        .{ step, window_tokens, output_bytes },
     );
 }
 

@@ -93,6 +93,8 @@ unassigned → assigned → in_progress → blocked → completed → closed
 
 The `log_ticket` tool supports `create`, `transition` (with reason), and `list`. Every non-trivial task gets a ticket before work starts. Transitions are durable records in `.var/tickets/tickets.jsonl` with schema `var1.ticket_transition.v1`. Long tasks must have ticket tracking for accuracy, recovery, and audit.
 
+Assignment is queue admission. It does not launch an agent directly. The scheduler claims assigned tickets only when the configured capacity has a free slot, then calls the existing `AgentService` and fixed-pool `Supervisor` path. Heartbeats, leases, stale-owner requeue, terminal reconciliation, and repair evidence remain durable scheduler/ticket state. `tickets.proactive_workpool` is opt-in; the default is a configured pool waiting for explicit assignment.
+
 ### Interjection Protocol (Speak While Working)
 
 The operator can send messages while the agent is actively working. Messages are:
@@ -112,6 +114,18 @@ The `manage_plugin` tool discovers, inspects, and toggles plugins from `.var/plu
 ## Configuration Surface
 
 All config lives in `~/.vantari/config.json` (non-secret) and `~/.vantari/auth.json` (credentials). The config is hot-loaded per-turn.
+
+### Agent filesystem and process access
+
+```json
+{
+  "runtime": {
+    "full_access_mode": false
+  }
+}
+```
+
+`runtime.full_access_mode` is the explicit cross-directory switch. `false` is the default and keeps file, search, LSP, and `shell_exec` paths inside the active workspace. Set it to `true` only when the operator intends to work in another directory; relative paths stay workspace-rooted, while explicit absolute paths and `..` traversal are accepted. This setting is exposed by the Settings panel and validated `config/set` flow, then applies on the next turn. It does not move the canonical `.var`/session runtime state or relax configured prompt-file paths.
 
 ### Prompt Layers (configurable, hot-loaded)
 
@@ -212,7 +226,10 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - **Dual-mode reasoning dock** — 4 rows, ∞ for live reasoning, ◊ for buffer preview
 - **Input history** — Up/Down-arrow cycling through previous messages (persistent ring buffer, cap 1000)
 - **Agent activity tree** — nested group/item rows with tree connectors
+- **Agent turn summaries** — each keyed child row shows a bounded summary from the canonical child session summary ledger; tool phases update the state marker and never replace the row with `tool_completed`
+- **Minimal agent group rows** — `Agents completed/total`; no persistent `waiting on N` filler
 - **Live streaming** — assistant deltas, reasoning deltas, and tool progress rendered in real-time
+- **Operator metadata row** — model, effort, context used/capacity/remaining, active agents, pool pressure, and queue pressure; persistent `Esc cancel` text is omitted
 
 ## Quick Start
 
@@ -231,6 +248,7 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 .\zig-out\bin\VAR1.exe tools --json
 .\zig-out\bin\VAR1.exe config validate
 .\zig-out\bin\VAR1.exe config show
+.\zig-out\bin\VAR1.exe -c
 ```
 
 ## Files Worth Reading First
@@ -240,6 +258,9 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - `src/core/executor/buffer.zig` — buffer speculation service
 - `src/core/prompts/builder.zig` — system prompt assembly (all layers)
 - `src/core/agents/supervisor.zig` — bounded in-process delegation
+- `src/core/tickets/index.zig` — canonical ticket ledger, queue projection, claims, leases, and repair evidence
+- `src/core/scheduler/service.zig` — capacity-aware ticket dispatch and stale-owner reconciliation
+- `src/core/sessions/summaries.zig` — bounded durable session/agent turn summaries
 - `src/core/agents/spec.zig` — agent specialist definitions
 - `src/core/providers/routes.zig` — per-agent route resolution
 - `src/core/providers/openai_compatible.zig` — transport, streaming, effort/temperature
@@ -258,9 +279,11 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - Buffer speculation (concurrent navigation previews + next-turn injection)
 - Interjection protocol (speak while working — USER_STEER_MESSAGE at step boundary)
 - Per-turn config hot-loading
+- Default-restricted agent filesystem/process boundary with explicit `runtime.full_access_mode` opt-in
 - Per-agent effort/temperature/thinking controls
 - Knowledge scaffolding (research/plans/advice/roadmap/tickets/processes)
 - Full ticket lifecycle (create/transition/list — unassigned→assigned→in_progress→completed→closed)
+- Buffered ticket execution (assignment queue, fixed pool capacity, leases, heartbeat, stale-owner requeue, terminal reconciliation)
 - Process tracking ledger
 - Dual-mode reasoning dock (4 rows, ∞/◊ glyphs, buffer preview)
 - TUI Unicode glyph system (○/◉/✓/✗/⊘ markers, ├──/└── connectors, ◍/◉ group headers)
@@ -272,48 +295,31 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - Role-routed bounded delegation with silent advisors
 - Surgical precision work ethic
 
-## Deep Architecture — Database-Grade Agent Runtime
+## Deep architecture — current capability truth
 
-VANTARI treats the agent session as a **database transaction**, not a chat interaction. These mechanical invariants are baked into the kernel's design — they are not features bolted onto a chat wrapper.
+VANTARI treats the agent session as a durable state machine, not a chat
+interaction. The table separates mechanisms that execute through the canonical
+consumer path from frontier scaffolds that still need lifecycle proof.
 
-### Append-Only Event Spine with Monotonic Replay
-Every observable action is a typed event appended to `events.jsonl` with monotonic sequence numbers. The TUI is a read model over the event spine — it replays the same events and arrives at the same state after cold start. Timestamp-only cursors are insufficient under same-millisecond bursts.
+| Mechanism | Current state | Exact boundary |
+|---|---|---|
+| Append-only event spine | **Source-proven, client replay partial** | events.jsonl stores monotonic sequence numbers; stdio notifications currently drop seq and the TUI falls back to timestamp/type/text deduplication. |
+| Child branch/convergence | **In-process proven** | Fixed-pool convergence works while the kernel lives; process restart marks running receipts stale instead of resuming a worker. |
+| Write-intent ledger | **Frontier scaffold** | Reserve/commit helpers and tests exist; write-capable tools do not call them on the canonical mutation path. |
+| Byte-level session integrity | **Partial** | Readers salvage valid prefixes and malformed tails; the complete invalid-UTF-8 and duplicate-sequence contract remains a promotion target. |
+| Context compiler | **Shipped source path** | One builder compiles transcript plus checkpoint state and validates tool topology before provider dispatch. |
+| Compaction | **Manual writer shipped** | Entry-aware checkpoints exist; autonomous/background compaction remains gated. |
+| TTSR stream rules | **Detection only** | The callback records an abort request, but current provider streaming completes before correction and retry. |
+| Hash-anchored edits | **Shipped source path** | read_file hashes and edit preconditions reject stale content before mutation. |
+| Provider capability probing | **Frontier scaffold** | Cache code exists without a runtime adapter consumer. |
+| Arena/quota discipline | **Frontier scaffold** | Scoped allocators exist; quota counters are not maintained by the live turn path. |
+| DAP | **Non-composable prototype** | attach destroys its adapter before return; stacktrace and variables start fresh unattached adapters. |
+| eval | **Partial prototype** | Python state exists only inside a call-owned kernel; Bun is one-shot and does not enforce the advertised timeout. |
+| Scheduler lease | **Process-local confidence only** | lease.json is read/check/written without an inter-process compare-and-swap, so dual leadership is possible. |
 
-### Shard Graph — Branch/Converge Topology
-Agent delegation is modeled as a durable shard graph: parent sessions branch into child shards tracked through open → converged → abandoned lifecycle states. Orphaned branches are reconciled at cold start. Convergence is exactly-once via a `.reserved → .committed` state machine.
-
-### Write-Intent Ledger
-Before any write-capable tool mutates a file, VANTARI reserves a write-intent record. After mutation, it commits with before/after SHA-256 hashes. Abandoned intents (crash between reserve and commit) are reconciled at cold start. A crashed process never leaves the next client wondering "did that write complete?"
-
-### Byte-Level Session Integrity
-JSONL readers preserve valid prefix state across torn writes, UTF-8 BOMs, invalid UTF-8 bytes, duplicated sequence IDs, and malformed trailing rows — without corrupting the valid prefix. The session is recoverable up to the point of corruption.
-
-### Context Compiler (Not "Chat History")
-The context builder is the only owner that turns session storage into provider messages. It compiles from durable ledgers on every turn — there is no in-memory source of truth that can drift from disk. Tool-call adjacency is validated before dispatch; orphan tool results fail closed.
-
-### Semantic Compaction with Real Statistics
-Messages are scored by semantic relevance (embedding cosine similarity or TF-IDF), not just recency. The three-layer pipeline: value-weighting → TF-IDF/embeddings → agent summarization. Each layer has its own budget and validation gate.
-
-### TTSR — Time-Traveling Stream Rules
-Regex-based mid-stream abort: when the model emits a known-bad pattern (`Box::leak`, `eval(`, `os.system`), the stream is aborted mid-token, a reminder is injected, and the turn retries. Zero context cost when dormant; millisecond abort when triggered.
-
-### Hashline — Content-Hash Anchored Edits
-`read_file` returns a content hash; edit tools accept hash-anchored ranges. Stale anchors (file changed since read) are rejected before mutation. Eliminates "edited the wrong version" bugs entirely.
-
-### Provider Capability Probing
-Each adapter caches verified capabilities (streaming, tool-call shape, overflow signatures). Unknown capabilities fail closed — the adapter never assumes support for an unprobed capability.
-
-### Arena/Quota Discipline
-Allocators split by scope: turn, provider payload, tool result, UI frame. A 1000-turn session has the same memory profile as a 10-turn session — ephemeral allocations freed in bulk at scope boundaries.
-
-### DAP Integration — Agent Drives Real Debuggers
-Attach to running processes via Debug Adapter Protocol (lldb-dap, dlv, debugpy). Inspect stack frames, read variables, step through execution. The agent debugs using the same protocol VS Code uses.
-
-### Persistent Code Execution Sandbox
-Python and Bun workers with persistent state. Variables survive between calls. The sandbox can call back into the agent's own tools (read, search, task) over a loopback protocol — a reflective execution loop.
-
-### Durable Scheduler with Leader Lease
-Background thread with 5-second leader lease preventing dual-ticking. Jobs stored as individual JSON files. Crash-recoverable, workspace-scoped, no external cron dependency.
+The current evidence and ordered repair ledger live in the
+[full-harness SITREP](../../.docs/research/2026-08-12-full-harness-sitrep.md)
+and [findings index](../../.docs/todo/findings/00-INDEX.md).
 
 **Full deep architecture document:** [`.var/research/deep-architecture-innovations.md`](.var/research/deep-architecture-innovations.md)
 
@@ -342,4 +348,6 @@ Deep recon (4 background agents) confirmed that making a secondary provider call
 - [Complete Session Inventory](.var/research/session-2026-08-07-complete-inventory.md) — every non-ordinary detail from this session
 - [Architecture](architecture.md) — full cognitive architecture section with flow diagrams
 - [Planning Chains](.docs/todo/pending/) — DRAFT-, BUF-, PROMPT-, PLUG-, TUI- chains (planning-spec v3.0)
+- [Project records](../.docs/index.md) — current technical summary, workspace record, research, and closeout evidence
+- [Reference corpus](../.refs/index.md) — local harvest sources and adoption rules
 - [AGENTS.md](../AGENTS.md) — the operating contract (18 sections of runtime doctrine)

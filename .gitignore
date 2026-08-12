@@ -19,6 +19,15 @@
 **/.untrack/
 /data/
 
+# Legacy pre-.var runtime locations. Keep local credentials and generated
+# ledgers out of Git while the explicit migration/quarantine work is pending.
+/apps/backend/auth.json
+/apps/backend/config.json
+/apps/backend/sessions/
+/apps/backend/memories/
+/apps/backend/todos/
+/apps/backend/changelog/
+
 # Stray empty artifacts from shell redirects
 Created
 

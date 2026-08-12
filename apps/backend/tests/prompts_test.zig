@@ -75,7 +75,7 @@ test "prompt builder emits ordered guardrails and tool contract" {
 
     // Edit protocol — tool routing + path + file inspection.
     try std.testing.expect(std.mem.indexOf(u8, prompt, "native IX expressions such as lit:needle") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "all paths are relative to the displayed workspace root") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "paths are relative to the displayed workspace root") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "write_file may write the complete file") != null);
 
     // Tool catalog + capsules.

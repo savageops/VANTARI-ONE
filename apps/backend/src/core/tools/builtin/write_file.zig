@@ -5,13 +5,13 @@ const module = @import("../module.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "write_file",
-    .description = "Create a new workspace file or intentionally overwrite an entire file. Arguments require path and full content. Parent directories are created for workspace-relative targets.",
+    .description = "Create a new file or intentionally overwrite an entire file. Arguments require path and full content. Restricted mode keeps the target inside the workspace; runtime.full_access_mode=true permits an explicit external path.",
     .review_risk = .write_capable,
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "path": { "type": "string", "description": "Required workspace-relative file path to create or overwrite." },
+    \\    "path": { "type": "string", "description": "Required file path to create or overwrite. Restricted mode requires a workspace-relative path; runtime.full_access_mode=true permits an explicit external path." },
     \\    "content": { "type": "string", "description": "Required full file contents to write. For long generated artifacts, append_file chunks remain preferred for progress, recovery, and lower provider payload pressure." }
     \\  },
     \\  "required": ["path", "content"],
@@ -19,7 +19,7 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"path\":\"notes/todo.md\",\"content\":\"alpha\\n\"}",
-    .usage_hint = "Use only for full-file writes or a small seed before append_file chunks. For narrow edits prefer replace_in_file; for ledger/additive writes prefer append_file. Path must stay inside the workspace root.",
+    .usage_hint = "Use only for full-file writes or a small seed before append_file chunks. For narrow edits prefer replace_in_file; for ledger/additive writes prefer append_file. Paths stay inside the workspace unless runtime.full_access_mode is explicitly true.",
 };
 
 pub const availability = module.AvailabilitySpec{};
@@ -40,7 +40,7 @@ pub fn execute(
     });
     defer parsed.deinit();
 
-    const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
+    const file_path = try fsutil.resolveWithAccessMode(allocator, execution_context.workspace_root, parsed.value.path, execution_context.full_access_mode);
     defer allocator.free(file_path);
 
     const before = try module.captureFileSnapshot(allocator, file_path);

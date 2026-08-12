@@ -234,11 +234,37 @@ pub fn parseCompletionResponse(
 
     const model_str = if (root.get("model")) |m| (if (m == .string) m.string else configured_model) else configured_model;
 
+    var usage: types.Usage = .{};
+    captureAnthropicUsage(root, &usage);
+    usage.reconcile();
+
     return .{
         .model = try allocator.dupe(u8, model_str),
         .content = if (content_buf.items.len > 0) try content_buf.toOwnedSlice() else null,
         .tool_calls = try tool_calls.toOwnedSlice(),
+        .usage = usage,
     };
+}
+
+/// Extract an Anthropic Messages usage object into the canonical Usage
+/// contract. `cache_creation_input_tokens` folds into prompt (Anthropic bills
+/// cache creation at the input rate); `cache_read_input_tokens` becomes the
+/// cached bucket. Missing usage → fields unchanged (zeros by caller default).
+/// Why: the cost model must work for every wire protocol VANTARI speaks.
+/// Evidence: non-stream parse + message_start/message_delta stream events.
+fn captureAnthropicUsage(root: std.json.ObjectMap, usage: *types.Usage) void {
+    const usage_value = root.get("usage") orelse return;
+    if (usage_value != .object) return;
+    const u = usage_value.object;
+    if (getU64(u, "input_tokens")) |value| usage.prompt_tokens = value;
+    if (getU64(u, "output_tokens")) |value| usage.completion_tokens = value;
+    if (getU64(u, "cache_read_input_tokens")) |value| usage.cached_tokens = value;
+    if (getU64(u, "cache_creation_input_tokens")) |value| usage.prompt_tokens += value;
+}
+
+fn getU64(obj: std.json.ObjectMap, key: []const u8) ?u64 {
+    const value = obj.get(key) orelse return null;
+    return if (value == .integer) @intCast(value.integer) else null;
 }
 
 fn parseStreamResponse(
@@ -262,16 +288,18 @@ fn parseStreamResponse(
     }
 
     var cursor: usize = 0;
+    var usage: types.Usage = .{};
     while (cursor < response_body.len) {
         const remaining = response_body[cursor..];
         if (findSseBoundary(remaining)) |boundary| {
-            try parseAnthropicSseEvent(allocator, remaining[0..boundary.event_end], &content, &tc_accum);
+            try parseAnthropicSseEvent(allocator, remaining[0..boundary.event_end], &content, &tc_accum, &usage);
             cursor += boundary.remove_len;
             continue;
         }
-        try parseAnthropicSseEvent(allocator, remaining, &content, &tc_accum);
+        try parseAnthropicSseEvent(allocator, remaining, &content, &tc_accum, &usage);
         break;
     }
+    usage.reconcile();
 
     for (tc_accum.items) |acc| {
         if (acc.name.items.len == 0) continue;
@@ -289,6 +317,7 @@ fn parseStreamResponse(
         .model = try allocator.dupe(u8, configured_model),
         .content = if (content.items.len > 0) try content.toOwnedSlice() else null,
         .tool_calls = try tool_calls.toOwnedSlice(),
+        .usage = usage,
     };
 }
 
@@ -318,6 +347,7 @@ fn parseAnthropicSseEvent(
     event: []const u8,
     content: *std.array_list.Managed(u8),
     tc_accum: *std.array_list.Managed(TcAccumulator),
+    usage: *types.Usage,
 ) !void {
     var event_data = std.array_list.Managed(u8).init(allocator);
     defer event_data.deinit();
@@ -345,6 +375,17 @@ fn parseAnthropicSseEvent(
     };
 
     const event_type = if (root.get("type")) |t| (if (t == .string) t.string else "") else "";
+
+    // Usage evidence: message_start carries input + cache tokens on the
+    // message object; message_delta carries the terminal output_tokens count.
+    if (std.mem.eql(u8, event_type, "message_start")) {
+        if (root.get("message")) |message| {
+            if (message == .object) captureAnthropicUsage(message.object, usage);
+        }
+    }
+    if (std.mem.eql(u8, event_type, "message_delta")) {
+        captureAnthropicUsage(root, usage);
+    }
 
     // Text delta.
     if (std.mem.eql(u8, event_type, "content_block_delta")) {

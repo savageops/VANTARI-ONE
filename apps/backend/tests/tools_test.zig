@@ -1760,11 +1760,14 @@ test "shell_exec drains pipe after cap to prevent deadlock (bounded draining)" {
     defer std.testing.allocator.free(workspace_root);
 
     // Generate 64KB of output (larger than typical pipe buffer of 4KB-8KB)
-    // with a very small max_output_bytes to force the cap.
+    // with a very small max_output_bytes to force the cap. The timeout is a
+    // generous bound (this fixture's 10000-iteration Write-Host loop measures
+    // ~15s on loaded Windows hardware) — the assertions under test are the
+    // truncation cap and the deadlock-free completion, not the timeout.
     var shell_call = try makeToolCall(
         std.testing.allocator,
         "shell_exec",
-        "{\"mode\":\"shell\",\"command\":\"1..10000 | ForEach-Object { Write-Host ('x' * 100) }\",\"timeout_ms\":10000,\"max_output_bytes\":100}",
+        "{\"mode\":\"shell\",\"command\":\"1..10000 | ForEach-Object { Write-Host ('x' * 100) }\",\"timeout_ms\":30000,\"max_output_bytes\":100}",
     );
     defer shell_call.deinit(std.testing.allocator);
 

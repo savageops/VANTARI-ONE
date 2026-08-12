@@ -6,13 +6,13 @@ const hashline = @import("hashline.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "read_file",
-    .description = "Inspect an existing workspace file. Arguments require path and optionally accept start_line/end_line. Use only after the file path is known.",
+    .description = "Inspect an existing file. Arguments require path and optionally accept start_line/end_line. Restricted mode keeps the path inside the workspace; runtime.full_access_mode=true permits an explicit external path. Use only after the file path is known.",
     .review_risk = .read_only,
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "path": { "type": "string", "description": "Required existing workspace-relative file path to read." },
+    \\    "path": { "type": "string", "description": "Required existing file path. Restricted mode requires a workspace-relative path; runtime.full_access_mode=true permits an explicit external path." },
     \\    "start_line": { "type": "integer", "minimum": 1, "description": "Optional 1-based starting line." },
     \\    "end_line": { "type": "integer", "minimum": 1, "description": "Optional 1-based ending line." }
     \\  },
@@ -47,7 +47,7 @@ pub fn execute(
         return module.Error.InvalidArguments;
     }
 
-    const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
+    const file_path = try fsutil.resolveWithAccessMode(allocator, execution_context.workspace_root, parsed.value.path, execution_context.full_access_mode);
     defer allocator.free(file_path);
 
     const contents = fsutil.readTextAlloc(allocator, file_path) catch |err| switch (err) {

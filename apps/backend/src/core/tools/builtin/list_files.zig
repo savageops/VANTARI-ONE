@@ -5,20 +5,20 @@ const module = @import("../module.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "list_files",
-    .description = "Discover workspace paths. Call when the target file or directory is unknown. Arguments are an object with optional path and max_results only; omit path or use \".\" for the workspace root.",
+    .description = "Discover files and directories. Call when the target is unknown. Restricted mode keeps discovery inside the workspace; runtime.full_access_mode=true permits an explicit external path. Arguments are an object with optional path and max_results only; omit path or use \".\" for the workspace root.",
     .review_risk = .read_only,
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "path": { "type": "string", "description": "Optional existing workspace-relative file or directory path to list. Defaults to the workspace root when omitted or set to ." },
+    \\    "path": { "type": "string", "description": "Optional existing file or directory path to list. Restricted mode requires a workspace-relative path; runtime.full_access_mode=true permits an explicit external path. Defaults to the workspace root when omitted or set to ." },
     \\    "max_results": { "type": "integer", "minimum": 1, "description": "Optional maximum number of paths to return." }
     \\  },
     \\  "additionalProperties": false
     \\}
     ,
     .example_json = "{\"path\":\"src\",\"max_results\":100}",
-    .usage_hint = "Use before read_file/search_files when path certainty is low. Path must be workspace-relative and existing; never pass absolute paths or .. segments.",
+    .usage_hint = "Use before read_file/search_files when path certainty is low. Paths must be existing and workspace-relative unless runtime.full_access_mode is explicitly true.",
 };
 
 pub const availability = module.AvailabilitySpec{};
@@ -39,10 +39,11 @@ pub fn execute(
     });
     defer parsed.deinit();
 
-    const search_path = try fsutil.resolveInWorkspace(
+    const search_path = try fsutil.resolveWithAccessMode(
         allocator,
         execution_context.workspace_root,
         parsed.value.path orelse ".",
+        execution_context.full_access_mode,
     );
     defer allocator.free(search_path);
 

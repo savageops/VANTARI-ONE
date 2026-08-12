@@ -250,9 +250,7 @@ test "availability registry is derived from builtin module definitions" {
     }
 
     const search_spec = availabilitySpec(search_files.definition.name).?;
-    try std.testing.expect(search_spec.dependency != null);
-    try std.testing.expectEqual(module.DependencyKind.external_command, search_spec.dependency.?.kind);
-    try std.testing.expectEqualStrings("iex", search_spec.dependency.?.name);
+    try std.testing.expect(search_spec.dependency == null);
 
     for (agents.definitions) |definition| {
         const agent_spec = availabilitySpec(definition.name);

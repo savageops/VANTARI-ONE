@@ -160,6 +160,24 @@ const ParsedHealthResult = struct {
     subscription_plan_label: ?[]const u8 = null,
     subscription_status: ?[]const u8 = null,
     scheduler_supervisor: bool = false,
+    effort: []const u8 = "",
+    thinking_mode: []const u8 = "",
+    context_window_tokens: u64 = 0,
+    reserve_output_tokens: u64 = 0,
+    /// Additive operator telemetry projected by the canonical health RPC.
+    /// Defaults keep installed clients compatible with older kernels.
+    agent_pool_healthy: bool = false,
+    agent_pool_max: usize = 0,
+    agent_pool_queued: usize = 0,
+    agent_pool_running: usize = 0,
+    agent_pool_available: usize = 0,
+    tickets_unassigned: usize = 0,
+    tickets_assigned: usize = 0,
+    tickets_in_progress: usize = 0,
+    tickets_blocked: usize = 0,
+    tickets_completed: usize = 0,
+    tickets_closed: usize = 0,
+    ticket_ledger_healthy: bool = true,
 };
 
 const ParsedToolsListResult = struct {
@@ -340,7 +358,7 @@ pub const health_help_text =
     \\  VAR1 health [--json]
     \\
     \\Flags:
-    \\  --json                    Emit {"ok","model","workspace_root","base_url","auth_provider"} instead of plain text.
+    \\  --json                    Emit readiness, model/context, pool capacity, and ticket pressure as JSON.
     \\  -h, --help                Print help for the health command.
     \\
     \\Behavior:
@@ -983,21 +1001,39 @@ fn executeHealthViaKernel(allocator: std.mem.Allocator, workspace_root: []const 
         return;
     }
 
-    const text_payload = try std.fmt.allocPrint(
-        allocator,
-        "VAR1 health\nstatus: ready\nmodel: {s}\nworkspace_root: {s}\nbase_url: {s}\nauth_provider: {s}\nsubscription_plan: {s}\nsubscription_status: {s}\nscheduler_supervisor: {s}\n",
-        .{
-            parsed.value.model,
-            parsed.value.workspace_root,
-            parsed.value.base_url,
-            parsed.value.auth_provider orelse "unknown",
-            parsed.value.subscription_plan_label orelse "unknown",
-            parsed.value.subscription_status orelse "unknown",
-            if (parsed.value.scheduler_supervisor) "running" else "unavailable",
-        },
-    );
+    const text_payload = try formatHealthText(allocator, parsed.value);
     defer allocator.free(text_payload);
     try writeStdout(text_payload);
+}
+
+fn formatHealthText(allocator: std.mem.Allocator, health: ParsedHealthResult) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "VAR1 health\nstatus: {s}\nmodel: {s}\neffort: {s}\nthinking_mode: {s}\ncontext_window_tokens: {d}\nreserve_output_tokens: {d}\nworkspace_root: {s}\nbase_url: {s}\nauth_provider: {s}\nsubscription_plan: {s}\nsubscription_status: {s}\nscheduler_supervisor: {s}\nagent_pool: {d}/{d} running, {d} available, {d} queued, status={s}\ntickets: {d} assigned, {d} in_progress, {d} blocked\nticket_ledger: {s}\n",
+        .{
+            if (health.ok) "ready" else "unhealthy",
+            health.model,
+            if (health.effort.len > 0) health.effort else "default",
+            if (health.thinking_mode.len > 0) health.thinking_mode else "disabled",
+            health.context_window_tokens,
+            health.reserve_output_tokens,
+            health.workspace_root,
+            health.base_url,
+            health.auth_provider orelse "unknown",
+            health.subscription_plan_label orelse "unknown",
+            health.subscription_status orelse "unknown",
+            if (health.scheduler_supervisor) "running" else "unavailable",
+            health.agent_pool_running,
+            health.agent_pool_max,
+            health.agent_pool_available,
+            health.agent_pool_queued,
+            if (health.agent_pool_healthy) "healthy" else "unavailable",
+            health.tickets_assigned,
+            health.tickets_in_progress,
+            health.tickets_blocked,
+            if (health.ticket_ledger_healthy) "healthy" else "unhealthy",
+        },
+    );
 }
 
 fn executeToolsViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8, options: ToolsCliOptions) !void {
@@ -2042,6 +2078,43 @@ test "cli session list projection keeps output slices alive through JSON render"
 
     try std.testing.expect(std.mem.indexOf(u8, rendered, "assistant output survives projection") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, session.id) != null);
+}
+
+test "cli health projection preserves pool and ticket pressure for installed consumers" {
+    const health = ParsedHealthResult{
+        .ok = true,
+        .model = "Qwen3.6 35B-A3B",
+        .workspace_root = "E:\\VANTARI-ONE",
+        .base_url = "http://127.0.0.1:1234/v1",
+        .effort = "high",
+        .thinking_mode = "enabled",
+        .context_window_tokens = 200_000,
+        .reserve_output_tokens = 16_000,
+        .agent_pool_healthy = true,
+        .agent_pool_max = 6,
+        .agent_pool_queued = 2,
+        .agent_pool_running = 3,
+        .agent_pool_available = 1,
+        .tickets_unassigned = 4,
+        .tickets_assigned = 2,
+        .tickets_in_progress = 3,
+        .tickets_blocked = 1,
+        .tickets_completed = 5,
+        .tickets_closed = 2,
+        .ticket_ledger_healthy = true,
+    };
+
+    const rendered = try renderJsonAlloc(std.testing.allocator, health);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "agent_pool_available") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "tickets_blocked") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "ticket_ledger_healthy") != null);
+
+    const text = try formatHealthText(std.testing.allocator, health);
+    defer std.testing.allocator.free(text);
+    try std.testing.expect(std.mem.indexOf(u8, text, "agent_pool: 3/6 running, 1 available, 2 queued, status=healthy") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "tickets: 2 assigned, 3 in_progress, 1 blocked") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "ticket_ledger: healthy") != null);
 }
 
 fn writeStdout(text: []const u8) !void {

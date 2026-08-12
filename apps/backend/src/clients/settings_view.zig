@@ -79,39 +79,86 @@ pub const SettingsState = struct {
         var parsed = config_file.readValidatedDocument(self.allocator, self.workspace_root) catch return;
         defer parsed.deinit();
 
-        const root = parsed.value.object;
-        const section = root.get(section_name) orelse return;
-        if (section != .object) return;
+        var defaults = std.json.parseFromSlice(std.json.Value, self.allocator, config_file.default_document, .{}) catch return;
+        defer defaults.deinit();
 
-        // Get the _help object for this section if present.
-        const help_obj = if (section.object.get("_help")) |h| h else null;
+        const root = parsed.value.object;
+        const default_root = defaults.value.object;
+        const active_section = blk: {
+            if (root.get(section_name)) |section| {
+                if (section == .object) break :blk section.object;
+            }
+            break :blk null;
+        };
+        const default_section = blk: {
+            if (default_root.get(section_name)) |section| {
+                if (section == .object) break :blk section.object;
+            }
+            break :blk null;
+        } orelse return;
+
+        // Get the _help objects for this section if present. Older config
+        // files can contain a newer value without its newer help metadata;
+        // use the canonical template as the visible fallback.
+        const help_obj = if (active_section) |section| section.get("_help") else null;
+        const default_help_obj = default_section.get("_help");
 
         // Iterate the section's keys (excluding _help).
-        var iter = section.object.iterator();
-        while (iter.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*, "_help")) continue;
+        if (active_section) |section| {
+            var iter = section.iterator();
+            while (iter.next()) |entry| {
+                if (std.mem.eql(u8, entry.key_ptr.*, "_help")) continue;
+                try self.appendConfigEntry(entry.key_ptr.*, entry.value_ptr.*, helpForKey(help_obj, default_help_obj, entry.key_ptr.*));
+            }
+        }
 
-            const key = try self.allocator.dupe(u8, entry.key_ptr.*);
-            const value_text = try valueToString(self.allocator, entry.value_ptr.*);
-            const help_text = blk: {
-                if (help_obj) |h| {
-                    if (h == .object) {
-                        if (h.object.get(entry.key_ptr.*)) |help_val| {
-                            if (help_val == .string) break :blk try self.allocator.dupe(u8, help_val.string);
-                        }
-                    }
-                }
-                break :blk try self.allocator.dupe(u8, "");
-            };
-            const is_bool = entry.value_ptr.* == .bool;
-            try self.entries.append(self.allocator, .{
-                .key = key,
-                .value_text = value_text,
-                .help_text = help_text,
-                .is_bool = is_bool,
-            });
+        // Keep older valid config files backward-compatible without silently
+        // rewriting them. Missing keys remain typed defaults until the
+        // operator saves them through config/set.
+        var default_iter = default_section.iterator();
+        while (default_iter.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*, "_help")) continue;
+            if (active_section) |section| {
+                if (section.get(entry.key_ptr.*) != null) continue;
+            }
+            try self.appendConfigEntry(entry.key_ptr.*, entry.value_ptr.*, default_help_obj);
         }
         self.entry_cursor = 0;
+    }
+
+    fn helpForKey(primary: ?std.json.Value, fallback: ?std.json.Value, key: []const u8) ?std.json.Value {
+        if (primary) |help| {
+            if (help == .object and help.object.get(key) != null) return help;
+        }
+        return fallback;
+    }
+
+    fn appendConfigEntry(
+        self: *SettingsState,
+        key_text: []const u8,
+        value: std.json.Value,
+        help_obj: ?std.json.Value,
+    ) !void {
+        const key = try self.allocator.dupe(u8, key_text);
+        errdefer self.allocator.free(key);
+        const value_text = try valueToString(self.allocator, value);
+        errdefer self.allocator.free(value_text);
+        const help_text = blk: {
+            if (help_obj) |help| {
+                if (help == .object) {
+                    if (help.object.get(key_text)) |help_value| {
+                        if (help_value == .string) break :blk try self.allocator.dupe(u8, help_value.string);
+                    }
+                }
+            }
+            break :blk try self.allocator.dupe(u8, "");
+        };
+        try self.entries.append(self.allocator, .{
+            .key = key,
+            .value_text = value_text,
+            .help_text = help_text,
+            .is_bool = value == .bool,
+        });
     }
 
     /// Save the currently-edited entry via config/set RPC.
@@ -375,4 +422,58 @@ test "valueToString converts types" {
     const null_val = try valueToString(allocator, .null);
     defer allocator.free(null_val);
     try std.testing.expectEqualStrings("(disabled)", null_val);
+}
+
+test "settings exposes default keys omitted by an older config" {
+    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+
+    const config_path = try config_file.ensure(std.testing.allocator, workspace);
+    defer std.testing.allocator.free(config_path);
+    try VAR1.shared.fsutil.writeText(config_path, "{\"version\":1,\"runtime\":{\"max_steps\":10}}\n");
+
+    var state = SettingsState.init(std.testing.allocator, workspace);
+    defer state.deinit();
+    try state.loadSection();
+
+    var found = false;
+    for (state.entries.items) |entry| {
+        if (std.mem.eql(u8, entry.key, "full_access_mode")) {
+            found = true;
+            try std.testing.expectEqualStrings("false", entry.value_text);
+            try std.testing.expect(entry.is_bool);
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "settings accepts newer values with older help metadata" {
+    if (std.process.hasEnvVarConstant("VANTARI_HOME")) return error.SkipZigTest;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+
+    const config_path = try config_file.ensure(std.testing.allocator, workspace);
+    defer std.testing.allocator.free(config_path);
+    try VAR1.shared.fsutil.writeText(config_path,
+        \\{"version":1,"runtime":{"_help":{"max_steps":"Maximum steps."},"max_steps":10,"full_access_mode":true}}
+    );
+
+    var state = SettingsState.init(std.testing.allocator, workspace);
+    defer state.deinit();
+    try state.loadSection();
+
+    var found = false;
+    for (state.entries.items) |entry| {
+        if (std.mem.eql(u8, entry.key, "full_access_mode")) {
+            found = true;
+            try std.testing.expectEqualStrings("true", entry.value_text);
+            try std.testing.expect(std.mem.indexOf(u8, entry.help_text, "other directories") != null);
+        }
+    }
+    try std.testing.expect(found);
 }

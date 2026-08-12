@@ -6,6 +6,7 @@ const protocol_types = @import("../shared/protocol/types.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
 const models = @import("../core/providers/models.zig");
 const scheduler = @import("../core/scheduler/index.zig");
+const tickets = @import("../core/tickets/index.zig");
 const buffer_service = @import("../core/executor/buffer.zig");
 const store = @import("../core/sessions/store.zig");
 const auth_store = @import("../core/auth/store.zig");
@@ -287,7 +288,7 @@ pub fn serveKernel(
         .context = &server,
         .notifyFn = onAgentParentEvent,
     });
-    server.scheduler_service = try scheduler.Service.init(allocator, config, transport);
+    server.scheduler_service = try scheduler.Service.initWithAgentService(allocator, config, transport, agent_service);
     server.scheduler_thread = try std.Thread.spawn(.{}, runSchedulerService, .{&server.scheduler_service.?});
 
     // Buffer speculation service (background thread, concurrent with heavyweight).
@@ -1037,6 +1038,12 @@ fn handleEventsSubscribe(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn handleHealthGet(server: *Server) ![]u8 {
+    var agent_pool_healthy = true;
+    const capacity = server.agent_service.capacity() catch blk: {
+        agent_pool_healthy = false;
+        break :blk tools.AgentCapacitySnapshot{};
+    };
+    const ticket_snapshot = (tickets.TicketStore.init(server.allocator, server.config.workspace_root).snapshot() catch tickets.TicketSnapshot{ .healthy = false });
     return renderJsonAlloc(server.allocator, protocol_types.HealthGetResult{
         .ok = true,
         .model = server.config.openai_model,
@@ -1050,6 +1057,18 @@ fn handleHealthGet(server: *Server) ![]u8 {
         .thinking_mode = server.config.thinking_mode,
         .context_window_tokens = server.config.context_policy.context_window_tokens,
         .reserve_output_tokens = server.config.context_policy.reserve_output_tokens,
+        .agent_pool_healthy = agent_pool_healthy,
+        .agent_pool_max = capacity.max,
+        .agent_pool_queued = capacity.queued,
+        .agent_pool_running = capacity.running,
+        .agent_pool_available = capacity.available,
+        .tickets_unassigned = ticket_snapshot.unassigned,
+        .tickets_assigned = ticket_snapshot.assigned,
+        .tickets_in_progress = ticket_snapshot.in_progress,
+        .tickets_blocked = ticket_snapshot.blocked,
+        .tickets_completed = ticket_snapshot.completed,
+        .tickets_closed = ticket_snapshot.closed,
+        .ticket_ledger_healthy = ticket_snapshot.healthy,
     });
 }
 
@@ -1366,6 +1385,10 @@ fn noopReconcile(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8) anyerror!u
     return error.UnexpectedCall;
 }
 
+fn testHealthCapacity(_: ?*anyopaque) anyerror!tools.AgentCapacitySnapshot {
+    return .{ .max = 4, .queued = 2, .running = 1, .available = 3 };
+}
+
 const test_config = types.Config{
     .openai_base_url = @constCast("http://127.0.0.1:1234"),
     .openai_api_key = @constCast("test-key"),
@@ -1417,6 +1440,73 @@ fn appendStaleStartedEvent(workspace_root: []const u8, session_id: []const u8) !
         .message = "VAR1 session initialized.",
         .timestamp_ms = std.time.milliTimestamp() - stale_running_session_ms - 1,
     });
+}
+
+test "health/get projects Supervisor capacity and ticket ledger pressure" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    server.agent_service.capacityFn = testHealthCapacity;
+    defer server.deinit();
+
+    const ticket_store = tickets.TicketStore.init(std.testing.allocator, workspace_root);
+    var assigned = try ticket_store.create(.{
+        .title = "health queue",
+        .description = "health projection",
+        .category = "bug",
+        .severity = "high",
+        .status = .assigned,
+        .workspace_root = workspace_root,
+        .created_at_ms = 1,
+    });
+    defer assigned.deinit(std.testing.allocator);
+
+    const response = try handleHealthGet(&server);
+    defer std.testing.allocator.free(response);
+    var parsed = try std.json.parseFromSlice(protocol_types.HealthGetResult, std.testing.allocator, response, .{});
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value.ok);
+    try std.testing.expectEqual(@as(usize, 4), parsed.value.agent_pool_max);
+    try std.testing.expectEqual(@as(usize, 2), parsed.value.agent_pool_queued);
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.agent_pool_running);
+    try std.testing.expectEqual(@as(usize, 3), parsed.value.agent_pool_available);
+    try std.testing.expectEqual(@as(usize, 0), parsed.value.tickets_unassigned);
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.tickets_assigned);
+    try std.testing.expectEqual(@as(usize, 0), parsed.value.tickets_in_progress);
+    try std.testing.expectEqual(@as(usize, 0), parsed.value.tickets_blocked);
+    try std.testing.expectEqual(@as(usize, 0), parsed.value.tickets_completed);
+    try std.testing.expectEqual(@as(usize, 0), parsed.value.tickets_closed);
+    try std.testing.expect(parsed.value.ticket_ledger_healthy);
+    try std.testing.expect(std.mem.indexOf(u8, response, "agent_pool_available") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "tickets_assigned") != null);
+}
+
+test "health/get marks unavailable Supervisor capacity instead of healthy zero" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    const response = try handleHealthGet(&server);
+    defer std.testing.allocator.free(response);
+    var parsed = try std.json.parseFromSlice(protocol_types.HealthGetResult, std.testing.allocator, response, .{});
+    defer parsed.deinit();
+
+    try std.testing.expect(!parsed.value.agent_pool_healthy);
+    try std.testing.expectEqual(@as(usize, 0), parsed.value.agent_pool_max);
+    try std.testing.expect(std.mem.indexOf(u8, response, "agent_pool_healthy") != null);
 }
 
 test "processRequest returns parse errors for malformed json-rpc payloads" {

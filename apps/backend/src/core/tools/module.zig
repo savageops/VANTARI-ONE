@@ -180,6 +180,56 @@ pub const AgentGroupSnapshot = struct {
     terminal: bool = true,
 };
 
+pub const AgentCapacitySnapshot = struct {
+    max: usize = 0,
+    queued: usize = 0,
+    running: usize = 0,
+    available: usize = 0,
+};
+
+/// One scheduler-admitted ticket carried into the canonical agent runtime.
+/// Claim identity stays typed so a ticket cannot silently become a generic
+/// child batch with a different session or agent.
+pub const TicketTaskRequest = struct {
+    ticket_id: []const u8,
+    title: []const u8,
+    description: []const u8,
+    category: []const u8,
+    source_session_id: []const u8 = "",
+    expected_revision: u64,
+    worker_id: []const u8,
+    worker_generation: u64,
+    lease_token: []const u8,
+    lease_expires_at_ms: i64,
+    attempt: u32,
+    agent_hint: []const u8,
+    idempotency_key: []const u8,
+};
+
+pub const TicketLaunchReceipt = struct {
+    ticket_id: []u8,
+    group_id: []u8,
+    task_id: []u8,
+    session_id: []u8,
+    agent_id: []u8,
+    route_role: []u8,
+    capability_profile_id: []u8,
+    capability_hash: []u8,
+    model: []u8,
+
+    pub fn deinit(self: *TicketLaunchReceipt, allocator: std.mem.Allocator) void {
+        allocator.free(self.ticket_id);
+        allocator.free(self.group_id);
+        allocator.free(self.task_id);
+        allocator.free(self.session_id);
+        allocator.free(self.agent_id);
+        allocator.free(self.route_role);
+        allocator.free(self.capability_profile_id);
+        allocator.free(self.capability_hash);
+        allocator.free(self.model);
+    }
+};
+
 pub const AgentEventSink = struct {
     context: ?*anyopaque = null,
     notifyFn: ?*const fn (
@@ -221,6 +271,14 @@ pub const AgentService = struct {
         tasks: []const AgentTaskRequest,
         scope: DelegationScope,
     ) anyerror![]u8 = null,
+    launchTicketFn: ?*const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        request: TicketTaskRequest,
+    ) anyerror!TicketLaunchReceipt = null,
+    capacityFn: ?*const fn (
+        ctx: ?*anyopaque,
+    ) anyerror!AgentCapacitySnapshot = null,
     statusFn: *const fn (
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
@@ -293,6 +351,20 @@ pub const AgentService = struct {
         }
         if (tasks.len != 1) return Error.AgentServiceUnavailable;
         return self.launch(allocator, parent_session_id, tasks[0].task, tasks[0].name, scope);
+    }
+
+    pub fn launchTicket(
+        self: AgentService,
+        allocator: std.mem.Allocator,
+        request: TicketTaskRequest,
+    ) anyerror!TicketLaunchReceipt {
+        const launch_ticket = self.launchTicketFn orelse return Error.AgentServiceUnavailable;
+        return launch_ticket(self.context, allocator, request);
+    }
+
+    pub fn capacity(self: AgentService) anyerror!AgentCapacitySnapshot {
+        const read_capacity = self.capacityFn orelse return Error.AgentServiceUnavailable;
+        return read_capacity(self.context);
     }
 
     pub fn status(
@@ -393,6 +465,9 @@ pub const ToolEventSink = struct {
 
 pub const ExecutionContext = struct {
     workspace_root: []const u8,
+    /// When true, agent-facing path resolution may target explicit paths
+    /// outside workspace_root. The default remains restricted.
+    full_access_mode: bool = false,
     /// The session this tool call belongs to. Set by the executor loop;
     /// used by session-scoped tools (update_session_summary) to write into
     /// their own summary ledger row.
@@ -878,4 +953,72 @@ test "file effect envelope exposes effect-first content and structured metadata"
     try std.testing.expectEqualStrings(file_effect_schema_version, effect.get("schema_version").?.string);
     try std.testing.expectEqualStrings("write_file", effect.get("action").?.string);
     try std.testing.expectEqual(@as(i64, 5), effect.get("bytes_written").?.integer);
+}
+
+fn testTicketLaunchCallback(
+    _: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    request: TicketTaskRequest,
+) anyerror!TicketLaunchReceipt {
+    return .{
+        .ticket_id = try allocator.dupe(u8, request.ticket_id),
+        .group_id = try allocator.dupe(u8, "group-test"),
+        .task_id = try allocator.dupe(u8, "task-test"),
+        .session_id = try allocator.dupe(u8, "session-test"),
+        .agent_id = try allocator.dupe(u8, request.agent_hint),
+        .route_role = try allocator.dupe(u8, "implementer"),
+        .capability_profile_id = try allocator.dupe(u8, "profile-test"),
+        .capability_hash = try allocator.dupe(u8, "hash-test"),
+        .model = try allocator.dupe(u8, "model-test"),
+    };
+}
+
+fn testCapacityCallback(_: ?*anyopaque) anyerror!AgentCapacitySnapshot {
+    return .{ .max = 4, .queued = 1, .running = 2, .available = 1 };
+}
+
+test "agent service exposes typed ticket launch and capacity callbacks" {
+    var service = AgentService{
+        .context = null,
+        .launchFn = undefined,
+        .statusFn = undefined,
+        .waitFn = undefined,
+        .listFn = undefined,
+        .convergeFn = undefined,
+        .reconcileFn = undefined,
+        .launchTicketFn = testTicketLaunchCallback,
+        .capacityFn = testCapacityCallback,
+    };
+
+    const snapshot = try service.capacity();
+    try std.testing.expectEqual(@as(usize, 4), snapshot.max);
+    try std.testing.expectEqual(@as(usize, 1), snapshot.queued);
+    try std.testing.expectEqual(@as(usize, 2), snapshot.running);
+    try std.testing.expectEqual(@as(usize, 1), snapshot.available);
+
+    var receipt = try service.launchTicket(std.testing.allocator, .{
+        .ticket_id = "ticket-test",
+        .title = "Typed launch",
+        .description = "Prove the callback boundary",
+        .category = "architecture",
+        .expected_revision = 7,
+        .worker_id = "scheduler-test",
+        .worker_generation = 1,
+        .lease_token = "lease-test",
+        .lease_expires_at_ms = 123,
+        .attempt = 1,
+        .agent_hint = "implementer",
+        .idempotency_key = "launch-test",
+    });
+    defer receipt.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("ticket-test", receipt.ticket_id);
+    try std.testing.expectEqualStrings("group-test", receipt.group_id);
+    try std.testing.expectEqualStrings("task-test", receipt.task_id);
+    try std.testing.expectEqualStrings("session-test", receipt.session_id);
+    try std.testing.expectEqualStrings("implementer", receipt.agent_id);
+    try std.testing.expectEqualStrings("implementer", receipt.route_role);
+    try std.testing.expectEqualStrings("profile-test", receipt.capability_profile_id);
+    try std.testing.expectEqualStrings("hash-test", receipt.capability_hash);
+    try std.testing.expectEqualStrings("model-test", receipt.model);
 }

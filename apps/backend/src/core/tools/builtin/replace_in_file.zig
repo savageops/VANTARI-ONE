@@ -6,13 +6,13 @@ const hashline = @import("hashline.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "replace_in_file",
-    .description = "Perform exact text replacement in an existing workspace file. Large replacements are allowed when exact and intentional. Supports hash-anchored edits: pass the tag from read_file to reject stale anchors.",
+    .description = "Perform exact text replacement in an existing file. Restricted mode keeps the target inside the workspace; runtime.full_access_mode=true permits an explicit external path. Large replacements are allowed when exact and intentional. Supports hash-anchored edits: pass the tag from read_file to reject stale anchors.",
     .review_risk = .write_capable,
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "path": { "type": "string", "description": "Required existing workspace-relative file path to edit." },
+    \\    "path": { "type": "string", "description": "Required existing file path to edit. Restricted mode requires a workspace-relative path; runtime.full_access_mode=true permits an explicit external path." },
     \\    "old_text": { "type": "string", "description": "Required exact text to replace. Prefer the narrowest stable replacement window." },
     \\    "new_text": { "type": "string", "description": "Required replacement text. Large replacements are allowed when exact and intentional; append_file chunks remain preferred for long generated additions." },
     \\    "replace_all": { "type": "boolean", "description": "When true, replace every match instead of only the first one." },
@@ -47,7 +47,7 @@ pub fn execute(
     });
     defer parsed.deinit();
 
-    const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
+    const file_path = try fsutil.resolveWithAccessMode(allocator, execution_context.workspace_root, parsed.value.path, execution_context.full_access_mode);
     defer allocator.free(file_path);
 
     const original = try fsutil.readTextAlloc(allocator, file_path);

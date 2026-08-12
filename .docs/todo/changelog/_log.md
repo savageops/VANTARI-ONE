@@ -1,5 +1,21 @@
 # Execution Log
 
+## 2026-08-10 - Explicit cross-directory agent access boundary
+
+**Outcome:** Agent-facing file, search, LSP, and process tools now support an explicit full-access mode without weakening the default workspace boundary.
+
+- Added validated `runtime.full_access_mode`, default `false`, to the canonical config template and runtime policy.
+- Propagated the setting through `Config`, resolved routes, draft/buffer configs, child execution, and `ExecutionContext`.
+- Centralized path decisions in `fsutil.resolveWithAccessMode`; full access permits explicit absolute or traversing paths while relative paths remain workspace-rooted.
+- Updated prompt/tool contracts and error repair hints so agents know when external paths are permitted.
+- Kept `.var` runtime state, session ledgers, and configured prompt files on their existing canonical owners.
+- Added restricted/full resolver coverage and an external `shell_exec` cwd proof.
+- `/settings` now exposes default keys omitted by older config files without an implicit rewrite; `runtime.full_access_mode=false` remains visible and editable.
+- Older `_help` metadata may omit newer known keys without invalidating the config; `/settings` uses canonical default help text for the missing metadata instead of blocking the TUI.
+- Pinned Zig 0.15.1 ReleaseFast build and canonical Windows installer completed; installed SHA-256 is `7B12904FBEE46E2C741C17DCDAF677B85C2A5AB6AB4A4D9C6B7234F841993C5D`.
+- Installed `health --json` and `config validate` passed against the active `VANTARI_HOME` config; no user config was rewritten.
+- The latest focused TUI lane reached 56/56; the broad aggregate remains 1430/1688 with 74 shared fixture/session failures. Focused access-mode, shell-cwd, TUI, Debug, ReleaseFast, and installed health/config probes passed.
+
 ## 2026-08-09 - TUI history + slash commands + settings panel (chain 034)
 
 **Outcome:** Three deliverables landed across 6 execution units: global persistent message history, typed slash command system, and in-TUI settings panel.
@@ -1228,3 +1244,205 @@ Two consumer-breaking pipeline failures are now structurally impossible.
 - Installed TUI startup rendered `glm-5.2 · max · ctx — / 128k`; non-interactive
   startup failed closed with typed `TerminalUnavailable` evidence.
 - Research and owner mapping: `.docs/research/2026-08-09-tui-status-surface-and-repair-loop.md`.
+
+## 2026-08-09 - Provider cost model + wire compat auto-detection (chain 035)
+
+**Added:**
+
+- Measured token telemetry: all three wire adapters parse provider `usage` (chat_completions prompt_tokens_details.cached_tokens + stream terminal chunk, Anthropic input/output/cache_creation/cache_read, Responses input_tokens_details.cached_tokens) into `types.Usage` on `CompletionResponse`.
+- Compiled pricing engine `core/providers/pricing.zig` (prime-agent calculateCost formula, harvested price table with provenance, null cost for unknown models).
+- `turn_finished` schema v2: `prompt_tokens/completion_tokens/cached_tokens/cost_total_usd` (null when unpriced), built by the single owner `core/executor/turn_payload.zig` and emitted by both the kernel loop and model-task supervisor.
+- Compat auto-detection `core/providers/compat.zig`: `WireApi.auto` config floor resolves per base URL at dispatch (api.anthropic.com → anthropic_messages, else chat_completions); thinking shape keyed per endpoint (zai enable_thinking / deepseek nested thinking + reasoning_content echo / standard none).
+
+**Changed:**
+
+- `provider.wire_api` default is `"auto"` (explicit values still override detection).
+- The z.ai `enable_thinking` P0 fix is now scoped to z.ai endpoints instead of every chat_completions request.
+
+**Proof:**
+
+- `zig build test`: 1245/1494 main tests passed; failure set identical to pure-HEAD baseline (comm diff empty — zero regression across 035a-e).
+- 44 new tests across pricing (10), usage parse (20), turn payload (6), compat/detection (8) + config validation (3).
+- Installed binary validation pending (035h review).
+
+## 2026-08-10 - Buffered ticket scheduler and operator projection (chain 036)
+
+**Added:**
+
+- Durable ticket-event projection, queue-only assignment, revision-bound claims,
+  lease renewal, stale requeue, terminal evidence, and repair-required closure
+  fields under `core/tickets`.
+- Scheduler-owned ticket wake/dispatch/recovery through the existing
+  `AgentService` and bounded `Supervisor`; capacity remains one execution
+  authority and `PoolFull` leaves work assigned.
+- Additive `health/get` pool and ticket counts projected from Supervisor and the
+  valid ticket-event prefix.
+- Compact TUI footer pressure segments (`pool running/max`, `queue assigned`)
+  with bounded idle refresh, while preserving model/effort/context telemetry,
+  the composer/meta surface hierarchy, and Esc-free copy.
+
+**Proof:**
+
+- Pinned Zig 0.15.1 application build: `Build Summary: 9/9 steps succeeded`.
+- Scheduler/ticket focused probes: `18/18` ticket-filter tests and `14/14`
+  scheduler-filter tests passed with the live `VANTARI_HOME` override cleared
+  for isolated temporary scheduler leases.
+- TUI artifact: `49/49` tests passed; health RPC probe: `2/2`; ticket snapshot
+  probe: `2/2`; `git diff --check` exited 0 with only LF/CRLF normalization
+  warnings.
+- The broad graph reached `1673/1676`; the three failures remain in unrelated
+  runtime-loop, prompt-guidance, and workspace-resolution tests and are carried
+  as the explicit 036f regression boundary.
+
+## 2026-08-10 - Integrated ticket/pool proof and installed consumer closure (036f)
+
+**Added:**
+
+- Lossless installed CLI health projection for Supervisor pool health/capacity
+  and all ticket lifecycle buckets, with compact text output for pool and queue
+  pressure.
+- Explicit unhealthy/unknown pool state when Supervisor capacity cannot be
+  read; zero is no longer reported as a healthy pool.
+- Queue-only session absence assertion at `log_ticket`, and replay-loser
+  session failure evidence so a duplicate claim cannot create a second worker.
+- Windows installed ReleaseFast proof through the canonical installer,
+  including exact-path process cleanup and staged hash verification.
+
+**Proof:**
+
+- Pinned Zig 0.15.1 Debug build: `Build Summary: 9/9 steps succeeded`.
+- Canonical TUI artifact: `Build Summary: 9/9 steps succeeded; 53/53 tests passed`.
+- Broad canonical graph: `1681/1684` passed; three unrelated pre-existing
+  runtime-loop/tool-prompt/schema-repair failures remain explicitly bounded.
+- Installed `vantari.exe`: installer exit 0; `--help`, `health --json`, and
+  `config validate` exit 0; health JSON parses all 12 additive pool/ticket
+  fields; noninteractive TUI returns typed `TerminalUnavailable`; exact-path
+  process check returns zero; built and installed SHA256 match
+  `54496C7479C99C7E021247DC9D9F487541DCABF48FD9DC5BC41D4F24A082D179`.
+- `git diff --check` exits 0 with only known LF/CRLF normalization warnings.
+
+## 2026-08-10 - Terminal QC and chain closeout (036g)
+
+**Proof:**
+
+- The ownership audit found one canonical ticket ledger path under
+  `core/tickets`, one Supervisor-backed capacity path, and no second ticket,
+  pool, or status owner. Assignment remains queue admission; scheduler claim
+  remains the session and execution boundary.
+- Pinned Zig 0.15.1 build passed `9/9`; canonical TUI passed `53/53`; the
+  broad graph remains `1681/1684` with only the three named pre-existing
+  runtime-loop/tool-prompt/schema-repair failures.
+- Installed `vantari.exe` health exposed all 12 additive fields with pool
+  `0/6`, 6 available, and a healthy ticket ledger. `vantari -c` exited 1 with
+  typed `TerminalUnavailable` in the noninteractive shell, and the exact
+  installed process count was 0. Built and installed SHA256 matched
+  `54496C7479C99C7E021247DC9D9F487541DCABF48FD9DC5BC41D4F24A082D179`.
+- The parent manifest is complete, 036a-036g are archived, `next_todo` is
+  `NONE`, and `git diff --check` exits 0 with only known line-ending warnings.
+
+## 2026-08-10 - Agent summary child-row projection correction
+
+**Changed:**
+
+- The visible child row now keeps one keyed `group_id + task_id` entry. Tool
+  lifecycle phases update the state marker but no longer become the row label.
+- The supervisor projects the canonical child session summary at
+  `assistant_response`; the TUI compacts whitespace and truncates it to the
+  available one-line width.
+- The agent group row is `Agents completed/total`; the removed `waiting on N`
+  filler is not rendered. Persistent `Esc cancel` copy remains absent.
+- Project records now include `AGENTS.d/index.md`, `.docs/index.md`,
+  `.docs/technical_summary.md`, `.docs/workspace.json`, and `.refs/index.md`.
+  Scoped todo/changelog contracts now describe the planning-spec v3 chain.
+
+**Proof:**
+
+- Pinned Zig 0.15.1 `build test-tui --summary all`: `54/54` tests passed.
+- Pinned Zig 0.15.1 Debug application build: `9/9` steps succeeded.
+- Two adjacent pre-existing dirty compile defects in agent/config edits were
+  repaired before validation: the `doc_writer` initializer and the temperature
+  validator's shadowed local.
+
+## 2026-08-10 - Agent schema v2: doctrine-distilled specialists + ticket lifecycle policy
+
+**Added:**
+
+- `agents.definitions` schema v2: every specialist carries `doctrine_tags` (distilled AGENTS.md/agents.d vocabulary rendered into the model-visible catalog), `ticket_ownership` (agent drives its own ticket states; closing is structurally kernel-only — no config knob exists to widen it), `checkpoint_contract` (>=3-sentence live summary discipline), `autonomy` (directed/bounded/self_directed closed vocabulary), and optional `effort`/`temperature` (absent = VANTARI decides — the model is the plane, VANTARI is the pilot).
+- Five new builtin specialists: `scaffold` (planning-spec chain scaffolding with proof gates), `spec` (contract/spec author), `orchestrator_parent` (aggressive fan-out + ticket assignment + close/reopen-with-reasoning authority), `harvester` (three-law research harvest with source-proof), `doc_writer` (sliced large-file persistence). All seven existing floors enriched with ticket discipline, evidence-first capsules, and QC 4/4 reviewer judgment.
+- New `tickets` config section: `auto_assign` (assigned ticket auto-starts a specialist subagent), `proactive_workpool` (false = agents wait for assignment; true = idle specialists claim tickets), `close_authority` (kernel|operator), `reopen_with_reasoning`. Loaded via `loadTicketPolicy`.
+- `configure_agent` tool accepts the new fields; `renderCatalog` emits doctrine/ticket/checkpoint/autonomy/effort; `capabilityHash` now covers ticket ownership + autonomy.
+
+**Proof:**
+
+- `zig build test`: 1245/1494 main tests passed; failure set identical to pure-HEAD baseline (comm diff empty — zero regression).
+- All 48 agent registry contract cases pass with VANTARI_HOME unset, including 10 new cases (floor defaults, catalog doctrine render, full-field upsert round-trip, autonomy/temperature rejection, ticket policy defaults/custom/invalid).
+- Prompt guardrail test synced to the current builder text after an external working-tree edit replaced the path-protocol wording (mtime 20:39; surfaced, not silently reverted).
+
+## 2026-08-12 - Full harness SITREP and WIP accountability
+
+**Added:**
+
+- A full architecture, pipeline, process, method, competitive-harvest, proof,
+  and readiness report at
+  `.docs/research/2026-08-12-full-harness-sitrep.md`.
+- A priority-ordered executable findings ledger at
+  `.docs/todo/findings/00-INDEX.md`.
+- Current project-record links and machine-readable WIP/proof state in
+  `.docs/index.md`, `.docs/technical_summary.md`, and
+  `.docs/workspace.json`.
+
+**Corrected:**
+
+- Chain 036's historical closeout no longer acts as current production-ready
+  proof. Process-local agent execution, non-atomic scheduler leadership,
+  concurrent summary mutation, and event-sequence loss reopen its closure.
+- Chain 035 remains pending at 035g/035h until the current ReleaseFast source
+  reaches the installed consumer path.
+- Public docs now distinguish tracked clients, local prototypes, source-only
+  mechanisms, installed proof, and frontier scaffolds.
+
+**Proof:**
+
+- ReleaseFast build: 9/9.
+- Focused backend TUI: 54/56 passed, 2 skipped.
+- Vendored packages/tui: 103/104 passed, 1 skipped.
+- Isolated broad graph: 1690/1693 passed, 3 failed.
+- Built and installed hashes differ; active installed TUI/kernel processes
+  were preserved and no install was attempted.
+- The inherited production VANTARI_HOME test incident touched 535 runtime files
+  and is retained as an explicit P0 quarantine/repair obligation.
+
+## 2026-08-12 - Harness capability next-90 execution order
+
+**Added:**
+
+- `.docs/roadmap/24-harness-capability-next-90.md` ranks 90 concrete moves by
+  operator value, dependency leverage, integrity risk removed, and friction
+  removed.
+- The queue accounts for findings 10-31, live chains 021/035/036/PLUG, the
+  installed Windows proof boundary, and a 13-reference harness/runtime harvest.
+
+**Decision:**
+
+- Serialized test roots, RPC lifetime, ledgers, and persistent agent execution
+  precede TUI expansion, context sharding, plugins, and autonomous repair.
+- The strategic north star remains sharded token-minimal execution; roadmap 24
+  is the current implementation order required to reach it without building on
+  unsafe process-local ownership.
+
+## 2026-08-12 - Prompt-led autonomy and subtractive capability doctrine
+
+**Added:**
+
+- Applied doctrine extractions for prompt-led autonomy and subtractive
+  capability under `AGENTS.d/extractions/`.
+- Roadmap-wide add/consolidate/delete arbitration. All 90 moves must close, but
+  no move requires new code when deletion or owner consolidation closes it.
+- Prompt-profile proof for behavior, orchestration posture, pace, narration,
+  and burst cadence without alternate executor state machines.
+
+**Boundary:**
+
+- The model chooses behavior and the next eligible action. The kernel owns
+  executable capability, durability, budgets, evidence, recovery, and explicit
+  irreversible-action gates.

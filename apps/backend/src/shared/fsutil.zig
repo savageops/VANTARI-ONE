@@ -96,6 +96,29 @@ pub fn resolveInWorkspace(
     return target_abs;
 }
 
+/// Resolve an agent-facing path under the configured access mode.
+///
+/// Restricted mode preserves the workspace containment contract. Full access
+/// mode keeps relative paths anchored at the workspace root, but permits
+/// traversal and absolute paths so an agent can work in a sibling checkout or
+/// another explicitly selected directory.
+pub fn resolveWithAccessMode(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    requested_path: []const u8,
+    full_access_mode: bool,
+) ![]u8 {
+    if (!full_access_mode) return resolveInWorkspace(allocator, workspace_root, requested_path);
+
+    if (std.fs.path.isAbsolute(requested_path)) {
+        return resolveAbsolute(allocator, requested_path);
+    }
+
+    const root_abs = try resolveAbsolute(allocator, workspace_root);
+    defer allocator.free(root_abs);
+    return std.fs.path.resolve(allocator, &.{ root_abs, requested_path });
+}
+
 fn isWithinPath(root: []const u8, target: []const u8) bool {
     if (target.len < root.len) return false;
     if (!pathPrefixEqual(root, target[0..root.len])) return false;
@@ -205,4 +228,19 @@ test "runtimeRoot returns a valid path" {
     defer std.testing.allocator.free(root);
     try std.testing.expect(root.len > 0);
     try std.testing.expect(std.fs.path.isAbsolute(root));
+}
+
+test "resolveWithAccessMode keeps containment unless full access is explicit" {
+    const workspace = try resolveAbsolute(std.testing.allocator, ".");
+    defer std.testing.allocator.free(workspace);
+    const outside = try std.fs.path.resolve(std.testing.allocator, &.{ workspace, "..", "vantari-full-access-probe" });
+    defer std.testing.allocator.free(outside);
+
+    try std.testing.expectError(
+        PathError.PathOutsideWorkspace,
+        resolveWithAccessMode(std.testing.allocator, workspace, outside, false),
+    );
+    const resolved = try resolveWithAccessMode(std.testing.allocator, workspace, outside, true);
+    defer std.testing.allocator.free(resolved);
+    try std.testing.expectEqualStrings(outside, resolved);
 }

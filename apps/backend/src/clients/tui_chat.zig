@@ -52,6 +52,16 @@ const AgentCounts = struct {
     total: usize = 0,
 };
 
+const FooterPool = struct {
+    known: bool = false,
+    healthy: bool = true,
+    max: usize = 0,
+    running: usize = 0,
+    tickets_assigned: usize = 0,
+    tickets_in_progress: usize = 0,
+    ticket_ledger_healthy: bool = true,
+};
+
 const stream_min_frame_ns: u64 = 16 * std.time.ns_per_ms;
 const stream_max_adaptive_frame_ns: u64 = 100 * std.time.ns_per_ms;
 const stream_idle_wait_ms: usize = 100;
@@ -137,6 +147,24 @@ const ChatState = struct {
     thinking_mode: []const u8 = "",
     context_window_tokens: u64 = 0,
     reserve_output_tokens: u64 = 0,
+    agent_pool_max: usize = 0,
+    agent_pool_queued: usize = 0,
+    agent_pool_running: usize = 0,
+    agent_pool_available: usize = 0,
+    agent_pool_healthy: bool = false,
+    agent_pool_known: bool = false,
+    // Session cost read model accumulated from turn_finished v2 events
+    // (measured provider tokens + priced cost; cost stays zero-flag unless a
+    // turn reported a priced quantity).
+    session_prompt_tokens: u64 = 0,
+    session_completion_tokens: u64 = 0,
+    session_cached_tokens: u64 = 0,
+    session_cost_usd: f64 = 0,
+    has_session_cost: bool = false,
+    tickets_assigned: usize = 0,
+    tickets_in_progress: usize = 0,
+    ticket_ledger_healthy: bool = true,
+    last_health_refresh_ms: i64 = 0,
     /// Latest context compiler estimate from the typed turn boundary event.
     /// Null is intentional before the first provider turn or after a cold
     /// start with no replayable turn telemetry.
@@ -333,6 +361,37 @@ const ChatState = struct {
             if (replayProgressEvent(event.event_type)) try self.addProgress(event.event_type, event.message);
         }
         self.jumpToBottom();
+    }
+
+    fn applyHealthTelemetry(self: *ChatState, health: protocol.HealthGetResult) void {
+        self.agent_pool_known = true;
+        self.agent_pool_healthy = health.agent_pool_healthy;
+        self.agent_pool_max = health.agent_pool_max;
+        self.agent_pool_queued = health.agent_pool_queued;
+        self.agent_pool_running = health.agent_pool_running;
+        self.agent_pool_available = health.agent_pool_available;
+        self.tickets_assigned = health.tickets_assigned;
+        self.tickets_in_progress = health.tickets_in_progress;
+        self.ticket_ledger_healthy = health.ticket_ledger_healthy;
+    }
+
+    /// Refresh operator telemetry only from the idle UI loop. Provider
+    /// streaming already has its own event path; polling here avoids a second
+    /// status bus and keeps health reads bounded to one per half-second.
+    fn refreshHealthIfDue(self: *ChatState) !void {
+        const now_ms = std.time.milliTimestamp();
+        if (self.last_health_refresh_ms > 0 and now_ms - self.last_health_refresh_ms < 500) return;
+        self.last_health_refresh_ms = now_ms;
+
+        const health_call = try self.client.call(protocol.methods.health_get, "{}");
+        defer health_call.deinit(self.allocator);
+        const health_result_json = try expectKernelResult(self.allocator, health_call);
+        defer self.allocator.free(health_result_json);
+        var parsed_health = try std.json.parseFromSlice(protocol.HealthGetResult, self.allocator, health_result_json, .{
+            .ignore_unknown_fields = true,
+        });
+        defer parsed_health.deinit();
+        self.applyHealthTelemetry(parsed_health.value);
     }
 
     fn hydrateTranscript(self: *ChatState, messages: []const VAR1.shared.types.SessionMessage) !void {
@@ -578,6 +637,10 @@ const ChatState = struct {
 
         const TurnTelemetry = struct {
             window_tokens: u64 = 0,
+            prompt_tokens: u64 = 0,
+            completion_tokens: u64 = 0,
+            cached_tokens: u64 = 0,
+            cost_total_usd: ?f64 = null,
         };
         var parsed = std.json.parseFromSlice(TurnTelemetry, self.allocator, message, .{
             .ignore_unknown_fields = true,
@@ -585,6 +648,18 @@ const ChatState = struct {
         defer parsed.deinit();
 
         self.context_used_tokens = parsed.value.window_tokens;
+        // turn_finished v2 carries measured provider tokens + priced cost;
+        // accumulate into the session read model for /status (turn_started
+        // only refreshes the window estimate).
+        if (std.mem.eql(u8, event_type, "turn_finished")) {
+            self.session_prompt_tokens += parsed.value.prompt_tokens;
+            self.session_completion_tokens += parsed.value.completion_tokens;
+            self.session_cached_tokens += parsed.value.cached_tokens;
+            if (parsed.value.cost_total_usd) |cost| {
+                self.session_cost_usd += cost;
+                self.has_session_cost = true;
+            }
+        }
         return true;
     }
 
@@ -673,7 +748,7 @@ const ChatState = struct {
             else if (parsed.value.terminal)
                 try std.fmt.allocPrint(self.allocator, "Agents {d}/{d} - {d} failed, {d} cancelled", .{ finished, finished, failed, parsed.value.cancelled })
             else
-                try std.fmt.allocPrint(self.allocator, "Agents {d}/{d} - waiting on {d}", .{ finished, total, pending });
+                try std.fmt.allocPrint(self.allocator, "Agents {d}/{d}", .{ finished, total });
             defer self.allocator.free(text);
             const key = try std.fmt.allocPrint(self.allocator, "group:{s}", .{parsed.value.group_id});
             defer self.allocator.free(key);
@@ -697,16 +772,43 @@ const ChatState = struct {
             .running
         else
             activityStateFromLabel(parsed.value.status);
-        const text = if (state == .completed)
-            try self.allocator.dupe(u8, parsed.value.name)
-        else if (std.mem.eql(u8, event_type, "child_finished") and parsed.value.detail != null)
-            try std.fmt.allocPrint(self.allocator, "{s} - {s}", .{ parsed.value.name, parsed.value.detail.? })
-        else
-            try std.fmt.allocPrint(self.allocator, "{s} - {s}", .{ parsed.value.name, phase });
-        defer self.allocator.free(text);
         const key = try std.fmt.allocPrint(self.allocator, "agent:{s}:{s}", .{ parsed.value.group_id, parsed.value.task_id });
         defer self.allocator.free(key);
+
+        // The child row is an agent summary surface. Tool lifecycle phases
+        // remain available in the typed event spine, but they do not replace
+        // the agent's own turn summary in the visible tree.
+        if (std.mem.eql(u8, event_type, "child_finished") and parsed.value.detail == null) {
+            if (self.updateActivityState(key, state)) return;
+        }
+        const text = if (std.mem.eql(u8, phase, "assistant_response") and parsed.value.detail != null)
+            try formatAgentActivitySummary(
+                self.allocator,
+                parsed.value.name,
+                parsed.value.detail.?,
+                self.last_transcript_body_width,
+            )
+        else if (state == .completed)
+            try self.allocator.dupe(u8, parsed.value.name)
+        else if (std.mem.eql(u8, event_type, "child_finished") and parsed.value.detail != null)
+            try formatAgentActivityDetail(self.allocator, parsed.value.name, parsed.value.detail.?, self.last_transcript_body_width)
+        else if (isChildToolPhase(phase))
+            try formatAgentActivityDetail(self.allocator, parsed.value.name, parsed.value.status, self.last_transcript_body_width)
+        else
+            try formatAgentActivityDetail(self.allocator, parsed.value.name, phase, self.last_transcript_body_width);
+        defer self.allocator.free(text);
         try self.upsertActivityProgress(key, text, .item, state, parsed.value.group_id);
+    }
+
+    fn updateActivityState(self: *ChatState, activity_id: []const u8, state: ActivityState) bool {
+        for (self.messages.items) |*message| {
+            if (message.role != .progress) continue;
+            const existing = message.tool_call_id orelse continue;
+            if (!std.mem.eql(u8, existing, activity_id)) continue;
+            message.activity_state = state;
+            return true;
+        }
+        return false;
     }
 
     fn upsertToolStarted(self: *ChatState, message: []const u8) !void {
@@ -1136,7 +1238,12 @@ fn cmdExit(_: *ChatState, _: []const u8) anyerror!commands.CommandResult {
 }
 
 fn cmdStatus(state: *ChatState, _: []const u8) anyerror!commands.CommandResult {
-    const status_text = try commands.renderStatus(state.allocator, state.workspace_root, state.model, state.session_id, state.effort);
+    const status_text = try commands.renderStatus(state.allocator, state.workspace_root, state.model, state.session_id, state.effort, .{
+        .prompt_tokens = state.session_prompt_tokens,
+        .completion_tokens = state.session_completion_tokens,
+        .cached_tokens = state.session_cached_tokens,
+        .cost_total_usd = if (state.has_session_cost) state.session_cost_usd else null,
+    });
     defer state.allocator.free(status_text);
     try state.add(.system, status_text);
     return .handled;
@@ -1518,6 +1625,15 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
         .thinking_mode = parsed_health.value.thinking_mode,
         .context_window_tokens = parsed_health.value.context_window_tokens,
         .reserve_output_tokens = parsed_health.value.reserve_output_tokens,
+        .agent_pool_max = parsed_health.value.agent_pool_max,
+        .agent_pool_queued = parsed_health.value.agent_pool_queued,
+        .agent_pool_running = parsed_health.value.agent_pool_running,
+        .agent_pool_available = parsed_health.value.agent_pool_available,
+        .agent_pool_healthy = parsed_health.value.agent_pool_healthy,
+        .agent_pool_known = true,
+        .tickets_assigned = parsed_health.value.tickets_assigned,
+        .tickets_in_progress = parsed_health.value.tickets_in_progress,
+        .ticket_ledger_healthy = parsed_health.value.ticket_ledger_healthy,
     };
     defer state.deinit();
 
@@ -1551,6 +1667,7 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
     }
 
     while (true) {
+        state.refreshHealthIfDue() catch {};
         try draw(&vx, writer, &state, &input);
 
         const event = loop.nextEvent();
@@ -1800,7 +1917,7 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
     input.drawWithStyle(editor, styles.composer);
     const agent_counts = state.agentCounts();
     const meta_width = @as(usize, input_win.width) -| 4;
-    const footer_meta = try formatFooterMeta(
+    const footer_meta = try formatFooterMetaWithPool(
         state.allocator,
         state.model,
         state.effort,
@@ -1812,6 +1929,15 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         state.waiting,
         state.cancel_requested,
         state.scroll_offset,
+        .{
+            .known = state.agent_pool_known,
+            .healthy = state.agent_pool_healthy,
+            .max = state.agent_pool_max,
+            .running = state.agent_pool_running,
+            .tickets_assigned = state.tickets_assigned,
+            .tickets_in_progress = state.tickets_in_progress,
+            .ticket_ledger_healthy = state.ticket_ledger_healthy,
+        },
         meta_width,
     );
     defer state.allocator.free(footer_meta);
@@ -1933,6 +2059,61 @@ fn activityTitle(tool_name: []const u8) []const u8 {
         std.ascii.eqlIgnoreCase(tool_name, "todo_write") or
         std.ascii.eqlIgnoreCase(tool_name, "update_plan")) return "To-dos";
     return tool_name;
+}
+
+fn isChildToolPhase(phase: []const u8) bool {
+    const tool_phases = [_][]const u8{
+        "session_started",
+        "tool_requested",
+        "tool_reviewed",
+        "tool_started",
+        "tool_finished",
+        "tool_output_delta",
+        "tool_completed",
+        "turn_failed",
+    };
+    for (tool_phases) |candidate| {
+        if (std.mem.eql(u8, phase, candidate)) return true;
+    }
+    return false;
+}
+
+const max_agent_summary_bytes: usize = 144;
+
+fn compactAgentSummary(allocator: std.mem.Allocator, summary: []const u8) ![]u8 {
+    var compact = std.array_list.Managed(u8).init(allocator);
+    errdefer compact.deinit();
+
+    var tokens = std.mem.tokenizeAny(u8, summary, " \t\r\n");
+    while (tokens.next()) |token| {
+        if (compact.items.len > 0) try compact.append(' ');
+        try compact.appendSlice(token);
+    }
+    return compact.toOwnedSlice();
+}
+
+fn formatAgentActivityDetail(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    detail: []const u8,
+    body_width: usize,
+) ![]u8 {
+    const available = @min(max_agent_summary_bytes, body_width -| (name.len + 9));
+    if (available == 0) return truncateEnd(allocator, name, body_width);
+    const compact = try truncateEnd(allocator, detail, available);
+    defer allocator.free(compact);
+    return std.fmt.allocPrint(allocator, "{s} - {s}", .{ name, compact });
+}
+
+fn formatAgentActivitySummary(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    summary: []const u8,
+    body_width: usize,
+) ![]u8 {
+    const compact = try compactAgentSummary(allocator, summary);
+    defer allocator.free(compact);
+    return formatAgentActivityDetail(allocator, name, compact, body_width);
 }
 
 fn isAgentLifecycleTool(tool_name: []const u8) bool {
@@ -2496,6 +2677,38 @@ fn formatFooterMeta(
     scroll_offset: usize,
     width: usize,
 ) ![]u8 {
+    return formatFooterMetaWithPool(
+        allocator,
+        model,
+        effort,
+        thinking_mode,
+        context_used_tokens,
+        context_window_tokens,
+        running_agents,
+        total_agents,
+        waiting,
+        cancel_requested,
+        scroll_offset,
+        .{},
+        width,
+    );
+}
+
+fn formatFooterMetaWithPool(
+    allocator: std.mem.Allocator,
+    model: []const u8,
+    effort: []const u8,
+    thinking_mode: []const u8,
+    context_used_tokens: ?u64,
+    context_window_tokens: u64,
+    running_agents: usize,
+    total_agents: usize,
+    waiting: bool,
+    cancel_requested: bool,
+    scroll_offset: usize,
+    pool: FooterPool,
+    width: usize,
+) ![]u8 {
     if (width == 0) return allocator.dupe(u8, "");
 
     const effort_label = footerEffortLabel(effort, thinking_mode);
@@ -2504,24 +2717,40 @@ fn formatFooterMeta(
     const context_compact = try formatContextMeta(allocator, context_used_tokens, context_window_tokens, false);
     defer allocator.free(context_compact);
 
-    const agents = if (waiting and total_agents > 0)
-        try std.fmt.allocPrint(allocator, "agents {d}/{d}", .{ running_agents, total_agents })
-    else
-        try allocator.dupe(u8, "");
-    defer allocator.free(agents);
+    var agents = std.array_list.Managed(u8).init(allocator);
+    defer agents.deinit();
+    if (waiting and total_agents > 0) {
+        try agents.writer().print("agents {d}/{d}", .{ running_agents, total_agents });
+    }
+    if (pool.known and pool.max > 0 and (pool.running > 0 or pool.tickets_assigned > 0 or pool.tickets_in_progress > 0)) {
+        if (agents.items.len > 0) try agents.appendSlice(" · ");
+        try agents.writer().print("pool {d}/{d}", .{ pool.running, pool.max });
+    }
+    if (pool.known and !pool.healthy) {
+        if (agents.items.len > 0) try agents.appendSlice(" · ");
+        try agents.appendSlice("pool ?");
+    }
+    if (pool.tickets_assigned > 0 or !pool.ticket_ledger_healthy) {
+        if (agents.items.len > 0) try agents.appendSlice(" · ");
+        if (pool.ticket_ledger_healthy) {
+            try agents.writer().print("queue {d}", .{pool.tickets_assigned});
+        } else {
+            try agents.appendSlice("queue ?");
+        }
+    }
 
     const status = try formatFooterStatus(allocator, waiting, cancel_requested, scroll_offset);
     defer allocator.free(status);
 
-    var candidate = try buildFooterMetaLine(allocator, model, effort_label, context_full, agents, status, true, true, true);
+    var candidate = try buildFooterMetaLine(allocator, model, effort_label, context_full, agents.items, status, true, true, true);
     if (candidate.len <= width) return candidate;
     allocator.free(candidate);
 
-    candidate = try buildFooterMetaLine(allocator, model, effort_label, context_compact, agents, "", true, true, false);
+    candidate = try buildFooterMetaLine(allocator, model, effort_label, context_compact, agents.items, "", true, true, false);
     if (candidate.len <= width) return candidate;
     allocator.free(candidate);
 
-    candidate = try buildFooterMetaLine(allocator, model, "", context_compact, agents, "", false, true, false);
+    candidate = try buildFooterMetaLine(allocator, model, "", context_compact, agents.items, "", false, true, false);
     if (candidate.len <= width) return candidate;
     allocator.free(candidate);
 
@@ -4063,6 +4292,117 @@ test "tui footer projects context telemetry and live agent cardinality" {
     try std.testing.expect(std.mem.indexOf(u8, footer, "agents 1/2") != null);
 }
 
+test "tui footer projects canonical pool and buffered ticket pressure" {
+    const allocator = std.testing.allocator;
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "Qwen3.6 35B-A3B",
+        .base_url = "http://localhost:1234",
+        .auth_provider = "lmstudio",
+        .plan = "local",
+        .subscription_status = "active",
+        .effort = "high",
+        .context_window_tokens = 200_000,
+        .waiting = true,
+    };
+    defer state.deinit();
+
+    state.applyHealthTelemetry(.{
+        .ok = true,
+        .model = state.model,
+        .workspace_root = state.workspace_root,
+        .base_url = state.base_url,
+        .agent_pool_healthy = true,
+        .agent_pool_max = 4,
+        .agent_pool_queued = 2,
+        .agent_pool_running = 1,
+        .agent_pool_available = 3,
+        .tickets_assigned = 2,
+        .tickets_in_progress = 1,
+        .ticket_ledger_healthy = true,
+    });
+    try std.testing.expectEqual(@as(usize, 4), state.agent_pool_max);
+    try std.testing.expectEqual(@as(usize, 2), state.agent_pool_queued);
+    try std.testing.expectEqual(@as(usize, 1), state.agent_pool_running);
+    try std.testing.expectEqual(@as(usize, 3), state.agent_pool_available);
+    try std.testing.expectEqual(@as(usize, 2), state.tickets_assigned);
+    try std.testing.expectEqual(@as(usize, 1), state.tickets_in_progress);
+    try std.testing.expect(state.ticket_ledger_healthy);
+
+    const footer = try formatFooterMetaWithPool(
+        allocator,
+        state.model,
+        state.effort,
+        state.thinking_mode,
+        5_000,
+        state.context_window_tokens,
+        1,
+        2,
+        state.waiting,
+        false,
+        0,
+        .{
+            .known = state.agent_pool_known,
+            .healthy = state.agent_pool_healthy,
+            .max = state.agent_pool_max,
+            .running = state.agent_pool_running,
+            .tickets_assigned = state.tickets_assigned,
+            .tickets_in_progress = state.tickets_in_progress,
+            .ticket_ledger_healthy = state.ticket_ledger_healthy,
+        },
+        140,
+    );
+    defer allocator.free(footer);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "Qwen3.6 35B-A3B") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "high") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "ctx 5k / 200k (3%)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "195k left") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "agents 1/2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "pool 1/4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "queue 2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "Esc cancel") == null);
+
+    const quiet = try formatFooterMeta(
+        allocator,
+        state.model,
+        state.effort,
+        state.thinking_mode,
+        5_000,
+        state.context_window_tokens,
+        0,
+        0,
+        false,
+        false,
+        0,
+        140,
+    );
+    defer allocator.free(quiet);
+    try std.testing.expect(std.mem.indexOf(u8, quiet, "pool") == null);
+    try std.testing.expect(std.mem.indexOf(u8, quiet, "queue") == null);
+
+    const unhealthy = try formatFooterMetaWithPool(
+        allocator,
+        state.model,
+        state.effort,
+        state.thinking_mode,
+        null,
+        state.context_window_tokens,
+        0,
+        0,
+        false,
+        false,
+        0,
+        .{ .known = true, .healthy = false, .ticket_ledger_healthy = false },
+        80,
+    );
+    defer allocator.free(unhealthy);
+    try std.testing.expect(std.mem.indexOf(u8, unhealthy, "queue ?") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unhealthy, "pool ?") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unhealthy, "ctx —") != null);
+}
+
 test "tui transcript gives dense single-line treatment to runtime rows" {
     try std.testing.expect(isCompactRole(.progress));
     try std.testing.expect(isCompactRole(.system));
@@ -4170,7 +4510,8 @@ test "tui child replay keeps one keyed row per group and task" {
     defer state.deinit();
 
     try state.addProgress("child_group_started", "{\"group_id\":\"group-one\",\"queued\":1,\"terminal\":false}");
-    try std.testing.expectEqualStrings("Agents 0/1 - waiting on 1", state.messages.items[0].text);
+    try std.testing.expectEqualStrings("Agents 0/1", state.messages.items[0].text);
+    try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "waiting on") == null);
     try std.testing.expectEqual(ActivityKind.group, state.messages.items[0].activity_kind);
     try std.testing.expectEqual(ActivityState.running, state.messages.items[0].activity_state);
     try state.addProgress("child_admitted", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"queued\"}");
@@ -4183,12 +4524,16 @@ test "tui child replay keeps one keyed row per group and task" {
     try std.testing.expectEqual(ActivityState.running, state.messages.items[1].activity_state);
     try state.addProgress("child_waiting", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"waiting\"}");
     try std.testing.expectEqualStrings("Recon - waiting", state.messages.items[1].text);
+    try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"tool_completed\",\"detail\":\"tool completed: read_file\"}");
+    try std.testing.expectEqualStrings("Recon - running", state.messages.items[1].text);
+    try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"assistant_response\",\"detail\":\"Mapped the workspace and found the backend owner.\"}");
+    try std.testing.expectEqualStrings("Recon - Mapped the workspace and found the backend owner.", state.messages.items[1].text);
     try state.addProgress("child_finished", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"completed\"}");
     try state.addProgress("child_group_finished", "{\"group_id\":\"group-one\",\"completed\":1,\"terminal\":true}");
     try std.testing.expectEqual(@as(usize, 2), state.messages.items.len);
     try std.testing.expectEqualStrings("Agents 1/1", state.messages.items[0].text);
     try std.testing.expectEqual(ActivityState.completed, state.messages.items[0].activity_state);
-    try std.testing.expectEqualStrings("Recon", state.messages.items[1].text);
+    try std.testing.expectEqualStrings("Recon - Mapped the workspace and found the backend owner.", state.messages.items[1].text);
     try std.testing.expectEqual(ActivityState.completed, state.messages.items[1].activity_state);
 
     try state.addProgress("child_group_recovered", "{\"group_id\":\"group-one\",\"tasks\":1,\"stale_owners_reconciled\":1,\"terminal\":true}");
@@ -4198,6 +4543,31 @@ test "tui child replay keeps one keyed row per group and task" {
     try std.testing.expect(replayProgressEvent("child_progress"));
     try std.testing.expect(replayProgressEvent("session_waiting"));
     try std.testing.expect(!replayProgressEvent("assistant_delta"));
+}
+
+test "tui agent child rows show a bounded turn summary instead of tool phases" {
+    const allocator = std.testing.allocator;
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "glm-5.2",
+        .base_url = "https://api.z.ai/api/coding/paas/v4",
+        .auth_provider = "zai",
+        .plan = "coding",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+    state.last_transcript_body_width = 42;
+
+    try state.addProgress("child_admitted", "{\"group_id\":\"group-two\",\"task_id\":\"task-two\",\"name\":\"Scout\",\"status\":\"queued\"}");
+    try state.addProgress("child_progress", "{\"group_id\":\"group-two\",\"task_id\":\"task-two\",\"name\":\"Scout\",\"status\":\"running\",\"phase\":\"tool_completed\",\"detail\":\"tool completed: search_files\"}");
+    try std.testing.expectEqualStrings("Scout - running", state.messages.items[0].text);
+
+    try state.addProgress("child_progress", "{\"group_id\":\"group-two\",\"task_id\":\"task-two\",\"name\":\"Scout\",\"status\":\"running\",\"phase\":\"assistant_response\",\"detail\":\"This is a long agent turn summary that must stay on one compact row for the operator.\"}");
+    try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "tool_completed") == null);
+    try std.testing.expect(std.mem.endsWith(u8, state.messages.items[0].text, "..."));
+    try std.testing.expect(state.messages.items[0].text.len <= 42);
 }
 
 test "tui activity families share nested checkbox grammar" {
@@ -4214,4 +4584,97 @@ test "tui activity families share nested checkbox grammar" {
     try std.testing.expectEqualStrings("├── ", activityConnector(.item, false));
     try std.testing.expectEqualStrings("└── ", activityConnector(.item, true));
     try std.testing.expectEqualStrings("", activityConnector(.group, false));
+}
+
+test "tui turn_finished v2 telemetry parses tokens and priced cost" {
+    const allocator = std.testing.allocator;
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "deepseek-v4-flash",
+        .base_url = "https://api.deepseek.com",
+        .auth_provider = "deepseek",
+        .plan = "coding",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    const payload = "{\"schema\":\"var1.turn_finished.v2\",\"step\":1,\"window_tokens\":2000,\"output_bytes\":10,\"prompt_tokens\":1234,\"completion_tokens\":567,\"cached_tokens\":89,\"cost_total_usd\":0.001234}";
+    try std.testing.expect(try state.recordTurnTelemetry("turn_finished", payload));
+
+    try std.testing.expectEqual(@as(u64, 1234), state.session_prompt_tokens);
+    try std.testing.expectEqual(@as(u64, 567), state.session_completion_tokens);
+    try std.testing.expectEqual(@as(u64, 89), state.session_cached_tokens);
+    try std.testing.expect(state.has_session_cost);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.001234), state.session_cost_usd, 1e-9);
+}
+
+test "tui turn_finished accumulates session cost across turns" {
+    const allocator = std.testing.allocator;
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "deepseek-v4-flash",
+        .base_url = "https://api.deepseek.com",
+        .auth_provider = "deepseek",
+        .plan = "coding",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    const first = "{\"schema\":\"var1.turn_finished.v2\",\"prompt_tokens\":100,\"completion_tokens\":50,\"cached_tokens\":0,\"cost_total_usd\":0.0001}";
+    const second = "{\"schema\":\"var1.turn_finished.v2\",\"prompt_tokens\":200,\"completion_tokens\":100,\"cached_tokens\":10,\"cost_total_usd\":0.0002}";
+    try std.testing.expect(try state.recordTurnTelemetry("turn_finished", first));
+    try std.testing.expect(try state.recordTurnTelemetry("turn_finished", second));
+
+    try std.testing.expectEqual(@as(u64, 300), state.session_prompt_tokens);
+    try std.testing.expectEqual(@as(u64, 150), state.session_completion_tokens);
+    try std.testing.expectEqual(@as(u64, 10), state.session_cached_tokens);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0003), state.session_cost_usd, 1e-12);
+}
+
+test "tui turn_finished null cost leaves has_session_cost false" {
+    const allocator = std.testing.allocator;
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "custom-local",
+        .base_url = "http://localhost:1234/v1",
+        .auth_provider = "local",
+        .plan = "coding",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    const payload = "{\"schema\":\"var1.turn_finished.v2\",\"prompt_tokens\":42,\"completion_tokens\":7,\"cached_tokens\":0,\"cost_total_usd\":null}";
+    try std.testing.expect(try state.recordTurnTelemetry("turn_finished", payload));
+
+    try std.testing.expectEqual(@as(u64, 42), state.session_prompt_tokens);
+    try std.testing.expect(!state.has_session_cost);
+    try std.testing.expectApproxEqAbs(@as(f64, 0), state.session_cost_usd, 1e-12);
+}
+
+test "tui turn_started refreshes window estimate without accumulating cost" {
+    const allocator = std.testing.allocator;
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "glm-5.2",
+        .base_url = "https://api.z.ai/api/coding/paas/v4",
+        .auth_provider = "zai",
+        .plan = "coding",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    const payload = "{\"schema\":\"var1.turn_started.v1\",\"step\":2,\"window_tokens\":5000}";
+    try std.testing.expect(try state.recordTurnTelemetry("turn_started", payload));
+
+    try std.testing.expectEqual(@as(u64, 5000), state.context_used_tokens);
+    try std.testing.expectEqual(@as(u64, 0), state.session_prompt_tokens);
+    try std.testing.expect(!state.has_session_cost);
 }

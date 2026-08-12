@@ -1,11 +1,13 @@
 const std = @import("std");
 const docs_sync = @import("../docs/sync.zig");
 const executor = @import("../executor/loop.zig");
+const turn_payload = @import("../executor/turn_payload.zig");
 const profile_contract = @import("profile.zig");
 const provider = @import("../providers/openai_compatible.zig");
 const provider_dispatch = @import("../providers/dispatch.zig");
 const routes = @import("../providers/routes.zig");
 const store = @import("../sessions/store.zig");
+const summaries = @import("../sessions/summaries.zig");
 const tools = @import("../tools/runtime.zig");
 const types = @import("../../shared/types.zig");
 
@@ -15,6 +17,7 @@ pub const Error = error{
     InvalidConcurrency,
     InvalidModelTaskOutput,
     ModelTaskToolCall,
+    PoolFull,
     UnknownGroup,
 };
 
@@ -30,6 +33,11 @@ const ConvergenceState = enum {
     open,
     reserved,
     committed,
+};
+
+const ActiveCounts = struct {
+    queued: usize = 0,
+    running: usize = 0,
 };
 
 pub const TaskInput = struct {
@@ -299,6 +307,22 @@ pub const Supervisor = struct {
 
     /// Publish one fully admitted group, then queue all members on the fixed pool.
     pub fn submitGroup(self: *Supervisor, input: GroupInput, prepared_tasks: []const *Task) !void {
+        return self.submitGroupInternal(input, prepared_tasks, false);
+    }
+
+    /// Publish exactly one scheduler-admitted ticket task only when the fixed
+    /// pool has an available slot. Ordinary child batches retain their
+    /// existing queue semantics through submitGroup.
+    pub fn submitTicketGroup(self: *Supervisor, input: GroupInput, prepared_task: *Task) !void {
+        return self.submitGroupInternal(input, &.{prepared_task}, true);
+    }
+
+    fn submitGroupInternal(
+        self: *Supervisor,
+        input: GroupInput,
+        prepared_tasks: []const *Task,
+        require_capacity: bool,
+    ) !void {
         if (!self.started) return Error.InvalidConcurrency;
         if (prepared_tasks.len == 0) return Error.EmptyGroup;
 
@@ -325,6 +349,13 @@ pub const Supervisor = struct {
         };
 
         self.mutex.lock();
+        if (require_capacity) {
+            const active = self.activeCountsLocked();
+            if (active.queued + active.running >= self.max_concurrency) {
+                self.mutex.unlock();
+                return Error.PoolFull;
+            }
+        }
         if (self.groups.contains(group.id)) {
             self.mutex.unlock();
             return Error.DuplicateGroup;
@@ -557,6 +588,38 @@ pub const Supervisor = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         return self.max_concurrency;
+    }
+
+    pub fn capacity(self: *Supervisor) tools.AgentCapacitySnapshot {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.capacityLocked();
+    }
+
+    fn capacityLocked(self: *Supervisor) tools.AgentCapacitySnapshot {
+        const active = self.activeCountsLocked();
+        const occupied = active.queued + active.running;
+        return .{
+            .max = self.max_concurrency,
+            .queued = active.queued,
+            .running = active.running,
+            .available = if (occupied < self.max_concurrency) self.max_concurrency - occupied else 0,
+        };
+    }
+
+    fn activeCountsLocked(self: *Supervisor) ActiveCounts {
+        var counts = ActiveCounts{};
+        var groups = self.groups.iterator();
+        while (groups.next()) |entry| {
+            for (entry.value_ptr.*.tasks) |task| {
+                switch (task.lifecycle) {
+                    .queued => counts.queued += 1,
+                    .running => counts.running += 1,
+                    .completed, .failed, .cancelled => {},
+                }
+            }
+        }
+        return counts;
     }
 
     pub fn liveDirectoryScanCount(_: *Supervisor) usize {
@@ -887,11 +950,17 @@ fn runModelTask(supervisor: *Supervisor, task: *Task, route: *routes.ResolvedRou
         .message = content,
         .timestamp_ms = now_ms,
     });
+    // Typed turn terminal evidence with measured usage + cost, same builder
+    // as the kernel loop (single owner, no payload drift). Allocated payload
+    // is freed after appendEvent serializes it into the durable ledger.
+    const finished_msg = turn_payload.turnFinishedPayload(task_allocator, 0, &.{}, completion.model, completion.usage, content.len) catch "Bounded model task completed in one provider turn.";
+    const owns_finished = finished_msg.ptr != "Bounded model task completed in one provider turn.".ptr;
     try store.appendEvent(task_allocator, route.config.workspace_root, task.session_id, .{
         .event_type = "turn_finished",
-        .message = "Bounded model task completed in one provider turn.",
+        .message = finished_msg,
         .timestamp_ms = now_ms,
     });
+    if (owns_finished) task_allocator.free(finished_msg);
     store.syncSessionLedgers(task_allocator, route.config.workspace_root, task.session_id) catch {};
     try docs_sync.completeSession(task_allocator, route.config.workspace_root, .{
         .session_id = task.session_id,
@@ -976,6 +1045,19 @@ fn onChildSessionEvent(
     const task: *Task = @ptrCast(@alignCast(ctx.?));
     const projected_type = if (std.mem.eql(u8, event_type, "session_waiting")) "child_waiting" else "child_progress";
     const phase = if (std.mem.eql(u8, event_type, "session_waiting")) "waiting" else event_type;
+
+    // The turn-end summary is the operator-useful child projection. Prefer
+    // the durable summary row, which is already refreshed before the final
+    // assistant event, and fall back to the response payload for model-task
+    // or legacy sessions without a summary row.
+    if (std.mem.eql(u8, event_type, "assistant_response")) {
+        if (summaries.readSummary(std.heap.page_allocator, task.group.?.workspace_root, task.session_id) catch null) |row_value| {
+            var row = row_value;
+            defer row.deinit(std.heap.page_allocator);
+            taskSupervisor(task).emitTaskEvent(task, projected_type, phase, row.summary) catch {};
+            return;
+        }
+    }
     taskSupervisor(task).emitTaskEvent(task, projected_type, phase, message) catch {};
 }
 
@@ -1000,6 +1082,7 @@ fn shouldProjectChildEvent(event_type: []const u8) bool {
         "tool_finished",
         "tool_completed",
         "session_waiting",
+        "assistant_response",
         "turn_failed",
     };
     for (projected) |candidate| if (std.mem.eql(u8, event_type, candidate)) return true;
@@ -1208,4 +1291,61 @@ test "group snapshots are terminal only after every task reaches a terminal stat
     second.terminal_evidence_committed = true;
     group.terminal_evidence_committed = true;
     try std.testing.expect(snapshotGroupLocked(&group).terminal);
+}
+
+test "ticket capacity counts queued and running work and releases terminal tasks" {
+    var supervisor = Supervisor{ .max_concurrency = 3 };
+    defer supervisor.groups.deinit(std.heap.page_allocator);
+
+    var queued = Task{
+        .parent_session_id = undefined,
+        .parent_checkpoint_id = undefined,
+        .session_id = undefined,
+        .task_id = undefined,
+        .name = undefined,
+        .agent_spec_id = undefined,
+        .route_role = undefined,
+        .capability_profile_id = undefined,
+        .output_schema_json = undefined,
+        .branch_seq = 1,
+        .remaining_depth = 0,
+        .route = null,
+        .transport = undefined,
+        .agent_service = undefined,
+        .lifecycle = .queued,
+    };
+    var running = queued;
+    running.lifecycle = .running;
+    var tasks = [_]*Task{ &queued, &running };
+    var group = Group{
+        .supervisor = &supervisor,
+        .id = undefined,
+        .parent_session_id = undefined,
+        .workspace_root = undefined,
+        .shared_context = undefined,
+        .tasks = tasks[0..],
+        .created_at_ms = 0,
+    };
+    try supervisor.groups.put(std.heap.page_allocator, "ticket-capacity", &group);
+
+    var snapshot = supervisor.capacity();
+    try std.testing.expectEqual(@as(usize, 3), snapshot.max);
+    try std.testing.expectEqual(@as(usize, 1), snapshot.queued);
+    try std.testing.expectEqual(@as(usize, 1), snapshot.running);
+    try std.testing.expectEqual(@as(usize, 1), snapshot.available);
+
+    queued.lifecycle = .completed;
+    running.lifecycle = .failed;
+    snapshot = supervisor.capacity();
+    try std.testing.expectEqual(@as(usize, 0), snapshot.queued);
+    try std.testing.expectEqual(@as(usize, 0), snapshot.running);
+    try std.testing.expectEqual(@as(usize, 3), snapshot.available);
+
+    queued.lifecycle = .queued;
+    running.lifecycle = .running;
+    supervisor.max_concurrency = 1;
+    snapshot = supervisor.capacity();
+    try std.testing.expectEqual(@as(usize, 1), snapshot.max);
+    try std.testing.expectEqual(@as(usize, 1), snapshot.queued + snapshot.running);
+    try std.testing.expectEqual(@as(usize, 0), snapshot.available);
 }

@@ -224,7 +224,7 @@ pub const definition = types.ToolDefinition{
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "path": { "type": "string", "description": "Workspace-relative file path." },
+    \\    "path": { "type": "string", "description": "File path. Restricted mode requires a workspace-relative path; runtime.full_access_mode=true permits an explicit external path." },
     \\    "line": { "type": "integer", "minimum": 1, "description": "1-based line number." },
     \\    "column": { "type": "integer", "minimum": 1, "description": "1-based column number." }
     \\  },
@@ -233,7 +233,7 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"path\":\"src/main.zig\",\"line\":42,\"column\":15}",
-    .usage_hint = "Use to find where a function, type, or variable is defined. Requires a running language server for the file's language.",
+    .usage_hint = "Use to find where a function, type, or variable is defined. Paths stay inside the workspace unless runtime.full_access_mode is explicitly true. Requires a running language server for the file's language.",
 };
 
 /// Built-in tool definition for lsp_references — find all references to a symbol.
@@ -245,7 +245,7 @@ pub const references = types.ToolDefinition{
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "path": { "type": "string", "description": "Workspace-relative file path." },
+    \\    "path": { "type": "string", "description": "File path. Restricted mode requires a workspace-relative path; runtime.full_access_mode=true permits an explicit external path." },
     \\    "line": { "type": "integer", "minimum": 1, "description": "1-based line number." },
     \\    "column": { "type": "integer", "minimum": 1, "description": "1-based column number." }
     \\  },
@@ -254,7 +254,7 @@ pub const references = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"path\":\"src/main.zig\",\"line\":42,\"column\":15}",
-    .usage_hint = "Use to find every place a symbol is referenced across the workspace. Requires a running language server.",
+    .usage_hint = "Use to find every place a symbol is referenced across the workspace or an explicitly selected external directory. Paths stay inside the workspace unless runtime.full_access_mode is explicitly true. Requires a running language server.",
 };
 
 pub const availability = module.AvailabilitySpec{};
@@ -285,7 +285,7 @@ pub fn executeDefinition(
     const server_cmd = lsp_server.?;
     defer allocator.free(server_cmd);
 
-    const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
+    const file_path = try fsutil.resolveWithAccessMode(allocator, execution_context.workspace_root, parsed.value.path, execution_context.full_access_mode);
     defer allocator.free(file_path);
 
     // Read the file content to send as didOpen.
@@ -343,7 +343,7 @@ pub fn executeReferences(
     const server_cmd = lsp_server.?;
     defer allocator.free(server_cmd);
 
-    const file_path = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.path);
+    const file_path = try fsutil.resolveWithAccessMode(allocator, execution_context.workspace_root, parsed.value.path, execution_context.full_access_mode);
     defer allocator.free(file_path);
 
     const content = fsutil.readTextAlloc(allocator, file_path) catch {

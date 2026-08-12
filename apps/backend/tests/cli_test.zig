@@ -585,11 +585,11 @@ test "cli tools help documents schema fields" {
     try std.testing.expect(std.mem.indexOf(u8, help, "Workspace-state tools remain relevance-gated") != null);
 }
 
-test "cli health help documents config-only readiness output" {
+test "cli health help documents readiness and operator projection output" {
     const help = VAR1.clients.cli.helpText("health").?;
 
-    try std.testing.expect(std.mem.indexOf(u8, help, "\"base_url\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "\"auth_provider\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "pool capacity") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "ticket pressure") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "does not send a model completion request") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "VAR1 health --json") != null);
 }

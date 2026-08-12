@@ -8,6 +8,7 @@ const child_supervisor = @import("supervisor.zig");
 const provider = @import("../providers/openai_compatible.zig");
 const routes = @import("../providers/routes.zig");
 const store = @import("../sessions/store.zig");
+const tickets = @import("../tickets/index.zig");
 const scope_contract = @import("scope.zig");
 const tools = @import("../tools/runtime.zig");
 const types = @import("../../shared/types.zig");
@@ -18,6 +19,8 @@ pub const Error = error{
     UnknownAgent,
     NoBranchesToConverge,
     InvalidBatch,
+    MissingParentSession,
+    TicketClaimReplay,
 };
 
 pub const Service = struct {
@@ -54,6 +57,8 @@ pub const Service = struct {
             .context = self,
             .launchFn = launchFromHandle,
             .launchBatchFn = launchBatchFromHandle,
+            .launchTicketFn = launchTicketFromHandle,
+            .capacityFn = capacityFromHandle,
             .statusFn = statusFromHandle,
             .waitFn = waitFromHandle,
             .listFn = listFromHandle,
@@ -99,6 +104,20 @@ fn launchBatchFromHandle(
 ) anyerror![]u8 {
     const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
     return launchBatch(service, allocator, parent_session_id, shared_context, tasks_to_launch, delegation_scope);
+}
+
+fn launchTicketFromHandle(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    request: tools.TicketTaskRequest,
+) anyerror!tools.TicketLaunchReceipt {
+    const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
+    return launchTicket(service, allocator, request);
+}
+
+fn capacityFromHandle(ctx_ptr: ?*anyopaque) anyerror!tools.AgentCapacitySnapshot {
+    const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
+    return readCapacity(service);
 }
 
 /// Launch a child session checkpoint-addressed to a parent checkpoint. The
@@ -318,6 +337,222 @@ fn nextBranchSeq(
         if (cp.branch_seq > max_seq) max_seq = cp.branch_seq;
     }
     return max_seq + 1;
+}
+
+fn ensureSupervisorStarted(service: *Service, allocator: std.mem.Allocator) !usize {
+    const max_concurrency = try config_file.loadAgentMaxConcurrency(allocator, service.config.workspace_root);
+    try service.supervisor.start(max_concurrency);
+    return max_concurrency;
+}
+
+fn readCapacity(service: *Service) !tools.AgentCapacitySnapshot {
+    _ = try ensureSupervisorStarted(service, std.heap.page_allocator);
+    return service.supervisor.capacity();
+}
+
+fn resolveTicketAgent(
+    registry: *agent_spec.Registry,
+    requested_hint: []const u8,
+    category: []const u8,
+) !agent_spec.AgentSpec {
+    if (hasText(requested_hint)) {
+        if (registry.resolve(requested_hint)) |spec| return spec else |err| switch (err) {
+            agent_spec.Error.UnknownAgentSpec => {},
+            else => return err,
+        }
+    }
+    return registry.resolve(tickets.agentHintForCategory(category));
+}
+
+/// Launch one already-scheduled ticket through the existing route/session and
+/// Supervisor owners. The ticket claim is written only after the child session
+/// receipt exists and before the task enters the fixed pool.
+fn launchTicket(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    request: tools.TicketTaskRequest,
+) !tools.TicketLaunchReceipt {
+    if (!hasText(request.ticket_id) or !hasText(request.title) or !hasText(request.description) or !hasText(request.category)) return Error.InvalidBatch;
+    if (!hasText(request.worker_id) or !hasText(request.lease_token) or !hasText(request.agent_hint) or !hasText(request.idempotency_key)) return Error.InvalidBatch;
+
+    const capacity = try readCapacity(service);
+    if (capacity.available == 0) return child_supervisor.Error.PoolFull;
+
+    var registry = try agent_spec.loadRegistry(allocator, service.config.workspace_root);
+    defer registry.deinit();
+    const spec = try resolveTicketAgent(&registry, request.agent_hint, request.category);
+    const route = try std.heap.page_allocator.create(routes.ResolvedRoute);
+    var route_owned = true;
+    defer if (route_owned) {
+        route.deinit(std.heap.page_allocator);
+        std.heap.page_allocator.destroy(route);
+    };
+    route.* = routes.resolve(std.heap.page_allocator, service.config.*, spec.route_role, .{
+        .max_steps = spec.max_steps,
+        .max_tool_calls = spec.max_tool_calls,
+        .execution_kind = spec.execution_kind,
+        .capability_profile_id = spec.capability_profile_id,
+    }) catch |err| {
+        std.heap.page_allocator.destroy(route);
+        route_owned = false;
+        return err;
+    };
+
+    const group_id = try newGroupId(allocator);
+    defer allocator.free(group_id);
+    const task_id = try std.fmt.allocPrint(allocator, "ticket-task-{s}-{d}", .{ request.ticket_id, request.attempt });
+    defer allocator.free(task_id);
+    const display_name = try std.fmt.allocPrint(allocator, "ticket-{s}-{s}", .{ request.ticket_id, spec.id });
+    defer allocator.free(display_name);
+    const shared_context = try std.fmt.allocPrint(allocator, "Ticket {s}\nTitle: {s}\nCategory: {s}", .{ request.ticket_id, request.title, request.category });
+    defer allocator.free(shared_context);
+    const child_prompt = try renderChildPrompt(allocator, shared_context, request.description, spec, "{}");
+    defer allocator.free(child_prompt);
+
+    const parent_session_id: []const u8 = if (request.source_session_id.len > 0) blk: {
+        var parent = store.readSessionRecord(allocator, service.config.workspace_root, request.source_session_id) catch return Error.MissingParentSession;
+        parent.deinit(allocator);
+        break :blk request.source_session_id;
+    } else blk: {
+        const coordinator_prompt = try std.fmt.allocPrint(allocator, "Ticket coordinator for {s}: {s}", .{ request.ticket_id, request.title });
+        defer allocator.free(coordinator_prompt);
+        var coordinator = try store.initSessionWithOptions(allocator, service.config.workspace_root, coordinator_prompt, .{
+            .status = .initialized,
+            .display_name = display_name,
+            .agent_profile = "root",
+        });
+        const coordinator_id = try allocator.dupe(u8, coordinator.id);
+        coordinator.deinit(allocator);
+        break :blk coordinator_id;
+    };
+    const owns_synthetic_parent = request.source_session_id.len == 0;
+    defer if (owns_synthetic_parent) allocator.free(parent_session_id);
+
+    const parent_checkpoint_id = blk: {
+        const maybe_checkpoint = store.readLatestContextCheckpoint(allocator, service.config.workspace_root, parent_session_id) catch null;
+        if (maybe_checkpoint) |checkpoint| {
+            defer checkpoint.deinit(allocator);
+            break :blk try allocator.dupe(u8, checkpoint.id);
+        }
+        break :blk try allocator.dupe(u8, "parent-root");
+    };
+    defer allocator.free(parent_checkpoint_id);
+    const branch_seq = try nextBranchSeq(allocator, service.config.workspace_root, parent_session_id);
+    const capability_hash = try agent_spec.capabilityHash(spec, route.capability_profile_id);
+    const output_schema_hash = agent_spec.contentHash("{}");
+    const created_at_ms = std.time.milliTimestamp();
+    const execution_receipt = types.ExecutionReceiptView{
+        .execution_kind = route.execution_kind.label(),
+        .agent_spec_id = spec.id,
+        .route_role = route.role.label(),
+        .provider_id = route.providerId(),
+        .model = route.config.openai_model,
+        .wire_api = route.config.wire_api.label(),
+        .thinking_mode = route.config.thinking_mode,
+        .capability_profile_id = route.capability_profile_id,
+        .capability_hash = capability_hash[0..],
+        .parent_session_id = parent_session_id,
+        .parent_checkpoint_id = parent_checkpoint_id,
+        .group_id = group_id,
+        .task_id = task_id,
+        .branch_seq = branch_seq,
+        .budget = .{
+            .max_steps = spec.max_steps,
+            .max_tool_calls = spec.max_tool_calls,
+            .max_children = spec.max_children,
+        },
+        .output_schema_hash = output_schema_hash[0..],
+        .created_at_ms = created_at_ms,
+    };
+    var child_session = try store.initSessionWithExecutionReceipt(allocator, service.config.workspace_root, child_prompt, .{
+        .status = .initialized,
+        .parent_session_id = parent_session_id,
+        .display_name = display_name,
+        .agent_profile = route.capability_profile_id,
+    }, &execution_receipt);
+    defer child_session.deinit(allocator);
+
+    const ticket_store = tickets.TicketStore.init(allocator, service.config.workspace_root);
+    var claim = ticket_store.claim(.{
+        .ticket_id = request.ticket_id,
+        .expected_revision = request.expected_revision,
+        .worker_id = request.worker_id,
+        .worker_generation = request.worker_generation,
+        .lease_token = request.lease_token,
+        .lease_expires_at_ms = request.lease_expires_at_ms,
+        .attempt = request.attempt,
+        .session_id = child_session.id,
+        .agent_hint = spec.id,
+        .capability_hash = capability_hash[0..],
+        .idempotency_key = request.idempotency_key,
+        .claimed_at_ms = created_at_ms,
+    }) catch |err| {
+        markTicketAdmissionFailed(service, child_session.id, @errorName(err));
+        return err;
+    };
+    defer claim.deinit(allocator);
+    if (!claim.appended) {
+        markTicketAdmissionFailed(service, child_session.id, "TicketClaimReplay");
+        return Error.TicketClaimReplay;
+    }
+
+    const claim_message = try std.fmt.allocPrint(allocator, "Ticket {s} claimed by {s}; group={s} task={s}", .{ request.ticket_id, spec.id, group_id, task_id });
+    defer allocator.free(claim_message);
+    try store.appendEvent(allocator, service.config.workspace_root, child_session.id, .{
+        .event_type = "ticket_claimed",
+        .message = claim_message,
+        .timestamp_ms = created_at_ms,
+    });
+    try docs_sync.writePending(allocator, service.config.workspace_root, .{
+        .session_id = child_session.id,
+        .status = types.statusLabel(child_session.status),
+        .prompt = child_session.prompt,
+        .output = "",
+        .updated_at_ms = child_session.updated_at_ms,
+    });
+
+    const prepared_task = try service.supervisor.createTask(.{
+        .parent_session_id = parent_session_id,
+        .parent_checkpoint_id = parent_checkpoint_id,
+        .session_id = child_session.id,
+        .task_id = task_id,
+        .name = display_name,
+        .agent_spec_id = spec.id,
+        .route_role = route.role.label(),
+        .capability_profile_id = route.capability_profile_id,
+        .branch_seq = branch_seq,
+        .remaining_depth = if (spec.max_children > 0) 1 else 0,
+        .output_schema_json = "{}",
+        .route = route,
+        .transport = service.transport,
+        .agent_service = service.handle(),
+    });
+    route_owned = false;
+    var submitted = false;
+    defer if (!submitted) service.supervisor.destroyPreparedTask(prepared_task);
+
+    service.supervisor.submitTicketGroup(.{
+        .id = group_id,
+        .parent_session_id = parent_session_id,
+        .workspace_root = service.config.workspace_root,
+        .shared_context = shared_context,
+    }, prepared_task) catch |err| {
+        markAdmissionFailed(prepared_task, @errorName(err));
+        return err;
+    };
+    submitted = true;
+
+    return .{
+        .ticket_id = try allocator.dupe(u8, request.ticket_id),
+        .group_id = try allocator.dupe(u8, group_id),
+        .task_id = try allocator.dupe(u8, task_id),
+        .session_id = try allocator.dupe(u8, child_session.id),
+        .agent_id = try allocator.dupe(u8, spec.id),
+        .route_role = try allocator.dupe(u8, route.role.label()),
+        .capability_profile_id = try allocator.dupe(u8, route.capability_profile_id),
+        .capability_hash = try allocator.dupe(u8, capability_hash[0..]),
+        .model = try allocator.dupe(u8, route.config.openai_model),
+    };
 }
 
 fn launch(
@@ -1221,6 +1456,21 @@ fn markAdmissionFailed(task: *child_supervisor.Task, reason: []const u8) void {
     }) catch {};
 }
 
+/// A ticket claim can lose a revision/idempotency race after the child session
+/// has been persisted because the session id is part of the durable claim.
+/// Keep that loser session truthful and terminal; never leave an initialized
+/// orphan for cold-start recovery to mistake for live work.
+fn markTicketAdmissionFailed(service: *Service, session_id: []const u8, reason: []const u8) void {
+    var session = store.readSessionRecord(std.heap.page_allocator, service.config.workspace_root, session_id) catch return;
+    defer session.deinit(std.heap.page_allocator);
+    store.setSessionFailure(std.heap.page_allocator, service.config.workspace_root, &session, reason) catch {};
+    store.appendEvent(std.heap.page_allocator, service.config.workspace_root, session_id, .{
+        .event_type = "session_failed",
+        .message = reason,
+        .timestamp_ms = std.time.milliTimestamp(),
+    }) catch {};
+}
+
 fn hasText(value: []const u8) bool {
     return std.mem.trim(u8, value, " \t\r\n").len > 0;
 }
@@ -1241,4 +1491,58 @@ fn newAgentName(allocator: std.mem.Allocator) ![]u8 {
 
 fn isTerminal(status_value: types.SessionStatus) bool {
     return status_value == .completed or status_value == .failed or status_value == .cancelled;
+}
+
+test "ticket launch rejects incomplete admission before capacity or session work" {
+    var service = Service{ .config = undefined, .transport = undefined };
+    var request = tools.TicketTaskRequest{
+        .ticket_id = "ticket-test",
+        .title = "Ticket",
+        .description = "Description",
+        .category = "bug",
+        .expected_revision = 1,
+        .worker_id = "scheduler-test",
+        .worker_generation = 1,
+        .lease_token = "lease-test",
+        .lease_expires_at_ms = 100,
+        .attempt = 1,
+        .agent_hint = "recon",
+        .idempotency_key = "claim-test",
+    };
+
+    request.ticket_id = "";
+    try std.testing.expectError(Error.InvalidBatch, launchTicket(&service, std.testing.allocator, request));
+    request = .{
+        .ticket_id = "ticket-test",
+        .title = "",
+        .description = "Description",
+        .category = "bug",
+        .expected_revision = 1,
+        .worker_id = "scheduler-test",
+        .worker_generation = 1,
+        .lease_token = "lease-test",
+        .lease_expires_at_ms = 100,
+        .attempt = 1,
+        .agent_hint = "recon",
+        .idempotency_key = "claim-test",
+    };
+    try std.testing.expectError(Error.InvalidBatch, launchTicket(&service, std.testing.allocator, request));
+
+    request.description = "";
+    try std.testing.expectError(Error.InvalidBatch, launchTicket(&service, std.testing.allocator, request));
+    request.description = "Description";
+    request.category = "";
+    try std.testing.expectError(Error.InvalidBatch, launchTicket(&service, std.testing.allocator, request));
+    request.category = "bug";
+    request.worker_id = "";
+    try std.testing.expectError(Error.InvalidBatch, launchTicket(&service, std.testing.allocator, request));
+    request.worker_id = "scheduler-test";
+    request.lease_token = "";
+    try std.testing.expectError(Error.InvalidBatch, launchTicket(&service, std.testing.allocator, request));
+    request.lease_token = "lease-test";
+    request.agent_hint = "";
+    try std.testing.expectError(Error.InvalidBatch, launchTicket(&service, std.testing.allocator, request));
+    request.agent_hint = "recon";
+    request.idempotency_key = "";
+    try std.testing.expectError(Error.InvalidBatch, launchTicket(&service, std.testing.allocator, request));
 }

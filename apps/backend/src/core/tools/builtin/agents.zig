@@ -88,6 +88,23 @@ pub const definitions = [_]types.ToolDefinition{
         .usage_hint = "Use wait_agent only when you are ready to spend bounded time collecting a result or current snapshot. Set timeout_ms explicitly for long child work; use longer waits instead of repeated short polling when the child is expected to keep running.",
     },
     .{
+        .name = "wait_all_agents",
+        .description = "Wait bounded time for all child groups to converge. Returns an aggregated snapshot of all groups.",
+        .review_risk = .read_only,
+        .parameters_json =
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "timeout_ms": { "type": "integer", "minimum": 1, "description": "Optional timeout in milliseconds. Defaults to 30000." }
+        \\  },
+        \\  "required": [],
+        \\  "additionalProperties": false
+        \\}
+        ,
+        .example_json = "{\"timeout_ms\":60000}",
+        .usage_hint = "Use wait_all_agents to block until all children are terminal or the timeout expires. Returns aggregated snapshot with group counts.",
+    },
+    .{
         .name = "list_agents",
         .description = "List the child agents launched by the current parent session, including their names and statuses. JSON arguments must be an empty object.",
         .review_risk = .read_only,
@@ -130,13 +147,19 @@ pub const definitions = [_]types.ToolDefinition{
         \\    "max_steps": { "type": "integer", "minimum": 1, "maximum": 4096 },
         \\    "max_tool_calls": { "type": "integer", "minimum": 0, "maximum": 4096 },
         \\    "max_children": { "type": "integer", "minimum": 0, "maximum": 64 },
-        \\    "output_contract": { "type": "string" }
+        \\    "output_contract": { "type": "string" },
+        \\    "doctrine_tags": { "type": "string", "description": "Distilled doctrine tags (kebab-case, space separated) rendered into the model-visible catalog." },
+        \\    "ticket_ownership": { "type": "boolean", "description": "Agent may transition states of tickets it owns. Agents can never close tickets - that authority is kernel-only." },
+        \\    "checkpoint_contract": { "type": "string", "description": "Live checkpoint summary contract the agent keeps current while working." },
+        \\    "autonomy": { "type": "string", "enum": ["directed","bounded","self_directed"] },
+        \\    "effort": { "type": "string", "description": "Optional per-agent effort override; absent = VANTARI decides." },
+        \\    "temperature": { "type": "number", "description": "Optional per-agent temperature override; absent = VANTARI decides." }
         \\  },
         \\  "required": ["action","id"],
         \\  "additionalProperties": false
         \\}
         ,
-        .example_json = "{\"action\":\"upsert\",\"id\":\"frontend_recon\",\"extends\":\"recon\",\"description\":\"Frontend ownership recon.\",\"when_to_use\":\"Use for frontend architecture work.\",\"instruction\":\"Inspect frontend only and return exact evidence.\"}",
+        .example_json = "{\"action\":\"upsert\",\"id\":\"frontend_recon\",\"extends\":\"recon\",\"description\":\"Frontend ownership recon.\",\"when_to_use\":\"Use for frontend architecture work.\",\"instruction\":\"Inspect frontend only and return exact evidence.\",\"doctrine_tags\":\"evidence-first findings-ledger\",\"ticket_ownership\":true,\"autonomy\":\"directed\"}",
         .usage_hint = "Use reset to remove a custom id or return a built-in id to its compiled floor. Call agents again after mutation to observe the hot-loaded effective catalog.",
     },
 };
@@ -172,6 +195,9 @@ pub fn execute(
     }
     if (std.mem.eql(u8, tool_name, "wait_agent")) {
         return executeWaitAgent(allocator, execution_context, arguments_json);
+    }
+    if (std.mem.eql(u8, tool_name, "wait_all_agents")) {
+        return executeWaitAllAgents(allocator, execution_context, arguments_json);
     }
     if (std.mem.eql(u8, tool_name, "list_agents")) {
         return executeListAgents(allocator, execution_context);
@@ -327,6 +353,45 @@ fn executeWaitAgent(
     return module.okEnvelope(allocator, "wait_agent", content);
 }
 
+fn executeWaitAllAgents(
+    allocator: std.mem.Allocator,
+    execution_context: module.ExecutionContext,
+    arguments_json: []const u8,
+) ![]u8 {
+    const service = execution_context.agent_service orelse return module.Error.AgentServiceUnavailable;
+    const parent_session_id = execution_context.parent_session_id orelse return module.Error.MissingParentSession;
+
+    const Args = struct {
+        timeout_ms: usize = 30_000,
+    };
+
+    var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+
+    // Try waitParent first (aggregated wait across all groups)
+    if (service.waitParentFn) |waitParent| {
+        const snapshot = try waitParent(service.context, parent_session_id, parsed.value.timeout_ms);
+        const content = try std.fmt.allocPrint(allocator,
+            "{{\"schema\":\"var1.agent_group_snapshot.v1\",\"groups\":{d},\"queued\":{d},\"running\":{d},\"completed\":{d},\"failed\":{d},\"cancelled\":{d},\"ready\":{},\"terminal\":{}}}", .{
+            snapshot.groups,
+            snapshot.queued,
+            snapshot.running,
+            snapshot.completed,
+            snapshot.failed,
+            snapshot.cancelled,
+            snapshot.ready,
+            snapshot.terminal,
+        });
+        defer allocator.free(content);
+        return module.okEnvelope(allocator, "wait_all_agents", content);
+    }
+
+    // Fallback: if waitParentFn is null, return current status
+    return executeListAgents(allocator, execution_context);
+}
+
 fn executeListAgents(
     allocator: std.mem.Allocator,
     execution_context: module.ExecutionContext,
@@ -398,6 +463,12 @@ fn executeConfigureAgent(
         max_tool_calls: ?usize = null,
         max_children: ?usize = null,
         output_contract: ?[]const u8 = null,
+        doctrine_tags: ?[]const u8 = null,
+        ticket_ownership: ?bool = null,
+        checkpoint_contract: ?[]const u8 = null,
+        autonomy: ?[]const u8 = null,
+        effort: ?[]const u8 = null,
+        temperature: ?f64 = null,
     };
     var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
         .ignore_unknown_fields = false,
@@ -417,6 +488,12 @@ fn executeConfigureAgent(
             .max_tool_calls = parsed.value.max_tool_calls,
             .max_children = parsed.value.max_children,
             .output_contract = parsed.value.output_contract,
+            .doctrine_tags = parsed.value.doctrine_tags,
+            .ticket_ownership = parsed.value.ticket_ownership,
+            .checkpoint_contract = parsed.value.checkpoint_contract,
+            .autonomy = parsed.value.autonomy,
+            .effort = parsed.value.effort,
+            .temperature = parsed.value.temperature,
         })
     else if (std.mem.eql(u8, parsed.value.action, "reset"))
         try agent_spec.resetConfiguredAgent(allocator, execution_context.workspace_root, parsed.value.id)

@@ -7,6 +7,7 @@ const routes = @import("../providers/routes.zig");
 pub const Error = error{
     EmptyAgentRegistry,
     InvalidAgentDefinition,
+    InstructionTooLarge,
     UnknownAgentSpec,
     UnknownAgentBase,
 };
@@ -23,6 +24,29 @@ pub const AgentSpec = struct {
     max_tool_calls: usize,
     max_children: usize,
     output_contract: []const u8,
+    /// Distilled doctrine tags (kebab-case, space separated) baked into the
+    /// model-visible catalog so every specialist carries the doctrine without
+    /// re-reading AGENTS.md: evidence-first capability-truth ticket-discipline
+    /// harvest-before-originate proof-gated append-only no-parallel-systems
+    /// stale-owner-reconciliation cold-start-replayable.
+    doctrine_tags: []const u8,
+    /// Agent may transition states of tickets it owns (assigned→in_progress→
+    /// complete). Agents NEVER close tickets — close authority is kernel-only
+    /// (tickets.close_authority). No config knob exists to widen this.
+    ticket_ownership: bool,
+    /// Live checkpoint contract the agent must keep current while working
+    /// (>=3-sentence summary row) so the parent, siblings, and cold-start
+    /// recovery can see progress and state. Rendered into the catalog.
+    checkpoint_contract: []const u8,
+    /// Direction mode: "directed" (execute only the assigned ticket),
+    /// "bounded" (assigned ticket plus explicitly bounded adjacent evidence),
+    /// "self_directed" (may decompose its ticket into child work within budget).
+    autonomy: []const u8,
+    /// Optional per-agent effort override; "" means VANTARI (the kernel) or
+    /// the route decides — the model is the plane, VANTARI is the pilot.
+    effort: []const u8 = "",
+    /// Optional per-agent temperature override; -1 means VANTARI/route decides.
+    temperature: f64 = -1,
 };
 
 pub const Registry = struct {
@@ -58,6 +82,12 @@ pub const DefinitionPatch = struct {
     max_tool_calls: ?usize = null,
     max_children: ?usize = null,
     output_contract: ?[]const u8 = null,
+    doctrine_tags: ?[]const u8 = null,
+    ticket_ownership: ?bool = null,
+    checkpoint_contract: ?[]const u8 = null,
+    autonomy: ?[]const u8 = null,
+    effort: ?[]const u8 = null,
+    temperature: ?f64 = null,
 };
 
 pub const MutationEvidence = struct {
@@ -80,9 +110,9 @@ var config_mutation_mutex: std.Thread.Mutex = .{};
 const built_in_specs = [_]AgentSpec{
     .{
         .id = "general",
-        .description = "Bounded general-purpose VAR1 child session.",
-        .when_to_use = "Use when no narrower specialist owns the task.",
-        .instruction_capsule = "Return a concise SITREP with findings, evidence, uncertainty, blockers, and residual risk.",
+        .description = "Bounded general-purpose VAR1 child session with ticket discipline.",
+        .when_to_use = "Use when no narrower specialist owns the task, or when the ticket needs a flexible executor with delegation latitude.",
+        .instruction_capsule = "TICKET DISCIPLINE: own your assigned ticket — drive state to complete, mark complete when done, NEVER close (kernel-only). KEEP the checkpoint summary current (>=3 sentences: status, evidence, next action) so the parent and siblings can read your state live. Return a concise SITREP: findings, evidence paths, uncertainty, blockers, residual risk. Evidence-first: every claim carries file:line or command receipt.",
         .route_role = .general,
         .execution_kind = .agent_session,
         .capability_profile_id = "subagent",
@@ -90,12 +120,16 @@ const built_in_specs = [_]AgentSpec{
         .max_tool_calls = 64,
         .max_children = 2,
         .output_contract = "var1.sitrep.v1",
+        .doctrine_tags = "ticket-discipline evidence-first checkpoint-live no-parallel-systems capability-truth",
+        .ticket_ownership = true,
+        .checkpoint_contract = "var1.summary.v1",
+        .autonomy = "bounded",
     },
     .{
         .id = "recon",
-        .description = "Read-only repository or evidence reconnaissance.",
-        .when_to_use = "Use when ownership, architecture, dependencies, or exact source evidence must be mapped before a decision.",
-        .instruction_capsule = "Inspect only. Return findings with exact paths, commands, uncertainty, blockers, and residual risk.",
+        .description = "Read-only repository or evidence reconnaissance. IX/IEX search, exact provenance.",
+        .when_to_use = "Use when ownership, architecture, dependencies, or exact source evidence must be mapped before any decision or mutation.",
+        .instruction_capsule = "INSPECT ONLY. Evidence-first: cite exact paths, file:line, and commands; record uncertainty and residual risk; never guess — source or retract. Use ix/IEX search contracts; never substitute ad hoc readers. Findings-ledger shape: defect/owner/evidence/acceptance. Keep the checkpoint summary current.",
         .route_role = .recon,
         .execution_kind = .agent_session,
         .capability_profile_id = "recon",
@@ -103,12 +137,16 @@ const built_in_specs = [_]AgentSpec{
         .max_tool_calls = 48,
         .max_children = 0,
         .output_contract = "var1.recon_sitrep.v1",
+        .doctrine_tags = "evidence-first harvest-before-originate findings-ledger source-or-retract no-parallel-systems",
+        .ticket_ownership = true,
+        .checkpoint_contract = "var1.summary.v1",
+        .autonomy = "directed",
     },
     .{
         .id = "planner",
-        .description = "One-turn plan synthesis from supplied evidence.",
-        .when_to_use = "Use after reconnaissance when supplied evidence must become an ordered implementation contract.",
-        .instruction_capsule = "Use only supplied context. Return an ordered implementation plan with invariants, proof gates, blockers, and stop conditions.",
+        .description = "One-turn plan synthesis from supplied evidence. Planning-spec protocol distillation.",
+        .when_to_use = "Use after reconnaissance when supplied evidence must become an ordered, gated implementation contract.",
+        .instruction_capsule = "USE ONLY SUPPLIED CONTEXT. Return an ordered plan: decomposed phases, dependency edges, invariants preserved, proof gates per phase, blocker protocol, stop conditions. Every phase maps to source evidence; no invented owners. State the falsification hook that catches a shallow execution.",
         .route_role = .planning,
         .execution_kind = .model_task,
         .capability_profile_id = "model_task",
@@ -116,12 +154,33 @@ const built_in_specs = [_]AgentSpec{
         .max_tool_calls = 0,
         .max_children = 0,
         .output_contract = "var1.plan.v1",
+        .doctrine_tags = "proof-gated evidence-anchored invariant-preserving no-pretend-completion",
+        .ticket_ownership = false,
+        .checkpoint_contract = "var1.summary.v1",
+        .autonomy = "directed",
+    },
+    .{
+        .id = "spec",
+        .description = "One-turn spec/contract author. System boundary, owners, dependency order, ratchet targets.",
+        .when_to_use = "Use when a feature or chain needs an authoritative parent spec: boundary, canonical owners, sequencing, improvement ratchet, research agenda.",
+        .instruction_capsule = "AUTHOR THE CONTRACT, not prose. Name the system boundary, canonical owners, dependency and risk ordering, chain-level improvement ratchet (better-than-before deltas), and bounded research agenda with evidence surfaces. Source-message anchors verbatim; every slice carries a proof obligation. Reject skeletal specs.",
+        .route_role = .planning,
+        .execution_kind = .model_task,
+        .capability_profile_id = "model_task",
+        .max_steps = 1,
+        .max_tool_calls = 0,
+        .max_children = 0,
+        .output_contract = "var1.spec.v1",
+        .doctrine_tags = "capability-truth evidence-anchored ratchet-monotonic source-message-provenance",
+        .ticket_ownership = false,
+        .checkpoint_contract = "var1.summary.v1",
+        .autonomy = "directed",
     },
     .{
         .id = "compactor",
-        .description = "One-turn dense summary wording over supplied artifacts.",
+        .description = "One-turn dense summary wording over supplied artifacts. Entry-aware compression.",
         .when_to_use = "Use when supplied evidence must be compressed without losing decisions, owners, or unresolved state.",
-        .instruction_capsule = "Preserve decisions, evidence, active state, unresolved risks, and exact owner paths. Do not invent facts.",
+        .instruction_capsule = "PRESERVE decisions, evidence, active state, unresolved risks, and exact owner paths; compacted ranges stay source-truth under the full transcript. Do not invent facts. Bounded aggressiveness: higher compaction may re-summarize; never drop a decision or owner.",
         .route_role = .compaction,
         .execution_kind = .model_task,
         .capability_profile_id = "model_task",
@@ -129,12 +188,16 @@ const built_in_specs = [_]AgentSpec{
         .max_tool_calls = 0,
         .max_children = 0,
         .output_contract = "var1.compaction_summary.v1",
+        .doctrine_tags = "entry-aware append-only no-fact-invention source-truth-preserved",
+        .ticket_ownership = false,
+        .checkpoint_contract = "var1.summary.v1",
+        .autonomy = "directed",
     },
     .{
         .id = "implementer",
-        .description = "Bounded implementation branch with read, write, and command capability.",
-        .when_to_use = "Use when one isolated file or module slice can be implemented and validated independently.",
-        .instruction_capsule = "Own only the assigned files. Preserve concurrent work. Implement, test, and return a diff-grounded SITREP.",
+        .description = "Bounded implementation branch with read, write, and command capability. Ticket owner.",
+        .when_to_use = "Use when one isolated file or module slice can be implemented and validated independently as its own ticket.",
+        .instruction_capsule = "TICKET OWNER: own the assigned ticket, drive it to complete, mark complete ONLY when proven (tests + evidence), NEVER close (kernel-only). Own only the assigned files; preserve concurrent work. Write-capable tools emit effect evidence: resolved path, byte counts, hashes. Keep the checkpoint summary current; return a diff-grounded SITREP with validation receipts.",
         .route_role = .implementation,
         .execution_kind = .agent_session,
         .capability_profile_id = "write",
@@ -142,12 +205,84 @@ const built_in_specs = [_]AgentSpec{
         .max_tool_calls = 96,
         .max_children = 0,
         .output_contract = "var1.implementation_sitrep.v1",
+        .doctrine_tags = "ticket-discipline capability-truth effect-evidence diff-grounded no-pretend-completion",
+        .ticket_ownership = true,
+        .checkpoint_contract = "var1.summary.v1",
+        .autonomy = "bounded",
+    },
+    .{
+        .id = "doc_writer",
+        .description = "High-step document writer for large file persistence with verification.",
+        .when_to_use = "Use when a large file (docs, ledgers, generated artifacts) must be written and verified in bounded slices.",
+        .instruction_capsule = "PERSIST IN SLICES: write, verify byte counts and structure, then continue; never leave a torn tail. Docs describe shipped runtime truth, not intended future state. Keep the checkpoint summary current; return a SITREP with written paths, byte counts, and verification receipts.",
+        .route_role = .implementation,
+        .execution_kind = .agent_session,
+        .capability_profile_id = "write",
+        .max_steps = 120,
+        .max_tool_calls = 60,
+        .max_children = 0,
+        .output_contract = "var1.implementation_sitrep.v1",
+        .doctrine_tags = "capability-truth effect-evidence docs-ship-runtime-truth torn-write-safe",
+        .ticket_ownership = true,
+        .checkpoint_contract = "var1.summary.v1",
+        .autonomy = "directed",
+    },
+    .{
+        .id = "scaffold",
+        .description = "Chain scaffold: decomposes work into planning-spec chains / findings-ledgers with proof gates.",
+        .when_to_use = "Use when work requires decomposed execution chains, state-machine handoff, invariant preservation, or crash recovery.",
+        .instruction_capsule = "SCAFFOLD THE CHAIN: source-message anchors verbatim -> category purity -> repository ownership recon -> parent + lettered units -> dependency edges -> quality gates (test floor, idempotency contract, blast radius, rollback) -> evidence-gated single-move archival -> terminal QC review. Every unit carries entry state, exit state, handoff contract. Skeletal slices are failures.",
+        .route_role = .implementation,
+        .execution_kind = .agent_session,
+        .capability_profile_id = "subagent",
+        .max_steps = 128,
+        .max_tool_calls = 96,
+        .max_children = 2,
+        .output_contract = "var1.scaffold.v1",
+        .doctrine_tags = "proof-gated evidence-anchored handoff-complete crash-recovery single-move-archival",
+        .ticket_ownership = true,
+        .checkpoint_contract = "var1.summary.v1",
+        .autonomy = "self_directed",
+    },
+    .{
+        .id = "orchestrator_parent",
+        .description = "Parent orchestrator: aggressive fan-out delegation, live monitoring, ticket assignment and closure review.",
+        .when_to_use = "Use when orchestrating multi-agent work with constant parallel delegation, ticket assignment, and completion review.",
+        .instruction_capsule = "DELEGATION DISCIPLINE — AGGRESSIVE: fan out ALL branchable work immediately; never one agent when two can run parallel; background:true always; poll agent_status non-blocking; never sit idle — launch the next independent stream while agents fly. TICKET AUTHORITY: assign tickets to specialists; each agent owns its ticket state; agents mark complete but ONLY YOU close or reopen/reassign, ALWAYS with written reasoning; a reopened ticket is re-assigned immediately to a fresh specialist. Read child checkpoint summaries to synthesize; reconcile contradictions; publish ONE parent-owned conclusion. Live status table after every action.",
+        .route_role = .general,
+        .execution_kind = .agent_session,
+        .capability_profile_id = "subagent",
+        .max_steps = 256,
+        .max_tool_calls = 128,
+        .max_children = 12,
+        .output_contract = "var1.orchestration_sitrep.v1",
+        .doctrine_tags = "ticket-discipline parallel-fanout live-monitor reconcile-contradictions parent-owned-conclusion close-with-reasoning",
+        .ticket_ownership = true,
+        .checkpoint_contract = "var1.summary.v1",
+        .autonomy = "self_directed",
+    },
+    .{
+        .id = "harvester",
+        .description = "Competitive intelligence harvester: nsect/insect research, source-proof benchmarks.",
+        .when_to_use = "Use when competitor research, market analysis, feature benchmarking, or evidence harvesting must precede a decision.",
+        .instruction_capsule = "RESEARCH HARVEST DOCTRINE — THREE LAWS: (1) NEVER GUESS: source every claim to URL or file:line; (2) HARVEST WIDE: 3-5+ queries per competitor, then benchmark deep against our source; (3) PROVE OR RETRACT. Competitor mistakes are free education, successes are stolen blueprints. Six-competitor floor for decisions; twelve for deep mechanisms. Write findings to the evidence ledger with provenance.",
+        .route_role = .recon,
+        .execution_kind = .agent_session,
+        .capability_profile_id = "recon",
+        .max_steps = 80,
+        .max_tool_calls = 64,
+        .max_children = 0,
+        .output_contract = "var1.harvest_report.v1",
+        .doctrine_tags = "harvest-before-originate six-competitor-floor source-or-retract evidence-ledger benchmark-deep",
+        .ticket_ownership = true,
+        .checkpoint_contract = "var1.summary.v1",
+        .autonomy = "bounded",
     },
     .{
         .id = "reviewer",
-        .description = "One-turn supplied-artifact review.",
+        .description = "One-turn supplied-artifact review. QC 4/4 maintainer judgment.",
         .when_to_use = "Use when a bounded artifact set needs an independent findings-first review without tool access.",
-        .instruction_capsule = "Review only supplied evidence. Return severity-ordered findings with exact referents and falsification notes.",
+        .instruction_capsule = "QC 4/4 JUDGMENT: structure (maintainer-grade ownership, no parallel systems), contract truth (capability proven through the real consumer path), test pressure (falsification, not ceremony), code quality (anti-pattern sweep: hidden fallbacks, drift, fake simplicity). Severity-ordered findings with exact referents and falsification notes. No professional does this — why would he do it like that? flags amateur tells.",
         .route_role = .review,
         .execution_kind = .model_task,
         .capability_profile_id = "model_task",
@@ -155,12 +290,16 @@ const built_in_specs = [_]AgentSpec{
         .max_tool_calls = 0,
         .max_children = 0,
         .output_contract = "var1.review.v1",
+        .doctrine_tags = "findings-first capability-truth no-parallel-systems falsification-pressure maintainer-craft",
+        .ticket_ownership = false,
+        .checkpoint_contract = "var1.summary.v1",
+        .autonomy = "directed",
     },
     .{
         .id = "validator",
-        .description = "Read-only validation branch for independent proof.",
+        .description = "Read-only validation branch for independent falsification proof.",
         .when_to_use = "Use when commands or source checks can independently falsify an implementation claim without mutation.",
-        .instruction_capsule = "Run bounded validation probes without mutation. Return commands, observed outputs, failures, and residual risk.",
+        .instruction_capsule = "FALSIFY, DO NOT CONFIRM: run bounded validation probes without mutation; treat a passing test as valuable only when it proves an invariant a shallow implementation would violate. Return commands, observed outputs, failures, and residual risk. Adversarial pipeline probes: poisoned suffixes, stale owners, torn writes, same-millisecond bursts.",
         .route_role = .validation,
         .execution_kind = .agent_session,
         .capability_profile_id = "recon",
@@ -168,6 +307,10 @@ const built_in_specs = [_]AgentSpec{
         .max_tool_calls = 48,
         .max_children = 0,
         .output_contract = "var1.validation_sitrep.v1",
+        .doctrine_tags = "falsification-pressure adversarial-probes capability-truth no-green-tests",
+        .ticket_ownership = true,
+        .checkpoint_contract = "var1.summary.v1",
+        .autonomy = "directed",
     },
 };
 
@@ -247,7 +390,10 @@ pub fn renderCatalog(allocator: std.mem.Allocator, registry: Registry) ![]u8 {
     try writer.writeAll("{\"schema\":\"var1.agent_catalog.v1\",\"hotloaded\":true,\"agents\":[");
     for (registry.specs, 0..) |spec, index| {
         if (index > 0) try writer.writeByte(',');
-        try writer.print("{{\"id\":{f},\"description\":{f},\"when_to_use\":{f},\"kind\":{f},\"route_role\":{f},\"capability_profile\":{f},\"output_contract\":{f}}}", .{
+        // Doctrine tags, ticket ownership, checkpoint contract, autonomy, and
+        // effort are model-visible: the catalog IS the doctrine surface the
+        // operator prompt steers with — no second prompt layer.
+        try writer.print("{{\"id\":{f},\"description\":{f},\"when_to_use\":{f},\"kind\":{f},\"route_role\":{f},\"capability_profile\":{f},\"output_contract\":{f},\"doctrine\":{f},\"ticket_ownership\":{s},\"checkpoint\":{f},\"autonomy\":{f},\"effort\":{f}}}", .{
             std.json.fmt(spec.id, .{}),
             std.json.fmt(spec.description, .{}),
             std.json.fmt(spec.when_to_use, .{}),
@@ -255,6 +401,11 @@ pub fn renderCatalog(allocator: std.mem.Allocator, registry: Registry) ![]u8 {
             std.json.fmt(spec.route_role.label(), .{}),
             std.json.fmt(spec.capability_profile_id, .{}),
             std.json.fmt(spec.output_contract, .{}),
+            std.json.fmt(spec.doctrine_tags, .{}),
+            if (spec.ticket_ownership) "true" else "false",
+            std.json.fmt(spec.checkpoint_contract, .{}),
+            std.json.fmt(spec.autonomy, .{}),
+            std.json.fmt(spec.effort, .{}),
         });
     }
     try writer.writeAll("]}");
@@ -303,6 +454,12 @@ pub fn capabilityHash(spec: AgentSpec, capability_profile_id: []const u8) ![64]u
     var budget_buffer: [96]u8 = undefined;
     const budget = try std.fmt.bufPrint(&budget_buffer, "{d}:{d}:{d}", .{ spec.max_steps, spec.max_tool_calls, spec.max_children });
     hasher.update(budget);
+    // Behavioral surface: ticket ownership and autonomy change what a child
+    // may do; receipts must reflect it.
+    hasher.update("\x00");
+    hasher.update(if (spec.ticket_ownership) "ticket_owner" else "no_ticket");
+    hasher.update("\x00");
+    hasher.update(spec.autonomy);
     var digest: [32]u8 = undefined;
     hasher.final(&digest);
     return hexDigest(digest);
@@ -345,6 +502,22 @@ fn mutateConfiguredAgent(
     const agents = try ensureObjectField(arena, root, "agents");
     const definitions = try ensureObjectField(arena, agents, "definitions");
 
+    // Instruction size cap: 8192 bytes
+    if (patch.instruction) |instruction| {
+        if (instruction.len > 8192) {
+            return Error.InstructionTooLarge;
+        }
+    }
+
+    // max_children > 0 requires max_tool_calls >= 1 (need launch_agent)
+    if (patch.max_children) |mc| {
+        if (mc > 0) {
+            if (patch.max_tool_calls) |mtc| {
+                if (mtc == 0) return Error.InvalidAgentDefinition;
+            }
+        }
+    }
+
     switch (action) {
         .reset => _ = definitions.orderedRemove(patch.id),
         .upsert => {
@@ -359,6 +532,12 @@ fn mutateConfiguredAgent(
             if (patch.max_tool_calls) |value| try putInteger(arena, definition, "max_tool_calls", value);
             if (patch.max_children) |value| try putInteger(arena, definition, "max_children", value);
             if (patch.output_contract) |value| try putString(arena, definition, "output_contract", value);
+            if (patch.doctrine_tags) |value| try putString(arena, definition, "doctrine_tags", value);
+            if (patch.ticket_ownership) |value| try putValue(arena, definition, "ticket_ownership", .{ .bool = value });
+            if (patch.checkpoint_contract) |value| try putString(arena, definition, "checkpoint_contract", value);
+            if (patch.autonomy) |value| try putString(arena, definition, "autonomy", value);
+            if (patch.effort) |value| try putString(arena, definition, "effort", value);
+            if (patch.temperature) |value| try putValue(arena, definition, "temperature", .{ .float = value });
         },
     }
 
@@ -422,6 +601,14 @@ fn cloneEffective(
     const max_tool_calls = if (object) |value| optionalUsize(value, "max_tool_calls", base.max_tool_calls) else base.max_tool_calls;
     const max_children = if (object) |value| optionalUsize(value, "max_children", base.max_children) else base.max_children;
     const output_contract = if (object) |value| optionalString(value, "output_contract", base.output_contract) else base.output_contract;
+    const doctrine_tags = if (object) |value| optionalString(value, "doctrine_tags", base.doctrine_tags) else base.doctrine_tags;
+    const ticket_ownership = if (object) |value| optionalBool(value, "ticket_ownership", base.ticket_ownership) else base.ticket_ownership;
+    const checkpoint_contract = if (object) |value| optionalString(value, "checkpoint_contract", base.checkpoint_contract) else base.checkpoint_contract;
+    const autonomy = if (object) |value| optionalString(value, "autonomy", base.autonomy) else base.autonomy;
+    if (!isValidAutonomy(autonomy)) return Error.InvalidAgentDefinition;
+    const effort = if (object) |value| optionalString(value, "effort", base.effort) else base.effort;
+    const temperature = if (object) |value| optionalFloat(value, "temperature", base.temperature) else base.temperature;
+    if (temperature != -1 and (temperature < 0 or temperature > 2)) return Error.InvalidAgentDefinition;
 
     try validateEffective(base, max_steps, max_tool_calls, max_children);
     _ = try profile_contract.resolveProfile(base.capability_profile_id);
@@ -438,6 +625,13 @@ fn cloneEffective(
     errdefer allocator.free(profile_owned);
     const contract_owned = try allocator.dupe(u8, output_contract);
     errdefer allocator.free(contract_owned);
+    const doctrine_owned = try allocator.dupe(u8, doctrine_tags);
+    errdefer allocator.free(doctrine_owned);
+    const checkpoint_owned = try allocator.dupe(u8, checkpoint_contract);
+    errdefer allocator.free(checkpoint_owned);
+    const autonomy_owned = try allocator.dupe(u8, autonomy);
+    errdefer allocator.free(autonomy_owned);
+    const effort_owned: []u8 = if (effort.len > 0) try allocator.dupe(u8, effort) else @constCast("");
 
     return .{
         .id = id_owned,
@@ -451,7 +645,21 @@ fn cloneEffective(
         .max_tool_calls = max_tool_calls,
         .max_children = max_children,
         .output_contract = contract_owned,
+        .doctrine_tags = doctrine_owned,
+        .ticket_ownership = ticket_ownership,
+        .checkpoint_contract = checkpoint_owned,
+        .autonomy = autonomy_owned,
+        .effort = effort_owned,
+        .temperature = temperature,
     };
+}
+
+/// Autonomy vocabulary is closed: directed / bounded / self_directed.
+/// Anything else is a schema violation, not a runtime fallback.
+fn isValidAutonomy(value: []const u8) bool {
+    return std.mem.eql(u8, value, "directed") or
+        std.mem.eql(u8, value, "bounded") or
+        std.mem.eql(u8, value, "self_directed");
 }
 
 fn validateEffective(base: AgentSpec, max_steps: usize, max_tool_calls: usize, max_children: usize) !void {
@@ -501,6 +709,12 @@ fn optionalUsize(object: std.json.ObjectMap, key: []const u8, default: usize) us
     return std.math.cast(usize, value.integer) orelse default;
 }
 
+fn optionalFloat(object: std.json.ObjectMap, key: []const u8, default: f64) f64 {
+    const value = object.get(key) orelse return default;
+    if (value == .null) return default;
+    return value.float;
+}
+
 fn deinitOwnedSpec(allocator: std.mem.Allocator, spec: AgentSpec) void {
     allocator.free(spec.id);
     allocator.free(spec.description);
@@ -508,6 +722,10 @@ fn deinitOwnedSpec(allocator: std.mem.Allocator, spec: AgentSpec) void {
     allocator.free(spec.instruction_capsule);
     allocator.free(spec.capability_profile_id);
     allocator.free(spec.output_contract);
+    allocator.free(spec.doctrine_tags);
+    allocator.free(spec.checkpoint_contract);
+    allocator.free(spec.autonomy);
+    if (spec.effort.len > 0) allocator.free(spec.effort);
 }
 
 fn hexDigest(digest: [32]u8) [64]u8 {

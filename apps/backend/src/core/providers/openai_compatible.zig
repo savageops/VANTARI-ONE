@@ -1,5 +1,6 @@
 const std = @import("std");
 const context_overflow = @import("../context/overflow.zig");
+const compat = @import("compat.zig");
 const types = @import("../../shared/types.zig");
 
 pub const Error = error{
@@ -35,6 +36,7 @@ const Scheme = enum {
 const ParsedResponse = struct {
     model: ?[]const u8 = null,
     choices: []const Choice,
+    usage: ?ParsedUsage = null,
 
     const Choice = struct {
         message: Message,
@@ -57,8 +59,23 @@ const ParsedResponse = struct {
     };
 };
 
+/// OpenAI-compat usage block: `{prompt_tokens, completion_tokens,
+/// total_tokens, prompt_tokens_details: {cached_tokens}}`. The provider
+/// standard; the final stream chunk is `{"choices":[],"usage":{...}}`.
+const ParsedUsage = struct {
+    prompt_tokens: u64 = 0,
+    completion_tokens: u64 = 0,
+    total_tokens: u64 = 0,
+    prompt_tokens_details: ?PromptTokensDetails = null,
+
+    const PromptTokensDetails = struct {
+        cached_tokens: u64 = 0,
+    };
+};
+
 const ParsedStreamChunk = struct {
     choices: []const Choice = &.{},
+    usage: ?ParsedUsage = null,
 
     const Choice = struct {
         delta: Delta = .{},
@@ -169,8 +186,10 @@ pub const testing = struct {
         model: []const u8,
         request: types.CompletionRequest,
         stream: bool,
+        thinking_mode: []const u8,
+        thinking_format: compat.ThinkingFormat,
     ) ![]u8 {
-        return buildRequestJson(allocator, model, request, stream, "disabled", "", -1.0);
+        return buildRequestJson(allocator, model, request, stream, thinking_mode, "", -1.0, thinking_format);
     }
 
     pub fn completionResponse(
@@ -201,7 +220,10 @@ pub fn completeWithTransportAndHooks(
     const url = try completionUrl(allocator, config.openai_base_url);
     defer allocator.free(url);
 
-    const payload = try buildRequestJson(allocator, config.openai_model, request, stream_hooks.hasHandlers(), config.thinking_mode, config.effort, config.temperature);
+    // The request body's thinking shape follows the endpoint convention
+    // (zai enable_thinking / deepseek nested thinking / standard none).
+    const thinking_format = compat.detectThinkingFormat(config.openai_base_url);
+    const payload = try buildRequestJson(allocator, config.openai_model, request, stream_hooks.hasHandlers(), config.thinking_mode, config.effort, config.temperature, thinking_format);
     defer allocator.free(payload);
 
     clearFailureDiagnostic();
@@ -219,6 +241,7 @@ fn buildRequestJson(
     thinking_mode: []const u8,
     effort: []const u8,
     temperature: f64,
+    thinking_format: compat.ThinkingFormat,
 ) ![]u8 {
     var payload = std.array_list.Managed(u8).init(allocator);
     errdefer payload.deinit();
@@ -230,7 +253,7 @@ fn buildRequestJson(
 
     for (request.messages, 0..) |message, index| {
         if (index > 0) try writer.writeAll(",");
-        try writeMessageJson(writer, message);
+        try writeMessageJson(writer, message, thinking_format);
     }
     try writer.writeAll("]");
 
@@ -247,18 +270,31 @@ fn buildRequestJson(
         try writeJsonValue(writer, effort);
     }
 
-    // Thinking mode: z.ai's coding paas endpoint (api.z.ai/api/coding/paas/v4)
-    // expects `enable_thinking` as a TOP-LEVEL boolean, not the DeepSeek nested
-    // `thinking: {type:"enabled"}` convention. Default to ON (empty string or
-    // "on" enables reasoning) — only "off" explicitly disables it. This is
-    // critical for GLM-5.2: without enable_thinking, reasoning_content is
-    // silently off and the model never emits reasoning_delta events.
-    // Reference: prime-agent salvage map P0 finding (openai-completions.ts:564-565).
+    // Thinking-mode emission follows the endpoint convention (compat.zig
+    // detectThinkingFormat; harvested from prime openai-completions.ts:564-577):
+    // - zai: z.ai's coding paas endpoint (api.z.ai/api/coding/paas/v4) expects
+    //   `enable_thinking` as a TOP-LEVEL boolean. Default ON (empty string or
+    //   "on" enables reasoning) — only "off" disables. Critical for GLM-5.2:
+    //   without enable_thinking, reasoning_content is silently off (P0 fix f9e0dcc).
+    // - deepseek: nested `thinking: {type:"enabled"|"disabled"}` convention.
+    // - standard: no thinking field (LM Studio, Ollama, OpenAI).
     const thinking_disabled = std.mem.eql(u8, thinking_mode, "off");
-    if (!thinking_disabled) {
-        try writer.writeAll(",\"enable_thinking\":true");
-    } else {
-        try writer.writeAll(",\"enable_thinking\":false");
+    switch (thinking_format) {
+        .zai => {
+            if (!thinking_disabled) {
+                try writer.writeAll(",\"enable_thinking\":true");
+            } else {
+                try writer.writeAll(",\"enable_thinking\":false");
+            }
+        },
+        .deepseek => {
+            if (!thinking_disabled) {
+                try writer.writeAll(",\"thinking\":{\"type\":\"enabled\"}");
+            } else {
+                try writer.writeAll(",\"thinking\":{\"type\":\"disabled\"}");
+            }
+        },
+        .standard => {},
     }
 
     if (stream) try writer.writeAll(",\"stream\":true");
@@ -304,7 +340,25 @@ fn parseCompletionResponse(
         .content = if (parsed_message.content) |value| try allocator.dupe(u8, value) else null,
         .reasoning = if (parsed_message.reasoning_content) |value| try allocator.dupe(u8, value) else null,
         .tool_calls = tool_calls,
+        .usage = extractUsage(parsed.value.usage),
     };
+}
+
+/// Map the OpenAI-compat usage block into the canonical Usage contract.
+/// `prompt_tokens_details.cached_tokens` becomes the cached bucket; the total
+/// is reconciled from buckets when the endpoint omits it (stream tails).
+/// Missing usage → zeros (never an error; token evidence is best-effort).
+fn extractUsage(usage: ?ParsedUsage) types.Usage {
+    var result: types.Usage = .{};
+    const value = usage orelse return result;
+    result.prompt_tokens = value.prompt_tokens;
+    result.completion_tokens = value.completion_tokens;
+    result.total_tokens = value.total_tokens;
+    if (value.prompt_tokens_details) |details| {
+        result.cached_tokens = details.cached_tokens;
+    }
+    result.reconcile();
+    return result;
 }
 
 const ToolCallAccumulator = struct {
@@ -345,14 +399,15 @@ fn parseStreamCompletionResponse(
     }
 
     var cursor: usize = 0;
+    var last_stream_usage: ?ParsedUsage = null;
     while (cursor < response_body.len) {
         const remaining = response_body[cursor..];
         if (findSseEventBoundary(remaining)) |boundary| {
-            try parseStreamEventInto(allocator, remaining[0..boundary.event_end], &content, &reasoning, &tool_accumulators);
+            try parseStreamEventInto(allocator, remaining[0..boundary.event_end], &content, &reasoning, &tool_accumulators, &last_stream_usage);
             cursor += boundary.remove_len;
             continue;
         }
-        try parseStreamEventInto(allocator, remaining, &content, &reasoning, &tool_accumulators);
+        try parseStreamEventInto(allocator, remaining, &content, &reasoning, &tool_accumulators, &last_stream_usage);
         break;
     }
 
@@ -367,6 +422,7 @@ fn parseStreamCompletionResponse(
         .content = if (content.items.len > 0) try content.toOwnedSlice() else null,
         .reasoning = if (reasoning.items.len > 0) try reasoning.toOwnedSlice() else null,
         .tool_calls = tool_calls,
+        .usage = extractUsage(last_stream_usage),
     };
 }
 
@@ -376,6 +432,7 @@ fn parseStreamEventInto(
     content: *std.array_list.Managed(u8),
     reasoning: *std.array_list.Managed(u8),
     tool_accumulators: *std.array_list.Managed(ToolCallAccumulator),
+    last_stream_usage: *?ParsedUsage,
 ) !void {
     var event_data = std.array_list.Managed(u8).init(allocator);
     defer event_data.deinit();
@@ -397,6 +454,10 @@ fn parseStreamEventInto(
     }) catch return;
     defer parsed.deinit();
 
+    // OpenAI-compat providers attach usage on the terminal chunk
+    // `{"choices":[],"usage":{...}}` and some attach it on every chunk.
+    // Last non-null wins so the terminal accounting is the final word.
+    if (parsed.value.usage) |usage| last_stream_usage.* = usage;
     if (parsed.value.choices.len == 0) return;
     const delta = parsed.value.choices[0].delta;
     if (delta.content) |value| try content.appendSlice(value);
@@ -1184,9 +1245,20 @@ fn defaultPort(scheme: Scheme) u16 {
     };
 }
 
-fn writeMessageJson(writer: anytype, message: types.ChatMessage) !void {
+fn writeMessageJson(writer: anytype, message: types.ChatMessage, thinking_format: compat.ThinkingFormat) !void {
     try writer.writeAll("{\"role\":");
     try writeJsonValue(writer, types.roleLabel(message.role));
+
+    // DeepSeek requires the model's prior reasoning echoed back on assistant
+    // messages (`requiresReasoningContentOnAssistantMessages`, prime
+    // openai-completions.ts:573-577); other conventions handle it natively
+    // (z.ai via enable_thinking) or ignore it.
+    if (thinking_format == .deepseek) {
+        if (message.reasoning) |reasoning| {
+            try writer.writeAll(",\"reasoning_content\":");
+            try writeJsonValue(writer, reasoning);
+        }
+    }
 
     if (message.content) |content| {
         try writer.writeAll(",\"content\":");
@@ -1385,11 +1457,12 @@ test "provider request payload opts into streaming and parallel tool calls when 
     const payload = try buildRequestJson(std.testing.allocator, "test-model", .{
         .messages = messages[0..],
         .tool_definitions = tool_definitions[0..],
-    }, true, "disabled", "", -1.0);
+    }, true, "disabled", "", -1.0, .zai);
     defer std.testing.allocator.free(payload);
 
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"stream\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"tool_choice\":\"auto\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"enable_thinking\":false") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"parallel_tool_calls\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"name\":\"read_file\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"name\":\"search_files\"") != null);

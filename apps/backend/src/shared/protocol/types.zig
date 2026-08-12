@@ -153,6 +153,24 @@ pub const HealthGetResult = struct {
     thinking_mode: []const u8 = "",
     context_window_tokens: u64 = 0,
     reserve_output_tokens: u64 = 0,
+    /// Live Supervisor capacity; these values are read-only projections and
+    /// are never used by clients to admit work.
+    /// False means the runtime could not read the canonical Supervisor pool;
+    /// zero values must not be interpreted as a healthy empty pool.
+    agent_pool_healthy: bool = false,
+    agent_pool_max: usize = 0,
+    agent_pool_queued: usize = 0,
+    agent_pool_running: usize = 0,
+    agent_pool_available: usize = 0,
+    /// Ticket counts projected from the valid event prefix. A poisoned suffix
+    /// preserves the prefix counts while making the health boundary visible.
+    tickets_unassigned: usize = 0,
+    tickets_assigned: usize = 0,
+    tickets_in_progress: usize = 0,
+    tickets_blocked: usize = 0,
+    tickets_completed: usize = 0,
+    tickets_closed: usize = 0,
+    ticket_ledger_healthy: bool = true,
 };
 
 pub const ToolsListResult = struct {

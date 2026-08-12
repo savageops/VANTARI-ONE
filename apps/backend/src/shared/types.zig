@@ -15,6 +15,9 @@ pub const WireApi = enum {
     chat_completions,
     responses,
     anthropic_messages,
+    /// Config default: resolve at dispatch time from the provider base_url
+    /// (compat.detectWireApi). Explicit values always beat detection.
+    auto,
 
     pub fn fromString(value: []const u8) ?WireApi {
         if (std.mem.eql(u8, value, "chat_completions")) return .chat_completions;
@@ -22,6 +25,7 @@ pub const WireApi = enum {
         if (std.mem.eql(u8, value, "responses")) return .responses;
         if (std.mem.eql(u8, value, "anthropic_messages")) return .anthropic_messages;
         if (std.mem.eql(u8, value, "anthropic")) return .anthropic_messages;
+        if (std.mem.eql(u8, value, "auto")) return .auto;
         return null;
     }
 
@@ -30,6 +34,7 @@ pub const WireApi = enum {
             .chat_completions => "chat_completions",
             .responses => "responses",
             .anthropic_messages => "anthropic_messages",
+            .auto => "auto",
         };
     }
 };
@@ -45,6 +50,9 @@ pub const Config = struct {
     max_tool_calls_per_turn: usize = 16,
     max_tool_calls_per_session: usize = 96,
     workspace_root: []u8,
+    /// Agent-facing file/process access boundary. False keeps operations
+    /// inside workspace_root; true enables explicit cross-directory access.
+    full_access_mode: bool = false,
     context_policy: ContextPolicy = .{},
     prompt_policy: PromptPolicy = .{},
     memory_policy: MemoryPolicy = .{},
@@ -61,6 +69,9 @@ pub const Config = struct {
     /// Empty string omits the field (provider default). Controls reasoning
     /// depth on GLM-5.x and other models that accept the "effort" parameter.
     effort: []const u8 = "",
+    /// Owned runtime-policy effort storage when the value came from config.json.
+    /// Literal/test-config effort values leave this null.
+    effort_owned: ?[]u8 = null,
     /// Provider sampling temperature. Negative value omits the field
     /// (provider default). Range 0.0–2.0; lower = more deterministic.
     temperature: f64 = -1.0,
@@ -73,6 +84,7 @@ pub const Config = struct {
         if (self.subscription_plan_label) |value| allocator.free(value);
         if (self.subscription_status) |value| allocator.free(value);
         allocator.free(self.workspace_root);
+        if (self.effort_owned) |value| allocator.free(value);
         self.prompt_policy.deinit(allocator);
         var cp = self.context_policy;
         cp.deinit(allocator);
@@ -472,12 +484,39 @@ pub const CompletionRequest = struct {
     tool_definitions: []const ToolDefinition = &.{},
 };
 
+/// Provider-reported token accounting (measured, not estimated). All integer
+/// value type — no allocation, no deinit. Mirrors prime-agent's `Usage`
+/// (packages/ai/src/types.ts:201-214) flattened to the buckets VANTARI prices:
+/// prompt, completion, and cached (prompt cache read) tokens.
+/// Why: the event spine's token telemetry must come from the provider's usage
+/// block, not a compile-time estimate. Preserves: per-turn measured evidence.
+/// Evidence: filled by all three provider adapters (035a/035c); priced by
+/// pricing.calculateCost; emitted in turn_finished v2 events.
+pub const Usage = struct {
+    prompt_tokens: u64 = 0,
+    completion_tokens: u64 = 0,
+    cached_tokens: u64 = 0,
+    total_tokens: u64 = 0,
+
+    /// Recompute total from the measured buckets when the provider omits
+    /// total_tokens (some OpenAI-compat endpoints do on stream tails).
+    /// Keeps the provider total when present.
+    pub fn reconcile(self: *Usage) void {
+        if (self.total_tokens == 0) {
+            self.total_tokens = self.prompt_tokens + self.completion_tokens + self.cached_tokens;
+        }
+    }
+};
+
 pub const CompletionResponse = struct {
     model: []u8,
     content: ?[]u8 = null,
     tool_calls: []ToolCall = &.{},
     /// Model reasoning trace captured from the provider response.
     reasoning: ?[]u8 = null,
+    /// Provider-reported token accounting; zeros when the endpoint omits
+    /// usage (never an error — token evidence is best-effort per wire protocol).
+    usage: Usage = .{},
 
     pub fn deinit(self: CompletionResponse, allocator: std.mem.Allocator) void {
         allocator.free(self.model);

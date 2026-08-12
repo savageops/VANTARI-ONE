@@ -2,7 +2,7 @@
 
 # VANTARI-ONE
 
-### Local Agent Kernel · Zig Runtime · No Runtime Dependencies
+### Local Agent Kernel · Zig Runtime · Optional Tool Dependencies
 
 A native agent runtime built around replayable session state, bounded execution,<br/>
 provider-wire adaptation, typed tool governance, and recoverable evidence.<br/>
@@ -12,7 +12,7 @@ One binary; one protocol; one owner for runtime truth.
 
 [![Release](https://img.shields.io/github/v/release/savageops/VANTARI-ONE?display_name=tag&sort=semver&label=Release&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/savageops/VANTARI-ONE/total?label=Downloads&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases)
-[![Tests](https://img.shields.io/badge/Tests-1%2C470%2B%20cases-0f766e)](#validation)
+[![Tests](https://img.shields.io/badge/Tests-1%2C680%2B%20cases-0f766e)](#validation)
 [![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-f7a41d?logo=zig)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-0f766e)](./LICENSE)
 
@@ -91,11 +91,11 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 | Metric | Value |
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
-| **Kernel surface** | 73 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 1,470+ declared backend test cases across source and adversarial pipeline suites |
-| **Dependencies** | No language runtime after installation; build-time dependencies compile into the executable |
+| **Kernel surface** | 109 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
+| **Proof surface** | 1,680+ declared backend test cases across source and adversarial pipeline suites |
+| **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
-| **Clients** | Native streaming TUI · CLI · Local browser workbench |
+| **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |
 | **Protocol** | JSON-RPC 2.0 over stdio with Content-Length framing |
 | **Session storage** | Filesystem JSONL ledgers at `.var/sessions/<id>/` |
 | **Platform** | Windows-native first class; Linux/macOS via Zig cross-compilation |
@@ -135,7 +135,11 @@ flowchart TB
   provider --> events
 ```
 
-Three shipped client surfaces — TUI, CLI, and the local browser workbench — enter the same kernel runtime. Session state, context assembly, provider interaction, tool dispatch, capability governance, and event emission stay inside the Zig binary. No client owns runtime state or assembles provider context.
+The two tracked client surfaces — TUI and CLI — enter the same kernel runtime.
+Session state, context assembly, provider interaction, tool dispatch, capability
+governance, and event emission stay inside the Zig binary. The local browser
+workbench exists only as an ignored prototype in this checkout and is not a
+shipped client.
 
 ### Remote Deployment Boundary
 
@@ -161,7 +165,7 @@ The promotion test is mechanical: kill the relay, start a fresh relay, and recov
 
 ```text
 ┌──────────────────────────────────────────────────────────────────┐
-│  CLIENT LAYER              TUI · CLI · Browser workbench         │
+│  CLIENT LAYER              TUI · CLI                              │
 ├──────────────────────────────────────────────────────────────────┤
 │  HOST LAYER                stdio RPC · HTTP bridge · audit      │
 ├──────────────────────────────────────────────────────────────────┤
@@ -181,7 +185,11 @@ The promotion test is mechanical: kill the relay, start a fresh relay, and recov
 
 Each layer has a single canonical owner. The context engine never writes to the provider. The tool runtime never writes to the transcript. The provider never reads from the session store. Dependencies flow downward. State flows through explicit function parameters, never globals.
 
-The host layer is the outermost kernel surface: framed stdio RPC plus the loopback HTTP bridge. TUI, CLI, and browser remain clients. Public networking and remote identity belong to the planned relay boundary, so local execution does not inherit deployment infrastructure.
+The host layer is the outermost kernel surface: framed stdio RPC plus the
+loopback HTTP bridge. TUI and CLI are tracked clients. Browser and remote
+surfaces remain prototype or roadmap clients. Public networking and remote
+identity belong to the planned relay boundary, so local execution does not
+inherit deployment infrastructure.
 
 <br/>
 
@@ -201,7 +209,7 @@ cd apps/backend
 ```powershell
 cd apps/backend
 .\scripts\install_windows.ps1
-vantari c                                       # launch interactive TUI session
+vantari -c                                     # launch the interactive TUI session
 ```
 
 `vantari` resolves the workspace from the terminal's current directory. Provider credentials live in the installed profile — running from any project directory works without copying auth config.
@@ -212,13 +220,24 @@ vantari workspace set <path>                    # pin a specific workspace
 vantari workspace clear                         # return to directory-based resolution
 ```
 
-### Launch the browser workbench
+### Browser workbench boundary
 
-```powershell
-.\zig-out\bin\vantari.exe serve --host 127.0.0.1 --port 4310
-```
+The tracked checkout does not ship a browser client. A local ignored prototype
+may use the loopback HTTP bridge, but it has no tracked source, packaging, or
+consumer proof and is therefore not part of the release surface.
 
-Open [`apps/frontend/var1-client/index.html`](./apps/frontend/var1-client/index.html) from a local HTTP server and point it at `http://127.0.0.1:4310`.
+<br/>
+
+## Buffered tickets and agent pool
+
+Ticket assignment is queue admission, not an immediate child-session launch.
+The scheduler claims assigned work only when the configured agent pool has
+capacity, then routes the ticket through the existing AgentService and
+Supervisor owners. This source path is implemented, but process-surviving agent
+execution and inter-process lease arbitration remain open readiness findings;
+see the current full-harness SITREP before treating the pool as durable.
+
+The TUI keeps this mechanic legible without adding a status forest: the footer shows pool and queue pressure when non-zero; the activity group shows `Agents completed/total`; each keyed child row ends with a bounded turn summary sourced from the child session summary ledger. Tool lifecycle names remain typed event metadata, not the visible child summary. The persistent footer omits `Esc cancel`.
 
 <br/>
 
@@ -371,13 +390,13 @@ The model-visible catalog is generated from module-owned definitions. Each entry
 
 | Tool | Risk | Description |
 |---|---|---|
-| `read_file` | `read_only` | Bounded text read from workspace-relative paths |
-| `list_files` | `read_only` | Native Zig directory and file discovery — no external dependencies |
+| `read_file` | `read_only` | Bounded text read; workspace-relative by default, explicit external paths in full access mode |
+| `list_files` | `read_only` | Native Zig directory and file discovery — no external dependencies; same access boundary |
 | `search_files` | `read_only` | Content search via external `iex` binary with structured JSON output; probes availability at startup |
-| `write_file` | `write_capable` | Atomic file creation/overwrite with `var1.tool_effect.v1` receipt and SHA-256 verification |
-| `append_file` | `write_capable` | Additive writes for ledgers and large artifact chunking with effect receipt |
-| `replace_in_file` | `write_capable` | Targeted find-replace with before/after verification and effect receipt |
-| `shell_exec` | `command_execution` | Bounded command execution — `argv` · `shell` · `bash` · `powershell` modes with timeout, output caps, and streaming |
+| `write_file` | `write_capable` | Atomic file creation/overwrite with `var1.tool_effect.v1` receipt and SHA-256 verification; same access boundary |
+| `append_file` | `write_capable` | Additive writes for ledgers and large artifact chunking with effect receipt; same access boundary |
+| `replace_in_file` | `write_capable` | Targeted find-replace with before/after verification and effect receipt; same access boundary |
+| `shell_exec` | `command_execution` | Bounded command execution — `argv` · `shell` · `bash` · `powershell` modes with timeout, output caps, streaming, and explicit full-access opt-in |
 | `skill_info` | `read_only` | Skill capsule retrieval for protocol routing without prompt pollution |
 | `launch_agent` | `delegating` | Scoped child-session creation with capability profile validation |
 | `schedule_job` | `write_capable` | Durable scheduler job lifecycle — create, list, get, update, delete, pause, resume, run_now |
@@ -568,7 +587,7 @@ Installed state has two sibling owners under `$VANTARI_HOME` (normally `~/.vanta
 └── auth.json      provider credentials, account identity, active provider
 ```
 
-Use `vantari config path|show|init|validate` to locate and validate the configuration. Because JSON has no comment syntax, the canonical template carries non-operative `_about` notes and a typed `_help` map beside every configurable value; validation rejects malformed or drifting documentation metadata. The runtime never prints or merges `auth.json` into config output.
+Use `vantari config path|show|init|validate` to locate and validate the configuration. Because JSON has no comment syntax, the canonical template carries non-operative `_about` notes and a typed `_help` map beside every configurable value; validation rejects malformed or undocumented metadata while older configs may omit help for newer known values. The runtime never prints or merges `auth.json` into config output.
 
 ### Provider
 
@@ -579,7 +598,7 @@ Use `vantari config path|show|init|validate` to locate and validate the configur
 | `MODEL` | yes | — | Model identifier sent to the provider |
 | `WORKSPACE` | no | `.` | Workspace root for `.var/` resolution |
 
-Wire shape is explicit rather than inferred from branding: set `provider.wire_api` to `chat_completions`, `responses`, or `anthropic_messages` in `config.json`.
+Wire shape defaults to `auto` and resolves from the endpoint; set `provider.wire_api` to `chat_completions`, `responses`, or `anthropic_messages` when an explicit override is required.
 
 ### Execution Limits
 
@@ -588,6 +607,18 @@ Wire shape is explicit rather than inferred from branding: set `provider.wire_ap
 | `MAX_STEPS` | `4096` | Provider turn ceiling per session |
 | `MAX_TOOL_CALLS_PER_TURN` | `16` | Tool-call ceiling per assistant turn |
 | `MAX_TOOL_CALLS_PER_SESSION` | `96` | Tool-call ceiling per session |
+
+### Agent filesystem and process access
+
+`runtime.full_access_mode` is `false` by default. Restricted mode keeps agent-facing file, search, LSP, and `shell_exec` paths inside the active workspace. Set it to `true` only when the operator explicitly wants an agent to work in another directory:
+
+```json
+"runtime": {
+  "full_access_mode": false
+}
+```
+
+The setting is hot-loaded for the next turn and is available through the TUI Settings surface or the validated `config/set` path. In full access mode, relative paths remain anchored at the active workspace and explicit absolute paths or `..` traversal may target another directory. The canonical VANTARI runtime root, session ledgers, `.var/` state, and configured prompt files remain separate protected owners; full access does not relocate or rewrite them.
 
 ### Context Policy
 
@@ -607,6 +638,21 @@ Wire shape is explicit rather than inferred from branding: set `provider.wire_ap
 
 `context_window_tokens: null` permits local model discovery; a positive value is an explicit operator override. Unknown or mistyped values fail validation.
 
+### Agent behavior and ticket queue
+
+Agent definitions may tune persona, route role, ticket ownership, checkpoint contract, autonomy, effort, and temperature. Omitted or `null` effort/temperature leaves the decision with VANTARI and the resolved route; configuration exposes capability, it does not replace the kernel's orchestration judgment.
+
+```json
+"tickets": {
+  "auto_assign": true,
+  "proactive_workpool": false,
+  "close_authority": "kernel",
+  "reopen_with_reasoning": true
+}
+```
+
+`assigned` is queue admission only. The scheduler claims work through the configured fixed pool, and agents may complete owned tickets but never close them. Lease expiry, stale-owner requeue, and repair promotion remain durable evidence rather than hidden status changes.
+
 ### Prompt Policy
 
 ```json
@@ -616,7 +662,7 @@ Wire shape is explicit rather than inferred from branding: set `provider.wire_ap
 }
 ```
 
-Prompt paths are workspace-relative. Missing or empty explicitly configured files fail closed. The `environment` object accepts `VANTARI_WORKSPACE`, `MAX_STEPS`, `MAX_TOOL_CALLS_PER_TURN`, and `MAX_TOOL_CALLS_PER_SESSION`; real process environment values have highest precedence.
+Prompt paths remain workspace-relative. Missing or empty explicitly configured files fail closed. The `environment` object accepts `VANTARI_WORKSPACE`, `MAX_STEPS`, `MAX_TOOL_CALLS_PER_TURN`, and `MAX_TOOL_CALLS_PER_SESSION`; real process environment values have highest precedence. This prompt-file boundary is independent of `runtime.full_access_mode`.
 
 <br/>
 
@@ -646,7 +692,10 @@ Run a local agent that reads your codebase, executes tools with review gates, an
 
 **Teams shipping agent products**
 
-Embed the kernel behind your own interface. The shipped TUI, CLI, and browser bridge demonstrate the pattern: different interaction surfaces, one protocol, no duplicated executor.
+Embed the kernel behind your own interface. The tracked TUI and CLI demonstrate
+the pattern: different interaction surfaces, one protocol, no duplicated
+executor. The HTTP bridge is kernel source; a tracked browser consumer is not
+currently shipped.
 
 </td>
 <td width="33%">
@@ -674,7 +723,8 @@ Every tool call, context window, and model interaction is recorded in structured
 | Native skill routing with on-demand capsule retrieval | **Shipped** |
 | Wire-protocol routing — Chat Completions, Responses, Anthropic Messages | **Shipped** |
 | Provider model discovery and local context-window detection | **Shipped** |
-| Durable scheduler records, leases, attempts, and host supervision | **Shipped** |
+| Durable scheduler records and attempts | **Source present; inter-process lease claim pending** |
+| Buffered ticket admission and fixed in-process agent capacity | **Source present; process-survival proof pending** |
 | Plugin runtime with typed socket execution | **In progress** |
 | Provider fallback chains | Planned |
 | Identity auth against `auth.vantari.one` — PKCE OAuth mirroring the openai-codex pattern | Planned |
@@ -731,11 +781,14 @@ The socket owns request/response semantics; provider records select base URL, mo
 <details>
 <summary><strong>Why multiple clients, one protocol</strong></summary>
 
-The shipped TUI, CLI, and browser bridge speak to the same kernel protocol. This means:
+The tracked TUI and CLI speak to the same kernel protocol. The HTTP bridge
+exposes the same kernel boundary, but this checkout does not ship a tracked
+browser consumer. This means:
 
 - **No execution path divergence** — clients submit `session/send`; the kernel advances the session.
 - **No state duplication** — clients render session state but do not own it. A session started in one surface remains recoverable through another.
-- **No framework dependency** — the browser client is 473 lines of vanilla JavaScript. No React, no Vue, no Svelte, no npm, no build step.
+- **No client-owned executor** — future tracked clients must submit through the
+  same protocol instead of creating a second runtime.
 
 Runtime truth lives in `.var/sessions/`. Future clients, including a relay or dashboard, must remain observation and control surfaces over that owner.
 
@@ -789,15 +842,19 @@ vantari auth status|login|logout <provider>    identity and provider auth
 | Document | Purpose |
 |---|---|
 | [`AGENTS.md`](./AGENTS.md) | Kernel governance contract — ownership rules, anti-patterns, proof-gated lifecycle |
+| [`.docs/index.md`](./.docs/index.md) | Project records, research, planning chains, and completed-work evidence |
+| [`.docs/technical_summary.md`](./.docs/technical_summary.md) | Current runtime, ticket/pool, TUI projection, and proof boundary |
+| [`.refs/index.md`](./.refs/index.md) | Local reference corpus and harvest rules |
 | [`apps/backend/README.md`](./apps/backend/README.md) | Kernel internals, module ownership, layered architecture |
 | [`apps/backend/architecture.md`](./apps/backend/architecture.md) | Canonical architecture map with sequence diagrams and state machines |
-| [`apps/frontend/var1-client/README.md`](./apps/frontend/var1-client/README.md) | Browser workbench operator guide |
+| [`.docs/research/2026-08-12-full-harness-sitrep.md`](./.docs/research/2026-08-12-full-harness-sitrep.md) | Current full-harness design, pipeline, proof, concerns, and closure order |
+| [`.docs/todo/findings/00-INDEX.md`](./.docs/todo/findings/00-INDEX.md) | Priority-ordered executable readiness findings |
 
 <br/>
 
 ## Validation
 
-The backend currently declares 1,470+ test cases across `apps/backend/src/` and `apps/backend/tests/`. They target state transitions, protocol edges, and failure pressure rather than line coverage:
+The backend currently declares 1,680+ test cases across `apps/backend/src/` and `apps/backend/tests/`. They target state transitions, protocol edges, and failure pressure rather than line coverage:
 
 - Corrupted JSONL suffixes, torn writes, BOMs, duplicated sequence IDs
 - Stale running sessions with no active kernel owner

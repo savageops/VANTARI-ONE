@@ -16,7 +16,7 @@ pub const definition = types.ToolDefinition{
     \\    "mode": { "type": "string", "enum": ["shell", "bash", "powershell", "argv"], "description": "Execution mode. shell uses the platform default command shell; bash uses bash -lc; powershell uses powershell.exe -Command; argv executes argv directly." },
     \\    "command": { "type": "string", "description": "Command string for shell, bash, or powershell mode." },
     \\    "argv": { "type": "array", "items": { "type": "string" }, "description": "Argument vector for argv mode. argv[0] is the executable." },
-    \\    "cwd": { "type": "string", "description": "Optional workspace-relative working directory. Defaults to ." },
+    \\    "cwd": { "type": "string", "description": "Optional working directory. Restricted mode resolves it inside the workspace; runtime.full_access_mode=true permits explicit paths outside it. Defaults to workspace root." },
     \\    "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 60000, "description": "Execution timeout in milliseconds. Defaults to 10000." },
     \\    "max_output_bytes": { "type": "integer", "minimum": 1, "maximum": 65536, "description": "Maximum captured bytes per stdout/stderr stream. Defaults to 16384." }
     \\  },
@@ -25,7 +25,7 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"mode\":\"argv\",\"argv\":[\"zig\",\"version\"],\"cwd\":\".\",\"timeout_ms\":10000,\"max_output_bytes\":4096}",
-    .usage_hint = "Use mode=argv with argv only for precise execution. Use mode=powershell/shell/bash with command only for compound operators. On Windows, prefer PowerShell-native commands such as Select-String/Get-ChildItem instead of cmd find/findstr pipelines. cwd is always resolved inside the workspace. Inspect exit_code; nonzero exits are returned as data, not transport failure.",
+    .usage_hint = "Use mode=argv with argv only for precise execution. Use mode=powershell/shell/bash with command only for compound operators. On Windows, prefer PowerShell-native commands such as Select-String/Get-ChildItem instead of cmd find/findstr pipelines. cwd stays inside the workspace unless runtime.full_access_mode is explicitly true. Inspect exit_code; nonzero exits are returned as data, not transport failure.",
 };
 
 pub const availability = module.AvailabilitySpec{};
@@ -50,7 +50,7 @@ pub fn execute(
     });
     defer parsed.deinit();
 
-    const cwd = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.cwd orelse ".");
+    const cwd = try fsutil.resolveWithAccessMode(allocator, execution_context.workspace_root, parsed.value.cwd orelse ".", execution_context.full_access_mode);
     defer allocator.free(cwd);
 
     const timeout_ms = clamp(parsed.value.timeout_ms orelse 10_000, 1, 60_000);
@@ -75,7 +75,7 @@ pub fn execute(
     });
     defer result.deinit(allocator);
 
-    return renderResult(allocator, parsed.value.mode, cwd, argv, result);
+    return renderResult(allocator, parsed.value.mode, cwd, argv, result, std.time.milliTimestamp());
 }
 
 pub fn executeToolCall(
@@ -99,7 +99,7 @@ pub fn executeToolCall(
     });
     defer parsed.deinit();
 
-    const cwd = try fsutil.resolveInWorkspace(allocator, execution_context.workspace_root, parsed.value.cwd orelse ".");
+    const cwd = try fsutil.resolveWithAccessMode(allocator, execution_context.workspace_root, parsed.value.cwd orelse ".", execution_context.full_access_mode);
     defer allocator.free(cwd);
 
     const timeout_ms = clamp(parsed.value.timeout_ms orelse 10_000, 1, 60_000);
@@ -127,7 +127,7 @@ pub fn executeToolCall(
 
     appendProcessLedger(allocator, execution_context, parsed.value.mode, cwd, argv, tool_call_id, started_at_ms, result) catch {};
 
-    return renderResult(allocator, parsed.value.mode, cwd, argv, result);
+    return renderResult(allocator, parsed.value.mode, cwd, argv, result, started_at_ms);
 }
 
 const ToolOutputContext = struct {
@@ -202,6 +202,7 @@ fn renderResult(
     cwd: []const u8,
     argv: []const []const u8,
     result: module.CommandOutput,
+    started_at_ms: i64,
 ) ![]u8 {
     var output = std.array_list.Managed(u8).init(allocator);
     errdefer output.deinit();
@@ -210,21 +211,30 @@ fn renderResult(
     try output.writer().print("{f}", .{std.json.fmt(mode, .{})});
     try output.writer().writeAll(",\"cwd\":");
     try output.writer().print("{f}", .{std.json.fmt(cwd, .{})});
-    try output.writer().writeAll(",\"argv\":[");
-    for (argv, 0..) |arg, index| {
-        if (index > 0) try output.writer().writeAll(",");
-        try output.writer().print("{f}", .{std.json.fmt(arg, .{})});
+    if (std.mem.eql(u8, mode, "argv")) {
+        try output.writer().writeAll(",\"argv\":[");
+        for (argv, 0..) |arg, index| {
+            if (index > 0) try output.writer().writeAll(",");
+            try output.writer().print("{f}", .{std.json.fmt(arg, .{})});
+        }
+        try output.writer().writeAll("]");
+    } else {
+        const command_text = if (argv.len > 0) argv[argv.len - 1] else "";
+        try output.writer().writeAll(",\"command\":");
+        try output.writer().print("{f}", .{std.json.fmt(command_text, .{})});
     }
-    try output.writer().writeAll("],\"exit_code\":");
+    try output.writer().writeAll(",\"exit_code\":");
     try output.writer().print("{d}", .{result.exit_code});
     try output.writer().writeAll(",\"timed_out\":");
     try output.writer().writeAll(if (result.timed_out) "true" else "false");
     try output.writer().writeAll(",\"truncated\":");
     try output.writer().writeAll(if (result.truncated) "true" else "false");
+    try output.writer().writeAll(",\"duration_ms\":");
+    try output.writer().print("{d}", .{std.time.milliTimestamp() - started_at_ms});
     try output.writer().writeAll(",\"stdout\":");
-    try output.writer().print("{f}", .{std.json.fmt(result.stdout, .{})});
+    try output.writer().print("{f}", .{std.json.fmt(@as([]const u8, result.stdout), .{})});
     try output.writer().writeAll(",\"stderr\":");
-    try output.writer().print("{f}", .{std.json.fmt(result.stderr, .{})});
+    try output.writer().print("{f}", .{std.json.fmt(@as([]const u8, result.stderr), .{})});
     try output.writer().writeAll("}");
 
     return output.toOwnedSlice();
@@ -265,6 +275,44 @@ test "shell_exec builds direct argv and returns structured exit metadata" {
 
     try std.testing.expect(std.mem.indexOf(u8, output, "\"tool\":\"shell_exec\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "\"exit_code\":0") != null);
+}
+
+test "shell_exec full access mode resolves an external cwd" {
+    const workspace = try fsutil.resolveAbsolute(std.testing.allocator, ".");
+    defer std.testing.allocator.free(workspace);
+    const external_root = try std.fs.path.resolve(std.testing.allocator, &.{ workspace, ".." });
+    defer std.testing.allocator.free(external_root);
+    const arguments = try std.fmt.allocPrint(std.testing.allocator, "{{\"mode\":\"argv\",\"argv\":[\"zig\",\"version\"],\"cwd\":{f}}}", .{
+        std.json.fmt(external_root, .{}),
+    });
+    defer std.testing.allocator.free(arguments);
+
+    const Runner = struct {
+        fn run(
+            _: ?*anyopaque,
+            allocator: std.mem.Allocator,
+            _: []const u8,
+            _: []const []const u8,
+            _: module.CommandLimits,
+        ) anyerror!module.CommandOutput {
+            return .{
+                .exit_code = 0,
+                .stdout = try allocator.dupe(u8, "0.15.1\n"),
+                .stderr = try allocator.dupe(u8, ""),
+            };
+        }
+    };
+
+    const output = try execute(std.testing.allocator, .{
+        .workspace_root = workspace,
+        .full_access_mode = true,
+    }, arguments, .{
+        .context = null,
+        .runFn = undefinedRun,
+        .runWithLimitsFn = Runner.run,
+    });
+    defer std.testing.allocator.free(output);
+    try std.testing.expect(std.mem.indexOf(u8, output, external_root) != null);
 }
 
 fn undefinedRun(

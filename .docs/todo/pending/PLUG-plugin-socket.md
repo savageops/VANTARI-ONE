@@ -5,6 +5,7 @@ protocol_version: "3.0"
 spec_status: approved
 category: feature
 status: pending
+next_todo: /todo/pending/PLUGa-plugin-socket.md
 epic_boundary: "Wire the existing plugin manifest/socket contracts into the tool runtime so discovered plugins register tools, dispatch through the subprocess socket, surface in the model-visible catalog, and are manageable via a manage_plugin tool — all opt-in and never silently altering the built-in tool list."
 subtodo_start: /todo/pending/PLUGa-plugin-socket.md
 subtodo_final: /todo/pending/PLUGh-plugin-socket.md

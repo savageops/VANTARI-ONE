@@ -34,6 +34,9 @@ pub const CommandLimits = module.CommandLimits;
 pub const AgentService = module.AgentService;
 pub const AgentTaskRequest = module.AgentTaskRequest;
 pub const AgentGroupSnapshot = module.AgentGroupSnapshot;
+pub const AgentCapacitySnapshot = module.AgentCapacitySnapshot;
+pub const TicketTaskRequest = module.TicketTaskRequest;
+pub const TicketLaunchReceipt = module.TicketLaunchReceipt;
 pub const AgentEventSink = module.AgentEventSink;
 pub const ToolEventSink = module.ToolEventSink;
 pub const ExecutionContext = module.ExecutionContext;
@@ -233,14 +236,14 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
     }
 
     if (std.mem.eql(u8, error_name, "PathOutsideWorkspace")) {
-        return "The requested path escaped the workspace root. Retry with a workspace-relative path only and never use .. or an absolute path.";
+        return "The requested path escaped the workspace root. Retry with a workspace-relative path, or set runtime.full_access_mode=true when the operator explicitly intends an external directory.";
     }
 
     if (std.mem.eql(u8, error_name, "FileNotInspected")) {
         if (std.mem.eql(u8, tool_name, "write_file") or std.mem.eql(u8, tool_name, "append_file") or std.mem.eql(u8, tool_name, "replace_in_file")) {
             return "Read the exact target with read_file before using write_file, append_file, or replace_in_file. For a new file, call read_file first and use its FileNotFound result as absence proof.";
         }
-        return "The target was not inspected through the read ledger before this side effect. Inspect the exact workspace-relative target and retry.";
+        return "The target was not inspected through the read ledger before this side effect. Inspect the exact target and retry.";
     }
 
     if (std.mem.eql(u8, error_name, "ToolPayloadExceeded")) {
@@ -255,22 +258,22 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
 
     if (std.mem.eql(u8, error_name, "FileNotFound")) {
         if (std.mem.eql(u8, tool_name, "search_files")) {
-            return "The search path or the iex executable was not found. Re-check the workspace-relative path with list_files, or switch to read_file if you already know the target file.";
+            return "The search path or the iex executable was not found. Re-check the path with list_files, or switch to read_file if you already know the target file.";
         }
         if (std.mem.eql(u8, tool_name, "list_files")) {
-            return "The requested path was not found. Omit path or use . for the workspace root, then retry with an existing workspace-relative path.";
+            return "The requested path was not found. Omit path or use . for the workspace root, then retry with an existing path.";
         }
         if (std.mem.eql(u8, tool_name, "read_file")) {
-            return "The requested file was not found. Use list_files or search_files to confirm the workspace-relative path before retrying.";
+            return "The requested file was not found. Use list_files or search_files to confirm the path before retrying.";
         }
         if (std.mem.eql(u8, tool_name, "replace_in_file")) {
-            return "The requested file was not found. Confirm the existing workspace-relative file path with list_files or read_file before retrying.";
+            return "The requested file was not found. Confirm the existing file path with list_files or read_file before retrying.";
         }
         if (std.mem.eql(u8, tool_name, "shell_exec")) {
             return "shell_exec could not resolve argv[0] or the requested shell executable. Retry with argv mode and an installed executable, or use powershell mode on Windows.";
         }
 
-        return "The requested workspace path or file was not found. Re-check the workspace-relative path before retrying.";
+        return "The requested path or file was not found. Re-check the path before retrying.";
     }
 
     if (std.mem.eql(u8, error_name, "CommandTimedOut") and std.mem.eql(u8, tool_name, "shell_exec")) {
@@ -282,7 +285,7 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
     }
 
     if (std.mem.eql(u8, error_name, "CommandFailed") and std.mem.eql(u8, tool_name, "search_files")) {
-        return "search_files failed. Confirm the search path with list_files and retry with a smaller, valid workspace-relative target, or switch to read_file if you already know the file.";
+        return "search_files failed. Confirm the search path with list_files and retry with a smaller, valid target, or switch to read_file if you already know the file.";
     }
 
     if (std.mem.eql(u8, error_name, "ToolUnavailable") and std.mem.eql(u8, tool_name, "search_files")) {

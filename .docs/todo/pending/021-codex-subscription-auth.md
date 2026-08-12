@@ -5,6 +5,7 @@ protocol_version: "2.0"
 spec_status: approved
 category: feature
 status: pending
+next_todo: /todo/pending/021c-codex-subscription-auth.md
 epic_boundary: "Add Codex subscription authentication to VAR1 by extending the canonical `.var/auth/auth.json` ledger, resolver, login flow, and provider transport without introducing a second auth store."
 subtodo_start: /todo/pending/021a-codex-subscription-auth.md
 subtodo_final: /todo/pending/021f-codex-subscription-auth.md

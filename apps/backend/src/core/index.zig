@@ -14,18 +14,25 @@ pub const context = @import("context/index.zig");
 pub const docs_sync = @import("docs/sync.zig");
 pub const evaluation = @import("evaluation/index.zig");
 pub const executor = @import("executor/loop.zig");
+pub const turn_payload = @import("executor/turn_payload.zig");
 pub const memory = @import("memory/index.zig");
 pub const workspace_runtime = tools.workspace_runtime;
 pub const plugins = @import("plugins/index.zig");
 pub const prompts = @import("prompts/index.zig");
 pub const protocol_types = @import("../shared/protocol/types.zig");
 pub const provider_runtime = @import("providers/openai_compatible.zig");
+pub const provider_anthropic = @import("providers/anthropic.zig");
+pub const provider_responses = @import("providers/responses.zig");
 pub const provider_capability = @import("providers/capability.zig");
+pub const provider_compat = @import("providers/compat.zig");
+pub const provider_dispatch = @import("providers/dispatch.zig");
+pub const provider_pricing = @import("providers/pricing.zig");
 pub const provider_routes = @import("providers/routes.zig");
 pub const scheduler = @import("scheduler/index.zig");
 pub const session_store = @import("sessions/store.zig");
 pub const session_summaries = @import("sessions/summaries.zig");
 pub const session_history = @import("sessions/history.zig");
+pub const tickets = @import("tickets/index.zig");
 pub const tools = @import("tools/index.zig");
 pub const tool_runtime = tools.runtime;
 
@@ -35,6 +42,7 @@ test "core namespace exposes executor and store" {
     std.testing.refAllDeclsRecursive(agent_scope);
     std.testing.refAllDeclsRecursive(agent_spec);
     std.testing.refAllDeclsRecursive(agent_supervisor);
+    std.testing.refAllDeclsRecursive(tickets);
     std.testing.refAllDeclsRecursive(provider_routes);
     std.testing.refAllDeclsRecursive(evaluation);
     std.testing.refAllDeclsRecursive(memory);
@@ -52,5 +60,6 @@ test "core namespace exposes executor and store" {
     try std.testing.expect(@hasDecl(@This(), "scheduler"));
     try std.testing.expect(@hasDecl(@This(), "tools"));
     try std.testing.expect(@hasDecl(@This(), "plugins"));
+    try std.testing.expect(@hasDecl(@This(), "tickets"));
     try std.testing.expect(@hasDecl(@This(), "prompts"));
 }

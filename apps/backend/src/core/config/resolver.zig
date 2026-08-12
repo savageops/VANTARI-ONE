@@ -169,13 +169,17 @@ fn applyRuntimePolicy(allocator: std.mem.Allocator, config: *types.Config, polic
     config.max_steps = policy.max_steps;
     config.max_tool_calls_per_turn = policy.max_tool_calls_per_turn;
     config.max_tool_calls_per_session = policy.max_tool_calls_per_session;
+    config.full_access_mode = policy.full_access_mode;
     if (policy.workspace) |workspace| {
         const replacement = try allocator.dupe(u8, workspace);
         allocator.free(config.workspace_root);
         config.workspace_root = replacement;
     }
     if (policy.effort) |effort| {
-        config.effort = effort;
+        const owned = try allocator.dupe(u8, effort);
+        if (config.effort_owned) |previous| allocator.free(previous);
+        config.effort_owned = owned;
+        config.effort = owned;
     }
     if (policy.temperature) |temp| {
         config.temperature = temp;

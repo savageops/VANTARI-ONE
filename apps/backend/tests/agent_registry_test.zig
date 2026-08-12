@@ -1,7 +1,7 @@
 const std = @import("std");
 const VAR1 = @import("VAR1");
 
-const registry_case_count = 46;
+const registry_case_count = 56;
 
 fn registryFromDocument(document: []const u8) !VAR1.core.agent_spec.Registry {
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
@@ -40,7 +40,7 @@ fn verifyRegistryCase(index: usize) !void {
         0 => {
             var registry = try registryFromDocument("{\"version\":1}");
             defer registry.deinit();
-            try std.testing.expectEqual(@as(usize, 7), registry.all().len);
+            try std.testing.expectEqual(@as(usize, 12), registry.all().len);
         },
         1 => {
             const spec = try VAR1.core.agent_spec.resolve("general");
@@ -114,7 +114,7 @@ fn verifyRegistryCase(index: usize) !void {
         14 => {
             var registry = try registryFromDocument("{\"version\":1,\"agents\":{\"definitions\":{\"recon\":{\"enabled\":false}}}}");
             defer registry.deinit();
-            try std.testing.expectEqual(@as(usize, 6), registry.all().len);
+            try std.testing.expectEqual(@as(usize, 11), registry.all().len);
         },
         15 => {
             var registry = try registryFromDocument("{\"version\":1}");
@@ -136,7 +136,7 @@ fn verifyRegistryCase(index: usize) !void {
         28 => try expectRegistryError(VAR1.core.config_file.Error.InvalidConfig, "{\"version\":1,\"agents\":{\"definitions\":{\"custom\":{\"extends\":\"recon\",\"max_steps\":0}}}}"),
         29 => try expectRegistryError(VAR1.core.config_file.Error.InvalidConfig, "{\"version\":1,\"agents\":{\"definitions\":{\"custom\":{\"extends\":\"general\",\"max_children\":65}}}}"),
         30 => try expectRegistryError(VAR1.core.config_file.Error.InvalidConfig, "{\"version\":1,\"agents\":{\"definitions\":{\"custom\":{\"extends\":\"recon\",\"route_role\":\"unknown\"}}}}"),
-        31 => try expectRegistryError(VAR1.core.agent_spec.Error.EmptyAgentRegistry, "{\"version\":1,\"agents\":{\"definitions\":{\"general\":{\"enabled\":false},\"recon\":{\"enabled\":false},\"planner\":{\"enabled\":false},\"compactor\":{\"enabled\":false},\"implementer\":{\"enabled\":false},\"reviewer\":{\"enabled\":false},\"validator\":{\"enabled\":false}}}}"),
+        31 => try expectRegistryError(VAR1.core.agent_spec.Error.EmptyAgentRegistry, "{\"version\":1,\"agents\":{\"definitions\":{\"general\":{\"enabled\":false},\"recon\":{\"enabled\":false},\"planner\":{\"enabled\":false},\"spec\":{\"enabled\":false},\"compactor\":{\"enabled\":false},\"implementer\":{\"enabled\":false},\"doc_writer\":{\"enabled\":false},\"scaffold\":{\"enabled\":false},\"orchestrator_parent\":{\"enabled\":false},\"harvester\":{\"enabled\":false},\"reviewer\":{\"enabled\":false},\"validator\":{\"enabled\":false}}}}"),
         32 => {
             var registry = try registryFromDocument("{\"version\":1,\"agents\":{\"definitions\":{\"recon\":{\"route_role\":\"validation\"}}}}");
             defer registry.deinit();
@@ -189,7 +189,7 @@ fn verifyRegistryCase(index: usize) !void {
                 second.deinit(std.testing.allocator);
                 var registry = try VAR1.core.agent_spec.loadRegistry(std.testing.allocator, workspace);
                 defer registry.deinit();
-                try std.testing.expectEqualStrings("Read-only repository or evidence reconnaissance.", (try registry.resolve("recon")).description);
+                try std.testing.expectEqualStrings("Read-only repository or evidence reconnaissance. IX/IEX search, exact provenance.", (try registry.resolve("recon")).description);
             } else if (index == 39) {
                 const evidence = try VAR1.core.agent_spec.upsertConfiguredAgent(std.testing.allocator, workspace, .{ .id = "recon", .enabled = false });
                 defer evidence.deinit(std.testing.allocator);
@@ -253,6 +253,106 @@ fn verifyRegistryCase(index: usize) !void {
             const launch = findDefinition("launch_agent") orelse return error.MissingLaunchAgentDefinition;
             try std.testing.expect(std.mem.indexOf(u8, launch.parameters_json, "general,recon") == null);
             try std.testing.expect(std.mem.indexOf(u8, launch.parameters_json, "Hot-loaded specialist id") != null);
+        },
+        46 => {
+            const scaffold = try VAR1.core.agent_spec.resolve("scaffold");
+            try std.testing.expectEqualStrings("self_directed", scaffold.autonomy);
+            try std.testing.expect(scaffold.ticket_ownership);
+            const orchestrator = try VAR1.core.agent_spec.resolve("orchestrator_parent");
+            try std.testing.expectEqual(@as(usize, 12), orchestrator.max_children);
+            try std.testing.expectEqualStrings("ticket-discipline parallel-fanout live-monitor reconcile-contradictions parent-owned-conclusion close-with-reasoning", orchestrator.doctrine_tags);
+            const planner = try VAR1.core.agent_spec.resolve("planner");
+            try std.testing.expect(!planner.ticket_ownership);
+            const implementer = try VAR1.core.agent_spec.resolve("implementer");
+            try std.testing.expect(implementer.ticket_ownership);
+            try std.testing.expectEqualStrings("var1.summary.v1", implementer.checkpoint_contract);
+        },
+        47 => {
+            var registry = try registryFromDocument("{\"version\":1}");
+            defer registry.deinit();
+            const catalog = try VAR1.core.agent_spec.renderCatalog(std.testing.allocator, registry);
+            defer std.testing.allocator.free(catalog);
+            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"doctrine\":\"ticket-discipline") != null);
+            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"ticket_ownership\":true") != null);
+            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"ticket_ownership\":false") != null);
+            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"checkpoint\":\"var1.summary.v1\"") != null);
+            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"autonomy\":\"self_directed\"") != null);
+        },
+        48 => {
+            var tmp = std.testing.tmpDir(.{});
+            defer tmp.cleanup();
+            const workspace = try tmpWorkspacePath(std.testing.allocator, &tmp, "doctrine-upsert");
+            defer std.testing.allocator.free(workspace);
+            const evidence = try VAR1.core.agent_spec.upsertConfiguredAgent(std.testing.allocator, workspace, .{
+                .id = "frontend_recon",
+                .extends = "recon",
+                .description = "Frontend ownership recon.",
+                .doctrine_tags = "evidence-first findings-ledger",
+                .ticket_ownership = true,
+                .checkpoint_contract = "var1.summary.v1",
+                .autonomy = "bounded",
+                .effort = "high",
+                .temperature = 0.3,
+            });
+            defer evidence.deinit(std.testing.allocator);
+            var registry = try VAR1.core.agent_spec.loadRegistry(std.testing.allocator, workspace);
+            defer registry.deinit();
+            const spec = try registry.resolve("frontend_recon");
+            try std.testing.expectEqualStrings("evidence-first findings-ledger", spec.doctrine_tags);
+            try std.testing.expect(spec.ticket_ownership);
+            try std.testing.expectEqualStrings("var1.summary.v1", spec.checkpoint_contract);
+            try std.testing.expectEqualStrings("bounded", spec.autonomy);
+            try std.testing.expectEqualStrings("high", spec.effort);
+            try std.testing.expectApproxEqAbs(@as(f64, 0.3), spec.temperature, 1e-9);
+        },
+        49 => try expectRegistryError(VAR1.core.agent_spec.Error.InvalidAgentDefinition, "{\"version\":1,\"agents\":{\"definitions\":{\"custom\":{\"extends\":\"recon\",\"autonomy\":\"unlimited\"}}}}"),
+        50 => try expectRegistryError(VAR1.core.config_file.Error.InvalidConfig, "{\"version\":1,\"agents\":{\"definitions\":{\"custom\":{\"extends\":\"recon\",\"temperature\":3.5}}}}"),
+        51 => {
+            var tmp = std.testing.tmpDir(.{});
+            defer tmp.cleanup();
+            const workspace = try tmpWorkspacePath(std.testing.allocator, &tmp, "no-ticket");
+            defer std.testing.allocator.free(workspace);
+            const evidence = try VAR1.core.agent_spec.upsertConfiguredAgent(std.testing.allocator, workspace, .{
+                .id = "no_ticket_recon",
+                .extends = "recon",
+                .ticket_ownership = false,
+            });
+            defer evidence.deinit(std.testing.allocator);
+            var registry = try VAR1.core.agent_spec.loadRegistry(std.testing.allocator, workspace);
+            defer registry.deinit();
+            try std.testing.expect(!(try registry.resolve("no_ticket_recon")).ticket_ownership);
+        },
+        52 => {
+            var tmp = std.testing.tmpDir(.{});
+            defer tmp.cleanup();
+            const workspace = try tmpWorkspacePath(std.testing.allocator, &tmp, "ticket-policy-defaults");
+            defer std.testing.allocator.free(workspace);
+            const policy = try VAR1.core.config_file.loadTicketPolicy(std.testing.allocator, workspace);
+            try std.testing.expect(policy.auto_assign);
+            try std.testing.expect(!policy.proactive_workpool);
+            try std.testing.expectEqualStrings("kernel", policy.close_authority);
+            try std.testing.expect(policy.reopen_with_reasoning);
+        },
+        53 => {
+            var tmp = std.testing.tmpDir(.{});
+            defer tmp.cleanup();
+            const workspace = try tmpWorkspacePath(std.testing.allocator, &tmp, "ticket-policy-custom");
+            defer std.testing.allocator.free(workspace);
+            try VAR1.shared.fsutil.writeText(try VAR1.core.config_file.path(std.testing.allocator, workspace), "{\"version\":1,\"tickets\":{\"auto_assign\":false,\"proactive_workpool\":true,\"close_authority\":\"operator\",\"reopen_with_reasoning\":false}}");
+            const policy = try VAR1.core.config_file.loadTicketPolicy(std.testing.allocator, workspace);
+            try std.testing.expect(!policy.auto_assign);
+            try std.testing.expect(policy.proactive_workpool);
+            try std.testing.expectEqualStrings("operator", policy.close_authority);
+            try std.testing.expect(!policy.reopen_with_reasoning);
+        },
+        54 => try expectRegistryError(VAR1.core.config_file.Error.InvalidConfig, "{\"version\":1,\"tickets\":{\"close_authority\":\"agent\"}}"),
+        55 => {
+            const spec = try VAR1.core.agent_spec.resolve("doc_writer");
+            try std.testing.expectEqual(@as(usize, 120), spec.max_steps);
+            const harvester = try VAR1.core.agent_spec.resolve("harvester");
+            try std.testing.expectEqualStrings("harvest-before-originate six-competitor-floor source-or-retract evidence-ledger benchmark-deep", harvester.doctrine_tags);
+            const reviewer = try VAR1.core.agent_spec.resolve("reviewer");
+            try std.testing.expectEqualStrings("findings-first capability-truth no-parallel-systems falsification-pressure maintainer-craft", reviewer.doctrine_tags);
         },
         else => return error.UnknownRegistryCase,
     }
