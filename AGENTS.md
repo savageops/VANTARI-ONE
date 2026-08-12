@@ -103,7 +103,7 @@ Typed events are the runtime's nervous system. String breadcrumbs may exist only
 - Provider streaming is a kernel contract. If a provider supports SSE deltas, deltas must persist before the final assistant response.
 - TUI progress is a read model over `events.jsonl`, not a separate speculative status bus.
 - Tool spans update a single keyed row in clients. Do not append request/start/done rows for one tool invocation.
-- Child activity uses one keyed `group_id + task_id` row. Tool phases update its typed state marker; the `assistant_response` boundary supplies the bounded child turn summary from `sessions/summaries.json`.
+- Child activity uses one keyed `group_id + task_id` row. Tool phases update its typed state marker; the `assistant_response` boundary supplies the bounded child turn summary from `sessions/summaries.jsonl`.
 - Child group rows show `Agents completed/total`. Do not render the removed `waiting on N` filler or expose `tool_completed` as the child's visible summary.
 - Command stdout/stderr are untrusted data. Parse only runtime-owned envelopes; render output as bounded display text.
 - Event cursors use monotonic ledger position plus replay suppression. Timestamp-only cursors are insufficient under same-millisecond bursts.

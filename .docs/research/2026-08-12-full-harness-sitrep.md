@@ -194,8 +194,8 @@ The replay contract is currently weaker than the UI text suggests. SessionEventN
 | P0-2 | Session admission and buffer routing race | **Closed 2026-08-12.** The old check/set and split buffer identity surfaces could double-run a session or expose a freed/cross-session preview. | `Runtime.tryStartSession` is one atomic transition; losing prompts become bounded interjections. One `BufferProjection` owns session identity plus preview and rejects late prior-session callbacks. |
 | P0-3 | Agent persistence is process-local | The fixed pool is in-process; restart reconciliation marks work stale. run-session is advertised but never launched. The requirement to run until ticket completion is not met across TUI/kernel exit. | Make a daemon or detached worker the execution owner while preserving AgentService, Supervisor admission, receipts, and ledgers. Do not add a second scheduler. |
 | P0-4 | Scheduler leader lease can split-brain | [tryAcquireLease](../../apps/backend/src/core/scheduler/store.zig#L266) performs read/check/write with no inter-process lock or CAS. Two kernels can claim leadership. | Claim with a Windows-safe exclusive lock or create/replace protocol that verifies the owner generation after write before dispatch. |
-| P0-5 | Summary ledger loses concurrent updates | [upsertSummary](../../apps/backend/src/core/sessions/summaries.zig#L120) reads the whole JSON object and rewrites it. Concurrent agent turns are last-writer-wins; the 622 KB live ledger makes every write O(N). | Replace it with append-only summaries.jsonl plus latest-row projection, stable sequence, and valid-prefix recovery. |
-| P0-6 | Broad tests write into live runtime state | **Closed 2026-08-12.** The invalid broad run and a later direct-test wrapper bypass reached the live root. | Six build artifacts and both direct wrappers now assign generated cache-owned homes plus the cache-root guard. The 129-session broad incident and exact 21-session direct incident are backed up/quarantined with manifests and rollback. The 1,923-test graph and direct rerun leave live state unchanged. |
+| P0-5 | Summary ledger loses concurrent updates | **Closed 2026-08-12.** The keyed v1 object was last-writer-wins and rewrote the full live ledger. | `summaries.jsonl` v2 appends stable sequenced revisions under one host-process owner, projects the greatest sequence per session, isolates poisoned suffixes, and imports the legacy object once. One hundred concurrent writers retained 100 rows and unique sequences. |
+| P0-6 | Broad tests write into live runtime state | **Closed 2026-08-12.** The invalid broad run and a later direct-test wrapper bypass reached the live root. | Six build artifacts and both direct wrappers now assign generated cache-owned homes plus the cache-root guard. The 129-session broad incident and exact 21-session direct incident are backed up/quarantined with manifests and rollback. The 1,929-test graph and direct rerun leave live state unchanged. |
 | P0-7 | Secret-shaped legacy state is unignored | **Closed 2026-08-12.** Seven backend runtime-shaped owners existed outside canonical ownership. | All 2,252 files were archived reversibly without merging fixtures into live state. Automatic todo/changelog sync now writes direct workspace `.var` paths; no fallback reader was added. |
 
 ### P1 — capability truth and deterministic replay
@@ -272,14 +272,16 @@ VANTARI currently owns FailureReceipt and part of ExactInputRerun. It does not y
 | Probe | Result |
 |---|---|
 | apps/backend ReleaseFast build | 9/9 steps succeeded. |
-| Canonical isolated graph | 19/19 steps; 1,923/1,923 tests across integration, executable, TUI, memory, chain 035, and host lanes. |
+| Canonical isolated graph | 19/19 steps; 1,929/1,929 tests across integration, executable, TUI, memory, chain 035, and host lanes. |
 | Backend TUI lane | 58/58 passed, including settings open/apply/close/reopen/timeout and remote-error handling. |
 | Host lifecycle lane | 224/224 passed, including atomic same-session admission, session-keyed buffer projection, cancellation-before-join shutdown, deadlines, and Job Object ownership. |
 | Admission and buffer races | 100 contenders produced one turn owner and 99 non-starters; a losing prompt was retained as a steer. A→B buffer switching rejected late A state. |
+| Summary concurrency | 100 synchronized upserts retained every session with unique sequences; latest-row projection, poisoned-suffix continuation, v1 import, and shared JSONL append passed. Dupe audit found zero candidate pairs across summary/store/fsutil owners. |
+| Installed summary migration | Disposable `VANTARI_HOME` imported 1,176/1,176 legacy rows, appended one terminal summary through `session/send`, retained 1,177 unique sequences, preserved the live legacy SHA-256, and exited with zero VANTARI processes. |
 | Active shutdown | A real blocked provider request observed cancellation before join, persisted exactly one `session_cancelled` event, returned `cancelled`, fenced late starts, and passed 20 repeats. |
 | Direct-test isolation | Wrapper rerun kept 99,960 files / 693,051,144 bytes and config/auth hashes unchanged; one generated cache-owned home; zero VANTARI processes. |
 | git diff --check | Exit 0; line-ending warnings only. |
-| Built and installed ReleaseFast SHA-256 | `6E6DFC9688F3B2763487C7A379586E17376546784F16AEC736493EF7F602CB4A`; exact match. |
+| Built and installed ReleaseFast SHA-256 | `E6566B141ED7D0178197C8077CF25E381E48E1972148FDE0248BAFE79B8E2445`; exact match. |
 | Installed settings transport | `initialize` plus `config/set` returned in 5 ms; isolated runtime removed; live config/auth/lease and full tree metrics unchanged; zero processes. |
 | Installed process boundary | Forced parent termination also removed its kernel child through the shared Windows Job Object; zero VANTARI processes remained. |
 | Smoke-harness correction | The first settings smoke inherited live `VANTARI_HOME` and rotated only the expired scheduler `lease.json` (one-byte timestamp-width change). Config, auth, summaries, and process inventory were unchanged. The retained script now pins a disposable workspace and proves the live lease hash unchanged. |
@@ -294,7 +296,7 @@ Observed audit-owned contamination:
 - 130 session directories created or updated between 09:43:57 and 09:51:26.
 - 512 session files, 17 changelog files, and 4 todo files touched.
 - 535 files and 2,214,002 bytes in the incident window.
-- sessions/summaries.json now contains 1,194 rows; 18 of the 130 generated IDs are present.
+- The legacy `sessions/summaries.json` object then contained 1,194 rows; 18 of the 130 generated IDs were present.
 - changelog/_log.md was rewritten during the run.
 
 No destructive cleanup was attempted because the installed TUI remained active and timestamp-only selection could include legitimate concurrent operator work. The cleanup obligation is recorded in [12-test-isolation-and-runtime-hygiene.md](../todo/findings/12-test-isolation-and-runtime-hygiene.md): stop the exact process pair, snapshot the runtime root, identify generated IDs from the test interval and fixtures, quarantine rather than delete, rebuild projections, and read back every retained row.
@@ -347,7 +349,8 @@ root byte/count/hash identical.
 ## Residual boundary
 
 This audit proves the current checkout, atomic same-session admission, active
-request shutdown, ReleaseFast installed binary, isolated settings transport, and
-Windows child cleanup on this machine. It does not prove a clean clone, another
-host, a live multi-kernel scheduler race, or a full provider turn on this
-ReleaseFast binary. Those remain explicit promotion gates, not implied success.
+request shutdown, ReleaseFast installed binary, disposable summary migration,
+isolated settings transport, and Windows child cleanup on this machine. It does
+not prove a clean clone, another host, a live multi-kernel scheduler race, or a
+live external-provider turn on this ReleaseFast binary. Those remain explicit
+promotion gates, not implied success.

@@ -10,7 +10,7 @@ const VAR1 = @import("VAR1");
 test "session summary ledger modules are reachable through the core namespace" {
     try std.testing.expect(@hasDecl(VAR1.core, "session_summaries"));
     try std.testing.expectEqualStrings(
-        "var1.session_summary.v1",
+        "var1.session_summary.v2",
         VAR1.core.session_summaries.schema_version,
     );
     try std.testing.expectEqual(

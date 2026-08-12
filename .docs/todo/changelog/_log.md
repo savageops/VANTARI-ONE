@@ -1,5 +1,29 @@
 # Execution Log
 
+## 2026-08-12 - Sequenced append-only session summaries
+
+**Outcome:** Replaced the concurrent last-writer-wins summary object with one
+sequenced append-only ledger while preserving the prompt-led mandatory handoff.
+
+- `core/sessions/summaries.zig` now owns `summaries.jsonl` v2, one mutation
+  mutex, stable row sequence, latest-row projection, and one-time v1 import.
+- `shared/fsutil.appendJsonlRecord` is the only torn-suffix-safe JSONL append
+  primitive; the duplicate summary/store append body was removed.
+- One hundred synchronized writers retained 100 rows and unique sequences.
+  Two-revision projection, poisoned-suffix continuation, and legacy import pass.
+- The existing update-tool receipt now reports the exact persisted `seq` with
+  its turn count; no second receipt or projection surface was added.
+- The pinned graph passes 19/19 steps and 1,929/1,929 tests. The packaged GGUF
+  dupe audit inspected 42 segments and found zero candidate or exact pairs.
+- Installed `session/send` in a disposable runtime imported all 1,176 legacy
+  rows, appended one v2 row, retained 1,177 unique sequences, preserved the live
+  legacy hash, and left zero VANTARI processes. Built and installed SHA-256 match
+  `E6566B141ED7D0178197C8077CF25E381E48E1972148FDE0248BAFE79B8E2445`.
+- Harvest retained OpenAI Codex's serialized writer/ordered replay invariant and
+  pi's lean append/replay shape; VANTARI keeps fewer concepts and adds recovery,
+  migration, and concurrency proof in the existing session owner.
+- Next owner: move 13, per-session message append state and tail initialization.
+
 ## 2026-08-12 - Runtime isolation and serialized host lifecycle
 
 **Outcome:** Closed both live-state incidents, removed legacy runtime ownership,

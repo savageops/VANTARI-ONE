@@ -49,7 +49,7 @@ For this incident: wait for the exact installed process pair to exit, snapshot C
 
 - Moves 1–2: all six test artifacts use `addIsolatedTestRun`; child homes and
   `std.testing.tmpDir` stay under `apps/backend/.zig-cache`, and the test-only
-  guard rejects escape. The graph passes 1,923/1,923 with zero skips while the
+  guard rejects escape. The graph passes 1,929/1,929 with zero skips while the
   live root remains byte/count/hash identical.
 - Move 3: the pre-repair snapshot remains at
   `C:\Users\Savage\.vantari-backups\2026-08-12-test-isolation-incident-pre-repair`.

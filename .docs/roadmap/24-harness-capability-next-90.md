@@ -43,7 +43,7 @@ advance the queue until the real installed consumer path proves it.
 
 | Move | Decision | State | Proof or gate |
 |---:|---|---|---|
-| 1 | consolidate | closed | Six build-graph homes plus direct-wrapper isolation; 1,923/1,923 pass. Direct `zig test` keeps the live root at 99,960 files / 693,051,144 bytes with config/auth hashes unchanged. |
+| 1 | consolidate | closed | Six build-graph homes plus direct-wrapper isolation; 1,929/1,929 pass. Direct `zig test` keeps the live root at 99,960 files / 693,051,144 bytes with config/auth hashes unchanged. |
 | 2 | add | closed | Test-only cache-root guard rejects escape; ReleaseFast remains 9/9. |
 | 3 | consolidate | closed | 129 generated sessions, 16 changelog directories, 18 summary keys, and 64 known test rows quarantined with rollback at `C:/Users/Savage/.vantari-quarantine/2026-08-12-test-isolation-incident`; retained live state read back cleanly. |
 | 4 | delete/consolidate | closed | Seven legacy backend owners archived without merge under `.var/backup/2026-08-12-legacy-backend-runtime`; 2,252 files retained reversibly and automatic todo/changelog sync now writes direct workspace `.var` owners. |
@@ -54,8 +54,9 @@ advance the queue until the real installed consumer path proves it.
 | 9 | consolidate | closed | One session-keyed `BufferProjection` owns identity plus preview; A→B switching rejects late A callbacks and returns only owned exact-session copies. |
 | 10 | consolidate | closed | Shutdown stops admission, fences late turns, signals active sessions, then joins. A real blocked provider turn persisted exactly one `session_cancelled` event and a cancelled RPC result; 20 repeated focused runs passed. |
 | 11 | consolidate | closed | Source TUI tests cover open/apply/close/reopen/timeout; installed `config/set` flipped `full_access_mode` in 5 ms through the real host transport, removed its isolated runtime, and left zero processes. |
+| 12 | consolidate | closed | `summaries.jsonl` v2 appends stable sequenced revisions under one owner and projects the greatest sequence per session. V1 import, poison continuation, 100 synchronized writers/100 retained rows, 1,929-test graph, and zero-pair dupe audit pass. Installed `session/send` imported 1,176 legacy rows and appended one v2 row with 1,177 unique sequences. |
 | 31 | delete/consolidate | closed | Retired prompt leak and brittle prose assertions removed; broad graph green. |
-| 38 | consolidate | closed | ReleaseFast and `%LOCALAPPDATA%/Vantari/bin/vantari.exe` share SHA-256 `6E6DFC9688F3B2763487C7A379586E17376546784F16AEC736493EF7F602CB4A`; installer and isolated installed smoke both exit cleanly. |
+| 38 | consolidate | closed | ReleaseFast and `%LOCALAPPDATA%/Vantari/bin/vantari.exe` share SHA-256 `E6566B141ED7D0178197C8077CF25E381E48E1972148FDE0248BAFE79B8E2445`; installer and isolated installed smokes exit cleanly. |
 
 ## Competitive basis
 

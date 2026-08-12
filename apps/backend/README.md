@@ -338,7 +338,7 @@ global config/auth/session owners. Skip guards hid coverage and did not solve th
 owner error. The build now assigns every one of six test artifacts a generated
 home; `zigw.ps1` and `zigw.sh` do the same for direct `zig test`; and a
 compile-gated `VANTARI_TEST_ROOT` rejects cache-root escape. The obsolete skip
-guards are deleted; the 1,923-test graph executes every lane while the live
+guards are deleted; the 1,929-test graph executes every lane while the live
 runtime root remains unchanged. Both audit-owned incident sets are held in
 reversible quarantine with backup, manifest, and rollback.
 

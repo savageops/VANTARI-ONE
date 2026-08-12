@@ -49,11 +49,11 @@ input
 ```
 
 The full transcript stays append-only. `context.jsonl` is model-visible
-projection state, never a second transcript. `sessions/summaries.json` is the
-current bounded summary projection used by session navigation and child-agent
-activity. Its whole-object read/modify/write path is not concurrency-safe; the
-current findings require an append-only replacement before calling it a
-durable multi-agent ledger.
+projection state, never a second transcript. `sessions/summaries.jsonl` v2 is
+the bounded summary ledger used by session navigation and child-agent activity.
+Each update appends one stable sequence; readers project the greatest sequence
+per session. One host-process mutex owns mutation, and the former keyed v1
+object is a one-time migration input only.
 
 ## Buffered ticket execution
 
@@ -104,7 +104,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,923/1,923 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,929/1,929 tests with zero skips.
   Its 224-test host lane executes the formerly dormant stdio client/server and
   shared process-tree tests; the backend TUI lane passes 58/58.
 - Parent-shell production-home probes kept 99,960 files, 693,051,144 bytes,
@@ -134,13 +134,20 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   steer messages. Buffer identity and preview share one session-keyed projection.
   Shutdown fences late starts, signals active turns before join, and persisted
   exactly one cancellation terminal event under a blocked provider request.
+- Session summaries are append-only v2 rows with stable sequence identity,
+  latest-row projection, poisoned-suffix continuation, and one-time v1 import.
+  One hundred concurrent writers retained all 100 rows; the local GGUF dupe
+  audit found zero candidate pairs across the summary, store, and fsutil owners.
 - Built and installed ReleaseFast SHA-256 both equal
-  `6E6DFC9688F3B2763487C7A379586E17376546784F16AEC736493EF7F602CB4A`.
+  `E6566B141ED7D0178197C8077CF25E381E48E1972148FDE0248BAFE79B8E2445`.
+- Installed `session/send` against a disposable local provider imported all
+  1,176 legacy summary rows, appended one terminal v2 row, retained 1,177
+  unique sequences, preserved the live legacy hash, and left zero process.
 - The installed settings smoke flips `runtime.full_access_mode` to `true` in a
   disposable workspace, receives `var1.config_set.v1` in 5 ms, removes the
   isolated runtime, preserves the complete live root, and leaves zero process.
-- Moves 5–11 and finding 10 are closed. The next P0 owner is persistent agent
-  execution and inter-process scheduler arbitration.
+- Moves 5–12 and finding 10 are closed. Move 13 now owns message append sequence;
+  persistent agent execution and inter-process scheduler arbitration remain P0.
 - `git diff --check` exits 0 with line-ending warnings only.
 
 See [`research/2026-08-12-full-harness-sitrep.md`](research/2026-08-12-full-harness-sitrep.md)

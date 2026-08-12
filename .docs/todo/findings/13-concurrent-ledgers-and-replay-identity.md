@@ -11,11 +11,13 @@ source: ../../research/2026-08-12-full-harness-sitrep.md
 
 ## Finding
 
-Session summaries use whole-object last-writer-wins replacement, message sequence allocation reparses the full transcript without a per-session writer lock, and stdio drops the event sequence before TUI replay. These are three forms of the same defect: durable rows exist, but concurrent mutation and consumer identity do not have one serialized owner.
+Session summary mutation is now serialized and append-only. Message sequence allocation still reparses the full transcript without a per-session state owner, and stdio still drops the event sequence before TUI replay. The remaining defect is the same: durable rows exist, but message mutation and consumer identity do not yet share one exact sequence owner.
 
 ## Evidence
 
-- [summaries.zig:120](../../../apps/backend/src/core/sessions/summaries.zig#L120) reads all rows and rewrites one JSON object.
+- Closed move 12: `summaries.zig` appends v2 revisions with stable sequence,
+  projects the greatest sequence per session, isolates poisoned suffixes, and
+  imports the v1 object once without retaining a fallback reader.
 - [store.zig:1623](../../../apps/backend/src/core/sessions/store.zig#L1623) reparses all messages to find the next sequence.
 - [protocol/types.zig:68](../../../apps/backend/src/shared/protocol/types.zig#L68) omits seq from SessionEventNotification.
 - [tui_chat.zig:666](../../../apps/backend/src/clients/tui_chat.zig#L666) deduplicates by timestamp, type, and message.
@@ -36,6 +38,17 @@ Use append-only summaries.jsonl with stable row sequence and latest-row projecti
 
 - [Eve](https://github.com/vercel/eve): durable indexed event streams.
 - Existing VANTARI event tail-scan sequencer: reuse the proven primitive instead of adding a database.
+- [OpenAI Codex rollout writer](https://github.com/openai/codex/blob/main/codex-rs/rollout/src/recorder.rs): retain one serialized JSONL writer and ordered identity; reject its broader task/channel architecture here.
+- [pi session manager](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/session-manager.ts): retain append/replay simplicity; reject its unguarded single-process append as the concurrency owner.
+
+## Partial closure proof
+
+- 100 synchronized summary upserts retained 100 latest rows with unique sequences.
+- V1 import, two-revision projection, poisoned-suffix continuation, and shared
+  JSONL tail repair pass in the 1,929-test graph.
+- Packaged GGUF dupe audit: 42 segments, zero candidate pairs, zero exact pairs
+  across `summaries.zig`, `store.zig`, and `fsutil.zig`.
+- Finding remains pending for moves 13–17 and 20.
 
 ## Out of scope
 

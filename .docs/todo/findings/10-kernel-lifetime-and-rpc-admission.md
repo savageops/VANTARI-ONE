@@ -52,7 +52,7 @@ Do not add another RPC server, running registry, or settings-specific workaround
   shutdown signalled cancellation. Join completed below two seconds, exactly one
   `session_cancelled` event persisted, the RPC result reported `cancelled`, and
   late admission failed as `ServerShuttingDown`. Twenty repeat runs passed.
-- Full pinned graph: 19/19 steps and 1,923/1,923 tests; host lane 224/224.
+- Full pinned graph: 19/19 steps and 1,929/1,929 tests; host lane 224/224.
 - Installed ReleaseFast hash matches source at
   `6E6DFC9688F3B2763487C7A379586E17376546784F16AEC736493EF7F602CB4A`;
   installed settings transport remains 5 ms with zero surviving process.

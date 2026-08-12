@@ -58,6 +58,31 @@ pub fn appendText(path: []const u8, text: []const u8) !void {
     try file.pwriteAll(text, end_position);
 }
 
+/// Append one JSONL record without allowing a torn suffix to absorb it. The
+/// caller chooses whether this append is the durability boundary.
+pub fn appendJsonlRecord(path: []const u8, record: []const u8, sync: bool) !void {
+    if (record.len == 0) return;
+    try ensureParent(path);
+
+    var file = std.fs.cwd().openFile(path, .{ .mode = .read_write }) catch |err| switch (err) {
+        error.FileNotFound => try std.fs.cwd().createFile(path, .{ .read = true, .truncate = false }),
+        else => return err,
+    };
+    defer file.close();
+
+    var end_position = try file.getEndPos();
+    if (end_position > 0) {
+        var tail: [1]u8 = undefined;
+        if (try file.preadAll(tail[0..], end_position - 1) == 1 and tail[0] != '\n') {
+            try file.pwriteAll("\n", end_position);
+            end_position += 1;
+        }
+    }
+    try file.pwriteAll(record, end_position);
+    if (record[record.len - 1] != '\n') try file.pwriteAll("\n", end_position + record.len);
+    if (sync) try file.sync();
+}
+
 pub fn readTextAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return std.fs.cwd().readFileAlloc(allocator, path, max_text_file_bytes);
 }
@@ -65,6 +90,22 @@ pub fn readTextAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 pub fn moveFile(old_path: []const u8, new_path: []const u8) !void {
     try ensureParent(new_path);
     try std.fs.cwd().rename(old_path, new_path);
+}
+
+test "appendJsonlRecord isolates a torn suffix and terminates each record" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/append-jsonl.jsonl", .{tmp.sub_path});
+    defer allocator.free(path);
+
+    try appendText(path, "torn");
+    try appendJsonlRecord(path, "{\"seq\":1}", false);
+    try appendJsonlRecord(path, "{\"seq\":2}\n", true);
+
+    const content = try readTextAlloc(allocator, path);
+    defer allocator.free(content);
+    try std.testing.expectEqualStrings("torn\n{\"seq\":1}\n{\"seq\":2}\n", content);
 }
 
 pub fn resolveAbsolute(allocator: std.mem.Allocator, path: []const u8) ![]u8 {

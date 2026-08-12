@@ -1332,39 +1332,15 @@ fn appendJsonlRecord(
     path: []const u8,
     jsonl: []const u8,
 ) !void {
-    try fsutil.ensureParent(path);
-
-    var file = std.fs.cwd().openFile(path, .{ .mode = .read_write }) catch |err| switch (err) {
-        error.FileNotFound => try std.fs.cwd().createFile(path, .{
-            .read = true,
-            .truncate = false,
-        }),
-        else => return err,
-    };
-    defer file.close();
-
-    var end_position = try file.getEndPos();
-    if (end_position > 0) {
-        var tail: [1]u8 = undefined;
-        const read_count = try file.preadAll(tail[0..], end_position - 1);
-        if (read_count == 1 and tail[0] != '\n') {
-            try file.pwriteAll("\n", end_position);
-            end_position += 1;
-        }
-    }
-
-    try file.pwriteAll(jsonl, end_position);
-
     // Batched durability gate: flush the OS page cache at most once per
     // batch window. Per-append FlushFileBuffers on Windows throttles
     // provider streaming to ~1 token/sec; batching keeps the stream fast
     // while bounding crash loss to the last window of deltas. Terminal
     // turn boundaries force a full flush via `syncSessionLedgers`.
     const now_ms = std.time.milliTimestamp();
-    if (now_ms - last_ledger_sync_ms >= ledger_sync_batch_window_ms) {
-        file.sync() catch {};
-        last_ledger_sync_ms = now_ms;
-    }
+    const should_sync = now_ms - last_ledger_sync_ms >= ledger_sync_batch_window_ms;
+    try fsutil.appendJsonlRecord(path, jsonl, should_sync);
+    if (should_sync) last_ledger_sync_ms = now_ms;
 }
 
 pub fn sessionsRootPath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {

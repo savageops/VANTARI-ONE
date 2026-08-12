@@ -356,7 +356,7 @@ Every session directory contains:
 
 `core/executor/loop.zig` parks a waiting parent on the supervisor condition without a provider call. The first unconsumed terminal child wakes the parent; the service appends that child's convergence record exactly once, rebuilds through the context compiler, and permits the next routing/synthesis turn while unfinished siblings remain supervised. A parent cannot emit terminal output while any owned child remains active. Full specialists execute as ordinary isolated VAR1 child sessions. Tool-free `model_task` specialists use one provider turn and validate their supplied output schema without acquiring a second transcript or tool runtime.
 
-Child assistant/reasoning deltas and tool transcripts stay in the child ledger. The parent event spine receives only bounded control events: group start, admission, queue, start, material progress/wait, child terminal, group terminal, and convergence. Every child `session.json` keeps a heap-owned immutable execution receipt containing the secret-free resolved agent, route, model, wire API, budgets, group, and branch identity; explicit checked JSON decoding preserves that receipt across optimized status rewrites and cold recovery. CLI, stdio, and TUI consume the same projection. The TUI renders Search, Explore, Agents, and To-dos through one group/item grammar with `[ ]`, `[>]`, `[x]`, `[!]`, `[-]` markers and `|--` / `` `--`` child rails; tool lifecycle phases remain event metadata while the child row is replaced by the bounded `assistant_response` summary from `sessions/summaries.json`. No second status bus exists.
+Child assistant/reasoning deltas and tool transcripts stay in the child ledger. The parent event spine receives only bounded control events: group start, admission, queue, start, material progress/wait, child terminal, group terminal, and convergence. Every child `session.json` keeps a heap-owned immutable execution receipt containing the secret-free resolved agent, route, model, wire API, budgets, group, and branch identity; explicit checked JSON decoding preserves that receipt across optimized status rewrites and cold recovery. CLI, stdio, and TUI consume the same projection. The TUI renders Search, Explore, Agents, and To-dos through one group/item grammar with `[ ]`, `[>]`, `[x]`, `[!]`, `[-]` markers and `|--` / `` `--`` child rails; tool lifecycle phases remain event metadata while the child row is replaced by the bounded `assistant_response` summary from `sessions/summaries.jsonl`. No second status bus exists.
 
 ## Module ownership
 
@@ -472,7 +472,7 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-12:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Isolated broad test graph -> 19/19 steps and 1923/1923 tests passed.
+- Isolated broad test graph -> 19/19 steps and 1929/1929 tests passed.
 - Focused backend TUI -> 58/58 passed.
 - Host lifecycle -> 224/224 passed, including atomic same-session admission,
   session-keyed buffer state, cancellation-before-join shutdown, RPC deadlines,
@@ -584,33 +584,35 @@ Every `shell_exec` command appends a record (schema `var1.process.v1`) to `.var/
 
 ### Session summary ledger
 
-Every session — root orchestrator, subagents, past sessions — projects a
-≤100-word handoff summary into a single JSON object at
-`.var/sessions/summaries.json` (schema `var1.session_summary.v1`), atomically
-rewritten on upsert:
+Every session — root orchestrator, subagents, past sessions — appends a
+≤100-word handoff revision to `.var/sessions/summaries.jsonl` (schema
+`var1.session_summary.v2`):
 
 ```text
-<session_id>: {
-  schema, session_id, parent_session_id, title, topic,
+{
+  schema, seq, session_id, parent_session_id, title, topic,
   summary (≤100 words), status, workspace_root,
   source ("agent" | "kernel_fallback"), updated_at_ms, turn_count
 }
 ```
 
-Ownership lives in `src/core/sessions/summaries.zig` (word counting, truncation, read/upsert, newest-first timeline, and the turn-end freshness gate). The executor loop binds `execution_context.session_id`, and every terminal exit runs `ensureFreshSummary`: if the agent did not update its row during the run, the kernel writes a deterministic fallback (status + 40-word objective + 40-word outcome) with `source: kernel_fallback` — the row itself is the durable enforcement evidence, so the typed event grammar is untouched.
-
-Atomic replacement prevents torn files but does not serialize concurrent
-read-modify-write cycles. Multiple agents can lose rows through last-writer-wins
-replacement, and the full object is rewritten on every turn. The current
-findings ledger requires append-only summary rows plus a latest-row projection
-before this surface can be called concurrency-safe.
+Ownership lives in `src/core/sessions/summaries.zig`: one host-process mutex
+serializes sequence and turn-count allocation, one shared JSONL append primitive
+isolates torn suffixes, and readers select the greatest sequence per session.
+The former keyed `summaries.json` v1 object is imported once only when the v2
+ledger does not exist; it remains an immutable rollback input and is never a
+parallel runtime reader. The executor loop binds `execution_context.session_id`,
+and every terminal exit runs `ensureFreshSummary`: if the agent did not update
+its row during the run, the kernel appends a deterministic fallback (status +
+40-word objective + 40-word outcome) with `source: kernel_fallback`. The row is
+the durable enforcement evidence, so the typed event grammar is untouched.
 
 Two tools expose the ledger:
 
 | Tool | Risk | Contract |
 |---|---|---|
 | `session_summaries` | read_only | Timeline of every session's last summary, newest first. `scope: project` (current workspace) vs `global` (all rows — spans workspaces when VANTARI_HOME is set); `session_id` returns the full single row; `query` filters title/topic/summary; 40-word previews by default, `full` for untruncated. |
-| `update_session_summary` | write_capable | MANDATORY pre-turn-end update. Rejects >100-word summaries; mirrors the live session status into the row; returns an effect receipt (session_id, words, turn_count, ledger_path, schema). |
+| `update_session_summary` | write_capable | MANDATORY pre-turn-end update. Rejects >100-word summaries; mirrors the live session status into the row; returns an effect receipt (session_id, seq, words, turn_count, ledger_path, schema). |
 
 The buffer speculation service consumes the active session's summary row as
 handoff context on every tick, never a raw transcript tail. Tickets remain the

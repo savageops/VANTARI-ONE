@@ -194,12 +194,12 @@ test "session_summaries project scope excludes foreign-workspace rows" {
     const ledger_path = try summaries.summariesFilePath(allocator, workspace);
     defer allocator.free(ledger_path);
 
-    // Hand-write a ledger with one foreign-workspace row and one local row.
+    // Hand-write two append-only rows sharing one global projection.
     const local_root = std.fmt.allocPrint(allocator, ".zig-cache/tmp/local-{s}", .{tmp.sub_path}) catch unreachable;
     defer allocator.free(local_root);
     const ledger = try std.fmt.allocPrint(
         allocator,
-        "{{\"sess-foreign\":{{\"schema\":\"var1.session_summary.v1\",\"session_id\":\"sess-foreign\",\"parent_session_id\":\"\",\"title\":\"Foreign\",\"topic\":\"\",\"summary\":\"Work in another workspace entirely.\",\"status\":\"completed\",\"workspace_root\":\"{s}\",\"source\":\"agent\",\"updated_at_ms\":100,\"turn_count\":1}},\"sess-local\":{{\"schema\":\"var1.session_summary.v1\",\"session_id\":\"sess-local\",\"parent_session_id\":\"\",\"title\":\"Local\",\"topic\":\"\",\"summary\":\"Work in this workspace.\",\"status\":\"completed\",\"workspace_root\":\"{s}\",\"source\":\"agent\",\"updated_at_ms\":200,\"turn_count\":1}}}}",
+        "{{\"schema\":\"var1.session_summary.v2\",\"seq\":1,\"session_id\":\"sess-foreign\",\"parent_session_id\":\"\",\"title\":\"Foreign\",\"topic\":\"\",\"summary\":\"Work in another workspace entirely.\",\"status\":\"completed\",\"workspace_root\":\"{s}\",\"source\":\"agent\",\"updated_at_ms\":100,\"turn_count\":1}}\n{{\"schema\":\"var1.session_summary.v2\",\"seq\":2,\"session_id\":\"sess-local\",\"parent_session_id\":\"\",\"title\":\"Local\",\"topic\":\"\",\"summary\":\"Work in this workspace.\",\"status\":\"completed\",\"workspace_root\":\"{s}\",\"source\":\"agent\",\"updated_at_ms\":200,\"turn_count\":1}}\n",
         .{ local_root, workspace },
     );
     defer allocator.free(ledger);

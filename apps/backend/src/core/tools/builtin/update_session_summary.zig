@@ -8,7 +8,7 @@ const module = @import("../module.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "update_session_summary",
-    .description = "Write or replace this session's permanent <=100-word summary in the session summary ledger (.var/sessions/summaries.json). MANDATORY before your turn ends — every session, including subagents, must leave a fresh summary so the timeline of all sessions stays truthful. The ledger is globally readable by every VANTARI session via session_summaries, so your summary is your session's handoff record for other agents and future cold starts. Capture: objective, key decisions, work completed, open threads, and next steps — under 100 words. If a turn ends without this call, the kernel writes a truncated fallback, visible in the ledger as source:kernel_fallback.",
+    .description = "Append this session's permanent <=100-word summary revision to the session summary ledger (.var/sessions/summaries.jsonl). MANDATORY before your turn ends — every session, including subagents, must leave a fresh summary so the latest-row timeline stays truthful. The ledger is globally readable by every VANTARI session via session_summaries, so your summary is your session's handoff record for other agents and future cold starts. Capture: objective, key decisions, work completed, open threads, and next steps — under 100 words. If a turn ends without this call, the kernel appends a truncated fallback, visible in the ledger as source:kernel_fallback.",
     .review_risk = .write_capable,
     .parameters_json =
     \\{
@@ -59,7 +59,7 @@ pub fn execute(
     defer if (session_record) |*record| record.deinit(allocator);
     if (session_record) |record| status = types.statusLabel(record.status);
 
-    const turn_count = try summaries.upsertSummary(
+    const result = try summaries.upsertSummary(
         allocator,
         execution_context.workspace_root,
         session_id,
@@ -77,11 +77,12 @@ pub fn execute(
 
     const receipt = try std.fmt.allocPrint(
         allocator,
-        "{{\"session_id\":{f},\"words\":{d},\"turn_count\":{d},\"ledger_path\":{f},\"schema\":{f}}}",
+        "{{\"session_id\":{f},\"seq\":{d},\"words\":{d},\"turn_count\":{d},\"ledger_path\":{f},\"schema\":{f}}}",
         .{
             std.json.fmt(session_id, .{}),
+            result.seq,
             summaries.countWords(summary),
-            turn_count,
+            result.turn_count,
             std.json.fmt(ledger_path, .{}),
             std.json.fmt(summaries.schema_version, .{}),
         },
@@ -114,7 +115,8 @@ test "update_session_summary writes a schema-bound ledger row with effect receip
     var receipt = try std.json.parseFromSlice(std.json.Value, allocator, parsed_output.value.object.get("content").?.string, .{});
     defer receipt.deinit();
     try std.testing.expectEqual(@as(i64, @intCast(summaries.countWords(summary))), receipt.value.object.get("words").?.integer);
-    try std.testing.expectEqualStrings("var1.session_summary.v1", receipt.value.object.get("schema").?.string);
+    try std.testing.expectEqual(@as(i64, 1), receipt.value.object.get("seq").?.integer);
+    try std.testing.expectEqualStrings("var1.session_summary.v2", receipt.value.object.get("schema").?.string);
 
     var row = (try summaries.readSummary(allocator, workspace, "sess-tool-1")).?;
     defer row.deinit(allocator);
