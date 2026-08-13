@@ -69,7 +69,9 @@ Rules:
 - messages.jsonl remains complete and append-only. context.jsonl is a model-visible
   checkpoint ledger, not a transcript.
 - Use typed tools and advertised availability. search_files requires iex.
-- runtime.full_access_mode is false by default and never relocates .var.
+- runtime.full_access_mode is false by default; resolved child routes carry it
+  into the shared file/search/LSP/shell execution context, and it never relocates
+  .var.
 - Auth uses one provider ledger: installed `$VANTARI_HOME/auth.json` or
   workspace `.var/auth.json`; `auth status --json` is secret-free, `auth login
   openai-codex` owns PKCE persistence, and `auth logout <provider-id>` removes

@@ -187,7 +187,7 @@ typed failure, not a downgrade to `/v1/chat/completions`.
 }
 ```
 
-`runtime.full_access_mode` is the explicit cross-directory switch. `false` is the default and keeps file, search, LSP, and `shell_exec` paths inside the active workspace. Set it to `true` only when the operator intends to work in another directory; relative paths stay workspace-rooted, while explicit absolute paths and `..` traversal are accepted. This setting is exposed by the Settings panel and validated `config/set` flow, then applies on the next turn. It does not move the canonical `.var`/session runtime state or relax configured prompt-file paths.
+`runtime.full_access_mode` is the explicit cross-directory switch. `false` is the default and keeps file, search, LSP, and `shell_exec` paths inside the active workspace. Set it to `true` only when the operator intends to work in another directory; relative paths stay workspace-rooted, while explicit absolute paths and `..` traversal are accepted. Resolved child routes inherit the flag into the same execution context, so child agents use the identical boundary. This setting is exposed by the Settings panel and validated `config/set` flow, then applies on the next turn. It does not move the canonical `.var`/session runtime state or relax configured prompt-file paths.
 
 ### Prompt Layers (configurable, hot-loaded)
 

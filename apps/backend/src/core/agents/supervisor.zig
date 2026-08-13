@@ -992,13 +992,7 @@ fn runTaskEntry(supervisor: *Supervisor, task: *Task) void {
 
     const result = executor.runPromptWithOptions(std.heap.page_allocator, route.config, "", .{
         .transport = task.transport,
-        .execution_context = .{
-            .workspace_root = route.config.workspace_root,
-            .parent_session_id = task.session_id,
-            .agent_service = child_agent_service,
-            .capability_profile_id = task.capability_profile_id,
-            .delegation_depth_remaining = task.remaining_depth,
-        },
+        .execution_context = childExecutionContext(route, task, child_agent_service),
         .session_id = task.session_id,
         .hooks = hooks,
     });
@@ -1027,6 +1021,21 @@ fn runTaskEntry(supervisor: *Supervisor, task: *Task) void {
         supervisor.finishTask(task, lifecycle, failure_class);
     }
     disposeRoute(task);
+}
+
+fn childExecutionContext(
+    route: *const routes.ResolvedRoute,
+    task: *const Task,
+    child_agent_service: ?tools.AgentService,
+) tools.ExecutionContext {
+    return .{
+        .workspace_root = route.config.workspace_root,
+        .full_access_mode = route.config.full_access_mode,
+        .parent_session_id = task.session_id,
+        .agent_service = child_agent_service,
+        .capability_profile_id = task.capability_profile_id,
+        .delegation_depth_remaining = task.remaining_depth,
+    };
 }
 
 fn runModelTask(supervisor: *Supervisor, task: *Task, route: *routes.ResolvedRoute) !void {
@@ -1388,6 +1397,26 @@ test "summary tool completion is the live child-summary projection boundary" {
     try std.testing.expect(isSummaryToolCompletion("tool_completed", "tool completed: update_session_summary"));
     try std.testing.expect(!isSummaryToolCompletion("tool_started", "tool completed: update_session_summary"));
     try std.testing.expect(!isSummaryToolCompletion("tool_completed", "tool completed: read_file"));
+}
+
+test "child execution context preserves the resolved access mode" {
+    var route: routes.ResolvedRoute = undefined;
+    route.config.workspace_root = "launch-workspace";
+    route.config.full_access_mode = true;
+
+    var task: Task = undefined;
+    task.session_id = "child-session";
+    task.capability_profile_id = "subagent";
+    task.remaining_depth = 1;
+
+    var execution_context = childExecutionContext(&route, &task, null);
+    try std.testing.expect(execution_context.full_access_mode);
+    try std.testing.expectEqualStrings("launch-workspace", execution_context.workspace_root);
+    try std.testing.expectEqualStrings("child-session", execution_context.parent_session_id.?);
+
+    route.config.full_access_mode = false;
+    execution_context = childExecutionContext(&route, &task, null);
+    try std.testing.expect(!execution_context.full_access_mode);
 }
 
 test "group snapshots are terminal only after every task reaches a terminal state" {

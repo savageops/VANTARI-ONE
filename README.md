@@ -690,7 +690,7 @@ Wire shape defaults to `auto` and resolves from the endpoint; set `provider.wire
 
 ### Agent filesystem and process access
 
-`runtime.full_access_mode` is `false` by default. Restricted mode keeps agent-facing file, search, LSP, and `shell_exec` paths inside the active workspace. Set it to `true` only when the operator explicitly wants an agent to work in another directory:
+`runtime.full_access_mode` is `false` by default. Restricted mode keeps agent-facing file, search, LSP, and `shell_exec` paths inside the active workspace. Set it to `true` only when the operator explicitly wants an agent to work in another directory. Resolved child routes inherit the flag for the shared execution context, so every child path tool follows the same boundary; `.var` and session ledgers remain canonical:
 
 ```json
 "runtime": {

@@ -96,7 +96,9 @@ requires source/installed SHA-256 equality and the installed consumer path.
 ## Boundaries
 
 - `runtime.full_access_mode` defaults to `false`; enable it explicitly for
-  intended cross-directory work. It never relocates `.var`.
+  intended cross-directory work. Resolved child routes carry the flag into the
+  shared execution context used by file, search, LSP, and shell tools. It never
+  relocates `.var`.
 - `search_files` requires `iex`. Do not hide an `rg`, `grep`, or `sed` fallback.
 - Browser routes are redacted prototypes. Owner routes are loopback-only and
   token/generation gated.
