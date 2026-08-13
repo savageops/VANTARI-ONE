@@ -28,6 +28,14 @@ pub fn main() !void {
 }
 
 fn runTui(mode: tui_chat.StartupMode) !void {
+    // Pre-flight the workspace config before the owner spawn: the TUI is the
+    // one client surface that previously skipped this gate, so an
+    // unconfigured workspace surfaced only as a silent OwnerStartFailed.
+    // `run`, interactive, and `schedule` all use the same envelope.
+    const workspace_root = try VAR1.core.workspace.resolve(std.heap.page_allocator);
+    defer std.heap.page_allocator.free(workspace_root);
+    try VAR1.clients.cli.ensureKernelConfigAvailable(std.heap.page_allocator, workspace_root);
+
     switch (mode) {
         .blank => tui_chat.main(std.heap.page_allocator) catch |err| {
             tui_chat.writeStartupFailure(std.heap.page_allocator, err) catch {};

@@ -2037,6 +2037,8 @@ fn startupFailureMessage(err: anyerror) []const u8 {
         error.InvalidRpcResponse => "Kernel stdio returned an invalid JSON-RPC response during TUI startup.",
         error.RpcRemoteError => "Kernel stdio returned an error during TUI startup.",
         error.MissingChildPipes => "Kernel stdio child process did not expose the required pipes.",
+        error.OwnerStartFailed => "TUI startup failed: the execution owner for this workspace exited during startup. The workspace may not be configured for provider execution (check auth and config), or another vantari process may hold the owner lease.",
+        error.OwnerStartTimeout => "TUI startup timed out waiting for the execution owner for this workspace. The workspace may not be configured for provider execution, or the owner is not becoming healthy.",
         else => "TUI startup failed before the chat surface became interactive.",
     };
 }
@@ -3796,6 +3798,11 @@ test "tui startup errors render typed operator-facing envelopes" {
     defer std.testing.allocator.free(invalid_rpc);
     try std.testing.expect(std.mem.indexOf(u8, invalid_rpc, "code=KernelInvalidRpcResponse") != null);
     try std.testing.expect(std.mem.indexOf(u8, invalid_rpc, "invalid JSON-RPC response") != null);
+
+    const owner_failed = try renderStartupFailure(std.testing.allocator, error.OwnerStartFailed);
+    defer std.testing.allocator.free(owner_failed);
+    try std.testing.expect(std.mem.indexOf(u8, owner_failed, "code=OwnerStartFailed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, owner_failed, "not be configured for provider execution") != null);
 }
 
 test "tui latest-session hydration restores transcript rows before the next turn" {
