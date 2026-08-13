@@ -449,3 +449,19 @@ The latest-session TUI selector is bounded, sequence-less legacy activity is
 not rendered, and live/cold keyed-row projection is equal. The persistent owner
 survives presentation detach by design; the exact proof-owned tree was torn
 down after installed continuation and blank-TUI checks, leaving zero processes.
+
+## Superseding current evidence — Move 42 (2026-08-13)
+
+Move 42 closes the composer/cancellation surface at
+`[2026-08-13-tui-composer-move42.md](2026-08-13-tui-composer-move42.md)`. The
+single TUI style owner proves transcript < metadata < composer background
+lightness; exact wide and width-40 metadata projections preserve the high-value
+fields; and cancellation copy is present only for an active waiting run. The
+terminal event clears the cancellation intent, and `/cancel` shares the
+generation-bound request owner during an active interjection while idle use is
+truthful. The complete Debug graph passes 19/19 build steps and 1,991/1,991
+tests; focused TUI passes 75/75; ReleaseFast/install passes 9/9. Installed ANSI
+inspection, blank TUI, and `vantari -c` continuation pass with source/installed
+SHA-256 `A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072`.
+The exact owner tree was torn down after presentation detach and the final
+VANTARI process census is zero. Move 43 is the active frontier.

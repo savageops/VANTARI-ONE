@@ -16,7 +16,7 @@ child-agent execution, and recovery evidence. TUI and CLI render kernel
 projections. `apps/frontend` is an ignored local prototype, not a shipped
 tracked client.
 
-## Current frontier — Move 41
+## Current frontier — Move 42
 
 Move 34 closes the Codex subscription transport slice. `core/auth/store.zig`
 remains the single credential owner for workspace `.var/auth.json` and installed
@@ -111,7 +111,27 @@ down the exact owner tree after exercising `vantari -c` and the blank TUI.
 Debug passes `19/19` build steps and `1,967/1,967` tests; ReleaseFast/install
 passes `9/9`; current source and installed SHA-256 is
 `C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54`; final
-installed VANTARI process census is zero. Move 42 is the next frontier.
+installed VANTARI process census is zero.
+
+Move 42 closes the composer hierarchy and conditional-cancellation boundary.
+`styles.surface`, `styles.meta_surface`, and `styles.composer` remain the sole
+TUI background tokens; the composer is the focused first row, metadata is the
+quieter row below it, and `colorLevel` proves strict lightness order. The
+steady-state row carries no cancellation shortcut. `formatFooterStatus` emits
+`cancelling` only while `waiting && cancel_requested`; terminal events clear the
+intent, Escape/Ctrl-C retain the generation-bound request path, and an active
+`/cancel` interjection shares that owner while idle `/cancel` is truthful. Exact
+wide and width-40 metadata projections cover the narrow/wide operator states.
+The seven-source harvest and compression decision are recorded in
+`.docs/research/2026-08-13-tui-composer-move42.md`.
+
+Move 42 proof: the complete Debug graph passes 19/19 steps and 1,991/1,991
+tests; the focused TUI lane passes 75/75; ReleaseFast/install passes 9/9.
+Installed ANSI inspection observed transcript `(8,17,15)`, metadata
+`(10,22,20)`, and composer `(16,34,31)`; blank TUI startup/exit and
+`vantari -c` continuation passed. Source and installed SHA-256 match
+`A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072`; exact
+owner-tree teardown leaves zero VANTARI processes.
 
 ## Behavior plane
 
@@ -279,6 +299,7 @@ zero-process cleanup.
 ## TUI projection contract
 
 - The footer is one compact metadata row: model, effort, context used/capacity/percentage, remaining capacity, active agents, pool pressure, and assigned queue pressure when non-zero. `Esc cancel` is intentionally omitted from the persistent row.
+- The footer background tokens are ordered `styles.surface < styles.meta_surface < styles.composer`; the composer is the focused input row above metadata, and `cancelling` is emitted only while an active run is waiting on cancellation.
 - A child group row is `Agents completed/total`. The old `waiting on N` filler is removed from the visible structure; terminal failure/cancellation evidence may remain as a suffix.
 - A child row is keyed by `group_id + task_id`. Tool lifecycle events update its state marker but do not become the row label.
 - At the child `assistant_response` boundary, the supervisor reads the canonical session summary and sends it as the row detail. The TUI compacts whitespace and truncates the summary to the available one-line width, so the visible row is `agent-name - summary…`, not `agent-name - tool_completed`.
@@ -304,14 +325,14 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,967/1,967 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,991/1,991 tests with zero skips.
   The reduced total is intentional: one registry loop executes all 53 declared
   cases and replaces 45 one-case wrappers that left ten cases undiscovered.
   Its host lane executes the stdio child, owner state/client, shared process
   lock, bridge, and process-tree contracts; the integration lane includes
   exact owner route, lease, stalled-loopback deadline, and explicit-workspace
   precedence probes. The backend
-  TUI lane passes 63/63.
+  TUI lane passes 75/75.
 - A barrier-synchronized leadership race returns one guard and one
   `LeaseUnavailable`. Native proof root
   `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1` starts two
@@ -410,10 +431,11 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   exactly. No CRC fields, sidecar quarantine ledger, auto-truncation path, or
   repair daemon was added.
 - The current source ReleaseFast and installed artifact share SHA-256
-  `C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54`.
-  Moves 37–41, Move 34 Codex transport, owner lifecycle, and ticket lifecycle
+  `A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072`.
+  Moves 37–42, Move 34 Codex transport, owner lifecycle, and ticket lifecycle
   promotion all pass; the installed catalog excludes `manage_plugin`, latest
-  session selection is bounded, and the final installed process census is zero.
+  session selection is bounded, composer/cancellation proof is installed, and
+  the final installed process census is zero.
 - Installed Codex OAuth consumer proof used a valid disposable `$VANTARI_HOME`
   fixture with a pinned context window to avoid unrelated local-model discovery.
   The captured request path was `/codex/responses`; the response was `ok`; no

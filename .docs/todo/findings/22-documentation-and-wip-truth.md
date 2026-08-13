@@ -162,3 +162,20 @@ Do not erase historical closeout records or fabricate proof to make a chain gree
   zero.
 - The current active boundary is Move 42. Move 50 Agent Hub and the visual
   installed matrix remain later boundaries; no completion is inferred for them.
+
+## Closure receipt — Move 42 (2026-08-13)
+
+- The current TUI palette remains one owner in `tui_chat.zig`; the tested
+  background hierarchy is transcript surface < metadata surface < composer.
+  No theme registry or parallel token system was introduced.
+- The steady-state footer has no cancellation shortcut. Active cancellation is
+  rendered only while `waiting && cancel_requested`; terminal events clear the
+  intent, active `/cancel` shares the generation-bound request path, and idle
+  `/cancel` is truthful.
+- Debug is `19/19` with `1,991/1,991`; focused TUI is `75/75`; ReleaseFast and
+  install are `9/9`. Installed ANSI, blank TUI, and `vantari -c` continuation
+  passed. Source and installed SHA-256 match
+  `A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072`; exact
+  owner-tree teardown leaves zero VANTARI processes.
+- The active boundary is Move 43. Move 50 Agent Hub and the installed visual
+  matrix remain later boundaries; no completion is inferred for them.

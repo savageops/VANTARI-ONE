@@ -22,6 +22,7 @@
     "current_owner_recovery_research": ".docs/research/2026-08-13-owner-generation-reconciliation.md",
     "current_ticket_lifecycle_research": ".docs/research/2026-08-13-installed-ticket-lifecycle-mesh.md",
     "current_tui_projection_research": ".docs/research/2026-08-13-tui-projection-move41.md",
+    "current_tui_composer_research": ".docs/research/2026-08-13-tui-composer-move42.md",
     "current_execution_owner_decision": ".docs/roadmap/21-persistent-execution-owner.md"
   },
   "canonical_owners": {
@@ -51,6 +52,8 @@
     "tool_phase": "typed state marker only; not the child row label",
     "activity_source": "contiguous sequence-bearing parent events plus canonical child summaries; sequence-less legacy activity is ignored",
     "persistent_cancel_hint": false,
+    "composer_hierarchy": "styles.surface < styles.meta_surface < styles.composer",
+    "cancellation_affordance": "cancelling only while waiting && cancel_requested; terminal events clear the intent",
     "prompt_mode_cycle": "roadmap 43: orchestrate -> build -> align -> plan; not yet shipped"
   },
   "access_boundary": {
@@ -64,14 +67,14 @@
   "proof": {
     "zig": "C:/Users/Savage/AppData/Local/Programs/zig/0.15.1/zig.exe",
     "release_fast": "9/9 steps succeeded",
-    "focused_tui": "63/63 passed; 0 skipped",
+    "focused_tui": "75/75 passed; 0 skipped",
     "host_lifecycle": "245/245 passed; shared crash-released process locks, deterministic ticket-child identity, 100-way atomic admission, session-keyed buffer projection, exact-generation cancellation, single terminal settlement, 100-owner admission-fenced shutdown, deadlines, and Job Object ownership",
-    "isolated_broad": "latest Debug run 19/19 steps; 1967/1967 passed; 0 skipped; ReleaseFast install 9/9; one registry loop executes all declared cases",
+    "isolated_broad": "latest Debug run 19/19 steps; 1991/1991 passed; 0 skipped; ReleaseFast install 9/9; one registry loop executes all declared cases",
     "test_runtime_isolation": "six build artifacts plus direct zig test receive generated VANTARI_HOME and VANTARI_TEST_ROOT; direct proof kept 99960 files and 693051144 bytes unchanged",
     "installed_binary": "C:/Users/Savage/AppData/Local/Vantari/bin/vantari.exe",
     "install_script": "apps/backend/scripts/install_windows.ps1",
-    "built_sha256": "C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54",
-    "installed_sha256": "C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54",
+    "built_sha256": "A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072",
+    "installed_sha256": "A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072",
     "installed_hash_matches": true,
     "installed_settings_smoke": "initialize ok; config/set var1.config_set.v1 in 5 ms; isolated runtime removed; live root unchanged; zero processes",
     "host_shutdown": "blocked provider request observed cancellation before join, returned cancelled, and passed 20 repeat runs; move 19 now routes the terminal through one turn_terminal commit owner",
@@ -102,7 +105,7 @@
     "codex_transport": "Move 34 source and installed proof: OAuth openai-codex dispatch builds /codex/responses with chatgpt-account-id, originator, OpenAI-Beta, and SSE headers; request includes stream:true and store:false; local fixture returns ok; /v1/chat/completions is not requested; bearer output is absent; owner/kernel pair is explicitly torn down and final installed process census is zero",
     "tui_cost_consumer": "Move 37/38/39 source and installed proof: multiline system rows preserve /status; installed Z.AI turns record measured prompt/completion/cached tokens and known/unknown cost states; historical graph 1964/1964; current artifact is superseded by Move40 hash 279A112A1D7CD94BF2C5678C961E83A3458951CB9D48E9C5CC21A6D01DF409AF; final installed VANTARI process census zero",
     "plugin_boundary": "Move40 deferred-delete: no installed plugin runtime consumer exists; default-visible manage_plugin placeholder and registry/runtime branches were removed; contract-only manifest/isolation/socket types remain for a future concrete need; installed tools catalog has 24 tools and excludes manage_plugin; final process census zero",
-    "tui_projection": "Move41 source and installed proof: cold activity hydration ignores seq 0, contiguous live/replay child rows match, child summaries come from summaries.jsonl, session/list limit 1 prevents oversized latest-session selection responses, installed vantari -c and blank TUI start/exit pass, source/installed SHA-256 C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54, exact owner-tree teardown leaves zero VANTARI processes",
+    "tui_projection": "Move41/42 source and installed proof: cold activity hydration ignores seq 0, contiguous live/replay child rows match, child summaries come from summaries.jsonl, session/list limit 1 prevents oversized latest-session selection responses, composer background tokens are surface < metadata < composer, cancellation is active-only, installed vantari -c and blank TUI start/exit pass, source/installed SHA-256 A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072, exact owner-tree teardown leaves zero VANTARI processes",
     "active_installed_processes_preserved": []
   },
   "wip": {
@@ -110,13 +113,13 @@
     "035": "035a-h and parent archived; provider/cost chain closed",
     "036": "036a-h and parent archived; findings 10, 11, and 13 closed; moves 21-31 and 38-40 closed; external-effect certainty remains a separate frontier",
     "PLUG": "parent and PLUGa-h archived as superseded by Move40 deferred-delete; no active plugin runtime frontier",
-    "TUI": "Move41 closed; Move42 composer hierarchy is next"
+    "TUI": "Move42 closed; Move43 prompt-mode selection is next"
   },
   "residuals": [
     "Both test-isolation incidents, 877 older context-poison fixtures, and legacy backend owners are repaired reversibly; quarantine/archive manifests and rollback paths remain retained evidence.",
     "The fixed agent pool survives presentation detach in one source and installed owner tree; scheduler leadership and ticket claim/lease/child admission are process-exclusive; assignment is ledger-only and has no config policy branch. Source and installed Windows lifecycle meshes close exact tree death, generation replacement, same-session resume, nested direct/group/parent delivery, terminal settlement, cold readback, and zero-process cleanup. Arbitrary external-effect certainty remains a separate gate.",
     "The tracked TUI consumes exact stored event seq and the in-process 100-way mesh is closed; ignored browser routes keep a compatibility transport SSE id, and multi-process writer ownership remains coupled to scheduler/claim arbitration.",
-    "Current source ReleaseFast and installed binary share SHA-256 C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54. Moves 37-41, Move 34 Codex transport, Move 33 auth CLI proof, and prior owner/ticket promotion pass; installed tools catalog excludes manage_plugin, latest-session continuation is bounded, and final installed process census is zero.",
+    "Current source ReleaseFast and installed binary share SHA-256 A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072. Moves 37-42, Move 34 Codex transport, Move 33 auth CLI proof, and prior owner/ticket promotion pass; installed tools catalog excludes manage_plugin, latest-session continuation is bounded, composer/cancellation proof is installed, and final installed process census is zero.",
     "Autonomous repair remains a gated evidence workflow, not an implicit background mutator."
   ]
 }

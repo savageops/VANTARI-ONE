@@ -2611,5 +2611,34 @@ sequence-bearing events and canonical summaries.
   backend architecture, and CLI/TUI rendering contract. Move 42 is next:
   composer tint hierarchy and conditional cancellation affordance.
 
-**Next todo:** Move 42 — make the composer lighter than transcript and metadata
-surfaces, remove persistent `Esc cancel` copy, and prove narrow/wide layout.
+## Closure receipt — Move 42 (2026-08-13)
+
+- The seven-source TUI harvest is recorded in
+  `.docs/research/2026-08-13-tui-composer-move42.md`. It confirms the
+  compression decision: retain one session-owned projection and one palette
+  owner; do not add a theme registry, persistent shortcut copy, or screenshot
+  framework for this seam.
+- `styles.surface`, `styles.meta_surface`, and `styles.composer` remain the
+  canonical footer surfaces. A strict `colorLevel` assertion proves transcript
+  < metadata < composer lightness. Exact wide and width-40 metadata cases
+  preserve model, effort, context, and remaining capacity without wrap.
+- Cancellation is now conditional: `cancelling` requires an active waiting run;
+  terminal events clear the intent; active `/cancel` interjections use the
+  generation-bound request owner; idle `/cancel` reports no active run. No
+  persistent `Esc cancel` copy is rendered.
+- Debug returned `19/19` build steps and `1,991/1,991` tests; focused TUI
+  returned `9/9` steps and `75/75` tests; `git diff --check` returned no
+  whitespace errors.
+- ReleaseFast/install returned `9/9`. Installed ANSI inspection observed
+  transcript `(8,17,15)`, metadata `(10,22,20)`, and composer `(16,34,31)`;
+  blank TUI startup/exit and installed `vantari -c` continuation passed.
+  Source and installed SHA-256 match
+  `A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072`.
+  The exact proof-owned owner tree was torn down and the final process census
+  was zero.
+- Updated the roadmap, technical summary, workspace record, findings receipt,
+  current sitrep supersession, research/index records, root/backend README,
+  backend architecture, and `AGENTS.md` contract.
+
+**Next todo:** Move 43 — make prompt-mode selection session-scoped and prompt-
+controlled, with provider-visible capture and no executor behavior branches.

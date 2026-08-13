@@ -698,6 +698,7 @@ const ChatState = struct {
             std.mem.eql(u8, event_type, "session_failed"))
         {
             self.active_run_seq = 0;
+            self.cancel_requested = false;
         }
     }
 
@@ -1239,7 +1240,11 @@ const ChatState = struct {
                         defer self.allocator.free(owned);
                         const text = std.mem.trim(u8, owned, " \t\r\n");
                         if (text.len > 0) {
-                            try self.queueMessage(session_id, text);
+                            if (std.mem.eql(u8, text, "/cancel")) {
+                                try self.requestCancel(session_id);
+                            } else {
+                                try self.queueMessage(session_id, text);
+                            }
                             input.clearAndFree();
                         }
                         continue;
@@ -1395,8 +1400,15 @@ fn cmdCompact(state: *ChatState, _: []const u8) anyerror!commands.CommandResult 
 }
 
 fn cmdCancel(state: *ChatState, _: []const u8) anyerror!commands.CommandResult {
-    state.cancel_requested = true;
-    try state.add(.system, "Cancellation requested.");
+    if (!state.waiting) {
+        try state.add(.system, "No active run to cancel.");
+        return .handled;
+    }
+    const session_id = state.session_id orelse {
+        try state.add(.system, "No active session to cancel.");
+        return .handled;
+    };
+    try state.requestCancel(session_id);
     return .handled;
 }
 
@@ -2281,9 +2293,9 @@ fn activityTextStyle(state: ActivityState) Style {
 
 const styles = struct {
     const surface: Style = .{ .fg = Color.rgbFromUint(0xd9f7ef), .bg = Color.rgbFromUint(0x08110f) };
-    /// Footer metadata is a quiet intermediate tint. The hierarchy is
-    /// surface < meta_surface < composer; no border or extra chrome is
-    /// needed to separate the focused input from runtime telemetry.
+    /// Footer metadata is a quiet intermediate tint. The background lightness
+    /// hierarchy is surface < meta_surface < composer; no border or extra
+    /// chrome is needed to separate focused input from runtime telemetry.
     const meta_surface: Style = .{ .fg = Color.rgbFromUint(0x78958d), .bg = Color.rgbFromUint(0x0a1614) };
     const composer: Style = .{ .fg = Color.rgbFromUint(0xe8fff8), .bg = Color.rgbFromUint(0x10221f) };
     const user: Style = .{ .fg = Color.rgbFromUint(0xcff8ec), .bg = Color.rgbFromUint(0x08110f), .bold = true };
@@ -2302,6 +2314,13 @@ const styles = struct {
     const status_working: Style = .{ .fg = Color.rgbFromUint(0xd7ad5a), .bg = Color.rgbFromUint(0x0a1614) };
     const status_failed: Style = .{ .fg = Color.rgbFromUint(0xe06c75), .bg = Color.rgbFromUint(0x0a1614) };
 };
+
+fn colorLevel(color: Color) u32 {
+    return switch (color) {
+        .rgb => |rgb| @as(u32, rgb[0]) * 2126 + @as(u32, rgb[1]) * 7152 + @as(u32, rgb[2]) * 722,
+        else => 0,
+    };
+}
 
 fn drawTranscript(win: Window, state: *ChatState) void {
     win.fill(.{ .style = styles.surface });
@@ -2963,12 +2982,11 @@ fn formatFooterStatus(
     scroll_offset: usize,
 ) ![]u8 {
     // Waiting is rendered by the agent-count segment in formatFooterMeta;
-    // status itself only carries cancellation and scrollback state.
-    _ = waiting;
+    // status carries cancellation only while that run is still active.
     var status = std.array_list.Managed(u8).init(allocator);
     errdefer status.deinit();
 
-    if (cancel_requested) {
+    if (waiting and cancel_requested) {
         try status.appendSlice("cancelling");
     }
 
@@ -3451,15 +3469,35 @@ test "tui run generation follows session lifecycle events" {
     defer state.deinit();
 
     _ = try state.recordProgressEvent(1, "session_started", "");
+    state.cancel_requested = true;
     try std.testing.expectEqual(@as(u64, 1), state.active_run_seq);
     _ = try state.recordProgressEvent(2, "assistant_response", "done");
     try std.testing.expectEqual(@as(u64, 1), state.active_run_seq);
     _ = try state.recordProgressEvent(3, protocol_events.turn_terminal_event_type, "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":1,\"outcome\":\"completed\",\"detail\":\"\"}");
     try std.testing.expectEqual(@as(u64, 0), state.active_run_seq);
+    try std.testing.expect(!state.cancel_requested);
     _ = try state.recordProgressEvent(4, "session_started", "");
     try std.testing.expectEqual(@as(u64, 4), state.active_run_seq);
     _ = try state.recordProgressEvent(5, protocol_events.turn_terminal_event_type, "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":4,\"outcome\":\"failed\",\"detail\":\"failed\"}");
     try std.testing.expectEqual(@as(u64, 0), state.active_run_seq);
+}
+
+test "tui slash cancel is truthful while idle" {
+    var state = ChatState{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .workspace_root = "workspace",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    try std.testing.expectEqual(commands.CommandResult.handled, try cmdCancel(&state, ""));
+    try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
+    try std.testing.expectEqualStrings("No active run to cancel.", state.messages.items[0].text);
 }
 
 test "tui stream cadence coalesces bursts without delaying an idle first frame" {
@@ -4446,6 +4484,15 @@ test "tui transcript authorship uses styling instead of label rows" {
     try std.testing.expectEqualStrings("project", basename("/tmp/project/"));
 }
 
+test "tui composer surfaces preserve a strict lightness hierarchy" {
+    const transcript_level = colorLevel(styles.surface.bg);
+    const metadata_level = colorLevel(styles.meta_surface.bg);
+    const composer_level = colorLevel(styles.composer.bg);
+
+    try std.testing.expect(transcript_level < metadata_level);
+    try std.testing.expect(metadata_level < composer_level);
+}
+
 test "tui layout removes top chrome and keeps metadata below the lifted composer" {
     const tall = computeLayout(30);
     try std.testing.expectEqual(@as(u16, 27), tall.transcript_height);
@@ -4500,9 +4547,7 @@ test "tui footer metadata preserves high-value fields inside narrow terminals" {
         40,
     );
     defer allocator.free(narrow);
-    try std.testing.expect(narrow.len <= 40);
-    try std.testing.expect(std.mem.indexOf(u8, narrow, "ctx 5k / 200k (3%)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, narrow, "glm-5.1") != null);
+    try std.testing.expectEqualStrings("glm-5.1 · high · ctx 5k / 200k (3%)", narrow);
 }
 
 test "tui footer metadata exposes only actionable transient state" {
@@ -4543,6 +4588,24 @@ test "tui footer metadata exposes only actionable transient state" {
     defer allocator.free(cancelling);
     try std.testing.expect(std.mem.indexOf(u8, cancelling, "cancelling") != null);
     try std.testing.expect(std.mem.indexOf(u8, cancelling, "Esc cancel") == null);
+
+    const idle = try formatFooterMeta(
+        allocator,
+        "glm-5.1",
+        "high",
+        "",
+        5_000,
+        200_000,
+        0,
+        0,
+        false,
+        true,
+        0,
+        96,
+    );
+    defer allocator.free(idle);
+    try std.testing.expect(std.mem.indexOf(u8, idle, "cancelling") == null);
+    try std.testing.expect(std.mem.indexOf(u8, idle, "Esc cancel") == null);
 }
 
 test "tui footer projects context telemetry and live agent cardinality" {

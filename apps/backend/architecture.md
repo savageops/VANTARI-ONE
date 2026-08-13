@@ -579,11 +579,11 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-13:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Debug and ReleaseFast test graphs -> 19/19 steps and 1967/1967 tests passed. The lower
+- Debug and ReleaseFast test graphs -> 19/19 steps and 1,991/1,991 tests passed. The lower
   total is intentional: 45 one-case registry wrappers were replaced by one loop
   that executes every one of the 53 declared cases, including ten that had no
   test declaration.
-- Focused backend TUI -> 63/63 passed.
+- Focused backend TUI -> 75/75 passed.
 - Host lifecycle lane passes, including atomic same-session admission,
   session-keyed buffer state, exact-generation cancellation,
   cancellation-before-join shutdown, RPC deadlines, late-response retirement,
@@ -617,7 +617,7 @@ Latest local Windows validation on 2026-08-13:
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Current source and installed SHA-256 match at
-  `C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54`.
+  `A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072`.
   Move 37/38 installation, the installed owner/ticket lifecycle proofs, Move 33
   auth help/status redaction, Move 34 Codex `/codex/responses` consumer proof,
   the Move 37 TUI cost consumer proof, and Move 41 sequence-addressed
@@ -626,6 +626,10 @@ Latest local Windows validation on 2026-08-13:
   The TUI now requests `session/list { limit: 1 }`, hydrates the latest
   transcript, renders the persisted child rows, and exits cleanly after the
   exact persistent-owner tree is torn down. Blank TUI startup/exit also passed.
+- Move 42 installed ANSI inspection observed transcript `(8,17,15)`, metadata
+  `(10,22,20)`, and composer `(16,34,31)`; no persistent cancellation hint was
+  rendered. The exact owner tree was torn down after the blank and continuation
+  checks, leaving zero VANTARI processes.
 - The source ticket lifecycle mesh at
   `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`
   proves assignment without launch, one claim, noninteractive TUI detach, exact
@@ -841,3 +845,15 @@ The system prompt instructs VAR1 to tune its own configuration: when it observes
 ### TUI input history
 
 The TUI composer maintains a persistent input history (ring buffer, cap 1000 entries). Up/Down arrow keys cycle through previous messages when the scroll position is at the transcript bottom. History is appended on every submit via `appendHistory`. When scrolled up, Up/Down still scroll the transcript — history navigation only activates at the bottom.
+
+### TUI composer and cancellation projection
+
+`apps/backend/src/clients/tui_chat.zig:styles` is the single palette owner for
+the TUI footer. The transcript uses `styles.surface`, the metadata row uses
+`styles.meta_surface`, and the focused input row uses `styles.composer`; their
+background lightness is tested as `surface < meta_surface < composer`. The
+steady-state footer contains no cancellation shortcut. `formatFooterStatus`
+renders `cancelling` only while `waiting && cancel_requested`, and terminal
+events clear that flag. Escape/Ctrl-C and active `/cancel` interjections share
+the generation-bound `requestCancel` owner; idle `/cancel` reports that there
+is no active run.

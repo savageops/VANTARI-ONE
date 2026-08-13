@@ -325,6 +325,7 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - **Replay-safe activity** — live and cold TUI projections consume contiguous sequence-bearing parent events; legacy sequence-less activity rows are not rendered
 - **Live streaming** — assistant deltas, reasoning deltas, and tool progress rendered in real-time
 - **Operator metadata row** — model, effort, context used/capacity/remaining, active agents, pool pressure, and queue pressure; persistent `Esc cancel` text is omitted
+- **Composer hierarchy** — transcript surface < metadata surface < focused input surface; `cancelling` appears only during an active cancellation request and disappears at the terminal boundary
 
 ## Quick Start
 

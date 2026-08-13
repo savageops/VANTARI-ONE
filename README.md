@@ -256,7 +256,7 @@ the exact session. The transcript, execution receipt, attempt, and mailbox curso
 do not move. This recovery is source and installed proven; arbitrary external
 side-effect certainty still requires the write-intent ledger.
 
-The TUI keeps this mechanic legible without adding a status forest: the footer shows pool and queue pressure when non-zero; the activity group shows `Agents completed/total`; each keyed child row ends with a bounded turn summary sourced from the child session summary ledger. Tool lifecycle names remain typed event metadata, not the visible child summary. The persistent footer omits `Esc cancel`.
+The TUI keeps this mechanic legible without adding a status forest: the footer shows pool and queue pressure when non-zero; the activity group shows `Agents completed/total`; each keyed child row ends with a bounded turn summary sourced from the child session summary ledger. Tool lifecycle names remain typed event metadata, not the visible child summary. The composer is a focused surface above a quieter metadata row, and cancellation copy appears only while a run is actively cancelling; the persistent footer omits `Esc cancel`.
 
 <br/>
 
@@ -933,6 +933,7 @@ vantari auth status|login|logout <provider>    identity and provider auth
 | [`apps/backend/architecture.md`](./apps/backend/architecture.md) | Canonical architecture map with sequence diagrams and state machines |
 | [`.docs/research/2026-08-12-full-harness-sitrep.md`](./.docs/research/2026-08-12-full-harness-sitrep.md) | Current full-harness design, pipeline, proof, concerns, and closure order |
 | [`.docs/research/2026-08-13-sequence-addressed-agent-mailbox.md`](./.docs/research/2026-08-13-sequence-addressed-agent-mailbox.md) | Agent-mailbox competitive harvest, event grammar, context boundary, and residual risk |
+| [`.docs/research/2026-08-13-tui-composer-move42.md`](./.docs/research/2026-08-13-tui-composer-move42.md) | Seven-source TUI harvest, composer surface hierarchy, conditional cancellation, and narrow/wide proof |
 | [`.docs/research/2026-08-13-model-selected-agent-eligibility.md`](./.docs/research/2026-08-13-model-selected-agent-eligibility.md) | Eight-reference selection harvest, deterministic eligibility receipt, prompt-profile tracer, and rejected selector architecture |
 | [`.docs/todo/findings/00-INDEX.md`](./.docs/todo/findings/00-INDEX.md) | Priority-ordered executable readiness findings |
 
@@ -940,7 +941,7 @@ vantari auth status|login|logout <provider>    identity and provider auth
 
 ## Validation
 
-The pinned Debug and ReleaseFast graphs currently pass 1,946 test cases across `apps/backend/src/`
+The pinned Debug and ReleaseFast graphs currently pass 1,991 test cases across `apps/backend/src/`
 and `apps/backend/tests/`. They target state transitions, protocol edges, and
 failure pressure rather than line coverage:
 
