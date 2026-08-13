@@ -66,6 +66,15 @@ pub const SettingsState = struct {
         if (self.status_message) |msg| self.allocator.free(msg);
     }
 
+    /// Replace the operator-facing status line without leaking the previous
+    /// message. The settings surface stays usable when the persisted config
+    /// is missing or invalid; callers can report that state here instead of
+    /// failing back into the chat composer.
+    pub fn setStatusMessage(self: *SettingsState, message: []const u8) !void {
+        if (self.status_message) |old| self.allocator.free(old);
+        self.status_message = try self.allocator.dupe(u8, message);
+    }
+
     /// Load the config entries for the current section from disk.
     pub fn loadSection(self: *SettingsState) !void {
         for (self.entries.items) |entry| {
@@ -76,17 +85,22 @@ pub const SettingsState = struct {
         self.entries.clearRetainingCapacity();
 
         const section_name = section_names[self.section_cursor];
-        var parsed = config_file.readValidatedDocument(self.allocator, self.workspace_root) catch return;
-        defer parsed.deinit();
+        // A damaged or not-yet-created workspace config must not make the
+        // settings command disappear. Use the compiled defaults as the
+        // visible projection and leave a short recovery hint in the footer.
+        var parsed = config_file.readValidatedDocument(self.allocator, self.workspace_root) catch null;
+        defer if (parsed) |*document| document.deinit();
 
         var defaults = std.json.parseFromSlice(std.json.Value, self.allocator, config_file.default_document, .{}) catch return;
         defer defaults.deinit();
 
-        const root = parsed.value.object;
         const default_root = defaults.value.object;
         const active_section = blk: {
-            if (root.get(section_name)) |section| {
-                if (section == .object) break :blk section.object;
+            if (parsed) |document| {
+                const root = document.value.object;
+                if (root.get(section_name)) |section| {
+                    if (section == .object) break :blk section.object;
+                }
             }
             break :blk null;
         };
@@ -124,6 +138,7 @@ pub const SettingsState = struct {
             try self.appendConfigEntry(entry.key_ptr.*, entry.value_ptr.*, default_help_obj);
         }
         self.entry_cursor = 0;
+        if (parsed == null) try self.setStatusMessage("Using defaults: workspace config is unavailable");
     }
 
     fn helpForKey(primary: ?std.json.Value, fallback: ?std.json.Value, key: []const u8) ?std.json.Value {
@@ -223,14 +238,14 @@ pub const SettingsState = struct {
             return false; // Let the TUI's text input handler handle char input.
         }
         // Section navigation.
-        if (key.matches(tui.Key.left, .{}) or key.matches(tui.Key.tab, .{})) {
+        if (key.matches(tui.Key.left, .{}) or key.matches(tui.Key.tab, .{ .shift = true })) {
             if (self.section_cursor > 0) {
                 self.section_cursor -= 1;
                 try self.loadSection();
             }
             return true;
         }
-        if (key.matches(tui.Key.right, .{})) {
+        if (key.matches(tui.Key.right, .{}) or key.matches(tui.Key.tab, .{})) {
             if (self.section_cursor < section_names.len - 1) {
                 self.section_cursor += 1;
                 try self.loadSection();
@@ -308,10 +323,15 @@ pub fn drawSettings(win: tui.Window, state: *SettingsState) void {
         .{ .row_offset = 2 },
     );
 
-    // Entries.
+    // Entries. Reserve the final two rows for status and navigation help,
+    // and stop by row rather than by entry count because each help line also
+    // consumes a terminal row.
     var row: usize = 3;
-    const max_entries = @min(state.entries.items.len, @as(usize, win.height -| 6));
-    for (state.entries.items[0..max_entries], 0..) |entry, i| {
+    const content_limit: usize = @as(usize, win.height -| 3);
+    var entry_index: usize = 0;
+    while (entry_index < state.entries.items.len and row < content_limit) : (entry_index += 1) {
+        const entry = state.entries.items[entry_index];
+        const i = entry_index;
         const is_selected = i == state.entry_cursor;
         const is_editing = is_selected and state.editing;
         const key_style: tui.Cell.Style = if (is_selected)
@@ -330,22 +350,23 @@ pub fn drawSettings(win: tui.Window, state: *SettingsState) void {
         // Key column (left).
         _ = win.print(
             &.{.{ .text = entry.key, .style = key_style }},
-            .{ .col_offset = 2, .row_offset = @intCast(row) },
+            .{ .col_offset = 2, .row_offset = @intCast(row), .wrap = .none },
         );
         // Value column (right, padded).
         const value_col: usize = 28;
         _ = win.print(
             &.{.{ .text = value_display, .style = value_style }},
-            .{ .col_offset = @intCast(value_col), .row_offset = @intCast(row) },
+            .{ .col_offset = @intCast(value_col), .row_offset = @intCast(row), .wrap = .none },
         );
         row += 1;
 
         // Help text (one line below, indented and dimmed).
-        if (entry.help_text.len > 0 and row < max_entries + 3 + 20) {
-            const help_truncated = if (entry.help_text.len > 76) entry.help_text[0..76] else entry.help_text;
+        if (entry.help_text.len > 0 and row < content_limit) {
+            const help_width = @as(usize, win.width) -| 6;
+            const help_truncated = if (entry.help_text.len > help_width) entry.help_text[0..help_width] else entry.help_text;
             _ = win.print(
                 &.{.{ .text = help_truncated, .style = .{ .bg = Color.bg, .fg = Color.dim } }},
-                .{ .col_offset = 4, .row_offset = @intCast(row) },
+                .{ .col_offset = 4, .row_offset = @intCast(row), .wrap = .none },
             );
             row += 1;
         }
@@ -404,6 +425,23 @@ test "SettingsState init and deinit" {
     var state = SettingsState.init(std.testing.allocator, workspace);
     defer state.deinit();
     try std.testing.expect(!state.open);
+}
+
+test "settings falls back to defaults when workspace config is unavailable" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+    const config_path = try config_file.ensure(std.testing.allocator, workspace);
+    defer std.testing.allocator.free(config_path);
+    try VAR1.shared.fsutil.writeText(config_path, "{broken\n");
+
+    var state = SettingsState.init(std.testing.allocator, workspace);
+    defer state.deinit();
+    try state.loadSection();
+
+    try std.testing.expect(state.entries.items.len > 0);
+    try std.testing.expectEqualStrings("Using defaults: workspace config is unavailable", state.status_message.?);
 }
 
 test "section_names has 10 entries" {
@@ -543,6 +581,45 @@ test "settings apply close and repeated reopen share one state owner" {
     try std.testing.expect(state.entries.items.len > 0);
     try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = tui.Key.escape }, &client));
     try std.testing.expect(!state.open);
+}
+
+test "settings shift tab navigates to the previous section" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var state = SettingsState.init(allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    state.section_cursor = 1;
+    try state.loadSection();
+
+    var client = SettingsSuccessClient{};
+    const shift_tab = tui.Key{ .codepoint = tui.Key.tab, .mods = .{ .shift = true } };
+    try std.testing.expect(try state.handleKey(shift_tab, &client));
+    try std.testing.expectEqual(@as(usize, 0), state.section_cursor);
+    try std.testing.expect(state.entries.items.len > 0);
+}
+
+test "settings tab navigates to the next section" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var state = SettingsState.init(allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    try state.loadSection();
+
+    var client = SettingsSuccessClient{};
+    const tab = tui.Key{ .codepoint = tui.Key.tab, .mods = .{} };
+    try std.testing.expect(try state.handleKey(tab, &client));
+    try std.testing.expectEqual(@as(usize, 1), state.section_cursor);
+    try std.testing.expect(state.entries.items.len > 0);
 }
 
 test "settings timeout is visible and remains closable" {

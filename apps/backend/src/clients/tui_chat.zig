@@ -275,9 +275,12 @@ const ChatState = struct {
         const query = if (slash) token[1..] else token;
         if (!slash and query.len == 0) return;
 
-        for (commands.builtin_command_info, 0..) |info, index| {
-            if (query.len > info.name.len) continue;
-            if (!std.ascii.eqlIgnoreCase(info.name[0..query.len], query)) continue;
+        // The executable command registry is the source of truth for the
+        // palette. Help metadata remains a presentation projection; it must
+        // not make a command look selectable when dispatch cannot handle it.
+        for (command_registry, 0..) |command, index| {
+            if (query.len > command.name.len) continue;
+            if (!std.ascii.eqlIgnoreCase(command.name[0..query.len], query)) continue;
             try self.autocomplete_matches.append(self.allocator, index);
         }
         self.autocomplete_visible = self.autocomplete_matches.items.len > 0;
@@ -314,7 +317,7 @@ const ChatState = struct {
     fn selectedAutocompleteName(self: *const ChatState) ?[]const u8 {
         if (!self.autocomplete_visible or self.autocomplete_matches.items.len == 0) return null;
         const cursor = @min(self.autocomplete_cursor, self.autocomplete_matches.items.len - 1);
-        return commands.builtin_command_info[self.autocomplete_matches.items[cursor]].name;
+        return command_registry[self.autocomplete_matches.items[cursor]].name;
     }
 
     fn beginInputRequest(self: *ChatState, message: []const u8) !void {
@@ -1680,8 +1683,19 @@ fn cmdSettings(state: *ChatState, _: []const u8) anyerror!commands.CommandResult
         state.settings_state = settings_view.SettingsState.init(state.allocator, state.workspace_root);
     }
     state.settings_state.?.open = true;
-    state.settings_state.?.loadSection() catch {};
+    state.settings_state.?.loadSection() catch {
+        // Keep the overlay open and make allocation/parse failures visible in
+        // its own status row. A settings command must never fall through as a
+        // model prompt merely because a persisted value could not be read.
+        state.settings_state.?.setStatusMessage("Settings loaded with defaults; persisted values were unavailable.") catch {};
+    };
     return .handled;
+}
+
+fn reportCommandFailure(state: *ChatState, err: anyerror) void {
+    const message = std.fmt.allocPrint(state.allocator, "Command failed: {s}", .{@errorName(err)}) catch return;
+    defer state.allocator.free(message);
+    state.add(.system, message) catch {};
 }
 
 /// One-shot model switch. Calls config/set to write runtime.openai_model.
@@ -2148,7 +2162,10 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                     }
                     if (key.matches(tui.Key.enter, .{}) or key.matches('j', .{ .ctrl = true })) {
                         if (state.selectedAutocompleteName()) |name| {
-                            const result = commands.dispatchBare(ChatState, &state, &command_registry, name) catch .not_a_command;
+                            const result = commands.dispatchBare(ChatState, &state, &command_registry, name) catch |err| blk: {
+                                reportCommandFailure(&state, err);
+                                break :blk .handled;
+                            };
                             state.clearAutocomplete();
                             switch (result) {
                                 .exit => break,
@@ -2242,7 +2259,10 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                     const prompt = std.mem.trim(u8, owned_prompt, " \t\r\n");
                     // Slash command dispatch — intercept /-prefixed input before
                     // submitting to the model.
-                    const cmd_result = commands.dispatch(ChatState, &state, &command_registry, prompt) catch .not_a_command;
+                    const cmd_result = commands.dispatch(ChatState, &state, &command_registry, prompt) catch |err| blk: {
+                        reportCommandFailure(&state, err);
+                        break :blk .handled;
+                    };
                     switch (cmd_result) {
                         .exit => break,
                         .handled => {
@@ -2547,8 +2567,9 @@ const startup_intro_lines = [_][]const u8{
 };
 
 const startup_intro_version = "v0.1.8";
+const startup_intro_hint = "help · settings · model";
 const startup_intro_gap_rows: usize = 1;
-const startup_intro_projected_rows: usize = startup_intro_lines.len + 1 + startup_intro_gap_rows;
+const startup_intro_projected_rows: usize = startup_intro_lines.len + 2 + startup_intro_gap_rows;
 
 fn computeLayout(root_height: u16) ChatLayout {
     return computeLayoutForFooter(root_height, @min(@as(u16, 3), root_height));
@@ -2746,6 +2767,7 @@ const styles = struct {
     const system: Style = .{ .fg = Color.rgbFromUint(0x78958d), .bg = Color.rgbFromUint(0x08110f), .dim = true };
     const intro: Style = .{ .fg = Color.rgbFromUint(0x8ff5d2), .bg = Color.rgbFromUint(0x08110f), .bold = true };
     const intro_version: Style = .{ .fg = Color.rgbFromUint(0x78958d), .bg = Color.rgbFromUint(0x08110f), .dim = true };
+    const intro_hint: Style = .{ .fg = Color.rgbFromUint(0x9bbab1), .bg = Color.rgbFromUint(0x08110f), .dim = true };
     const text: Style = .{ .fg = Color.rgbFromUint(0xd9f7ef), .bg = Color.rgbFromUint(0x08110f) };
     const meta_label: Style = .{ .fg = Color.rgbFromUint(0x5d746e), .bg = Color.rgbFromUint(0x0a1614), .dim = true };
     const meta_value: Style = .{ .fg = Color.rgbFromUint(0x9bbab1), .bg = Color.rgbFromUint(0x0a1614), .dim = true };
@@ -2783,7 +2805,7 @@ fn drawAutocomplete(win: Window, state: *const ChatState, rows: u16) void {
             .style = row_style,
         }}, .{ .col_offset = 1, .wrap = .none });
 
-        const info = commands.builtin_command_info[command_index];
+        const info = command_registry[command_index];
         const name_style = if (selected) styles.autocomplete_selected_name else styles.autocomplete_name;
         _ = row.print(&.{.{ .text = info.name, .style = name_style }}, .{
             .col_offset = 3,
@@ -2908,6 +2930,7 @@ const TranscriptRow = struct {
     gap: bool = false,
     intro: bool = false,
     intro_version: bool = false,
+    intro_hint: bool = false,
 };
 
 fn buildTranscriptRows(allocator: std.mem.Allocator, win: Window, state: *const ChatState) !std.ArrayList(TranscriptRow) {
@@ -2969,6 +2992,12 @@ fn appendStartupIntroRows(
         .text = startup_intro_version,
         .intro = true,
         .intro_version = true,
+    });
+    try rows.append(allocator, .{
+        .role = .system,
+        .text = startup_intro_hint,
+        .intro = true,
+        .intro_hint = true,
     });
     var gap: usize = 0;
     while (gap < startup_intro_gap_rows) : (gap += 1) {
@@ -3084,7 +3113,7 @@ fn appendWrappedSegmentRows(
 fn drawTranscriptRow(win: Window, row: u16, transcript_row: TranscriptRow) void {
     if (transcript_row.gap) return;
     if (transcript_row.intro) {
-        drawIntroRow(win, row, transcript_row.text, transcript_row.intro_version);
+        drawIntroRow(win, row, transcript_row.text, transcript_row.intro_version, transcript_row.intro_hint);
         return;
     }
     const role_style = if (transcript_row.pending) styles.thinking else roleStyle(transcript_row.role);
@@ -3131,13 +3160,14 @@ fn drawTranscriptRow(win: Window, row: u16, transcript_row: TranscriptRow) void 
     });
 }
 
-fn drawIntroRow(win: Window, row: u16, text: []const u8, version: bool) void {
+fn drawIntroRow(win: Window, row: u16, text: []const u8, version: bool, hint: bool) void {
     const visual_width = introVisualWidth(text);
     const col: u16 = if (win.width > visual_width)
         @intCast((@as(usize, win.width) - visual_width) / 2)
     else
         0;
-    _ = win.print(&.{.{ .text = text, .style = if (version) styles.intro_version else styles.intro }}, .{
+    const style = if (version) styles.intro_version else if (hint) styles.intro_hint else styles.intro;
+    _ = win.print(&.{.{ .text = text, .style = style }}, .{
         .row_offset = row,
         .col_offset = col,
         .wrap = .none,
@@ -3231,6 +3261,9 @@ fn sliceBorrowedFromStartupIntro(slice: []const u8) bool {
     const version_start = @intFromPtr(startup_intro_version.ptr);
     const version_end = version_start + startup_intro_version.len;
     if (slice_start >= version_start and slice_end <= version_end) return true;
+    const hint_start = @intFromPtr(startup_intro_hint.ptr);
+    const hint_end = hint_start + startup_intro_hint.len;
+    if (slice_start >= hint_start and slice_end <= hint_end) return true;
     return false;
 }
 
@@ -4260,9 +4293,11 @@ test "tui transcript prepends startup intro without creating a message" {
     try std.testing.expectEqualStrings(startup_intro_lines[0], rows.items[0].text);
     try std.testing.expect(rows.items[startup_intro_lines.len].intro_version);
     try std.testing.expectEqualStrings(startup_intro_version, rows.items[startup_intro_lines.len].text);
-    try std.testing.expect(rows.items[startup_intro_lines.len + 1].gap);
+    try std.testing.expect(rows.items[startup_intro_lines.len + 1].intro_hint);
+    try std.testing.expectEqualStrings(startup_intro_hint, rows.items[startup_intro_lines.len + 1].text);
+    try std.testing.expect(rows.items[startup_intro_lines.len + 2].gap);
     try std.testing.expectEqualStrings("first operator message", rows.items[startup_intro_projected_rows].text);
-    try std.testing.expectEqual(@as(usize, 6), visibleTranscriptRowCount(rows.items));
+    try std.testing.expectEqual(@as(usize, 7), visibleTranscriptRowCount(rows.items));
 }
 
 test "tui progress keeps stdout and stderr streams separated for one tool call" {
@@ -4695,10 +4730,10 @@ test "tui scrollback keeps transcript navigable without mutating input state" {
     try state.add(.progress, "newest");
 
     const row_count = transcriptRowCount(&state, 80);
-    try std.testing.expectEqual(@as(usize, 10), row_count);
-    try std.testing.expectEqual(@as(usize, 10), visibleEndRow(&state, row_count));
+    try std.testing.expectEqual(@as(usize, 11), row_count);
+    try std.testing.expectEqual(@as(usize, 11), visibleEndRow(&state, row_count));
     state.scrollUp(1);
-    try std.testing.expectEqual(@as(usize, 9), visibleEndRow(&state, row_count));
+    try std.testing.expectEqual(@as(usize, 10), visibleEndRow(&state, row_count));
     try std.testing.expect(applyMouseScroll(&state, .{
         .col = 0,
         .row = 0,
@@ -4706,7 +4741,7 @@ test "tui scrollback keeps transcript navigable without mutating input state" {
         .mods = .{},
         .type = .press,
     }));
-    try std.testing.expectEqual(@as(usize, 6), visibleEndRow(&state, row_count));
+    try std.testing.expectEqual(@as(usize, 7), visibleEndRow(&state, row_count));
     try std.testing.expect(applyMouseScroll(&state, .{
         .col = 0,
         .row = 0,
@@ -4714,13 +4749,13 @@ test "tui scrollback keeps transcript navigable without mutating input state" {
         .mods = .{},
         .type = .press,
     }));
-    try std.testing.expectEqual(@as(usize, 9), visibleEndRow(&state, row_count));
+    try std.testing.expectEqual(@as(usize, 10), visibleEndRow(&state, row_count));
     state.scrollUp(100);
     try std.testing.expectEqual(@as(usize, 1), visibleEndRow(&state, row_count));
     state.scrollDown(1);
     try std.testing.expectEqual(@as(usize, 2), visibleEndRow(&state, row_count));
     state.jumpToBottom();
-    try std.testing.expectEqual(@as(usize, 10), visibleEndRow(&state, row_count));
+    try std.testing.expectEqual(@as(usize, 11), visibleEndRow(&state, row_count));
 }
 
 test "tui keeps the operator's scroll anchor while live output continues below" {
@@ -4744,8 +4779,8 @@ test "tui keeps the operator's scroll anchor while live output continues below" 
     state.scrollUp(2);
     try std.testing.expectEqual(@as(usize, 2), state.scroll_offset);
     const before_rows = transcriptRowCount(&state, 80);
-    try std.testing.expectEqual(@as(usize, 12), before_rows);
-    try std.testing.expectEqual(@as(usize, 10), visibleEndRow(&state, before_rows));
+    try std.testing.expectEqual(@as(usize, 13), before_rows);
+    try std.testing.expectEqual(@as(usize, 11), visibleEndRow(&state, before_rows));
 
     const output_event = "{\"schema\":\"var1.tool_output_delta.v1\",\"tool\":\"shell_exec\",\"tool_call_id\":\"call_1\",\"stream\":\"stdout\",\"chunk_b64\":\"bGl2ZS1saW5l\",\"cap_reached\":false}";
     try state.addProgress("tool_output_delta", output_event);
@@ -4753,8 +4788,8 @@ test "tui keeps the operator's scroll anchor while live output continues below" 
 
     try std.testing.expectEqual(@as(usize, 3), state.scroll_offset);
     const after_rows = transcriptRowCount(&state, 80);
-    try std.testing.expectEqual(@as(usize, 13), after_rows);
-    try std.testing.expectEqual(@as(usize, 10), visibleEndRow(&state, after_rows));
+    try std.testing.expectEqual(@as(usize, 14), after_rows);
+    try std.testing.expectEqual(@as(usize, 11), visibleEndRow(&state, after_rows));
     try std.testing.expectEqual(@as(usize, 5), state.messages.items.len);
     try std.testing.expectEqualStrings("stdout: live-line | live-line", state.messages.items[4].text);
 }
@@ -4999,15 +5034,15 @@ test "tui streamed assistant deltas preserve row scroll anchor as wrapping grows
 
     try state.addAssistantDelta("alpha beta");
     const before_rows = transcriptRowCount(&state, 6);
-    try std.testing.expectEqual(@as(usize, 8), before_rows);
+    try std.testing.expectEqual(@as(usize, 9), before_rows);
 
     state.scrollUp(1);
     try state.addAssistantDelta(" gamma delta");
 
     const after_rows = transcriptRowCount(&state, 6);
-    try std.testing.expectEqual(@as(usize, 10), after_rows);
+    try std.testing.expectEqual(@as(usize, 11), after_rows);
     try std.testing.expectEqual(@as(usize, 3), state.scroll_offset);
-    try std.testing.expectEqual(@as(usize, 7), visibleEndRow(&state, after_rows));
+    try std.testing.expectEqual(@as(usize, 8), visibleEndRow(&state, after_rows));
 }
 
 test "tui assistant deltas after progress open a new readable response block" {
