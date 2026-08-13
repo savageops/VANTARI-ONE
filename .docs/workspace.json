@@ -20,6 +20,7 @@
     "current_agent_selection_research": ".docs/research/2026-08-13-model-selected-agent-eligibility.md",
     "current_agent_capacity_research": ".docs/research/2026-08-13-fixed-pool-capacity-truth.md",
     "current_owner_recovery_research": ".docs/research/2026-08-13-owner-generation-reconciliation.md",
+    "current_ticket_lifecycle_research": ".docs/research/2026-08-13-installed-ticket-lifecycle-mesh.md",
     "current_execution_owner_decision": ".docs/roadmap/21-persistent-execution-owner.md"
   },
   "canonical_owners": {
@@ -66,7 +67,7 @@
     "test_runtime_isolation": "six build artifacts plus direct zig test receive generated VANTARI_HOME and VANTARI_TEST_ROOT; direct proof kept 99960 files and 693051144 bytes unchanged",
     "installed_binary": "C:/Users/Savage/AppData/Local/Vantari/bin/vantari.exe",
     "install_script": "apps/backend/scripts/install_windows.ps1",
-    "built_sha256": "ADDA84517C3DD1CC870E75C293E64BF1A7E1B3CE4525C1D56EC0B260E551ECD8",
+    "built_sha256": "F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727",
     "installed_sha256": "5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC",
     "installed_hash_matches": false,
     "installed_settings_smoke": "initialize ok; config/set var1.config_set.v1 in 5 ms; isolated runtime removed; live root unchanged; zero processes",
@@ -90,6 +91,9 @@
     "agent_eligibility": "source-complete var1.agent_eligibility.v1: hot-loaded route-resolvable specialists, stable unavailable classes, fixed-pool/team/depth/contact/communication state, exact SHA-256 snapshot receipt; read-only idle projection starts no workers; quiet and hive profiles choose different actions through one executor; final 115-segment audit has one expected import/declaration adjacency candidate, zero exact pairs, no second owner",
     "agent_capacity": "source-complete: AgentCapacitySnapshot.fromCounts solely derives running, idle, queued, and saturated available; submitted closure tails fence idle-boundary replacement of the same physical pool; 20-task pressure reaches 3 active without exceeding max, exposes backlog, drains a live reduction under the prior ceiling, then applies max 1; Debug/ReleaseFast 1947/1947; 256-segment audit has 12 candidates and zero exact duplicates",
     "ticket_owner_recovery": "source-complete: terminal evidence precedes lease recovery; heartbeat requires exact Supervisor ownership; one revision/session/expiry-fenced resume preserves ticket, attempt, session, immutable receipt, transcript, and mailbox cursor under a new generation; absent session alone requeues; idempotent same-session replay produces one provider call, one delivery, and one cursor; poisoned suffix blocks mutation; Debug/ReleaseFast 1953/1953; 139-segment audit has 5 candidates and zero exact duplicates",
+    "ticket_lifecycle_mesh": "source Windows process proof: queue-only assignment; noninteractive TUI detach; exact owner/kernel tree death; lease expiry; new owner generation; one claim and one same-session resume; two nested children; one direct, one group, and one parent message; six unique received messages; zero transcript copies; one completed ticket; cold post-shutdown ticket/session/message readback; final zero proof-owned processes; 10-file 139-segment audit has 6 candidates and zero exact duplicates; evidence apps/backend/.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a/result.json",
+    "owner_connection_cleanup": "detached owner /owner/health crash repaired: ConnectionJob lifecycle reference is released before its page-allocated job storage is destroyed; owner lifecycle, owner tracer, and ticket lifecycle process meshes pass",
+    "ticket_repair_projection": "completed child closes cleanly; failed and cancelled terminal children settle ticket work with repair_required=true; TicketStore.close rejects repair closure without approval, exact original-input rerun, and regression evidence",
     "installed_summary_migration": "disposable VANTARI_HOME imported 1176/1176 legacy rows, appended one terminal summary through session/send, retained 1177 unique summary sequences, wrote four contiguous unique user/assistant/tool/assistant message rows, emitted 12 unique monotonic event notifications, returned contiguous event seq 2-12 after after_seq 1, reconstructed stdout 0080E280A8FF and capped stderr FF010080E280A8FE from two typed deltas, ended on the sole stored/notified turn_terminal seq 12 with schema var1.turn_terminal.v1, outcome completed, and run_seq 1, preserved live legacy SHA-256 5D3FF92999B433FF90CA65D1C68A9A960AB24F11979893360DB58710C41BBF1B, and left zero processes",
     "active_installed_processes_preserved": [
       "PID 12028: operator TUI",
@@ -99,14 +103,14 @@
   "wip": {
     "021": "021a-b archived; 021c-f pending; frontier 021c",
     "035": "035a-f archived; 035g-h pending; current binary installed; live provider /status proof still missing",
-    "036": "036a-g archived; parent pending; findings 10 and 13 closed; move 21 source-complete and moves 22-29 closed; finding 11 / roadmap move 30 installed mesh is the repair frontier",
+    "036": "036a-g archived; parent pending; findings 10 and 13 closed; moves 21 and 30 source-complete, moves 22-29 closed; finding 11 waits for the hash-matched installed lifecycle mesh and new terminal review",
     "PLUG": "parent and PLUGa-h pending; unstarted"
   },
   "residuals": [
     "Both test-isolation incidents, 877 older context-poison fixtures, and legacy backend owners are repaired reversibly; quarantine/archive manifests and rollback paths remain retained evidence.",
-    "The fixed agent pool survives presentation detach in one source-built owner tree; scheduler leadership and ticket claim/lease/child admission are process-exclusive; assignment is ledger-only and has no config policy branch. Direct/group/parent mailbox, unread cursor, route-resolved eligibility, capacity projection, terminal-first same-session resume, absent-session requeue, and live-owner heartbeat are source-closed. Installed worker-kill/restart and arbitrary external-effect certainty remain separate gates.",
+    "The fixed agent pool survives presentation detach in one source-built owner tree; scheduler leadership and ticket claim/lease/child admission are process-exclusive; assignment is ledger-only and has no config policy branch. The source Windows lifecycle mesh closes exact tree death, generation replacement, same-session resume, nested direct/group/parent delivery, terminal settlement, and zero-process cleanup. Hash-matched installed worker-kill/restart and arbitrary external-effect certainty remain separate gates.",
     "The tracked TUI consumes exact stored event seq and the in-process 100-way mesh is closed; ignored browser routes keep a compatibility transport SSE id, and multi-process writer ownership remains coupled to scheduler/claim arbitration.",
-    "Current source ReleaseFast ADDA84517C3DD1CC870E75C293E64BF1A7E1B3CE4525C1D56EC0B260E551ECD8 differs from installed move-19 hash 5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC. Two operator-owned installed processes were preserved; move 38 owns verified replacement after they exit.",
+    "Current source ReleaseFast F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727 differs from installed move-19 hash 5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC. Two operator-owned installed processes were preserved; move 38 owns verified replacement after they exit.",
     "Autonomous repair remains a gated evidence workflow, not an implicit background mutator."
   ]
 }

@@ -182,6 +182,11 @@ Sub-agents are normal VAR1 sessions launched by a parent and supervised through 
 - Treat same-session resume as exactly one durable work identity and delivery
   position, not exactly-once arbitrary external effects. `core/tools` write-intent
   and effect reconciliation remains the owner of effect certainty.
+- Prove owner-loss recovery with `scripts/prove-ticket-lifecycle.ps1`: queue-only
+  assignment, one claim, exact owner-tree death, generation change, same-session
+  resume, nested mailbox delivery, terminal reconciliation, and zero proof-owned
+  processes. Source proof does not satisfy installed promotion; require the same
+  tracer against the hash-matched installed binary.
 
 ## VII. Skill Routing Contract
 

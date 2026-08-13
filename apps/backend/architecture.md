@@ -398,7 +398,11 @@ The project-local execution owner keeps this sole service/pool/scheduler
 composition alive across TUI and CLI detach. Move 29 makes its durable child
 identity source-resumable after owner death: terminal evidence settles first;
 an existing nonterminal session receives one generation-fenced `resume`; only
-an absent claimed session requeues. Move 30 owns installed kill/restart proof.
+an absent claimed session requeues. Move 30's source Windows process mesh kills
+the exact owner/kernel tree, waits for lease expiry, creates a new owner
+generation, resumes the same child session and receipt, completes nested
+collaboration, and leaves zero proof-owned processes. The hash-matched installed
+run remains open.
 Move 23 closes scheduler leadership.
 Move 24 closes ticket admission split-brain: `core/tickets` holds one shared
 process lock across projection, validation, and append; the winning claim row
@@ -436,7 +440,9 @@ compilation injects only the recipient's bounded unread batch and acknowledges i
 after provider success; it never copies sibling transcripts or creates a generic
 topic/subscription broker. Tickets remain the only work lifecycle. Move 29
 preserves the same recipient session and cursor across owner-generation recovery;
-it does not copy or reset delivery state. Move 30 owns installed crash proof.
+it does not copy or reset delivery state. Move 30's source process tracer proves
+nested direct/group/parent delivery exactly once after owner replacement, with no
+recipient transcript copy. Installed crash proof remains open.
 
 ## Module ownership
 
@@ -604,10 +610,17 @@ Latest local Windows validation on 2026-08-13:
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Current source SHA-256 is
-  `ADDA84517C3DD1CC870E75C293E64BF1A7E1B3CE4525C1D56EC0B260E551ECD8`.
+  `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`.
   Installed move-19 SHA-256 remains
   `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
   replacement waits for operator-owned PIDs 12028/14452 to exit naturally.
+- The source ticket lifecycle mesh at
+  `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`
+  proves assignment without launch, one claim, noninteractive TUI detach, exact
+  owner-tree death, one generation change, same-session resume, two nested
+  children, direct/group/parent delivery, six unique received messages, zero
+  transcript copies, one completed ticket, cold post-shutdown replay, and final
+  zero processes.
 - Installed settings transport flipped `runtime.full_access_mode` in an isolated
   workspace, removed all generated state, preserved the live root, and left
   zero VANTARI process.

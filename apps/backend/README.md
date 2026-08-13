@@ -129,6 +129,13 @@ and child identity before `AgentService` materializes or submits the child. Afte
 claim and session creation are durable, the child sends one parent wake through
 the same sequence-addressed mailbox used for normal agent collaboration.
 
+Run `scripts/prove-ticket-lifecycle.ps1 -BinaryPath zig-out/bin/vantari.exe` for
+the composed Windows process mesh. It proves queue-only assignment, client
+detach, exact owner/kernel tree loss, lease expiry, a new owner generation,
+same-session resume, nested direct/group/parent delivery, one terminal ticket,
+and zero proof-owned processes. Installed promotion requires the same tracer
+against a source-hash-matched installed binary.
+
 ### Interjection Protocol (Speak While Working)
 
 The operator can send messages while the agent is actively working. Messages are:
@@ -391,10 +398,10 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Single terminal settlement | **Source and installed proven** | `commitTurnTerminal` admits exactly one `var1.turn_terminal.v1` row per `session_started.seq`; repeated identical settlement is idempotent, conflicting or stale settlement is rejected, and legacy terminal names are read-only. |
 | Generation-bound cancellation | **Source and installed proven** | The tracked TUI sends the observed `session_started.seq` as `expected_run_seq`; missing, unobserved, and stale generations do not mutate a newer run. Shutdown retains an admission-fenced unconditional path. |
 | Message transcript writer | **Source and installed proven** | One per-session owner serializes every message role and initializes sequence from a bounded valid tail. Multi-process writer ownership remains coupled to the persistent-host work. |
-| Persistent execution owner | **Source proven; install pending** | One workspace lease converges 20 concurrent clients on one owner/kernel tree. Explicit workspace selection defeats inherited/configured redirection. Client detach preserves the generation; graceful stop drains; forced owner death leaves zero descendants; the next client creates one new generation. The active installed operator pair blocks replacement only. |
+| Persistent execution owner | **Source Windows process mesh passed; install pending** | One workspace lease converges 20 concurrent clients on one owner/kernel tree. Explicit workspace selection defeats inherited/configured redirection. Client detach preserves the generation; graceful stop drains; forced owner death leaves zero descendants; the next client creates one new generation. The active installed operator pair blocks replacement only. |
 | Session submission | **Source proven** | `run --session-id` routes through `LocalClient` and owner `session/send`; the retired per-session `run-session` process no longer bypasses shared capacity or nested delegation. |
-| Child branch/convergence | **Source recovery proven; installed kill pending** | Fixed-pool convergence survives presentation-client exit. After lease expiry, terminal evidence settles first; a surviving ticket child resumes on the same receipt/session under a new generation, while an absent session alone requeues. Ordinary non-ticket orphan receipts still become `StaleAgentOwner`. |
-| Agent mailbox | **Source recovery proven; installed kill pending** | Direct, parent, and current-group delivery uses recipient event sequence, sender receipt, queue/wake intent, and provider-success unread cursor. Same-session owner recovery preserves exactly one delivery position without copying the cursor. |
+| Child branch/convergence | **Source Windows restart mesh passed; installed kill pending** | Fixed-pool convergence survives presentation-client exit. The process tracer kills the exact owner/kernel tree, waits for lease expiry, then resumes the same ticket child and immutable receipt under a new generation. Ordinary non-ticket orphan receipts still become `StaleAgentOwner`. |
+| Agent mailbox | **Source Windows restart mesh passed; installed kill pending** | Direct, parent, and current-group delivery uses recipient event sequence, sender receipt, queue/wake intent, and provider-success unread cursor. The process tracer observes nested sibling and parent context once, with zero copied transcript rows. |
 | Agent eligibility | **Source proven** | One hot-loaded `AgentService` snapshot advertises only route-resolvable specialists with capacity/team/communication state and an exact SHA-256 receipt. Quiet and hive prompt profiles choose different actions through the same executor; installed replacement remains pending. |
 | Write-intent ledger | **Frontier scaffold** | Reserve/commit helpers and tests exist; write-capable tools do not call them on the canonical mutation path. |
 | Byte-level session integrity | **Source and installed proven** | One LF-only reader owns BOM, invalid-UTF-8, JSON/schema, duplicate, and non-monotonic boundaries across event/message/context/intent/summary projections. Append refuses a poisoned current tail without rewriting it; operator-facing corruption events remain a later diagnostics decision. |

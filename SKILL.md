@@ -58,6 +58,7 @@ second runtime owner.
 ```powershell
 .\scripts\prove-owner-tracer.ps1 -BinaryPath .\zig-out\bin\vantari.exe -EntryPoint serve
 .\scripts\prove-owner-lifecycle.ps1 -BinaryPath .\zig-out\bin\vantari.exe -ConcurrentClients 20
+.\scripts\prove-ticket-lifecycle.ps1 -BinaryPath .\zig-out\bin\vantari.exe
 ```
 
 Require one generation, one owner/kernel pair, duplicate-start rejection,
@@ -73,15 +74,15 @@ requires source/installed SHA-256 equality and the installed consumer path.
   token/generation gated.
 - Scheduler leadership is source-proven with one crash-released lock and
   generation fence across two kernels. Ticket claim, lease, capability, and
-  deterministic child identity now commit in one process-serialized row before
-  child materialization. Route-resolved specialist/team eligibility with a
-  deterministic receipt, direct/group/parent mail, provider-success unread
-  cursor, child completion, and ticket-claim notices are source-proven on
-  `events.jsonl`. Generation-fenced same-session resume and absent-session
-  requeue are also source-proven without copying the cursor. Installed
-  worker-kill/restart proof remains roadmap work; exactly-once external effects
-  remain behind the write-intent ledger. Do not infer either from source-only
-  proof.
+  deterministic child identity commit in one process-serialized row before
+  child materialization. The source Windows lifecycle mesh proves queue-only
+  assignment, TUI detach, exact owner-tree loss, generation replacement,
+  same-session resume, nested direct/group/parent delivery, one terminal ticket,
+  and zero proof-owned processes. Failure and cancellation project
+  `repair_required`; closure still requires approval, exact rerun, and regression
+  evidence. Installed hash-matched worker-kill/restart proof remains open;
+  exactly-once external effects remain behind the write-intent ledger. Do not
+  infer either from source-only proof.
 
 Read `README.md`, `apps/backend/architecture.md`, and
 `.docs/roadmap/24-harness-capability-next-90.md` for deeper contracts.

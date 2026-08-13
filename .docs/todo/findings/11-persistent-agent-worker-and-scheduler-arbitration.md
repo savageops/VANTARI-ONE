@@ -11,10 +11,10 @@ source: ../../research/2026-08-12-full-harness-sitrep.md
 
 ## Finding
 
-Move 21 now places the fixed agent pool in one project-local execution-owner
-tree, so it survives TUI and short-lived CLI exit. The remaining failure boundary
-is owner-process death: in-memory work is marked stale rather than resumed or
-requeued exactly once. Move 23 closes scheduler split-brain: one crash-released
+Move 21 places the fixed agent pool in one project-local execution-owner tree, so
+it survives TUI and short-lived CLI exit. Move 30 now proves source owner-process
+death and replacement end to end; the remaining boundary is the hash-matched
+installed run. Move 23 closes scheduler split-brain: one crash-released
 process lock and one read-back generation fence span each tick. Move 24 closes
 ticket admission split-brain: one process lock spans ticket projection,
 validation, and append; one winning row commits generation, lease, capability,
@@ -38,6 +38,13 @@ claim with a surviving session appends one generation-fenced `resume` and runs
 the immutable receipt's same group/task/session/attempt; only an absent session
 requeues. Cold receipt reconstruction defers ticket-owned sessions, and
 same-session replay preserves one mailbox delivery and cursor.
+Move 30 composes those owners through a source-built Windows process mesh. The
+tracer detaches a noninteractive TUI, kills the exact owner/kernel tree, waits for
+lease expiry, starts a different generation, resumes the same ticket session,
+runs two nested children, delivers direct/group/parent mail once, completes the
+ticket, and returns the proof-owned process count to zero. It also exposed a real
+HTTP bridge cleanup use-after-free; lifecycle release now precedes destruction of
+the page-allocated connection job.
 Move 25 closes assignment ambiguity: create-as-assigned and
 transition-to-assigned append queue state only, and the dead ticket execution
 policy is deleted.
@@ -148,8 +155,21 @@ under the old ceiling, and applies the reduced ceiling at idle. The 256-segment
 capacity audit finds zero exact duplicates. Same-session owner recovery passes
 terminal-first, live-owner heartbeat, absent-session requeue, poisoned-tail,
 idempotent replay, and cursor-preservation pressure. Its 139-segment audit finds
-zero exact duplicates. Installed worker-kill/restart proof remains open; this
-finding stays pending through Move 30.
+zero exact duplicates. The composed lifecycle result at
+`.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a` records one claim,
+one resume, two nested children, one direct, one group, one parent message, six
+unique received messages, zero transcript copies, one completion, cold
+post-shutdown replay, and final zero processes. Separate source pressure settles failed and cancelled children with
+`repair_required=true` and rejects repair closure without approval, exact rerun,
+and regression evidence. Owner lifecycle evidence is retained at
+`.zig-cache/owner-proofs/8e02c2b054864bb699cfd8f6182d4d9a`; scheduler
+leadership evidence is retained at
+`.zig-cache/owner-proofs/b80d4d5bcc7f438089f9a35dce16ce9a`. Source SHA-256
+is `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`;
+installed remains the move-19 hash while operator PIDs 12028/14452 are active.
+The 10-file, 139-segment lifecycle audit finds six candidates and zero exact
+duplicates. This finding stays pending until the installed tracer and new
+terminal review pass.
 
 ## Source and salvage
 

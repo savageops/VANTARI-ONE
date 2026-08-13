@@ -35,6 +35,7 @@ Created
 **/.toolchain/
 **/.zig-cache/
 **/zig-out/
+**/zig-out-*/
 **/zig-pkg/
 **/output/
 

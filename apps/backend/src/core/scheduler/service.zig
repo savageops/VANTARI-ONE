@@ -1113,7 +1113,7 @@ test "scheduler settles an expired terminal child before owner recovery" {
     try std.testing.expectEqual(tickets.TicketStatus.completed, ticket.status);
 }
 
-test "scheduler completes terminal child sessions and marks failed work for repair" {
+test "scheduler completes terminal child sessions and marks failed or cancelled work for repair" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1127,6 +1127,8 @@ test "scheduler completes terminal child sessions and marks failed work for repa
     defer allocator.free(completed_ticket_id);
     const failed_ticket_id = try createAssignedTicket(allocator, &store, workspace, "repair", "bug", 200);
     defer allocator.free(failed_ticket_id);
+    const cancelled_ticket_id = try createAssignedTicket(allocator, &store, workspace, "cancelled", "task", 300);
+    defer allocator.free(cancelled_ticket_id);
 
     var completed_session = try sessions.initSessionWithOptions(allocator, workspace, "complete", .{ .display_name = "completed child" });
     defer completed_session.deinit(allocator);
@@ -1140,10 +1142,15 @@ test "scheduler completes terminal child sessions and marks failed work for repa
     try sessions.setSessionFailure(allocator, workspace, &failed_session, "provider failed");
     try claimTicketForTest(allocator, &store, failed_ticket_id, "worker-failed", failed_session.id, "failed-lease", now_ms + 30_000, 1, 1);
 
+    var cancelled_session = try sessions.initSessionWithOptions(allocator, workspace, "cancelled", .{ .display_name = "cancelled child" });
+    defer cancelled_session.deinit(allocator);
+    try sessions.setSessionStatus(allocator, workspace, &cancelled_session, .cancelled);
+    try claimTicketForTest(allocator, &store, cancelled_ticket_id, "worker-cancelled", cancelled_session.id, "cancelled-lease", now_ms + 30_000, 1, 1);
+
     var service = try Service.init(allocator, &config, .{ .context = null, .sendFn = provider.httpSend });
     defer service.deinit();
     const result = try service.tick();
-    try std.testing.expectEqual(@as(usize, 2), result.ticket_completed_count);
+    try std.testing.expectEqual(@as(usize, 3), result.ticket_completed_count);
     try std.testing.expectEqual(@as(usize, 0), result.ticket_requeued_count);
     try std.testing.expectEqual(@as(usize, 0), result.ticket_renewed_count);
     try std.testing.expectEqual(@as(usize, 0), result.ticket_failed_count);
@@ -1152,6 +1159,7 @@ test "scheduler completes terminal child sessions and marks failed work for repa
     defer projection.deinit();
     const completed_ticket = projection.findConst(completed_ticket_id) orelse return error.TestExpectedTicket;
     const failed_ticket = projection.findConst(failed_ticket_id) orelse return error.TestExpectedTicket;
+    const cancelled_ticket = projection.findConst(cancelled_ticket_id) orelse return error.TestExpectedTicket;
     try std.testing.expectEqual(tickets.TicketStatus.completed, completed_ticket.status);
     try std.testing.expect(!completed_ticket.repair_required);
     try std.testing.expectEqualStrings(completed_session.id, completed_ticket.active_session_id);
@@ -1160,7 +1168,10 @@ test "scheduler completes terminal child sessions and marks failed work for repa
     try std.testing.expect(failed_ticket.repair_required);
     try std.testing.expect(std.mem.indexOf(u8, failed_ticket.terminal_receipt, "status=failed") != null);
     try std.testing.expect(std.mem.indexOf(u8, failed_ticket.terminal_receipt, "failure=provider failed") != null);
-    try std.testing.expectEqual(@as(usize, 8), projection.valid_events);
+    try std.testing.expectEqual(tickets.TicketStatus.completed, cancelled_ticket.status);
+    try std.testing.expect(cancelled_ticket.repair_required);
+    try std.testing.expect(std.mem.indexOf(u8, cancelled_ticket.terminal_receipt, "status=cancelled") != null);
+    try std.testing.expectEqual(@as(usize, 12), projection.valid_events);
 
     const completion_key = try std.fmt.allocPrint(allocator, "ticket-complete:{s}:3:1:{s}", .{ completed_ticket_id, completed_session.id });
     defer allocator.free(completion_key);
@@ -1179,5 +1190,5 @@ test "scheduler completes terminal child sessions and marks failed work for repa
 
     const second = try service.tick();
     try std.testing.expectEqual(@as(usize, 0), second.ticket_completed_count);
-    try std.testing.expectEqual(@as(usize, 8), projection.valid_events);
+    try std.testing.expectEqual(@as(usize, 12), projection.valid_events);
 }

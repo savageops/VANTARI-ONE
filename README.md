@@ -790,8 +790,8 @@ Every tool call, context window, and model interaction is recorded in structured
 | Wire-protocol routing — Chat Completions, Responses, Anthropic Messages | **Shipped** |
 | Provider model discovery and local context-window detection | **Shipped** |
 | Durable scheduler records and attempts | **Source proven; two-kernel leadership gate passed** |
-| Buffered ticket admission, fixed capacity, and same-session owner recovery | **Source proven; installed crash-restart proof pending** |
-| Sequence-addressed direct/group/parent agent mailbox | **Source proven; installed crash-restart proof pending** |
+| Buffered ticket admission, fixed capacity, and same-session owner recovery | **Source Windows process mesh passed; installed hash-matched run pending** |
+| Sequence-addressed direct/group/parent agent mailbox | **Source Windows restart/delivery mesh passed; installed hash-matched run pending** |
 | Model-selected route eligibility and team snapshot | **Source proven; installed replacement pending** |
 | Plugin runtime with typed socket execution | **In progress** |
 | Provider fallback chains | Planned |

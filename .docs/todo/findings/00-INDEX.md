@@ -22,7 +22,11 @@ Move 27 closes route-resolved model-selected team awareness and its deterministi
 receipt without adding a selector runtime. Move 28 closes fixed-pool capacity
 truth and idle-boundary config refresh without adding a second pool or ledger.
 Move 29 closes generation-fenced same-session owner recovery in source without
-a second lease store, copied mailbox cursor, or unconditional requeue.
+a second lease store, copied mailbox cursor, or unconditional requeue. Move 30
+now composes those owners through a source-built Windows crash/restart mesh:
+assignment, claim, detach, exact tree death, generation replacement, nested
+mailbox delivery, terminal settlement, and zero-process cleanup pass. Finding 11
+stays open until the hash-matched installed run and terminal review pass.
 
 [`../../roadmap/24-harness-capability-next-90.md`](../../roadmap/24-harness-capability-next-90.md) expands this ledger into the current 90-move execution order. This findings index remains the immediate P0/P1/P2 authority; roadmap 24 sequences the downstream capability and friction-removal work behind it.
 

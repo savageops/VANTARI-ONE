@@ -241,28 +241,25 @@ Every row above compounds the parent ratchet.
 
 [`../findings/11-persistent-agent-worker-and-scheduler-arbitration.md`](../findings/11-persistent-agent-worker-and-scheduler-arbitration.md)
 
-Moves 24–29 are closed in source. One shared ticket-ledger process lock serializes
-projection, revision validation, and append; the winning row commits lease,
-generation, capability, attempt, and deterministic child identity before one
-child is materialized. The two-kernel proof at
-`.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1` records one claim
-and one matching child. Direct create-as-assigned and transition-to-assigned
-retain two queued tickets with zero claims or sessions. The unused four-key
-ticket policy is deleted; `agent_routes.max_concurrency` is the sole capacity
-setting. One sequence-addressed mailbox now owns bounded direct/group/parent
-delivery. One receipt-bound `agents {}` snapshot exposes only route-resolvable
-specialists plus current pool/team/communication state while quiet and hive
-prompts choose different actions through the same executor. One canonical
-capacity constructor now separates active, idle, queued, and ticket-admission
-headroom. A 20-task pressure probe holds active work at three, exposes backlog,
-drains a live config reduction under the old ceiling, then replaces the same pool
-at one worker. Expired claims now settle terminal evidence first; heartbeat
-requires exact `Supervisor` ownership; surviving sessions resume under a new
-generation with the same attempt, receipt, transcript, and mailbox cursor; only
-absent sessions requeue. Cold receipt recovery no longer races this path with
-`StaleAgentOwner`. Debug and ReleaseFast pass 1,953/1,953; the Move 29
-139-segment audit finds zero exact duplicates. Move 30 is next: installed assign,
-message, detach, kill, restart, terminal, repair, and delivery proof.
+Moves 24–29 are closed. Move 30 is source-complete. The composed Windows tracer
+at `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`
+proves queue-only assignment, one claim and deterministic child, noninteractive
+TUI detach, exact owner/kernel tree death, lease expiry, one new generation,
+same-session resume, two nested children, direct/group/parent delivery, six
+unique received messages, zero transcript copies, one completion row, graceful
+shutdown, cold post-shutdown replay, retained `result.json`, and final zero
+processes. The run also found and fixed a detached-owner
+`ConnectionJob` cleanup use-after-free: lifecycle release now precedes allocator
+destroy. Separate scheduler pressure proves failed and cancelled terminal sessions
+settle as completed work with `repair_required=true`; `TicketStore.close` rejects
+repair closure without approval, exact rerun, and regression evidence. Debug and
+ReleaseFast pass 1,953/1,953; TUI passes 61/61; source SHA-256 is
+`F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`.
+Installed SHA-256 remains
+`5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
+operator-owned PIDs 12028/14452 remain active. Keep this parent open until the
+same tracer passes against the hash-matched installed binary and a new terminal
+review archives.
 
 ## Stop Condition
 

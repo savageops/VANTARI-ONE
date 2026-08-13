@@ -75,8 +75,9 @@ advance the queue until the real installed consumer path proves it.
 | 27 | consolidate/add-tests | closed | `agents {}` now returns one sorted `var1.agent_eligibility.v1` snapshot from the live `AgentService`: only route-resolvable specialists, stable unavailable classes, fixed-pool/team pressure, depth/contact bounds, communication targets/modes, and an exact SHA-256 receipt. Read-only eligibility projects configured idle capacity without starting worker threads; agent configuration invalidates prior eligibility. Removed always-on fan-out and first-call prompt mandates; quiet and hive profiles choose different actions through the same executor. Debug and ReleaseFast pass 1,946/1,946; ReleaseFast is 9/9; the final 115-segment audit finds one import/declaration adjacency candidate, zero exact pairs, and no second owner. Source SHA-256 is `8CB2B28182BE153458C211BBF5A500F1BCD1726BAAB517771C4939697CC72B42`; installed replacement remains move 38. |
 | 28 | consolidate/add-tests | closed | `AgentCapacitySnapshot.fromCounts` now solely derives running, idle, queued, and saturated ticket-admission headroom. Submitted closure tails fence idle-boundary replacement of the same physical pool; busy work drains under its actual ceiling. A 20-task probe reaches three active calls with visible backlog, preserves `running <= max`, then applies a live reduction to one after release. Debug and ReleaseFast pass 1,947/1,947; ReleaseFast is 9/9; the 256-segment audit finds 12 candidates, zero exact pairs, and no second capacity owner. Source SHA-256 is `6E6A80054C4982AA9F1D86E9415B2422A4F7B7670080795243A91818279A360A`; installed replacement remains move 38. |
 | 29 | consolidate/add-tests | closed | One revision/session/expiry-fenced `resume` ticket row replaces only worker generation and lease while preserving attempt, child session, immutable receipt, transcript, and mailbox cursor. Terminal evidence settles first; heartbeat requires exact live Supervisor ownership; absent sessions alone requeue; cold receipt recovery defers ticket-owned sessions. Idempotent replay produces one provider call, delivery, and cursor. Debug/ReleaseFast pass 1,953/1,953; ReleaseFast is 9/9; the 139-segment audit finds five candidates, zero exact pairs, and no second recovery owner. Source SHA-256 is `ADDA84517C3DD1CC870E75C293E64BF1A7E1B3CE4525C1D56EC0B260E551ECD8`; installed crash proof remains move 30. |
+| 30 | consolidate/add-tests | source-complete; install blocked | `prove-ticket-lifecycle.ps1` composes the canonical owner, scheduler, ticket, session, fixed-pool, and event-mailbox owners. Source ReleaseFast proves queue-only assignment, noninteractive TUI detach, exact owner/kernel tree death, lease expiry, a new owner generation, one same-session resume, two nested children, direct/group/parent delivery, six unique received messages, zero transcript copies, one completion row, cold post-shutdown replay, and final zero processes at `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`. It exposed and fixed a `ConnectionJob` defer-order use-after-free. Failed and cancelled terminal sessions project `repair_required`; repair closure rejects missing approval/rerun/regression evidence. Core 1,953/1,953 and TUI 61/61 pass; the 10-file, 139-segment audit finds six candidates and zero exact duplicates; source SHA-256 is `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`. Installed hash-matched proof and the new 036 terminal review wait for operator-owned PIDs 12028/14452 to exit naturally. |
 | 31 | delete/consolidate | closed | Retired prompt leak and brittle prose assertions removed; broad graph green. |
-| 38 | consolidate | reopened/pending | Historical install proof passed for an earlier artifact. Current ReleaseFast is `ADDA84517C3DD1CC870E75C293E64BF1A7E1B3CE4525C1D56EC0B260E551ECD8`; installed remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`. Replace and rerun installed smokes only after operator-owned PIDs 12028/14452 exit naturally. |
+| 38 | consolidate | reopened/pending | Historical install proof passed for an earlier artifact. Current ReleaseFast is `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`; installed remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`. Replace and rerun installed smokes only after operator-owned PIDs 12028/14452 exit naturally. |
 
 ## Competitive basis
 
@@ -238,10 +239,11 @@ advance the queue until the real installed consumer path proves it.
 
 ## Immediate frontier
 
-Start at move 30. Moves 1-20 and 22-29 are closed; move 21 is source-complete
-and blocked only at installed replacement. Move 29 closes terminal-first,
-generation-fenced same-session recovery without a second owner, copied cursor,
-or unconditional requeue. Move 30 proves the complete crash/restart lifecycle on
-the installed Windows path.
+Finish move 30's installed gate. Moves 1-20, 22-29, and 31 are closed; moves 21
+and 30 are source-complete and blocked only at installed replacement. Move 30's
+source Windows process mesh proves terminal-first, generation-fenced same-session
+recovery, nested mailbox delivery, and exact tree cleanup without a second owner,
+copied cursor, or unconditional requeue. The same tracer must pass through the
+hash-matched installed binary before finding 11 or ticket 036 closes.
 Do not spend implementation time on PLUG, context sharding, or autonomous repair
 while that band remains red.

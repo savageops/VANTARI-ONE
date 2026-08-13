@@ -316,8 +316,12 @@ pub fn serve(allocator: std.mem.Allocator, config: types.Config, options: ServeO
 }
 
 fn handleConnectionJob(job: *ConnectionJob) void {
-    defer job.lifecycle.release();
-    defer job.allocator.destroy(job);
+    const allocator = job.allocator;
+    const lifecycle = job.lifecycle;
+    defer {
+        lifecycle.release();
+        allocator.destroy(job);
+    }
     handleConnection(job.allocator, job.bridge, job.lifecycle, &job.connection) catch |err| {
         bridge_access.logError("http_connection", null, err);
     };

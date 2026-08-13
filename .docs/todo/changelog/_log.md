@@ -2249,3 +2249,65 @@ kill/restart, message, terminal, repair, and cleanup proof.
 **Next todo:** move 30 — run the installed 036 terminal mesh across assignment,
 claim, messaging, detach, worker kill, restart, complete/fail/cancel/repair, and
 verify no lost or duplicate delivery.
+
+## 2026-08-13 - Move 30 source Windows ticket lifecycle mesh
+
+**State:** source-complete; installed promotion blocked by active operator PIDs.
+
+**Changed:**
+
+- Added `scripts/prove-ticket-lifecycle.ps1`, one composed process tracer over the
+  existing owner, scheduler, ticket ledger, fixed pool, session ledger, and agent
+  mailbox. It adds no runtime entry point, worker registry, broker, or proof-only
+  kernel branch.
+- Repaired `host/http_bridge.zig:handleConnectionJob`. The former independent
+  defers destroyed the page-allocated `ConnectionJob` before reading its lifecycle
+  pointer. One defer now releases the captured lifecycle before allocator destroy.
+- Extended scheduler cold-start pressure so completed, failed, and cancelled
+  child sessions reconcile together. Failed and cancelled rows require repair;
+  cancelled evidence retains `status=cancelled`.
+- Ignored custom Zig prefix roots through `**/zig-out-*/`; proof/build output stays
+  outside tracked source.
+
+**Proof:**
+
+- Ticket lifecycle root
+  `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`:
+  queue-only assignment; TUI `TerminalUnavailable` detach; exact first owner/kernel
+  tree death; different replacement generation; one claim; one same-session
+  resume; two nested children; one direct, one group, and one parent message; six
+  unique recipient deliveries; zero transcript copies; one completion; graceful
+  shutdown; cold post-shutdown ticket/session/message replay; retained
+  `result.json`; final zero proof-owned processes.
+- Owner lifecycle root
+  `.zig-cache/owner-proofs/8e02c2b054864bb699cfd8f6182d4d9a`:
+  20/20 clients, graceful and forced recovery, three generations, zero survivors.
+- Scheduler root
+  `.zig-cache/owner-proofs/b80d4d5bcc7f438089f9a35dce16ce9a`:
+  two kernels, one winning attempt/claim/child/terminal row, generation fence, zero
+  survivors.
+- Core Debug and ReleaseFast pass 19/19 steps and 1,953/1,953 tests. Focused TUI
+  passes 9/9 steps and 61/61 tests. ReleaseFast SHA-256 is
+  `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`.
+- The GGUF duplicate-owner audit covers 10 lifecycle files and 139 segments. It
+  reports six semantic candidates, zero exact duplicates, and no second process,
+  scheduler, ticket, mailbox, or repair owner.
+
+**Competitive decision:** Prime Agent contributes daemon-detach and family
+message pressure; Codex contributes append-first event interpretation; Eve
+separates client streams from continuation ownership; Paperclip separates
+liveness from work state; Vercel Queues requires stable redelivery identity;
+Scion pressures restart-readable messaging. VANTARI composes those invariants
+through fewer owners: one execution tree, one ticket ledger, one fixed pool, and
+one sequence-addressed event mailbox.
+
+**Boundary:** Installed SHA-256 remains
+`5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
+Operator-owned installed PIDs 12028/14452 remain untouched. Move 30, finding 11,
+and parent 036 stay open until the hash-matched installed tracer and a new terminal
+review pass. Move 62 still owns arbitrary external-effect certainty; Moves 71-80
+own causal repair promotion.
+
+**Next todo:** preserve the active installed pair; run duplicate-owner audit and
+checkpoint this source result. Execute the same tracer against the installed path
+after those processes exit naturally.
