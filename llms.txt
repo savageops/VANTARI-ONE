@@ -17,6 +17,10 @@ defaults to `orchestrate`, and unknown labels fail before execution. Prompt mode
 changes provider guidance only; it does not change the executor, tools, access,
 model, or capacity.
 
+The TUI footer is one non-wrapping read model: status, prompt mode, model,
+effort, context used/capacity/percent, and remaining context. Unknown accounting
+is `ctx —`; no footer registry, progress gauge, second row, or status bus exists.
+
 Canonical execution path:
 operator input -> public LocalClient facade -> project-local execution owner ->
 private ChildClient -> kernel-stdio -> transcript/context/provider/tools/events ->

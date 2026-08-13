@@ -200,3 +200,17 @@ Do not erase historical closeout records or fabricate proof to make a chain gree
 - The active boundary is Move 44: one compact status row for prompt mode,
   model, effort, context, and remaining capacity. Agent Hub and the installed
   visual matrix remain later boundaries.
+
+## Closure receipt — Move 44 (2026-08-13)
+
+- The one canonical footer projection now renders `ready`/`working`/`cancelling`/
+  `failed`, the active prompt mode, model, effort, exact context arithmetic, and
+  remaining context without wrapping. Unknown capacity stays `ctx —`; no
+  progress gauge, settings registry, or second telemetry owner was added.
+- Focused TUI is `77/77`; Debug is `19/19` with `1,998/1,998`; ReleaseFast and
+  install are `9/9`. Installed TUI rendered the new row and blank startup/exit
+  passed. Source and installed SHA-256 match
+  `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`; exact
+  owner-tree teardown leaves zero VANTARI processes.
+- The active boundary is Move 45: agent/queue/cost signal policy. Agent Hub and
+  the installed visual matrix remain later boundaries.

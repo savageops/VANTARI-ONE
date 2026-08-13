@@ -2667,6 +2667,27 @@ controlled, with provider-visible capture and no executor behavior branches.
 - Updated roadmap, research/index records, root/backend README, architecture,
   technical summary, workspace record, findings receipt, and `AGENTS.md`.
 
-**Next todo:** Move 44 — one compact status row for active prompt mode, model,
-effort, context used/capacity/percent, and remaining context with graceful
-truncation.
+## Closure receipt — Move 44 (2026-08-13)
+
+- The eight-source status-row harvest is recorded in
+  `.docs/research/2026-08-13-status-row-move44.md`. It keeps one existing footer
+  projection owner, rejects a configurable registry and progress gauge, and
+  preserves prompt-mode control as a session-local provider lens.
+- `formatFooterMetaWithPool` now emits `status · prompt mode · model · effort ·
+  context used/capacity (percent) · remaining` without wrapping. Existing
+  runtime status maps to `ready`, `working`, `cancelling`, or `failed`; context
+  remains exact or explicitly unknown; codepoint-safe fitting protects narrow
+  terminals.
+- Focused TUI returned `9/9` steps and `77/77` tests; Debug returned `19/19`
+  steps and `1,998/1,998` tests; ReleaseFast/install returned `9/9`.
+- Installed TUI visibly rendered `ready · orchestrate · glm-5.2 · max · ctx — /
+  500k`. Source and installed SHA-256 match
+  `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`. The
+  proof-owned owner/kernel tree was explicitly torn down and the final process
+  census was zero.
+- Updated roadmap, research/index records, root/backend README, architecture,
+  technical summary, workspace record, findings receipt, `AGENTS.md`, `SKILL.md`,
+  and `llms.txt`.
+
+**Next todo:** Move 45 — keep active/max agents, nonzero queue, and known session
+cost only when those values carry signal.

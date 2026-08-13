@@ -56,6 +56,11 @@ second runtime owner.
   `orchestrate -> build -> align -> plan`; the next `session/send` applies one
   provider-visible layer and defaults to `orchestrate`. It does not change
   tools, access, model, capacity, or executor behavior.
+- The single TUI footer row projects `status · prompt mode · model · effort ·
+  context used/capacity/percent · remaining` without wrapping; unknown context
+  stays `ctx —`, and narrow fitting drops lower-signal detail before
+  codepoint-safe truncation. Keep it a read model, not a settings registry or
+  status bus.
 - Use `vantari auth status --json` for secret-free provider/account/plan state.
   Run `vantari auth login openai-codex` for the browser PKCE path or its manual
   redirect fallback; use `vantari auth logout <provider-id>` for one-record

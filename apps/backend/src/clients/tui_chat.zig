@@ -2055,6 +2055,8 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         state.model,
         state.effort,
         state.thinking_mode,
+        state.prompt_mode,
+        state.status,
         state.context_used_tokens,
         state.context_window_tokens,
         agent_counts.running,
@@ -2825,6 +2827,8 @@ fn formatFooterMeta(
         model,
         effort,
         thinking_mode,
+        .orchestrate,
+        "READY",
         context_used_tokens,
         context_window_tokens,
         running_agents,
@@ -2842,6 +2846,8 @@ fn formatFooterMetaWithPool(
     model: []const u8,
     effort: []const u8,
     thinking_mode: []const u8,
+    prompt_mode: prompt_modes.PromptMode,
+    runtime_status: []const u8,
     context_used_tokens: ?u64,
     context_window_tokens: u64,
     running_agents: usize,
@@ -2882,31 +2888,26 @@ fn formatFooterMetaWithPool(
         }
     }
 
-    const status = try formatFooterStatus(allocator, waiting, cancel_requested, scroll_offset);
-    defer allocator.free(status);
+    const status = footerStatusLabel(runtime_status, waiting, cancel_requested);
+    const mode = prompt_mode.label();
+    const transient = try formatFooterTransient(allocator, scroll_offset);
+    defer allocator.free(transient);
 
-    var candidate = try buildFooterMetaLine(allocator, model, effort_label, context_full, agents.items, status, true, true, true);
-    if (candidate.len <= width) return candidate;
+    var candidate = try buildFooterMetaLine(allocator, status, mode, model, effort_label, context_full, agents.items, transient, true, true, true);
+    if (footerVisualWidth(candidate) <= width) return candidate;
     allocator.free(candidate);
 
-    candidate = try buildFooterMetaLine(allocator, model, effort_label, context_compact, agents.items, "", true, true, false);
-    if (candidate.len <= width) return candidate;
+    candidate = try buildFooterMetaLine(allocator, status, mode, model, effort_label, context_full, "", "", true, false, false);
+    if (footerVisualWidth(candidate) <= width) return candidate;
     allocator.free(candidate);
 
-    candidate = try buildFooterMetaLine(allocator, model, "", context_compact, agents.items, "", false, true, false);
-    if (candidate.len <= width) return candidate;
+    candidate = try buildFooterMetaLine(allocator, status, mode, model, "", context_compact, agents.items, "", false, true, false);
+    if (footerVisualWidth(candidate) <= width) return candidate;
     allocator.free(candidate);
 
-    candidate = try buildFooterMetaLine(allocator, model, "", context_compact, "", "", false, false, false);
-    if (candidate.len <= width) return candidate;
-    allocator.free(candidate);
-
-    const context_budget = @min(context_compact.len, width);
-    if (context_budget == width) return truncateEnd(allocator, context_compact, width);
-    const model_budget = width - context_budget -| 3;
-    const compact_model = try truncateEnd(allocator, model, model_budget);
-    defer allocator.free(compact_model);
-    return std.fmt.allocPrint(allocator, "{s} · {s}", .{ compact_model, context_compact });
+    candidate = try buildFooterMetaLine(allocator, status, mode, model, "", context_compact, "", "", false, false, false);
+    defer allocator.free(candidate);
+    return truncateFooterEnd(allocator, candidate, width);
 }
 
 fn footerEffortLabel(effort: []const u8, thinking_mode: []const u8) []const u8 {
@@ -2964,23 +2965,27 @@ fn compactTokenCount(allocator: std.mem.Allocator, value: u64) ![]u8 {
 
 fn buildFooterMetaLine(
     allocator: std.mem.Allocator,
+    status: []const u8,
+    prompt_mode: []const u8,
     model: []const u8,
     effort: []const u8,
     context: []const u8,
     agents: []const u8,
-    status: []const u8,
+    transient: []const u8,
     include_effort: bool,
     include_agents: bool,
-    include_status: bool,
+    include_transient: bool,
 ) ![]u8 {
     var line = std.array_list.Managed(u8).init(allocator);
     errdefer line.deinit();
     var first = true;
+    try appendFooterPart(&line, &first, status);
+    try appendFooterPart(&line, &first, prompt_mode);
     try appendFooterPart(&line, &first, model);
     if (include_effort) try appendFooterPart(&line, &first, effort);
     try appendFooterPart(&line, &first, context);
     if (include_agents) try appendFooterPart(&line, &first, agents);
-    if (include_status) try appendFooterPart(&line, &first, status);
+    if (include_transient) try appendFooterPart(&line, &first, transient);
     return line.toOwnedSlice();
 }
 
@@ -2991,27 +2996,21 @@ fn appendFooterPart(line: *std.array_list.Managed(u8), first: *bool, part: []con
     first.* = false;
 }
 
-fn formatFooterStatus(
-    allocator: std.mem.Allocator,
+fn footerStatusLabel(
+    runtime_status: []const u8,
     waiting: bool,
     cancel_requested: bool,
-    scroll_offset: usize,
-) ![]u8 {
-    // Waiting is rendered by the agent-count segment in formatFooterMeta;
-    // status carries cancellation only while that run is still active.
-    var status = std.array_list.Managed(u8).init(allocator);
-    errdefer status.deinit();
+) []const u8 {
+    if (std.ascii.eqlIgnoreCase(runtime_status, "FAILED") or
+        std.ascii.eqlIgnoreCase(runtime_status, "RPC_ERROR")) return "failed";
+    if ((waiting and cancel_requested) or std.ascii.eqlIgnoreCase(runtime_status, "CANCELLING")) return "cancelling";
+    if (waiting or std.ascii.eqlIgnoreCase(runtime_status, "RUNNING")) return "working";
+    return "ready";
+}
 
-    if (waiting and cancel_requested) {
-        try status.appendSlice("cancelling");
-    }
-
-    if (scroll_offset > 0) {
-        if (status.items.len > 0) try status.appendSlice(" · ");
-        try status.writer().print("older +{d}", .{scroll_offset});
-    }
-
-    return status.toOwnedSlice();
+fn formatFooterTransient(allocator: std.mem.Allocator, scroll_offset: usize) ![]u8 {
+    if (scroll_offset == 0) return allocator.dupe(u8, "");
+    return std.fmt.allocPrint(allocator, "older +{d}", .{scroll_offset});
 }
 
 fn compactPathTail(allocator: std.mem.Allocator, path: []const u8, width: usize) ![]u8 {
@@ -3033,6 +3032,29 @@ fn truncateEnd(allocator: std.mem.Allocator, value: []const u8, width: usize) ![
     const prefix_len = width - 3;
     @memcpy(out[0..prefix_len], value[0..prefix_len]);
     @memcpy(out[prefix_len..], "...");
+    return out;
+}
+
+fn footerVisualWidth(value: []const u8) usize {
+    return std.unicode.utf8CountCodepoints(value) catch value.len;
+}
+
+fn truncateFooterEnd(allocator: std.mem.Allocator, value: []const u8, width: usize) ![]u8 {
+    if (footerVisualWidth(value) <= width) return allocator.dupe(u8, value);
+    if (width <= 3) return dotted(allocator, width);
+
+    const prefix_width = width - 3;
+    var byte_end: usize = 0;
+    var codepoints: usize = 0;
+    while (byte_end < value.len and codepoints < prefix_width) {
+        const byte_length = std.unicode.utf8ByteSequenceLength(value[byte_end]) catch 1;
+        byte_end += @min(@as(usize, byte_length), value.len - byte_end);
+        codepoints += 1;
+    }
+
+    const out = try allocator.alloc(u8, byte_end + 3);
+    @memcpy(out[0..byte_end], value[0..byte_end]);
+    @memcpy(out[byte_end..], "...");
     return out;
 }
 
@@ -4544,7 +4566,7 @@ test "tui footer metadata preserves high-value fields inside narrow terminals" {
     );
     defer allocator.free(wide);
     try std.testing.expectEqualStrings(
-        "glm-5.1 · high · ctx 5k / 200k (3%) · 195k left",
+        "ready · orchestrate · glm-5.1 · high · ctx 5k / 200k (3%) · 195k left",
         wide,
     );
 
@@ -4563,7 +4585,54 @@ test "tui footer metadata preserves high-value fields inside narrow terminals" {
         40,
     );
     defer allocator.free(narrow);
-    try std.testing.expectEqualStrings("glm-5.1 · high · ctx 5k / 200k (3%)", narrow);
+    try std.testing.expectEqualStrings("ready · orchestrate · glm-5.1 · ctx 5...", narrow);
+}
+
+test "tui footer maps runtime status and active prompt mode" {
+    const allocator = std.testing.allocator;
+
+    const working = try formatFooterMetaWithPool(
+        allocator,
+        "glm-5.1",
+        "high",
+        "",
+        .build,
+        "RUNNING",
+        5_000,
+        200_000,
+        0,
+        0,
+        true,
+        false,
+        0,
+        .{},
+        120,
+    );
+    defer allocator.free(working);
+    try std.testing.expectEqualStrings(
+        "working · build · glm-5.1 · high · ctx 5k / 200k (3%) · 195k left",
+        working,
+    );
+
+    const failed = try formatFooterMetaWithPool(
+        allocator,
+        "glm-5.1",
+        "high",
+        "",
+        .@"align",
+        "FAILED",
+        5_000,
+        200_000,
+        0,
+        0,
+        false,
+        false,
+        0,
+        .{},
+        120,
+    );
+    defer allocator.free(failed);
+    try std.testing.expect(std.mem.startsWith(u8, failed, "failed · align ·"));
 }
 
 test "tui footer metadata exposes only actionable transient state" {
@@ -4722,6 +4791,8 @@ test "tui footer projects canonical pool and buffered ticket pressure" {
         state.model,
         state.effort,
         state.thinking_mode,
+        .orchestrate,
+        "READY",
         5_000,
         state.context_window_tokens,
         1,
@@ -4773,6 +4844,8 @@ test "tui footer projects canonical pool and buffered ticket pressure" {
         state.model,
         state.effort,
         state.thinking_mode,
+        .orchestrate,
+        "READY",
         null,
         state.context_window_tokens,
         0,
@@ -4781,7 +4854,7 @@ test "tui footer projects canonical pool and buffered ticket pressure" {
         false,
         0,
         .{ .known = true, .healthy = false, .ticket_ledger_healthy = false },
-        80,
+        140,
     );
     defer allocator.free(unhealthy);
     try std.testing.expect(std.mem.indexOf(u8, unhealthy, "queue ?") != null);

@@ -485,3 +485,24 @@ Shift+Tab and blank startup/exit passed. Source and installed SHA-256 match
 `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`. The
 proof-owned owner/kernel tree was explicitly torn down and the final VANTARI
 process census is zero. Move 44 is the active frontier.
+
+## Superseding current evidence — Move 44 (2026-08-13)
+
+Move 44 closes the compact footer status row. The eight-source harvest and
+subtractive decision are recorded at
+`[2026-08-13-status-row-move44.md](2026-08-13-status-row-move44.md)`. The
+existing `formatFooterMetaWithPool` owner now projects `status · prompt mode ·
+model · effort · context used/capacity (percent) · remaining` in one
+non-wrapping row. Runtime status maps existing `ChatState` values to
+`ready`, `working`, `cancelling`, or `failed`; `PromptMode` remains the existing
+session-local value. Context arithmetic stays sourced from turn telemetry,
+preserves `ctx —` when accounting is unknown, and uses codepoint-safe width
+fitting with final bounded truncation. No status bus, progress gauge, footer
+registry, settings key, event type, or second row was added.
+
+The Debug graph passes 19/19 steps and 1,998/1,998 tests; focused TUI passes
+9/9 steps and 77/77 tests; ReleaseFast/install passes 9/9. The installed TUI
+rendered `ready · orchestrate · glm-5.2 · max · ctx — / 500k` and exited after
+the exact owner/kernel tree was torn down. Source and installed SHA-256 match
+`F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`; the final
+VANTARI process census is zero. Move 45 is the active frontier.

@@ -212,6 +212,11 @@ exact label and the kernel hot-loads one provider-visible guidance layer.
 does not select tools, change access, alter the executor, or change model/agent
 capacity; prompts remain the behavior control plane.
 
+The same footer projection displays `status · prompt mode · model · effort ·
+context used/capacity/percent · remaining` in one non-wrapping row. Unknown
+context remains `ctx —`; width fitting is codepoint-safe and drops lower-signal
+agent/queue detail before final truncation.
+
 ### Per-Agent Effort & Temperature
 
 ```json
@@ -331,7 +336,7 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - **Minimal agent group rows** — `Agents completed/total`; no persistent `waiting on N` filler
 - **Replay-safe activity** — live and cold TUI projections consume contiguous sequence-bearing parent events; legacy sequence-less activity rows are not rendered
 - **Live streaming** — assistant deltas, reasoning deltas, and tool progress rendered in real-time
-- **Operator metadata row** — model, effort, context used/capacity/remaining, active agents, pool pressure, and queue pressure; persistent `Esc cancel` text is omitted
+- **Operator metadata row** — one non-wrapping row for status, prompt mode, model, effort, context used/capacity/remaining, and signal-bearing agent/queue pressure; unknown context stays `ctx —` and persistent `Esc cancel` text is omitted
 - **Composer hierarchy** — transcript surface < metadata surface < focused input surface; `cancelling` appears only during an active cancellation request and disappears at the terminal boundary
 
 ## Quick Start
@@ -431,6 +436,7 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Persistent execution owner | **Source and installed proven** | One workspace lease converges 20 concurrent clients on one owner/kernel tree. Explicit workspace selection defeats inherited/configured redirection. Client detach preserves the generation; graceful stop drains; forced owner death leaves zero descendants; the next client creates one new generation. Installed owner lifecycle evidence is retained under `.zig-cache/owner-proofs/9cc5d7b8a1624e49937cb3b78716e1bb`. |
 | Session submission | **Source proven** | `run --session-id` routes through `LocalClient` and owner `session/send`; the retired per-session `run-session` process no longer bypasses shared capacity or nested delegation. |
 | Prompt-mode lens | **Source and installed proven** | `PromptMode` cycles through the TUI, exact labels cross `session/send`, unknown labels fail closed, and the provider envelope changes without an executor or capability branch. Debug `19/19` / `1,996/1,996`; ReleaseFast/install `9/9`; source/installed SHA-256 `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`. |
+| Compact TUI status row | **Source and installed proven** | `formatFooterMetaWithPool` projects status, prompt mode, model, effort, context arithmetic/unknown, and remaining context without wrapping; focused TUI `77/77`, Debug `19/19` / `1,998/1,998`, ReleaseFast/install `9/9`; source/installed SHA-256 `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`. |
 | Child branch/convergence | **Source and installed proven** | Fixed-pool convergence survives presentation-client exit. The process tracer kills the exact owner/kernel tree, waits for lease expiry, then resumes the same ticket child and immutable receipt under a new generation. Ordinary non-ticket orphan receipts still become `StaleAgentOwner`. Installed ticket evidence is retained under `.zig-cache/owner-proofs/825a25155fa64fe78b26a47789025ec9`. |
 | Agent mailbox | **Source and installed proven** | Direct, parent, and current-group delivery uses recipient event sequence, sender receipt, queue/wake intent, and provider-success unread cursor. The process tracer observes nested sibling and parent context once, with zero copied transcript rows. Installed ticket evidence is retained under `.zig-cache/owner-proofs/825a25155fa64fe78b26a47789025ec9`. |
 | Agent eligibility | **Source proven** | One hot-loaded `AgentService` snapshot advertises only route-resolvable specialists with capacity/team/communication state and an exact SHA-256 receipt. Quiet and hive prompt profiles choose different actions through the same executor; the dedicated installed snapshot probe has not run. |

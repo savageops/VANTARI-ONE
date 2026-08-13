@@ -16,7 +16,7 @@ child-agent execution, and recovery evidence. TUI and CLI render kernel
 projections. `apps/frontend` is an ignored local prototype, not a shipped
 tracked client.
 
-## Current frontier — Move 43
+## Current frontier — Move 44
 
 Move 34 closes the Codex subscription transport slice. `core/auth/store.zig`
 remains the single credential owner for workspace `.var/auth.json` and installed
@@ -152,6 +152,26 @@ proof-owned owner/kernel tree was explicitly torn down and the final installed
 VANTARI process census is zero. The seven-source harvest and rejected
 registry/executor complexity are recorded in
 `.docs/research/2026-08-13-prompt-mode-move43.md`.
+
+Move 44 closes the compact TUI status row. `formatFooterMetaWithPool` remains
+the single projection owner and emits status, active `PromptMode`, model,
+effort, context used/capacity/percent, and remaining context in one
+non-wrapping row. Existing `ChatState.status` values map to `ready`, `working`,
+`cancelling`, or `failed`; no second state machine or event bus was added.
+Context values remain sourced from typed turn telemetry: unknown or zero
+capacity renders `ctx —`, while known capacity preserves exact used/capacity,
+rounded percent, and remaining tokens. Candidate fitting uses codepoint width,
+keeps status/mode/model ahead of optional agent/queue detail, and ends with a
+bounded codepoint-safe truncation.
+
+Move 44 proof: Debug passes `19/19` build steps and `1,998/1,998` tests;
+focused TUI passes `9/9` steps and `77/77` tests; ReleaseFast/install passes
+`9/9`. Installed TUI rendered `ready · orchestrate · glm-5.2 · max · ctx — /
+500k` and exited after exact owner-tree teardown. Source and installed SHA-256
+match `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`;
+the final installed VANTARI process census is zero. The eight-source harvest
+and rejected gauge/registry complexity are recorded in
+`.docs/research/2026-08-13-status-row-move44.md`.
 
 ## Behavior plane
 
@@ -346,14 +366,14 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,996/1,996 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,998/1,998 tests with zero skips.
   The reduced total is intentional: one registry loop executes all 53 declared
   cases and replaces 45 one-case wrappers that left ten cases undiscovered.
   Its host lane executes the stdio child, owner state/client, shared process
   lock, bridge, and process-tree contracts; the integration lane includes
   exact owner route, lease, stalled-loopback deadline, and explicit-workspace
   precedence probes. The backend
-  TUI lane passes 76/76.
+  TUI lane passes 77/77.
 - A barrier-synchronized leadership race returns one guard and one
   `LeaseUnavailable`. Native proof root
   `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1` starts two
@@ -452,10 +472,10 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   exactly. No CRC fields, sidecar quarantine ledger, auto-truncation path, or
   repair daemon was added.
 - The current source ReleaseFast and installed artifact share SHA-256
-  `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`.
-  Moves 37–43, Move 34 Codex transport, owner lifecycle, and ticket lifecycle
+  `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`.
+  Moves 37–44, Move 34 Codex transport, owner lifecycle, and ticket lifecycle
   promotion all pass; the installed catalog excludes `manage_plugin`, latest
-  session selection is bounded, composer/cancellation/prompt-mode proof is installed, and
+  session selection is bounded, composer/cancellation/prompt-mode/status-row proof is installed, and
   the final installed process census is zero.
 - Installed Codex OAuth consumer proof used a valid disposable `$VANTARI_HOME`
   fixture with a pinned context window to avoid unrelated local-model discovery.

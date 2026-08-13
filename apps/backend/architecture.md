@@ -588,11 +588,11 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-13:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Debug and ReleaseFast test graphs -> 19/19 steps and 1,996/1,996 tests passed. The lower
+- Debug and ReleaseFast test graphs -> 19/19 steps and 1,998/1,998 tests passed. The lower
   total is intentional: 45 one-case registry wrappers were replaced by one loop
   that executes every one of the 53 declared cases, including ten that had no
   test declaration.
-- Focused backend TUI -> 76/76 passed.
+- Focused backend TUI -> 77/77 passed.
 - Host lifecycle lane passes, including atomic same-session admission,
   session-keyed buffer state, exact-generation cancellation,
   cancellation-before-join shutdown, RPC deadlines, late-response retirement,
@@ -626,7 +626,7 @@ Latest local Windows validation on 2026-08-13:
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Current source and installed SHA-256 match at
-  `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`.
+  `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`.
   Move 37/38 installation, the installed owner/ticket lifecycle proofs, Move 33
   auth help/status redaction, Move 34 Codex `/codex/responses` consumer proof,
   the Move 37 TUI cost consumer proof, Move 41 sequence-addressed
@@ -643,8 +643,14 @@ Latest local Windows validation on 2026-08-13:
   completed. Source prompt capture contains the selected provider layer;
   `session/send` rejects an unknown mode with JSON-RPC `-32602` before
   execution. Source and installed SHA-256 match
-  `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`; the
+  `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`; the
   exact owner/kernel tree was torn down and the final process census is zero.
+- Move 44 installed TUI rendered `ready · orchestrate · glm-5.2 · max · ctx — /
+  500k`; `formatFooterMetaWithPool` keeps the compact status/mode/model/effort/
+  context/remaining projection in one non-wrapping row. Source and installed
+  SHA-256 match
+  `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`; exact
+  owner/kernel tree teardown leaves zero VANTARI processes.
 - The source ticket lifecycle mesh at
   `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`
   proves assignment without launch, one claim, noninteractive TUI detach, exact
@@ -869,8 +875,10 @@ The TUI composer maintains a persistent input history (ring buffer, cap 1000 ent
 the TUI footer. The transcript uses `styles.surface`, the metadata row uses
 `styles.meta_surface`, and the focused input row uses `styles.composer`; their
 background lightness is tested as `surface < meta_surface < composer`. The
-steady-state footer contains no cancellation shortcut. `formatFooterStatus`
-renders `cancelling` only while `waiting && cancel_requested`, and terminal
-events clear that flag. Escape/Ctrl-C and active `/cancel` interjections share
+steady-state footer contains no cancellation shortcut. `footerStatusLabel`
+maps existing runtime state to `ready`, `working`, `cancelling`, or `failed`,
+while `formatFooterMetaWithPool` keeps one non-wrapping status/mode/model/effort/
+context/remaining order and codepoint-safe width fitting. Unknown context stays
+`ctx —`; terminal events clear the cancellation flag. Escape/Ctrl-C and active `/cancel` interjections share
 the generation-bound `requestCancel` owner; idle `/cancel` reports that there
 is no active run.

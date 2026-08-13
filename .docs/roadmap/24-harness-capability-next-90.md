@@ -187,7 +187,7 @@ advance the queue until the real installed consumer path proves it.
 | 41 | Render the footer and agent rows only from sequence-bearing events and canonical summaries. | closed: deleted the sequence-less cold replay fallback; added legacy-event rejection and live/replay keyed-row parity tests; bounded `session/list { limit: 1 }` for TUI latest-session selection after a 19,213-session installed response exceeded the owner transport cap; Debug `19/19`, `1,967/1,967`, ReleaseFast/install `9/9`, installed `vantari -c` continuation and blank TUI start/exit passed, source/installed SHA-256 `C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54`, exact proof-owned owner tree teardown and final zero process census. |
 | 42 | Make the composer slightly lighter than transcript background and lighter than its metadata row using design tokens; remove persistent `Esc cancel` copy and expose cancellation only when relevant. | closed: retained the single `styles.surface`/`styles.meta_surface`/`styles.composer` owner; strict lightness, exact wide/width-40 metadata, active-vs-idle cancellation, terminal clearing, and truthful `/cancel` tests pass; Debug `19/19` with `1,991/1,991`, focused TUI `9/9` with `75/75`, ReleaseFast/install `9/9`; installed ANSI proof observed `(8,17,15) < (10,22,20) < (16,34,31)`, blank TUI and `vantari -c` passed, source/installed SHA-256 `A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072`, exact owner-tree teardown leaves zero VANTARI processes. |
 | 43 | Let Shift+Tab cycle session-scoped `orchestrate`, `build`, `align`, and `plan` prompt profiles; default to `orchestrate` and apply the selected hot-loaded layer on the next turn. | closed: `PromptMode` cycles in `tui_chat.zig`, exact labels cross `session/send`, unknown labels fail with JSON-RPC `-32602` before execution, and all executor context rebuild paths carry the typed mode into the provider system envelope. Debug `19/19`, `1,996/1,996`; ReleaseFast/install `9/9`; installed TUI accepted Shift+Tab and blank startup/exit; source/installed SHA-256 `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`; exact owner-tree teardown leaves zero VANTARI processes. Research: `.docs/research/2026-08-13-prompt-mode-move43.md`. |
-| 44 | Keep one compact row for status, active prompt mode, model, effort, context used/capacity/percent, and remaining context. | footer; graceful truncation without wrap. |
+| 44 | Keep one compact row for status, active prompt mode, model, effort, context used/capacity/percent, and remaining context. | closed: `formatFooterMetaWithPool` now emits one non-wrapping status/mode/model/effort/context projection with codepoint-safe width fitting, mapped ready/working/cancelling/failed labels, full remaining-context math when space allows, and unknown-safe context. Focused TUI `9/9`, `77/77`; Debug `19/19`, `1,998/1,998`; ReleaseFast/install `9/9`; installed row observed as `ready · orchestrate · glm-5.2 · max · ctx — / 500k`; source/installed SHA-256 `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`; exact owner-tree teardown leaves zero VANTARI processes. Research: `.docs/research/2026-08-13-status-row-move44.md`. |
 | 45 | Add active/max agents, nonzero queue, and known session cost only when those values carry signal. | footer read model; no status forest. |
 | 46 | Render context as unknown after compaction or incomplete provider accounting instead of fabricated precision. | context telemetry; explicit unknown state snapshot. |
 | 47 | Render the group row as `Agents completed/total`; remove `waiting on N` filler. | child-group projection; all lifecycle snapshots. |
@@ -258,10 +258,11 @@ advance the queue until the real installed consumer path proves it.
 ## Immediate frontier
 
 Move 30, finding 11, parent 036, the 021 auth chain, parent 035, and Moves
-33-40 are closed after the installed hash-matched proofs, 036h terminal review,
-035h provider/cost pipeline QC, and the Move40 deferred-delete decision. Moves
-1-40 are the closed execution band; Move 41 is the next queued frontier. The
-provider cost/compat chain has no pending continuation. PLUG has no active
-runtime frontier: reopen it only after a concrete need and a new owner-mapped
-recon. Keep context sharding and autonomous repair behind the next owner
-decision rather than opening parallel architecture.
+33-44 are closed after the installed hash-matched proofs, 036h terminal review,
+035h provider/cost pipeline QC, the Move40 deferred-delete decision, and the
+Move44 status-row proof. Moves 1-44 are the closed execution band; Move 45 is
+the next queued frontier. The provider cost/compat chain has no pending
+continuation. PLUG has no active runtime frontier: reopen it only after a
+concrete need and a new owner-mapped recon. Keep context sharding and
+autonomous repair behind the next owner decision rather than opening parallel
+architecture.
