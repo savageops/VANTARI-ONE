@@ -5,7 +5,8 @@ type: execution-unit
 protocol_version: "3.0"
 category: feature
 phase: c
-status: pending
+status: superseded
+decision: deferred-delete
 patch_scope: "Add a validated `plugins` config section to core/config/default.json and core/config/file.zig (enabled, path, per-plugin enable map) default-OFF, plus a loadPluginPolicy loader. This is the opt-in gate; no discovery reads it yet (PLUGd does)."
 blast_radius: medium
 blast_radius_justification: "default.json is the foundational config document and file.zig validateDocumentShape gates every config read. Adding a top-level section changes the validated shape. Containment: the section is additive and defaults to plugins-disabled, so existing behavior is preserved; the validator change only permits one new key. Direct consumers = all config readers, but they ignore the new section unless they call loadPluginPolicy."
@@ -16,7 +17,7 @@ exit_criterion: "`zig build test` succeeds; the existing config test 'default co
 validation: "cd E:/Workspaces/01_Projects/01_Github/VANTARI-ONE/apps/backend && zig build test 2>&1 | tail -40"
 expected_exit_code: 0
 expected_output_pattern: ".*config.*pass|all tests passed|0 failed"
-evidence: "PLACEHOLDER — replace with exact captured stdout at completion. Archival is gated on this field being populated."
+evidence: "Move40 superseded this design unit before implementation. No runtime artifact was claimed. The retained plugin contract scaffolding is not model-visible; the default-visible manage_plugin placeholder was deleted. Reopen only with a concrete user-facing need and a new owner-mapped plan."
 conflict_surface: ""
 invariants:
   - "I1 (opt-in truth): with plugins section absent or enabled=false, loadPluginPolicy returns a disabled policy"
@@ -27,7 +28,7 @@ source_message_proof_obligation: "Implement the config gate so plugin capability
 entry_state: "PLUGb archived. core/config/default.json has no plugins section. file.zig validateDocumentShape rejects unknown top-level keys (line 266 allowed-list) and validates typed sections with _help parity. loadRuntimePolicy/loadAgentPolicy/loadContextPolicy etc. are the loader pattern. config.file.path() resolves config.json under fsutil.runtimeRootForWorkspace."
 rollback_surface: "1. Revert apps/backend/src/core/config/default.json (remove plugins section). 2. Revert apps/backend/src/core/config/file.zig (remove plugins validation block + loadPluginPolicy + PluginPolicy struct + tests). Order: file.zig first (so validator no longer references the section), then default.json."
 dependencies: "PLUGb"
-next_todo: /todo/pending/PLUGd-plugin-socket.md
+next_todo: NONE
 continuation: "On completion: record evidence (replace PLACEHOLDER), set status done, move this file to /todo/changelog/<same filename>, continue immediately to next_todo. Stay fully focused on this slice until it resolves. Do not switch to any other slice. Do not pause. Do not batch."
 blocked_reason: ""
 unblock_action: ""

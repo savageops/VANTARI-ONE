@@ -5,7 +5,8 @@ type: execution-unit
 protocol_version: "3.0"
 category: feature
 phase: a
-status: pending
+status: superseded
+decision: deferred-delete
 patch_scope: "Interpretation freeze and invariant declaration for the plugin socket chain. No artifact change."
 blast_radius: low
 blast_radius_justification: "No code, config, or doc artifact is modified. This unit only locks interpretation, scope boundaries, and invariants that downstream units inherit. Failure cannot propagate because nothing is executed against the runtime."
@@ -16,7 +17,7 @@ exit_criterion: "This file is present in /todo/pending/ with completed Interpret
 validation: "git -C E:/Workspaces/01_Projects/01_Github/VANTARI-ONE status --porcelain apps/backend"
 expected_exit_code: 0
 expected_output_pattern: "(empty — no tracked changes produced by this unit)"
-evidence: "PLACEHOLDER — replace with exact captured stdout at completion. Archival is gated on this field being populated."
+evidence: "Move40 superseded this design unit before implementation. No runtime artifact was claimed. The retained plugin contract scaffolding is not model-visible; the default-visible manage_plugin placeholder was deleted. Reopen only with a concrete user-facing need and a new owner-mapped plan."
 conflict_surface: ""
 invariants:
   - "I1 (opt-in truth): catalog/provider/dispatch contain zero plugin tools when plugins disabled or absent"
@@ -33,7 +34,7 @@ source_message_proof_obligation: "Freeze the minimal interpretation of the plugi
 entry_state: "Repository has harvested-but-unwired plugin contracts: core/plugins/manifest.zig (PluginManifest, PluginSocket, validateManifest, mountPlugin), core/plugins/isolation.zig (IsolationLevel, SubprocessTransport, default_isolation_level=.subprocess), core/plugins/index.zig, core/tools/sockets.zig (ToolSource=builtin|plugin, ToolSocket, validateDefinition). core/tools/runtime.zig has no plugin branch. core/config/default.json has no plugins section. Highest archived chain is 033."
 rollback_surface: "None. No artifact is modified. If the unit is aborted, delete this file; nothing else changes."
 dependencies: ""
-next_todo: /todo/pending/PLUGb-plugin-socket.md
+next_todo: NONE
 continuation: "On completion: record evidence (replace PLACEHOLDER with git status output), set status done, move this file to /todo/changelog/<same filename>, continue immediately to next_todo. Stay fully focused on this slice until it resolves. Do not switch to any other slice. Do not pause. Do not batch."
 blocked_reason: ""
 unblock_action: ""

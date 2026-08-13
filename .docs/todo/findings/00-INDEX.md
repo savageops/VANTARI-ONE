@@ -32,7 +32,10 @@ terminal review.
 
 [`../../roadmap/24-harness-capability-next-90.md`](../../roadmap/24-harness-capability-next-90.md) expands this ledger into the current 90-move execution order. This findings index remains the immediate P0/P1/P2 authority; roadmap 24 sequences the downstream capability and friction-removal work behind it.
 
-Execute one item at a time in priority and numeric order. Do not start PLUG, TUI expansion, or autonomous repair while a P0 item remains. Historical evidence stays readable, but a prior closeout cannot override current source and runtime proof.
+Execute one item at a time in priority and numeric order. Do not open a new
+plugin runtime, TUI expansion, or autonomous-repair mechanism without a current
+owner decision and evidence. Historical evidence stays readable, but a prior
+closeout cannot override current source and runtime proof.
 
 | Order | Priority | Finding | Owner surface | Status |
 |---|---|---|---|---|
@@ -42,7 +45,7 @@ Execute one item at a time in priority and numeric order. Do not start PLUG, TUI
 | 13 | P0 | [Concurrent ledgers and replay identity](13-concurrent-ledgers-and-replay-identity.md) | sessions, protocol, TUI cursor | closed 2026-08-12 |
 | 20 | P1 | [Tool capability truth](20-tool-capability-truth.md) | eval, DAP, TTSR, search, capability probes | pending |
 | 21 | P1 | [Work-state and prompt consolidation](21-work-state-and-prompt-consolidation.md) | tickets, workspace tools, prompt builder | ticket-policy slice closed; remaining work-state/prompt duplication pending |
-| 22 | P1 | [Documentation and WIP truth](22-documentation-and-wip-truth.md) | project records, public docs, 021/035/036/PLUG | pending |
+| 22 | P1 | [Documentation and WIP truth](22-documentation-and-wip-truth.md) | project records, public docs, 021/035/036/PLUG | closed 2026-08-13 after Move40 reconciliation |
 | 30 | P2 | [TUI operator hierarchy](30-tui-operator-hierarchy.md) | TUI read model and Agent Hub | pending |
 | 31 | P2 | [Gated harness repair loop](31-gated-harness-repair-loop.md) | failure evidence, approval, replay, regression | pending |
 

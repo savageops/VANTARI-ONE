@@ -5,7 +5,8 @@ type: execution-unit
 protocol_version: "3.0"
 category: feature
 phase: d
-status: pending
+status: superseded
+decision: deferred-delete
 patch_scope: "Add core/plugins/discovery.zig: scan the effective plugins directory for <id>/plugin.json, parse + validate each via the PLUGb parser/validator, filter by the PLUGc policy, and build an in-memory PluginRegistry. Hot-load: re-read on every loadPluginsForRuntime call (no process-local cache), mirroring agents/spec.loadRegistry. Re-export from core/plugins/index.zig."
 blast_radius: low
 blast_radius_justification: "Contained to a new module under core/plugins/. Nothing in the runtime reads the registry yet (PLUGf wires it). The new code reads disk + parses manifests; failure modes (missing dir, malformed manifest) return empty/error without affecting the existing catalog. Direct consumers = none yet at runtime."
@@ -16,7 +17,7 @@ exit_criterion: "`zig build test` succeeds; new discovery tests (empty dir, one 
 validation: "cd E:/Workspaces/01_Projects/01_Github/VANTARI-ONE/apps/backend && zig build test 2>&1 | tail -40"
 expected_exit_code: 0
 expected_output_pattern: ".*discovery.*pass|all tests passed|0 failed"
-evidence: "PLACEHOLDER — replace with exact captured stdout at completion. Archival is gated on this field being populated."
+evidence: "Move40 superseded this design unit before implementation. No runtime artifact was claimed. The retained plugin contract scaffolding is not model-visible; the default-visible manage_plugin placeholder was deleted. Reopen only with a concrete user-facing need and a new owner-mapped plan."
 conflict_surface: ""
 invariants:
   - "I1 (opt-in truth): loadPluginsForRuntime returns an empty registry when policy.enabled is false"
@@ -29,7 +30,7 @@ source_message_proof_obligation: "Implement disk discovery that scans the effect
 entry_state: "PLUGb + PLUGc archived. core/plugins/manifest.zig exposes parsePluginManifestFromJson + descriptor-bearing PluginSocket + validateManifest. core/config/file.zig exposes loadPluginPolicy + PluginPolicy + pluginDirectory. core/plugins/index.zig re-exports manifest symbols. No discovery module exists."
 rollback_surface: "1. Remove apps/backend/src/core/plugins/discovery.zig. 2. Revert apps/backend/src/core/plugins/index.zig re-exports added for discovery. Order: index.zig first, then delete discovery.zig."
 dependencies: "PLUGb, PLUGc"
-next_todo: /todo/pending/PLUGe-plugin-socket.md
+next_todo: NONE
 continuation: "On completion: record evidence (replace PLACEHOLDER), set status done, move this file to /todo/changelog/<same filename>, continue immediately to next_todo. Stay fully focused on this slice until it resolves. Do not switch to any other slice. Do not pause. Do not batch."
 blocked_reason: ""
 unblock_action: ""

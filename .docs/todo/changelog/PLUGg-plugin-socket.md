@@ -5,7 +5,8 @@ type: execution-unit
 protocol_version: "3.0"
 category: feature
 phase: g
-status: pending
+status: superseded
+decision: deferred-delete
 patch_scope: "Add core/tools/builtin/manage_plugin.zig (list/info/enable/disable) mirroring the agents builtin + configure_agent pattern, register it in registry.zig/runtime.zig, and add a config-mutation helper in core/plugins/ (setPluginEnabled) that atomically upserts the plugins.enabled_plugins map under a mutex and validates the effective policy before writing config.json."
 blast_radius: medium
 blast_radius_justification: "Adds a new model-visible tool (manage_plugin) and mutates config.json (enable/disable). Containment: the tool is registered like any builtin; enable/disable mutate only the plugins.enabled_plugins map via the proven config-mutation pattern (validate-before-write, mutex). Direct consumers = provider tool-schema list (one new tool), config.json (mutations), discovery (hot-reads the mutated map on next call)."
@@ -16,7 +17,7 @@ exit_criterion: "`zig build test` succeeds; new tests prove list reflects disk+p
 validation: "cd E:/Workspaces/01_Projects/01_Github/VANTARI-ONE/apps/backend && zig build test 2>&1 | tail -40"
 expected_exit_code: 0
 expected_output_pattern: ".*manage_plugin.*pass|all tests passed|0 failed"
-evidence: "PLACEHOLDER — replace with exact captured stdout at completion. Archival is gated on this field being populated."
+evidence: "Move40 superseded this design unit before implementation. No runtime artifact was claimed. The retained plugin contract scaffolding is not model-visible; the default-visible manage_plugin placeholder was deleted. Reopen only with a concrete user-facing need and a new owner-mapped plan."
 conflict_surface: ""
 invariants:
   - "I8 (config mutation safety): enable/disable mutate config.json atomically under a mutex and validate the effective registry/policy before the file becomes visible"
@@ -28,7 +29,7 @@ source_message_proof_obligation: "Give the model a tool to discover (list/info) 
 entry_state: "PLUGb/c/d/e/f archived. core/plugins/discovery.zig exposes loadPluginsForRuntime + PluginRegistry. core/config/file.zig exposes loadPluginPolicy + PluginPolicy + pluginDirectory + validateDocumentShape. core/agents/spec.zig is the config-mutation reference (config_mutation_mutex, mutateConfiguredAgent, MutationEvidence, upsertConfiguredAgent, ensureObjectField, putValue). registry.zig/runtime.zig register builtin tools via file_tool_definitions + executeWithRunner name checks. tools/builtin/agents.zig is the closest builtin analog (catalog + configure_agent)."
 rollback_surface: "1. Revert apps/backend/src/core/tools/registry.zig (remove manage_plugin from file_tool_definitions + availability_entries). 2. Revert apps/backend/src/core/tools/runtime.zig (remove manage_plugin dispatch + toolClassForName entry). 3. Remove apps/backend/src/core/plugins/policy.zig (or wherever the mutation helper lives). 4. Remove apps/backend/src/core/tools/builtin/manage_plugin.zig. Order: registry/runtime first, then delete the helper + tool file."
 dependencies: "PLUGd, PLUGf"
-next_todo: /todo/pending/PLUGh-plugin-socket.md
+next_todo: NONE
 continuation: "On completion: record evidence (replace PLACEHOLDER), set status done, move this file to /todo/changelog/<same filename>, continue immediately to next_todo. Stay fully focused on this slice until it resolves. Do not switch to any other slice. Do not pause. Do not batch."
 blocked_reason: ""
 unblock_action: ""

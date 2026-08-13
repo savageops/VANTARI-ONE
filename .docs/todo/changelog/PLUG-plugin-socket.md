@@ -4,11 +4,12 @@ type: parent
 protocol_version: "3.0"
 spec_status: approved
 category: feature
-status: pending
-next_todo: /todo/pending/PLUGa-plugin-socket.md
+status: done
+decision: deferred-delete
+next_todo: NONE
 epic_boundary: "Wire the existing plugin manifest/socket contracts into the tool runtime so discovered plugins register tools, dispatch through the subprocess socket, surface in the model-visible catalog, and are manageable via a manage_plugin tool — all opt-in and never silently altering the built-in tool list."
-subtodo_start: /todo/pending/PLUGa-plugin-socket.md
-subtodo_final: /todo/pending/PLUGh-plugin-socket.md
+subtodo_start: /todo/changelog/PLUGa-plugin-socket.md
+subtodo_final: /todo/changelog/PLUGh-plugin-socket.md
 continuation: "After each completed execution unit: record evidence, set status done, move to /todo/changelog/, continue immediately to next_todo. Stay focused on one slice at a time. Never batch-archive. Never pause between units."
 source_message_policy: "Every lettered unit MUST include source_message_anchor, source_message_excerpt, source_message_proof_obligation, and an Original User Message Proof section with verbatim snippets from the original user message."
 ---
@@ -236,12 +237,26 @@ Every row above should compound the parent ratchet (A1–A4).
 
 ## Current Frontier
 
-`/todo/pending/PLUGa-plugin-socket.md`
+No active frontier. Move40 deliberately deferred the plugin socket and removed
+the default-visible `manage_plugin` placeholder. The retained manifest,
+isolation, and socket types are contract-only scaffolding and do not advertise,
+discover, or dispatch plugin capability.
 
 ## Stop Condition
 
-`NONE` only after the terminal review (PLUGh) passes.
+The chain is superseded by Move40. No plugin implementation is claimed.
 
 ## Next todo
 
-`/todo/pending/PLUGa-plugin-socket.md`
+`NONE`
+
+## Move40 Decision — 2026-08-13
+
+The full plugin chain is deferred until a concrete user-facing plugin/tool
+need exists. Recon found that `manage_plugin` was a default-visible builtin
+whose enable/disable path was a TODO placeholder, while manifest/isolation/
+socket contracts had no runtime consumer beyond synthetic tests. Move40
+deleted the manager registration, dispatch branch, and placeholder file. The
+contract-only types remain isolated for a future re-decomposition; they are not
+an installed capability. Reopen with a new plan that uses the existing tool
+definition, availability, review, dispatch, process, and event owners.

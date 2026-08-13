@@ -362,54 +362,6 @@ fn mockReconcileShards(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8) anye
     return 0;
 }
 
-test "tool socket validates tool definitions through core namespace" {
-    try VAR1.core.tools.validateDefinition(std.testing.allocator, .{
-        .name = "lookup_ticket",
-        .description = "Look up a ticket.",
-        .review_risk = .read_only,
-        .parameters_json = "{\"type\":\"object\",\"additionalProperties\":false}",
-    });
-
-    try std.testing.expectError(VAR1.core.tools.sockets.Error.InvalidToolName, VAR1.core.tools.sockets.validateName("lookup-ticket"));
-    try std.testing.expectError(VAR1.core.tools.sockets.Error.InvalidParametersSchema, VAR1.core.tools.validateDefinition(std.testing.allocator, .{
-        .name = "bad_schema",
-        .description = "Bad schema.",
-        .review_risk = .unknown_high_impact,
-        .parameters_json = "[]",
-    }));
-}
-
-test "plugin manifest validates declared sockets without loading plugins" {
-    const sockets = [_]VAR1.core.plugins.PluginSocket{.{
-        .kind = .tool,
-        .name = "lookup_ticket",
-        .entry = "tools/lookup_ticket",
-        .review_risk = "read_only",
-    }};
-
-    try VAR1.core.plugins.validateManifest(.{
-        .id = "tickets",
-        .version = "0.1.0",
-        .sockets = sockets[0..],
-    });
-
-    try std.testing.expectError(VAR1.core.plugins.manifest.Error.InvalidPluginId, VAR1.core.plugins.validateManifest(.{
-        .id = "Tickets",
-        .version = "0.1.0",
-    }));
-
-    try std.testing.expectError(VAR1.core.plugins.manifest.Error.InvalidSocketName, VAR1.core.plugins.validateManifest(.{
-        .id = "tickets",
-        .version = "0.1.0",
-        .sockets = &.{.{
-            .kind = .tool,
-            .name = "lookup-ticket",
-            .entry = "tools/lookup_ticket",
-            .review_risk = "read_only",
-        }},
-    }));
-}
-
 test "file tools can create append replace and read within the workspace" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

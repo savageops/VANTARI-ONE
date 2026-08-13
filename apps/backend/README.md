@@ -148,9 +148,15 @@ This is non-interrupting (never cancels the current step), non-destructive (noth
 
 Synthesized from 8 competitor patterns (oh-my-pi, Eve, Scion, nullclaw, OpenClaw, Claude Code, Cursor, pi-mono). Simpler, more durable, more responsive than all of them.
 
-### Plugin Management
+### Deferred plugin socket
 
-The `manage_plugin` tool discovers, inspects, and toggles plugins from `.var/plugins/*/plugin.json`. Plugin manifests declare tool sockets that extend VANTARI's capability surface. Existing scaffolding (`manifest.zig`, `isolation.zig`, `sockets.zig`) provides validation and subprocess isolation contracts.
+The plugin socket is not a shipped runtime capability. Move40 removed the
+default-visible `manage_plugin` placeholder because its enable/disable path was
+not connected to discovery or dispatch. The remaining manifest, isolation, and
+socket types are contract-only scaffolding: they do not scan `.var/plugins/`,
+change the model-visible catalog, or execute plugin code. Reopen only for a
+concrete user-facing need through the existing tool definition, availability,
+review, dispatch, process, and event owners.
 
 ## Configuration Surface
 
@@ -391,7 +397,6 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - TUI input history (Up/Down cycling)
 - 9-word military checkpoint contract for subagents
 - Self-tuning doctrine
-- Plugin management surface (manage_plugin — list/info/enable/disable)
 - Role-routed bounded delegation with silent advisors
 - Route-resolved model-selected specialist/team snapshot with deterministic receipt
 - Sequence-addressed direct/parent/group agent messaging with queue/wake intent
@@ -467,7 +472,7 @@ Deep recon (4 background agents) confirmed that making a secondary provider call
 
 - [Complete Session Inventory](.var/research/session-2026-08-07-complete-inventory.md) — every non-ordinary detail from this session
 - [Architecture](architecture.md) — full cognitive architecture section with flow diagrams
-- [Planning Chains](.docs/todo/pending/) — DRAFT-, BUF-, PROMPT-, PLUG-, TUI- chains (planning-spec v3.0)
+- [Planning Chains](.docs/todo/pending/) — active DRAFT-, BUF-, PROMPT-, and TUI- chains; PLUG is deferred-delete and archived in [the changelog](.docs/todo/changelog/PLUG-plugin-socket.md)
 - [Project records](../.docs/index.md) — current technical summary, workspace record, research, and closeout evidence
 - [Reference corpus](../.refs/index.md) — local harvest sources and adoption rules
 - [AGENTS.md](../AGENTS.md) — the operating contract (18 sections of runtime doctrine)

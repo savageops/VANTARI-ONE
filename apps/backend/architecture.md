@@ -498,7 +498,8 @@ hash-matched binary.
 - `src/core/evaluation/`
   redacted heartbeat, evaluator, and unsupported-behavior event append helpers
 - `src/core/plugins/`
-  plugin manifest/socket contracts only; plugin implementations do not live in core
+  contract-only manifest/socket types for a deferred future boundary; no plugin
+  discovery, manager tool, catalog merge, or dispatch branch is shipped
 - `src/shared/protocol/types.zig`
   JSON-RPC methods and payload shapes
 - `src/host/stdio_wire.zig`
@@ -530,7 +531,12 @@ hash-matched binary.
 - `core/tools/` owns tool socket contracts, per-tool built-in modules, catalog availability, and runtime dispatch.
 - `core/plugins/` owns manifest validation for future plugin roots.
 
-Future plugin implementations should live outside `core/` and register through typed sockets. Auto-discovery is not enabled until manifest validation, explicit enablement, deterministic load order, and lifecycle tests are in place.
+Future plugin implementations should live outside `core/` and register through
+the existing typed tool owners. Move40 removed the default-visible
+`manage_plugin` placeholder and left the contract-only types inert. Auto-
+discovery is not enabled until a concrete user-facing need justifies manifest
+validation, explicit enablement, deterministic load order, lifecycle tests, and
+the same process/effect evidence as built-ins.
 
 ## Validation lane
 

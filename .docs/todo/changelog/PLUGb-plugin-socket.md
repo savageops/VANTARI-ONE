@@ -5,7 +5,8 @@ type: execution-unit
 protocol_version: "3.0"
 category: feature
 phase: b
-status: pending
+status: superseded
+decision: deferred-delete
 patch_scope: "Extend core/plugins/manifest.zig with per-socket descriptor fields (description, parameters_json, usage_hint, example_json) and a disk JSON parser (parsePluginManifestFromJson); re-export from core/plugins/index.zig. The on-disk schema becomes the .var/plugins/<name>/plugin.json format. No runtime/dispatch/config change."
 blast_radius: low
 blast_radius_justification: "Contained to the plugin contract module. Existing manifest.zig types are extended additively (new optional fields + a new parse function); validateManifest keeps its current behavior and gains descriptor validation for tool sockets. No runtime, catalog, or dispatch path reads this yet (PLUGf does), so failure cannot propagate to the model-visible surface."
@@ -16,7 +17,7 @@ exit_criterion: "`zig build test` succeeds; new tests for parsePluginManifestFro
 validation: "cd E:/Workspaces/01_Projects/01_Github/VANTARI-ONE/apps/backend && zig build test 2>&1 | tail -40"
 expected_exit_code: 0
 expected_output_pattern: ".*manifest.*pass|all tests passed|0 failed"
-evidence: "PLACEHOLDER — replace with exact captured stdout at completion. Archival is gated on this field being populated."
+evidence: "Move40 superseded this design unit before implementation. No runtime artifact was claimed. The retained plugin contract scaffolding is not model-visible; the default-visible manage_plugin placeholder was deleted. Reopen only with a concrete user-facing need and a new owner-mapped plan."
 conflict_surface: ""
 invariants:
   - "I3 (review gate preservation): manifest parser rejects tool sockets with missing/invalid review_risk before the manifest is mountable"
@@ -27,7 +28,7 @@ source_message_proof_obligation: "Implement the on-disk manifest schema so each 
 entry_state: "PLUGa archived. Interpretation Lock L4 requires descriptor fields on the manifest. core/plugins/manifest.zig has PluginManifest{id,version,sockets[]} and PluginSocket{kind,name,entry,review_risk?}. core/plugins/index.zig re-exports PluginManifest, PluginSocket, PluginSocketKind, validateManifest. Existing manifest tests cover validate/mount but not disk parsing or descriptor fields."
 rollback_surface: "1. Revert apps/backend/src/core/plugins/manifest.zig to pre-PLUGb state. 2. Revert apps/backend/src/core/plugins/index.zig re-exports added by this slice. Order: index.zig first (remove re-exports), then manifest.zig."
 dependencies: "PLUGa"
-next_todo: /todo/pending/PLUGc-plugin-socket.md
+next_todo: NONE
 continuation: "On completion: record evidence (replace PLACEHOLDER), set status done, move this file to /todo/changelog/<same filename>, continue immediately to next_todo. Stay fully focused on this slice until it resolves. Do not switch to any other slice. Do not pause. Do not batch."
 blocked_reason: ""
 unblock_action: ""

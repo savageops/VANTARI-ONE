@@ -2549,3 +2549,31 @@ chain only after the full pipeline review.
 
 **Next todo:** Move 40 — hold PLUG behind the current owner decision and
 re-decompose it against the proven built-in capability boundary.
+
+## Move 40 — PLUG deferred-delete and dead-surface removal (2026-08-13)
+
+**State:** closed
+
+- Reference harvest across the local Codex, pi, oh-my-pi, Eve, KrillClaw,
+  nullclaw, and Flue sources, followed by owner recon, found no concrete
+  installed plugin consumer. The existing `manage_plugin` builtin was
+  default-visible but its enable/disable path was TODO-only; manifest,
+  isolation, and socket types had no catalog or dispatch consumer.
+- Removed the `manage_plugin` file, registry/availability/runtime branches, and
+  two wrapper-only namespace tests. Retained the matrix-backed contract
+  namespaces because they still express the future socket boundary. No plugin
+  discovery, catalog merge, subprocess dispatch, or model-visible plugin tool
+  is claimed.
+- Installed `tools --json` returned exit `0`, valid catalog JSON, 24 tools, and
+  `contains_manage_plugin=False`. The two processes it started were terminated
+  through their exact installed path; the final installed process census was
+  zero.
+- Canonical source regression is `19/19` build steps and `1,962/1,962` tests;
+  ReleaseFast/install is `9/9`; source and installed SHA-256 match
+  `279A112A1D7CD94BF2C5678C961E83A3458951CB9D48E9C5CC21A6D01DF409AF`.
+- Archived PLUG parent and units `PLUGa` through `PLUGh` as superseded. Move 41
+  is next; move 86 may reopen plugin discovery only after a concrete need and a
+  new owner-mapped recon.
+
+**Next todo:** Move 41 — render the footer and agent rows only from
+sequence-bearing events and canonical summaries.

@@ -5,7 +5,8 @@ type: execution-unit
 protocol_version: "3.0"
 category: feature
 phase: f
-status: pending
+status: superseded
+decision: deferred-delete
 patch_scope: "Wire plugin tools into the existing tool-runtime spine: merge enabled plugin tool definitions into builtinDefinitionsForContext (catalog + provider schema), add a plugin dispatch branch in executeWithRunner that calls dispatchPluginTool, extend availabilitySpec/resolveAvailability and toolClassForName to recognize plugin tool names, and render provenance (ToolSource.plugin) in the catalog. Plugin tools obey the same ensureToolAllowed profile gate and review.reviewToolName gate as builtins."
 blast_radius: medium
 blast_radius_justification: "Modifies the shared catalog/dispatch path (runtime.builtinDefinitionsForContext, executeWithRunner, registry.availabilitySpec/resolveAvailability, runtime.toolClassForName) consumed by the provider tool-schema builder and the review gate. Containment: all additions are gated by loadPluginPolicy (default OFF), so with plugins disabled the catalog is byte-identical to today; with plugins enabled, additions are additive ToolDefinitions vetted by the existing review gate. Direct consumers = provider schema list, review gate, dispatch loop."
@@ -16,7 +17,7 @@ exit_criterion: "`zig build test` succeeds; new tests prove (1) disabled->no plu
 validation: "cd E:/Workspaces/01_Projects/01_Github/VANTARI-ONE/apps/backend && zig build test 2>&1 | tail -40"
 expected_exit_code: 0
 expected_output_pattern: ".*runtime.*pass|all tests passed|0 failed"
-evidence: "PLACEHOLDER — replace with exact captured stdout at completion. Archival is gated on this field being populated."
+evidence: "Move40 superseded this design unit before implementation. No runtime artifact was claimed. The retained plugin contract scaffolding is not model-visible; the default-visible manage_plugin placeholder was deleted. Reopen only with a concrete user-facing need and a new owner-mapped plan."
 conflict_surface: ""
 invariants:
   - "I1 (opt-in truth): catalog/provider/dispatch contain zero plugin tools when plugins disabled or absent"
@@ -29,7 +30,7 @@ source_message_proof_obligation: "Integrate plugin tools into the existing catal
 entry_state: "PLUGb/c/d/e archived. core/plugins/discovery.zig exposes loadPluginsForRuntime + PluginRegistry + findTool + LocatedTool. core/plugins/subprocess.zig exposes dispatchPluginTool(allocator, runner, plugin, socket, tool_name, args, transport). core/tools/runtime.zig builtinDefinitionsForContext returns compiled-in slices; executeWithRunner dispatches by name with no plugin branch; toolClassForName maps known builtin names. core/tools/registry.zig availabilitySpec/resolveAvailability know only builtin names. core/tools/review.zig reviewToolName is generic over []const ToolDefinition. core/tools/sockets.zig exposes ToolSource=builtin|plugin."
 rollback_surface: "1. Revert apps/backend/src/core/tools/registry.zig (availability/resolveAvailability plugin branches). 2. Revert apps/backend/src/core/tools/runtime.zig (builtinDefinitionsForContext merge, executeWithRunner plugin branch, toolClassForName plugin mapping, catalog provenance). Order: runtime.zig last (it consumes registry helpers). Re-running zig build test confirms restoration."
 dependencies: "PLUGb, PLUGc, PLUGd, PLUGe"
-next_todo: /todo/pending/PLUGg-plugin-socket.md
+next_todo: NONE
 continuation: "On completion: record evidence (replace PLACEHOLDER), set status done, move this file to /todo/changelog/<same filename>, continue immediately to next_todo. Stay fully focused on this slice until it resolves. Do not switch to any other slice. Do not pause. Do not batch."
 blocked_reason: ""
 unblock_action: ""

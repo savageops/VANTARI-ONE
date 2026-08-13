@@ -5,7 +5,8 @@ type: review-closeout
 protocol_version: "3.0"
 category: feature
 phase: h
-status: pending
+status: superseded
+decision: deferred-delete
 patch_scope: "No artifact change. This unit reviews, validates, verifies invariants, judges code quality and architecture, and decides whether the chain terminates or extends."
 blast_radius: low
 blast_radius_justification: "Read-only execution. Validation commands do not modify system state."
@@ -16,14 +17,14 @@ exit_criterion: "Terminal review decision: PASS (close chain, archive parent) or
 validation: "cd E:/Workspaces/01_Projects/01_Github/VANTARI-ONE/apps/backend && zig build test 2>&1 | tail -60 && zig build 2>&1 | tail -20"
 expected_exit_code: 0
 expected_output_pattern: "all tests passed|0 failed|build success"
-evidence: "PLACEHOLDER — replace with captured final validation output. Chain cannot terminate until populated."
+evidence: "Move40 superseded this review unit before implementation. No plugin runtime artifact exists to review. The default-visible manage_plugin placeholder was deleted; the retained manifest/isolation/socket types are contract-only and not model-visible. Reopen with a concrete need and a new owner-mapped plan."
 conflict_surface: ""
 invariants:
   - "I1-I8 (full set — verified as a block in this review)"
 source_message_anchor: "U1, U2, U3, U4, U5, U6, U7, U8, U9, U10, U11"
 source_message_excerpt: "(all parent anchors — closeout verifies every original-user-message requirement is implemented, evidenced, or explicitly closed)"
 source_message_proof_obligation: "Verify every source-message anchor is mapped to a completed unit, every proof obligation has evidence, and no original-user-message requirement is lost between parent and closeout."
-entry_state: "All implementation units PLUGa through PLUGg archived in /todo/changelog/ with non-PLACEHOLDER evidence. Plugin manifest parser, config gate, discovery, subprocess transport, runtime integration, and manage_plugin tool all landed."
+entry_state: "PLUGa through PLUGg were reviewed as the planned chain, but the plugin runtime remained unimplemented. Move40 superseded the chain before runtime integration; only contract-only manifest/isolation/socket types remain."
 rollback_surface: "None. If review fails, the next action is chain extension, not rollback."
 dependencies: "PLUGa, PLUGb, PLUGc, PLUGd, PLUGe, PLUGf, PLUGg"
 next_todo: NONE

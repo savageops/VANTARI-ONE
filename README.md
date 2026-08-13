@@ -743,14 +743,18 @@ Prompt paths remain workspace-relative. Missing or empty explicitly configured f
 
 <br/>
 
-## Plugin Architecture
+## Deferred Plugin Boundary
 
-Plugin support uses typed socket contracts validated at the manifest level:
+The plugin socket is deliberately not an installed capability. Move40 removed
+the default-visible `manage_plugin` placeholder because its enable/disable path
+was not wired to discovery or dispatch. The small manifest, isolation, and
+socket contracts remain contract-only reference scaffolding; they do not scan
+`.var/plugins/`, alter the model-visible catalog, or execute plugin code.
 
-- `src/core/tools/sockets.zig` — typed tool socket validation
-- `src/core/plugins/manifest.zig` — plugin manifest and socket declaration validation
-
-Plugin implementations live outside `core/` and register through typed sockets. The manifest system validates structure, socket declarations, and dependency requirements before any runtime interaction.
+Reopen the boundary only for a concrete user-facing tool need. The future slice
+must contribute through the existing tool definition, availability, review,
+dispatch, process, and event owners; it must not create a second registry or
+executor.
 
 <br/>
 

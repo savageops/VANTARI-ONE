@@ -29,7 +29,9 @@ Keep one current technical summary and one findings index. Mark every capability
   multiline `/status`, current hash equality, and terminal QC are closed.
 - 036: a-h and parent archived; findings 10, 11, and 13 are closed; roadmap
   moves 21–39 are closed.
-- PLUG: parent and a-h pending; unstarted; lower priority than P0 integrity work.
+- PLUG: parent and a-h archived as superseded by Move40 deferred-delete; no active
+  plugin runtime frontier. Reopen only with a concrete need and a new owner-mapped
+  recon.
 
 ## Acceptance
 
@@ -123,4 +125,21 @@ Do not erase historical closeout records or fabricate proof to make a chain gree
   code-quality, and provider-to-event-to-TUI criteria. One missing 035c
   Responses-stream cache-default pressure test was added; the current graph is
   `19/19` steps and `1,964/1,964` tests with zero leaks. 035a through 035h and
-  the parent are archived. The next active boundary is Move 40.
+  the parent are archived. The next active boundary was Move 40.
+
+## Closure receipt — Move 40 (2026-08-13)
+
+- The PLUG chain is archived as superseded, not shipped. Reference harvest and
+  owner recon found no installed plugin consumer; the default-visible
+  `manage_plugin` builtin had a TODO-only enable/disable path.
+- Move40 removed the manager file, registry/availability/dispatch branches, and
+  two wrapper-only tests. Contract-only manifest/isolation/socket namespaces
+  remain because the matrix tests still own those contracts; no plugin tool is
+  model-visible and no plugin discovery or dispatch capability is claimed.
+- The installed `tools --json` catalog returned 24 tools and no
+  `manage_plugin`. Debug passed `19/19` build steps and `1,962/1,962` tests;
+  ReleaseFast/install passed `9/9`; source and installed SHA-256 matched
+  `279A112A1D7CD94BF2C5678C961E83A3458951CB9D48E9C5CC21A6D01DF409AF`; the
+  final installed process census was zero.
+- The next active boundary is Move 41. PLUG move 86 is conditional on a new
+  concrete need and owner-mapped recon.

@@ -5,7 +5,8 @@ type: execution-unit
 protocol_version: "3.0"
 category: feature
 phase: e
-status: pending
+status: superseded
+decision: deferred-delete
 patch_scope: "Add core/plugins/subprocess.zig: a JSON-RPC caller that dispatches one plugin tool invocation to the plugin's entry executable over the harvested SubprocessTransport, bounded by CommandRunner/CommandLimits (timeout, output cap, Job-Object/process-group kill). Re-export from core/plugins/index.zig. No runtime wiring yet (PLUGf does it)."
 blast_radius: low
 blast_radius_justification: "Contained to a new module under core/plugins/. Nothing in the runtime calls it yet (PLUGf wires it into executeWithRunner). The module spawns a child process only when invoked; tests use a deterministic local executable/script fixture or a stubbed CommandRunner so no real untrusted plugin runs during tests. Failure cannot propagate to the catalog (not wired yet)."
@@ -16,7 +17,7 @@ exit_criterion: "`zig build test` succeeds; new subprocess tests (round-trip via
 validation: "cd E:/Workspaces/01_Projects/01_Github/VANTARI-ONE/apps/backend && zig build test 2>&1 | tail -40"
 expected_exit_code: 0
 expected_output_pattern: ".*subprocess.*pass|all tests passed|0 failed"
-evidence: "PLACEHOLDER — replace with exact captured stdout at completion. Archival is gated on this field being populated."
+evidence: "Move40 superseded this design unit before implementation. No runtime artifact was claimed. The retained plugin contract scaffolding is not model-visible; the default-visible manage_plugin placeholder was deleted. Reopen only with a concrete user-facing need and a new owner-mapped plan."
 conflict_surface: ""
 invariants:
   - "I4 (ownership boundary): transport caller lives under core/plugins/; plugin implementations (executables) live outside core/ and are invoked only as subprocesses"
@@ -27,7 +28,7 @@ source_message_proof_obligation: "Implement the subprocess transport caller so a
 entry_state: "PLUGb + PLUGc + PLUGd archived. core/plugins/manifest.zig exposes descriptor-bearing PluginSocket (with `entry` field). core/plugins/isolation.zig exposes SubprocessTransport{executable,args,timeout_ms,max_output_bytes}, IsolationLevel.subprocess, default_isolation_level. core/plugins/discovery.zig exposes MountedPlugin{manifest,directory,id}. core/tools/module.zig exposes CommandRunner, CommandLimits, CommandOutput, Error. runtime.zig has the Windows Job Object kill path (runCommandWithLimitsWindows) as the reference pattern."
 rollback_surface: "1. Revert apps/backend/src/core/plugins/index.zig re-exports added for subprocess. 2. Remove apps/backend/src/core/plugins/subprocess.zig. Order: index.zig first, then delete subprocess.zig."
 dependencies: "PLUGb"
-next_todo: /todo/pending/PLUGf-plugin-socket.md
+next_todo: NONE
 continuation: "On completion: record evidence (replace PLACEHOLDER), set status done, move this file to /todo/changelog/<same filename>, continue immediately to next_todo. Stay fully focused on this slice until it resolves. Do not switch to any other slice. Do not pause. Do not batch."
 blocked_reason: ""
 unblock_action: ""

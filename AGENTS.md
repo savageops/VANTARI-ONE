@@ -152,7 +152,7 @@ definition + availability + review_risk + execute
   -> effect/event evidence
 ```
 
-- Built-in tools remain the default capability surface. Plugin tools are opt-in and must not silently alter the model-visible tool list.
+- Built-in tools are the shipped capability surface. Plugin manifest, isolation, and socket types are contract-only; no plugin tool is model-visible until a concrete future mount path traverses the same definition, availability, review, and dispatch boundary.
 - Tool sockets use lowercase snake_case names and JSON-object parameter schemas.
 - Tool discovery is catalog-first. The model-visible catalog must explain available tools, unavailable dependencies, examples, usage hints, review risk, and exact JSON fields; no prompt layer may imply hidden tool names or backend-only escape hatches.
 - Agent-facing tools and backend-only primitives share one module-owned capability boundary. A primitive becomes agent-reachable only through a registered tool definition, availability contract, review risk, and dispatch path.

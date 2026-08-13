@@ -95,7 +95,7 @@ advance the queue until the real installed consumer path proves it.
 > Move 37/38 supersedes the installed artifact hash recorded by the historical
 > Move 34, Move 33, and earlier Move 38 receipts; the current
 > source/installed hash is
-> `09758F2AFE34AC5DCD94F786B5A307F8BB0DF9A11E5DA65B743A6EBB62354834`.
+> `279A112A1D7CD94BF2C5678C961E83A3458951CB9D48E9C5CC21A6D01DF409AF`.
 
 ## Competitive basis
 
@@ -178,7 +178,7 @@ advance the queue until the real installed consumer path proves it.
 | 37 | Execute 035g: sequence-backed TUI usage, cost accumulation, and `/status` proof. | closed: installed Z.AI priced/unknown turns, event-ledger readback, multiline `/status`, process cleanup, and TUI row-owner regression proof. |
 | 38 | Install the current ReleaseFast artifact after owner processes exit and require built/installed SHA-256 equality. | closed: `scripts/install_windows.ps1` path, built/installed SHA-256 `09758F2AFE34AC5DCD94F786B5A307F8BB0DF9A11E5DA65B743A6EBB62354834`, and zero final installed processes. |
 | 39 | Execute 035h terminal QC and archive 035 only after real provider and installed TUI proof. | closed: all QC criteria pass; 035h and parent 035 archived; current graph 19/19 and 1,964/1,964. |
-| 40 | Hold PLUG behind the integrity queue, then re-decompose it against the proven built-in capability owner and delete unnecessary registry/manager surface. | PLUG parent; no second tool truth. |
+| 40 | Hold PLUG behind the integrity queue, then re-decompose it against the proven built-in capability owner and delete unnecessary registry/manager surface. | closed: local reference harvest and owner recon found no installed plugin consumer; the default-visible `manage_plugin` placeholder, registry/availability/dispatch branches, and wrapper-only tests were removed; contract-only manifest/isolation/socket namespaces remain matrix-backed; installed `tools --json` exposes 24 tools with no `manage_plugin`; Debug 19/19 and 1,962/1,962, ReleaseFast/install 9/9, source/installed SHA-256 `279A112A1D7CD94BF2C5678C961E83A3458951CB9D48E9C5CC21A6D01DF409AF`, zero processes. |
 
 ## 41-50 — Finish the clean operator surface
 
@@ -249,7 +249,7 @@ advance the queue until the real installed consumer path proves it.
 | 83 | Enforce per-session and per-pool token, cost, wall-time, and turn budgets with warning and hard-stop receipts. | scheduler/usage ledger; quota cannot overspend silently. |
 | 84 | Add low-noise counters for context compile, JSONL scan, event replay, frame render, process spawn, and tool dispatch. | explicit diagnostics command; no always-on observability product. |
 | 85 | Split allocator quotas by turn, provider payload, tool result, and UI frame only where counters prove pressure. | Zig allocator owners; measured peak and failure envelope. |
-| 86 | If move 40 still proves a plugin need, land opt-in manifest discovery through the existing tool definition/availability boundary. | `core/plugins`; built-ins remain unchanged by default. |
+| 86 | Reopen plugin discovery only if a concrete user-facing need survives a new owner-mapped recon; if reopened, use the existing tool definition/availability boundary. | `core/plugins`; current Move40 decision is deferred-delete and built-ins remain unchanged by default. |
 | 87 | Supervise plugin JSON-RPC processes with the same deadlines, review risk, capability profiles, receipts, and cleanup as built-ins. | canonical process/tool runtime; no second executor. |
 | 88 | Make Windows install/update an atomic verified swap with locked-binary diagnosis, rollback, and source/installed hash receipt. | installer; interrupted update leaves a runnable prior binary. |
 | 89 | Run one adversarial release mesh across real provider streaming, tools, cancellation, daemon restart, cold-start replay, TUI, and installed auth/workspace resolution. | release gate; mocks cannot satisfy promotion. |
@@ -258,8 +258,10 @@ advance the queue until the real installed consumer path proves it.
 ## Immediate frontier
 
 Move 30, finding 11, parent 036, the 021 auth chain, parent 035, and Moves
-33-39 are closed after the installed hash-matched proofs, 036h terminal review,
-and 035h provider/cost pipeline QC. Moves 1-39 are the closed execution band;
-Move 40 is the next queued frontier. The provider cost/compat chain has no
-pending continuation. Keep PLUG, context sharding, and autonomous repair
-behind the next owner decision rather than opening parallel architecture.
+33-40 are closed after the installed hash-matched proofs, 036h terminal review,
+035h provider/cost pipeline QC, and the Move40 deferred-delete decision. Moves
+1-40 are the closed execution band; Move 41 is the next queued frontier. The
+provider cost/compat chain has no pending continuation. PLUG has no active
+runtime frontier: reopen it only after a concrete need and a new owner-mapped
+recon. Keep context sharding and autonomous repair behind the next owner
+decision rather than opening parallel architecture.

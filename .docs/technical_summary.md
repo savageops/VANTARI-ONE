@@ -75,7 +75,22 @@ pressure covers priced, cached, missing-cache, stream, and tool-call shapes;
 the added Responses-stream cache-default probe closes the promised 035c test
 floor. The full provider-to-event-to-TUI chain passes 19/19 build steps and
 1,964/1,964 tests. No cost database, price service, event type, or parallel
-executor was added. The next queued boundary is Move 40.
+executor was added.
+
+Move 40 closes the PLUG decision as deferred-delete. Recon across the local
+Codex, pi, oh-my-pi, Eve, KrillClaw, nullclaw, and Flue references plus the
+canonical tool owners found no installed plugin consumer. The default-visible
+`manage_plugin` builtin had a TODO-only enable/disable path, while manifest,
+isolation, and socket types were contract scaffolding with no catalog or
+dispatch consumer. The manager file, registry/availability/dispatch branches,
+and two wrapper-only tests were removed; matrix-backed contract namespaces
+remain intact for a future concrete need. The installed `tools --json` catalog
+returns 24 tools and excludes `manage_plugin`. Debug passes 19/19 build steps
+and 1,962/1,962 tests; ReleaseFast/install passes 9/9; current source and
+installed SHA-256 is
+`279A112A1D7CD94BF2C5678C961E83A3458951CB9D48E9C5CC21A6D01DF409AF`; the final
+installed VANTARI process census is zero. No plugin runtime capability is
+claimed. Move 41 is the next frontier.
 
 ## Behavior plane
 
@@ -374,10 +389,10 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   exactly. No CRC fields, sidecar quarantine ledger, auto-truncation path, or
   repair daemon was added.
 - The current source ReleaseFast and installed artifact share SHA-256
-  `09758F2AFE34AC5DCD94F786B5A307F8BB0DF9A11E5DA65B743A6EBB62354834`.
-  Move 37 TUI cost consumer, Move 38 installation, Move 39 provider/cost QC,
-  Move 34 Codex transport, owner lifecycle, and ticket lifecycle promotion all
-  pass; the final installed process census is zero.
+  `279A112A1D7CD94BF2C5678C961E83A3458951CB9D48E9C5CC21A6D01DF409AF`.
+  Moves 37–40, Move 34 Codex transport, owner lifecycle, and ticket lifecycle
+  promotion all pass; the installed catalog excludes `manage_plugin` and the
+  final installed process census is zero.
 - Installed Codex OAuth consumer proof used a valid disposable `$VANTARI_HOME`
   fixture with a pinned context window to avoid unrelated local-model discovery.
   The captured request path was `/codex/responses`; the response was `ok`; no
