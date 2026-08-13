@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub const agent_runtime = @import("agents/service.zig");
+pub const agent_mailbox = @import("agents/mailbox.zig");
 pub const agent_profile = @import("agents/profile.zig");
 pub const agent_scope = @import("agents/scope.zig");
 pub const agent_spec = @import("agents/spec.zig");
@@ -41,6 +42,7 @@ test "core namespace exposes executor and store" {
     std.testing.refAllDeclsRecursive(config_file);
     std.testing.refAllDeclsRecursive(workspace);
     std.testing.refAllDeclsRecursive(agent_profile);
+    std.testing.refAllDeclsRecursive(agent_mailbox);
     std.testing.refAllDeclsRecursive(agent_scope);
     std.testing.refAllDeclsRecursive(agent_spec);
     std.testing.refAllDeclsRecursive(agent_supervisor);

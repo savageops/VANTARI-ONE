@@ -247,7 +247,9 @@ crash-released scheduler lock and a persisted generation fence; the native
 two-kernel proof produces one winner and one attempt. The same proof now seeds
 one assigned ticket and observes one process-serialized claim containing the
 worker generation, lease, capability, and deterministic child identity, followed
-by exactly one child session. Exactly-once recovery after execution-owner death
+by exactly one child session. The child then sends the parent one durable
+ticket-claim wake through the sequence-addressed agent mailbox. Exactly-once
+recovery after execution-owner death
 remains open; see the current full-harness SITREP before treating active work as
 crash-resumable.
 
@@ -314,7 +316,7 @@ Tool calls pass through a **compiled review gate** before side effects execute. 
 | Risk class | Behavior | Tools |
 |---|---|---|
 | `read_only` | Approved through evidence path | `read_file` · `list_files` · `search_files` · `skill_info` · agent query tools |
-| `write_capable` | Pre-dispatch review with effect receipt | `write_file` · `append_file` · `replace_in_file` |
+| `write_capable` | Pre-dispatch review with durable receipt | `write_file` · `append_file` · `replace_in_file` · `send_agent_message` |
 | `command_execution` | Pre-dispatch review with bounded output | `shell_exec` |
 | `delegating` | Scoped delegation validation | `launch_agent` |
 | `unknown_high_impact` | **Blocked before dispatch** | Any undeclared or context-unavailable tool |
@@ -352,7 +354,9 @@ The installed `vantari` client renders a full terminal interface with:
 
 ### Scoped Delegation
 
-Child agents are not autonomous. `launch_agent` carries explicit scope fields that the kernel validates before spawning a child session:
+Child agents are normal bounded sessions. The model chooses eligible actions;
+`launch_agent` carries the hard scope fields that the kernel validates before
+spawning a child session:
 
 | Field | Contract |
 |---|---|
@@ -363,6 +367,17 @@ Child agents are not autonomous. `launch_agent` carries explicit scope fields th
 | `parent_capability_profile` | Inherited runtime boundary for tool classes and budgets |
 
 Two capability profiles — `root` and `subagent` — define typed runtime boundaries over tool classes, delegation policy, budget policy, and provider inheritance. They are not product roles or prompt taxonomy.
+
+### Sequence-Addressed Agent Mailbox
+
+`send_agent_message` lets any eligible session send bounded information to an
+exact session in its tree, its immediate parent, or its current sibling group.
+`queue` waits for the recipient's next run; `wake` requests the next safe
+provider boundary of a live run. Recipient sequence, sender receipt, and unread
+cursor are durable `events.jsonl` rows. Provider failure leaves mail unread.
+Messages inform; they do not assign tickets, launch work, grant authority, or
+copy sender transcripts. Child completion and ticket-claim notices use this same
+path.
 
 ### Skill Routing
 
@@ -427,6 +442,7 @@ The model-visible catalog is generated from module-owned definitions. Each entry
 | `shell_exec` | `command_execution` | Bounded command execution — `argv` · `shell` · `bash` · `powershell` modes with timeout, output caps, streaming, and explicit full-access opt-in |
 | `skill_info` | `read_only` | Skill capsule retrieval for protocol routing without prompt pollution |
 | `launch_agent` | `delegating` | Scoped child-session creation with capability profile validation |
+| `send_agent_message` | `write_capable` | Bounded direct, parent, or current-group information with queue/wake intent and durable delivery receipt |
 | `schedule_job` | `write_capable` | Durable scheduler job lifecycle — create, list, get, update, delete, pause, resume, run_now |
 
 **Agent orchestration tools** for parent-supervised child lifecycle:
@@ -436,6 +452,7 @@ The model-visible catalog is generated from module-owned definitions. Each entry
 | `agent_status` | Non-blocking child session snapshot |
 | `wait_agent` | Blocking wait with configurable `timeout_ms` |
 | `list_agents` | Enumerate parent's active children |
+| `send_agent_message` | Queue or wake one exact recipient, parent, or current group without creating work |
 
 All tool definitions are schema-first. The registry resolves availability from module-owned specs — `search_files` probes the `iex` executable at startup and reports unavailable if absent, rather than failing at invocation time. `tools/list` and `vantari tools --json` expose the same catalog with availability metadata, examples, and usage hints.
 
@@ -753,7 +770,8 @@ Every tool call, context window, and model interaction is recorded in structured
 | Wire-protocol routing — Chat Completions, Responses, Anthropic Messages | **Shipped** |
 | Provider model discovery and local context-window detection | **Shipped** |
 | Durable scheduler records and attempts | **Source proven; two-kernel leadership gate passed** |
-| Buffered ticket admission and fixed in-process agent capacity | **Source present; process-survival proof pending** |
+| Buffered ticket admission and fixed agent capacity | **Source proven; installed crash-recovery proof pending** |
+| Sequence-addressed direct/group/parent agent mailbox | **Source proven; owner-crash delivery reconciliation pending** |
 | Plugin runtime with typed socket execution | **In progress** |
 | Provider fallback chains | Planned |
 | Identity auth against `auth.vantari.one` — PKCE OAuth mirroring the openai-codex pattern | Planned |
@@ -877,13 +895,14 @@ vantari auth status|login|logout <provider>    identity and provider auth
 | [`apps/backend/README.md`](./apps/backend/README.md) | Kernel internals, module ownership, layered architecture |
 | [`apps/backend/architecture.md`](./apps/backend/architecture.md) | Canonical architecture map with sequence diagrams and state machines |
 | [`.docs/research/2026-08-12-full-harness-sitrep.md`](./.docs/research/2026-08-12-full-harness-sitrep.md) | Current full-harness design, pipeline, proof, concerns, and closure order |
+| [`.docs/research/2026-08-13-sequence-addressed-agent-mailbox.md`](./.docs/research/2026-08-13-sequence-addressed-agent-mailbox.md) | Agent-mailbox competitive harvest, event grammar, context boundary, and residual risk |
 | [`.docs/todo/findings/00-INDEX.md`](./.docs/todo/findings/00-INDEX.md) | Priority-ordered executable readiness findings |
 
 <br/>
 
 ## Validation
 
-The pinned graph currently passes 1,929 test cases across `apps/backend/src/`
+The pinned graph currently passes 1,943 test cases across `apps/backend/src/`
 and `apps/backend/tests/`. They target state transitions, protocol edges, and
 failure pressure rather than line coverage:
 
@@ -896,6 +915,9 @@ failure pressure rather than line coverage:
 - Active-request shutdown with cancellation before join and one terminal event
 - Bridge token verification, origin guard, payload redaction
 - Delegation scope zero-value rejection and profile expansion validation
+- Direct/group/parent agent mail, replay, provider-failure unread retention,
+  safe-boundary wake, ticket claim, and child-completion convergence without
+  transcript replication
 
 ```powershell
 cd apps/backend

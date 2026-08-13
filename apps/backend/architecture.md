@@ -380,12 +380,12 @@ Every session directory contains:
 
 `core/agents/spec.zig` owns stable specialist identity and hot-loads `config.json.agents.definitions`. An `AgentSpec` fixes execution kind, capability profile, route role, execution ceilings, recursion policy, and output contract. Built-in rows may be tuned or disabled; a custom id must extend one built-in floor. Operator configuration may remap provider, model, wire API, thinking mode, and context/output budgets through `core/providers/routes.zig`; it cannot weaken the inherited execution kind or capability profile.
 
-`core/agents/service.zig` validates one `{ context, tasks[] }` batch, resolves routes, persists secret-free execution receipts, then admits the group to `core/agents/supervisor.zig`. The supervisor owns one fixed `std.Thread.Pool`, O(1) group/parent indexes, a completion condition, cancellation, terminal-event ordering, and exactly-once convergence. Healthy wait/status paths do not scan `.var/sessions`; ledger traversal is an explicit cold-start recovery path.
+`core/agents/service.zig` validates one `{ context, tasks[] }` batch, resolves routes, persists secret-free execution receipts, then admits the group to `core/agents/supervisor.zig`. The supervisor owns one fixed `std.Thread.Pool`, O(1) group/parent indexes, a completion condition, cancellation, terminal-event ordering, and idempotent mailbox-backed convergence. Healthy wait/status paths do not scan `.var/sessions`; ledger traversal is an explicit cold-start recovery path.
 
 The project-local execution owner keeps this sole service/pool/scheduler
 composition alive across TUI and CLI detach. It does not make in-memory child
 work crash-resumable: owner death still requires the generation-fenced
-reconciliation assigned to moves 26–30. Move 23 closes scheduler leadership.
+reconciliation assigned to moves 27–30. Move 23 closes scheduler leadership.
 Move 24 closes ticket admission split-brain: `core/tickets` holds one shared
 process lock across projection, validation, and append; the winning claim row
 commits worker generation, lease, attempt, capability hash, and a deterministic
@@ -393,24 +393,25 @@ child-session id before `AgentService` can create or submit that session.
 Move 25 proves every assignment path is ledger-only and deletes the unused
 ticket execution-policy surface.
 
-`core/executor/loop.zig` parks a waiting parent on the supervisor condition without a provider call. The first unconsumed terminal child wakes the parent; the service appends that child's convergence record exactly once, rebuilds through the context compiler, and permits the next routing/synthesis turn while unfinished siblings remain supervised. A parent cannot emit terminal output while any owned child remains active. Full specialists execute as ordinary isolated VAR1 child sessions. Tool-free `model_task` specialists use one provider turn and validate their supplied output schema without acquiring a second transcript or tool runtime.
+`core/executor/loop.zig` parks a waiting parent on the supervisor condition without a provider call. The first unconsumed terminal child sends its bounded canonical summary through the parent mailbox, which wakes the parent, rebuilds through the context compiler, and permits the next routing/synthesis turn while unfinished siblings remain supervised. A parent cannot emit terminal output while any owned child remains active. Full specialists execute as ordinary isolated VAR1 child sessions. Tool-free `model_task` specialists use one provider turn and validate their supplied output schema without acquiring a second transcript or tool runtime.
 
-Child assistant/reasoning deltas and tool transcripts stay in the child ledger. The parent event spine receives only bounded control events: group start, admission, queue, start, material progress/wait, child terminal, group terminal, and convergence. Every child `session.json` keeps a heap-owned immutable execution receipt containing the secret-free resolved agent, route, model, wire API, budgets, group, and branch identity; explicit checked JSON decoding preserves that receipt across optimized status rewrites and cold recovery. CLI, stdio, and TUI consume the same projection. The TUI renders Search, Explore, Agents, and To-dos through one group/item grammar with `[ ]`, `[>]`, `[x]`, `[!]`, `[-]` markers and `|--` / `` `--`` child rails; tool lifecycle phases remain event metadata while the child row is replaced by the bounded `assistant_response` summary from `sessions/summaries.jsonl`. No second status bus exists.
+Child assistant/reasoning deltas and tool transcripts stay in the child ledger. The parent event spine receives bounded lifecycle events plus mailbox delivery; it never receives a copied child transcript. Every child `session.json` keeps a heap-owned immutable execution receipt containing the secret-free resolved agent, route, model, wire API, budgets, group, and branch identity; explicit checked JSON decoding preserves that receipt across optimized status rewrites and cold recovery. CLI, stdio, and TUI consume the same projection. The TUI renders Search, Explore, Agents, and To-dos through one group/item grammar with `[ ]`, `[>]`, `[x]`, `[!]`, `[-]` markers and `|--` / `` `--`` child rails; tool lifecycle phases remain event metadata while the child row is replaced by the bounded `assistant_response` summary from `sessions/summaries.jsonl`. No second status bus exists.
 
-### Planned selective agent awareness
+### Sequence-addressed agent mailbox
 
-Move 21 establishes the persistent execution owner in source. Moves 22–30 add one sequence-addressed
-mailbox through the existing agent/session/event lane. Every agent remains a
+Move 26 adds one sequence-addressed mailbox through the existing
+agent/session/event lane. Every agent remains a
 normal session, including a child that becomes a bounded parent. The delivery
 surface resolves direct-session, parent, and current-group targets; carries a
 bounded body plus summary or artifact references; and persists delivery sequence,
 unread cursor, acknowledgement, and explicit queue/wake intent.
 
-This is not shipped yet. Current child completion still uses convergence-specific
-parent messages and events. The mailbox must replace that special wake path, not
-run beside it. Tickets remain the only work lifecycle. Context compilation may
-inject only bounded unread messages selected for that session; it must never copy
-all sibling transcripts or create a generic topic/subscription broker.
+The mailbox is source-shipped. Child completion and ticket claim use it instead
+of convergence-specific transcript messages or a bespoke claim event. Context
+compilation injects only the recipient's bounded unread batch and acknowledges it
+after provider success; it never copies sibling transcripts or creates a generic
+topic/subscription broker. Tickets remain the only work lifecycle. Move 29 owns
+exact owner-generation delivery reconciliation across process death.
 
 ## Module ownership
 
@@ -442,10 +443,12 @@ all sibling transcripts or create a generic topic/subscription broker.
   typed tool socket namespace, built-in module registry/runtime, pre-dispatch review, availability resolver, command-backed search dispatch, and workspace-state helpers
 - `src/core/agents/spec.zig`
   stable specialist ids, execution-kind floors, capability profiles, route roles, budgets, and output contracts
+- `src/core/agents/mailbox.zig`
+  sequence-addressed direct/parent/current-group delivery, receipts, bounded unread context, and provider-success cursor
 - `src/core/agents/service.zig`
   batch validation, route/receipt persistence, supervisor admission, cold recovery, and convergence integration
 - `src/core/agents/supervisor.zig`
-  fixed-pool group execution, O(1) live indexes, condition-based wait, cancellation, terminal ordering, and exactly-once convergence
+  fixed-pool group execution, O(1) live indexes, condition-based wait, cancellation, terminal ordering, and idempotent mailbox-backed convergence
 - `src/core/tickets/index.zig`
   canonical ticket ledger, queue projection, claims, leases, stale-owner repair, and terminal evidence
 - `src/core/scheduler/service.zig`
@@ -536,7 +539,7 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-13:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Isolated broad test graph -> 19/19 steps and 1933/1933 tests passed. The lower
+- Isolated broad test graph -> 19/19 steps and 1943/1943 tests passed. The lower
   total is intentional: 45 one-case registry wrappers were replaced by one loop
   that executes every one of the 53 declared cases, including ten that had no
   test declaration.
@@ -556,10 +559,14 @@ Latest local Windows validation on 2026-08-13:
   remains the sole capacity setting. A 94-segment GGUF audit found one adjacent
   import/declaration candidate, zero exact pairs, and no second queue or
   execution owner.
+- Direct, parent, current-group, nested-parent, queue/wake, provider-failure,
+  safe-boundary continuation, child-completion, and ticket-claim mailbox probes
+  pass without transcript replication. The 116-segment audit found five
+  declaration/import adjacency candidates and zero exact pairs.
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Current source SHA-256 is
-  `77A2B111DCA35AA08E4D33973D83AB2FB9783E6C4D423A09611D24F0EE3142FD`.
+  `227CDA755E5A7E7BC3152DA4653DAB6AF1630D1288BB0919CFA648F69618C654`.
   Installed move-19 SHA-256 remains
   `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
   replacement waits for operator-owned PIDs 12028/14452 to exit naturally.

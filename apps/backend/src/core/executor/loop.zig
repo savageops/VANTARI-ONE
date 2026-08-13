@@ -3,6 +3,7 @@ const config_file = @import("../config/file.zig");
 const docs_sync = @import("../docs/sync.zig");
 const context_builder = @import("../context/index.zig");
 const context_stream_rules = @import("../context/stream_rules.zig");
+const agent_mailbox = @import("../agents/mailbox.zig");
 const prompts = @import("../prompts/index.zig");
 const draft = @import("draft.zig");
 const turn_payload = @import("turn_payload.zig");
@@ -265,6 +266,7 @@ pub fn runPromptWithOptions(
     }
 
     var requires_child_supervision = false;
+    var mailbox_context = MailboxContext{};
     var executed_tool_calls: usize = 0;
     var provider_retries: u8 = 0;
     const max_provider_retries: u8 = 4;
@@ -315,6 +317,26 @@ pub fn runPromptWithOptions(
                 );
             }
         }
+
+        mailbox_context.injectIfEligible(
+            allocator,
+            config.workspace_root,
+            session.id,
+            run_seq,
+            &messages,
+        ) catch |err| {
+            try failSession(
+                allocator,
+                config.workspace_root,
+                options.hooks,
+                &session,
+                run_seq,
+                .failed,
+                @errorName(err),
+                run_start_ms,
+            );
+            return err;
+        };
 
         // Typed turn ingress evidence: every provider turn starts with a
         // turn_started event carrying the step boundary and measured token
@@ -449,6 +471,25 @@ pub fn runPromptWithOptions(
         };
         defer completion.deinit(allocator);
         provider_retries = 0; // reset on success
+        mailbox_context.acknowledgeObservation(
+            allocator,
+            config.workspace_root,
+            session.id,
+            run_seq,
+            &messages,
+        ) catch |err| {
+            try failSession(
+                allocator,
+                config.workspace_root,
+                options.hooks,
+                &session,
+                run_seq,
+                .failed,
+                @errorName(err),
+                run_start_ms,
+            );
+            return err;
+        };
         if (options.hooks.shouldCancel(session.id)) {
             try cancelSession(allocator, config.workspace_root, options.hooks, &session, run_seq, "Cancellation requested during provider execution.");
             return Error.Cancelled;
@@ -687,11 +728,30 @@ pub fn runPromptWithOptions(
             continue;
         }
 
+        const wake_requires_continuation = agent_mailbox.hasEligibleUnread(
+            allocator,
+            config.workspace_root,
+            session.id,
+            run_seq,
+        ) catch |err| {
+            try failSession(
+                allocator,
+                config.workspace_root,
+                options.hooks,
+                &session,
+                run_seq,
+                .failed,
+                @errorName(err),
+                run_start_ms,
+            );
+            return err;
+        };
+
         if (completion.content) |content| {
             const final_output = try sanitizeOperatorResponse(allocator, session.prompt, content);
             defer allocator.free(final_output);
 
-            if (requires_child_supervision) {
+            if (requires_child_supervision or wake_requires_continuation) {
                 const progress_timestamp = std.time.milliTimestamp();
                 try store.upsertAssistantSessionMessageWithReasoning(
                     allocator,
@@ -710,15 +770,17 @@ pub fn runPromptWithOptions(
                     final_output,
                     session.status,
                 );
-                const agent_service = execution_context.agent_service orelse return tools.Error.AgentServiceUnavailable;
-                requires_child_supervision = try awaitChildGroups(
-                    allocator,
-                    config.workspace_root,
-                    options.hooks,
-                    &session,
-                    run_seq,
-                    agent_service,
-                );
+                if (requires_child_supervision) {
+                    const agent_service = execution_context.agent_service orelse return tools.Error.AgentServiceUnavailable;
+                    requires_child_supervision = try awaitChildGroups(
+                        allocator,
+                        config.workspace_root,
+                        options.hooks,
+                        &session,
+                        run_seq,
+                        agent_service,
+                    );
+                }
                 base_message_count = try rebuildProviderBaseMessages(
                     allocator,
                     config,
@@ -790,6 +852,18 @@ pub fn runPromptWithOptions(
             };
         }
 
+        if (wake_requires_continuation) {
+            base_message_count = try rebuildProviderBaseMessages(
+                allocator,
+                config,
+                execution_context,
+                session,
+                &messages,
+                messages.items.len,
+            );
+            continue;
+        }
+
         // Self-healing: if we reach here, the model returned no content and
         // no tool calls (empty response). This is handled by the provider-
         // resilience block above — but if the completion succeeded with null
@@ -852,6 +926,68 @@ pub fn runPromptWithOptions(
 
     try failSession(allocator, config.workspace_root, options.hooks, &session, run_seq, .failed, "StepLimitExceeded", run_start_ms);
     return Error.StepLimitExceeded;
+}
+
+const MailboxContext = struct {
+    through_seq: u64 = 0,
+
+    fn injectIfEligible(
+        self: *MailboxContext,
+        allocator: std.mem.Allocator,
+        workspace_root: []const u8,
+        session_id: []const u8,
+        run_seq: u64,
+        messages: *std.array_list.Managed(types.ChatMessage),
+    ) !void {
+        if (self.through_seq != 0) return;
+        const batch_value = try agent_mailbox.readUnreadBatch(
+            allocator,
+            workspace_root,
+            session_id,
+            run_seq,
+        ) orelse return;
+        var batch = batch_value;
+        defer batch.deinit(allocator);
+        try messages.append(try types.initTextMessage(allocator, .system, batch.rendered));
+        self.through_seq = batch.through_seq;
+    }
+
+    fn acknowledgeObservation(
+        self: *MailboxContext,
+        allocator: std.mem.Allocator,
+        workspace_root: []const u8,
+        session_id: []const u8,
+        run_seq: u64,
+        messages: *std.array_list.Managed(types.ChatMessage),
+    ) !void {
+        if (self.through_seq == 0) return;
+        try agent_mailbox.acknowledge(
+            allocator,
+            workspace_root,
+            session_id,
+            self.through_seq,
+            run_seq,
+        );
+        removeMailboxContextMessage(allocator, messages);
+        self.through_seq = 0;
+    }
+};
+
+fn removeMailboxContextMessage(
+    allocator: std.mem.Allocator,
+    messages: *std.array_list.Managed(types.ChatMessage),
+) void {
+    var index = messages.items.len;
+    while (index > 0) {
+        index -= 1;
+        const message = messages.items[index];
+        if (message.role != .system) continue;
+        const content = message.content orelse continue;
+        if (!std.mem.startsWith(u8, content, "AGENT_MAILBOX (")) continue;
+        var removed = messages.orderedRemove(index);
+        removed.deinit(allocator);
+        return;
+    }
 }
 
 /// Park one parent on its in-memory child condition until the first

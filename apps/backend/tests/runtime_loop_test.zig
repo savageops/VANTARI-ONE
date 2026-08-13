@@ -155,6 +155,13 @@ const OverflowRetryContext = struct {
     }
 };
 
+const MidTurnWakeContext = struct {
+    workspace_root: []const u8,
+    sender_session_id: []const u8,
+    call_count: usize = 0,
+    observed_wake: bool = false,
+};
+
 const CancelContext = struct {
     checks: usize = 0,
 };
@@ -444,6 +451,34 @@ fn mockSendResumePrompt(
 
     return allocator.dupe(u8,
         \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"3"}}]}
+    );
+}
+
+fn mockSendMidTurnWake(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const u8,
+    payload: []const u8,
+) anyerror![]u8 {
+    var ctx: *MidTurnWakeContext = @ptrCast(@alignCast(ctx_ptr.?));
+    ctx.call_count += 1;
+    if (ctx.call_count == 1) {
+        var receipt = try VAR1.core.agent_mailbox.send(allocator, ctx.workspace_root, .{
+            .sender_session_id = ctx.sender_session_id,
+            .tool_call_id = "mid-provider-wake",
+            .target = .parent,
+            .delivery = .wake,
+            .body = "MID_TURN_WAKE_SENTINEL_529",
+        });
+        defer receipt.deinit(allocator);
+        return allocator.dupe(u8,
+            \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"Provider progress before wake."}}]}
+        );
+    }
+    ctx.observed_wake = std.mem.indexOf(u8, payload, "MID_TURN_WAKE_SENTINEL_529") != null;
+    return allocator.dupe(u8,
+        \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"Wake incorporated at the next safe boundary."}}]}
     );
 }
 
@@ -775,6 +810,164 @@ test "loop can resume a precreated child session and preserve delegation metadat
     try std.testing.expectEqualStrings("berry-child", persisted.display_name.?);
     try std.testing.expectEqualStrings("subagent", persisted.agent_profile.?);
     try std.testing.expect(std.mem.indexOf(u8, context.payload.?, "how many r in strawberry") != null);
+}
+
+test "loop injects unread agent mail once and acknowledges only provider observation" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try tmpWorkspacePath(allocator, &tmp);
+    defer allocator.free(workspace_root);
+    const config = try makeConfig(allocator, workspace_root, 4);
+    defer config.deinit(allocator);
+
+    var recipient = try VAR1.core.session_store.initSession(allocator, workspace_root, "recipient prompt");
+    defer recipient.deinit(allocator);
+    var sender = try VAR1.core.session_store.initSessionWithOptions(allocator, workspace_root, "sender prompt", .{
+        .parent_session_id = recipient.id,
+        .display_name = "mail-sender",
+        .agent_profile = "recon",
+    });
+    defer sender.deinit(allocator);
+
+    var receipt = try VAR1.core.agent_mailbox.send(allocator, workspace_root, .{
+        .sender_session_id = sender.id,
+        .tool_call_id = "mail-before-run",
+        .target = .parent,
+        .delivery = .queue,
+        .body = "MAIL_CONTEXT_SENTINEL_731",
+        .references = &.{"artifact:apps/backend/src/core/agents/mailbox.zig"},
+    });
+    defer receipt.deinit(allocator);
+
+    var first_capture = ResumePromptContext{ .allocator = allocator };
+    defer first_capture.deinit();
+    const first = try VAR1.core.executor.runPromptWithOptions(allocator, config, "", .{
+        .transport = .{ .context = &first_capture, .sendFn = mockSendResumePrompt },
+        .execution_context = .{ .workspace_root = config.workspace_root },
+        .session_id = recipient.id,
+    });
+    defer first.deinit(allocator);
+    try std.testing.expect(std.mem.indexOf(u8, first_capture.payload.?, "AGENT_MAILBOX") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first_capture.payload.?, "MAIL_CONTEXT_SENTINEL_731") != null);
+
+    const messages = try VAR1.core.session_store.readSessionMessages(allocator, workspace_root, recipient.id);
+    defer VAR1.shared.types.deinitSessionMessages(allocator, messages);
+    for (messages) |message| {
+        try std.testing.expect(std.mem.indexOf(u8, message.content, "MAIL_CONTEXT_SENTINEL_731") == null);
+    }
+
+    const events = try VAR1.core.session_store.readEvents(allocator, workspace_root, recipient.id);
+    defer VAR1.shared.types.deinitSessionEvents(allocator, events);
+    var cursor_count: usize = 0;
+    for (events) |event| {
+        if (std.mem.eql(u8, event.event_type, VAR1.core.agent_mailbox.cursor_event_type)) cursor_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), cursor_count);
+
+    var second_capture = ResumePromptContext{ .allocator = allocator };
+    defer second_capture.deinit();
+    const second = try VAR1.core.executor.runPromptWithOptions(allocator, config, "", .{
+        .transport = .{ .context = &second_capture, .sendFn = mockSendResumePrompt },
+        .execution_context = .{ .workspace_root = config.workspace_root },
+        .session_id = recipient.id,
+    });
+    defer second.deinit(allocator);
+    try std.testing.expect(std.mem.indexOf(u8, second_capture.payload.?, "MAIL_CONTEXT_SENTINEL_731") == null);
+}
+
+test "loop leaves agent mail unread when provider observation fails" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try tmpWorkspacePath(allocator, &tmp);
+    defer allocator.free(workspace_root);
+    const config = try makeConfig(allocator, workspace_root, 4);
+    defer config.deinit(allocator);
+
+    var recipient = try VAR1.core.session_store.initSession(allocator, workspace_root, "recipient prompt");
+    defer recipient.deinit(allocator);
+    var sender = try VAR1.core.session_store.initSessionWithOptions(allocator, workspace_root, "sender prompt", .{
+        .parent_session_id = recipient.id,
+    });
+    defer sender.deinit(allocator);
+    var receipt = try VAR1.core.agent_mailbox.send(allocator, workspace_root, .{
+        .sender_session_id = sender.id,
+        .tool_call_id = "mail-before-failure",
+        .target = .parent,
+        .delivery = .queue,
+        .body = "MAIL_REPLAY_SENTINEL_947",
+    });
+    defer receipt.deinit(allocator);
+
+    try std.testing.expectError(error.ConnectionRefused, VAR1.core.executor.runPromptWithOptions(allocator, config, "", .{
+        .transport = .{ .context = null, .sendFn = mockSendFailure },
+        .execution_context = .{ .workspace_root = config.workspace_root },
+        .session_id = recipient.id,
+    }));
+    const failed_events = try VAR1.core.session_store.readEvents(allocator, workspace_root, recipient.id);
+    defer VAR1.shared.types.deinitSessionEvents(allocator, failed_events);
+    for (failed_events) |event| {
+        try std.testing.expect(!std.mem.eql(u8, event.event_type, VAR1.core.agent_mailbox.cursor_event_type));
+    }
+
+    var capture = ResumePromptContext{ .allocator = allocator };
+    defer capture.deinit();
+    const recovered = try VAR1.core.executor.runPromptWithOptions(allocator, config, "", .{
+        .transport = .{ .context = &capture, .sendFn = mockSendResumePrompt },
+        .execution_context = .{ .workspace_root = config.workspace_root },
+        .session_id = recipient.id,
+    });
+    defer recovered.deinit(allocator);
+    try std.testing.expect(std.mem.indexOf(u8, capture.payload.?, "MAIL_REPLAY_SENTINEL_947") != null);
+}
+
+test "wake mail arriving during provider execution forces one safe-boundary continuation" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try tmpWorkspacePath(allocator, &tmp);
+    defer allocator.free(workspace_root);
+    const config = try makeConfig(allocator, workspace_root, 4);
+    defer config.deinit(allocator);
+
+    var recipient = try VAR1.core.session_store.initSession(allocator, workspace_root, "recipient prompt");
+    defer recipient.deinit(allocator);
+    var sender = try VAR1.core.session_store.initSessionWithOptions(allocator, workspace_root, "sender prompt", .{
+        .parent_session_id = recipient.id,
+    });
+    defer sender.deinit(allocator);
+
+    var context = MidTurnWakeContext{
+        .workspace_root = workspace_root,
+        .sender_session_id = sender.id,
+    };
+    const result = try VAR1.core.executor.runPromptWithOptions(allocator, config, "", .{
+        .transport = .{ .context = &context, .sendFn = mockSendMidTurnWake },
+        .execution_context = .{ .workspace_root = config.workspace_root },
+        .session_id = recipient.id,
+    });
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), context.call_count);
+    try std.testing.expect(context.observed_wake);
+    try std.testing.expectEqualStrings("Wake incorporated at the next safe boundary.", result.output);
+
+    const messages = try VAR1.core.session_store.readSessionMessages(allocator, workspace_root, recipient.id);
+    defer VAR1.shared.types.deinitSessionMessages(allocator, messages);
+    for (messages) |message| {
+        try std.testing.expect(std.mem.indexOf(u8, message.content, "MID_TURN_WAKE_SENTINEL_529") == null);
+    }
+    const events = try VAR1.core.session_store.readEvents(allocator, workspace_root, recipient.id);
+    defer VAR1.shared.types.deinitSessionEvents(allocator, events);
+    var progress_count: usize = 0;
+    var cursor_count: usize = 0;
+    for (events) |event| {
+        if (std.mem.eql(u8, event.event_type, "assistant_progress")) progress_count += 1;
+        if (std.mem.eql(u8, event.event_type, VAR1.core.agent_mailbox.cursor_event_type)) cursor_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), progress_count);
+    try std.testing.expectEqual(@as(usize, 1), cursor_count);
 }
 
 test "loop resumes a same-session transcript from canonical messages" {

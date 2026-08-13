@@ -11,6 +11,7 @@ pub const ToolClass = enum {
     command,
     scheduling,
     delegation,
+    collaboration,
     workspace_state,
 };
 
@@ -40,6 +41,7 @@ const subagent_tool_classes = [_]ToolClass{
     .file_write,
     .command,
     .delegation,
+    .collaboration,
 };
 
 const root_tool_classes = [_]ToolClass{
@@ -48,6 +50,7 @@ const root_tool_classes = [_]ToolClass{
     .command,
     .scheduling,
     .delegation,
+    .collaboration,
     .workspace_state,
 };
 
@@ -55,12 +58,14 @@ const root_tool_classes = [_]ToolClass{
 // the minimum the branch type needs — least-privilege per branch.
 const recon_tool_classes = [_]ToolClass{
     .file_read,
+    .collaboration,
 };
 
 const write_branch_tool_classes = [_]ToolClass{
     .file_read,
     .file_write,
     .command,
+    .collaboration,
 };
 
 const model_task_tool_classes = [_]ToolClass{};
@@ -160,6 +165,7 @@ pub fn toolClassLabel(tool_class: ToolClass) []const u8 {
         .command => "command",
         .scheduling => "scheduling",
         .delegation => "delegation",
+        .collaboration => "collaboration",
         .workspace_state => "workspace_state",
     };
 }

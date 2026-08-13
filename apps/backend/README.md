@@ -121,7 +121,9 @@ is read back before dispatch. The native Windows proof starts two complete
 one unique schedule attempt, one ticket claim, and one deterministic child
 session. `.var/tickets/ledger.lock` serializes ticket read/validate/append across
 processes; the claim row commits worker generation, lease, attempt, capability,
-and child identity before `AgentService` materializes or submits the child.
+and child identity before `AgentService` materializes or submits the child. After
+claim and session creation are durable, the child sends one parent wake through
+the same sequence-addressed mailbox used for normal agent collaboration.
 
 ### Interjection Protocol (Speak While Working)
 
@@ -227,7 +229,7 @@ Seven built-in specialists with enforced tool-class profiles, each routable to i
 
 ### Bounded In-Process Supervisor
 
-Children run on a fixed `std.Thread.Pool` (default 6 workers, max 64) with hard concurrency limits, O(1) group/parent indexes, condition-based wait, cancellation, and cold-only ledger recovery. The supervisor provides exactly-once convergence — a child's terminal evidence is committed once, never duplicated.
+Children run on a fixed `std.Thread.Pool` (default 6 workers, max 64) with hard concurrency limits, O(1) group/parent indexes, condition-based wait, cancellation, and cold-only ledger recovery. The supervisor provides idempotent mailbox-backed convergence — a child's bounded terminal summary reaches its parent once without copying the child transcript.
 
 ### Child Prompt Protocol
 
@@ -240,6 +242,20 @@ Evidence required: <exact paths/commands/artifacts to return>
 ```
 
 Children never inherit the parent conversation or provider message window. They receive only explicit bounded context and return compact SITREPs.
+
+### Sequence-Addressed Agent Mailbox
+
+`send_agent_message` writes bounded collaboration input to the recipient's
+existing `events.jsonl`. It resolves an exact session inside the sender's tree,
+the immediate parent, or current-group siblings. `queue` waits for the next run;
+`wake` resumes an already-running recipient at its next safe provider boundary.
+The sender receives one idempotent receipt, each recipient gets a durable event
+sequence, and the unread cursor advances only after provider success.
+
+The context compiler injects at most 16 messages / 16 KiB as one transient
+system segment. Mail never enters `messages.jsonl`, grants authority, assigns a
+ticket, or launches work. Child completion and ticket claim use this same path;
+there is no convergence-specific transcript append or claim-notice bus.
 
 ### Silent Advisors
 
@@ -288,6 +304,7 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - `src/core/executor/draft.zig` — draft compilation module
 - `src/core/executor/buffer.zig` — buffer speculation service
 - `src/core/prompts/builder.zig` — system prompt assembly (all layers)
+- `src/core/agents/mailbox.zig` — sequence-addressed direct/parent/group delivery and unread cursor
 - `src/core/agents/supervisor.zig` — bounded in-process delegation
 - `src/core/tickets/index.zig` — canonical ticket ledger, queue projection, claims, leases, and repair evidence
 - `src/core/scheduler/store.zig` — scheduled jobs, attempts, process-exclusive leadership, and generation projection
@@ -331,6 +348,7 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - Self-tuning doctrine
 - Plugin management surface (manage_plugin — list/info/enable/disable)
 - Role-routed bounded delegation with silent advisors
+- Sequence-addressed direct/parent/group agent messaging with queue/wake intent
 - Surgical precision work ethic
 - One generation-bound `turn_terminal` settlement for completed, failed,
   timed-out, and cancelled runs
@@ -351,7 +369,8 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Message transcript writer | **Source and installed proven** | One per-session owner serializes every message role and initializes sequence from a bounded valid tail. Multi-process writer ownership remains coupled to the persistent-host work. |
 | Persistent execution owner | **Source proven; install pending** | One workspace lease converges 20 concurrent clients on one owner/kernel tree. Explicit workspace selection defeats inherited/configured redirection. Client detach preserves the generation; graceful stop drains; forced owner death leaves zero descendants; the next client creates one new generation. The active installed operator pair blocks replacement only. |
 | Session submission | **Source proven** | `run --session-id` routes through `LocalClient` and owner `session/send`; the retired per-session `run-session` process no longer bypasses shared capacity or nested delegation. |
-| Child branch/convergence | **Owner-lifetime proven** | Fixed-pool convergence now survives presentation-client exit. Scheduler leadership is process-exclusive and generation-fenced; owner-process death still marks running receipts stale instead of resuming a worker, and exactly-once reconciliation remains open. |
+| Child branch/convergence | **Owner-lifetime proven** | Fixed-pool convergence now survives presentation-client exit and routes the bounded child summary through the durable parent mailbox without transcript replication. Scheduler leadership is process-exclusive and generation-fenced; owner-process death still marks running receipts stale instead of resuming a worker. |
+| Agent mailbox | **Source proven** | Direct, parent, and current-group delivery uses recipient event sequence, sender receipt, queue/wake intent, and provider-success unread cursor. Owner-generation death/restart reconciliation remains open. |
 | Write-intent ledger | **Frontier scaffold** | Reserve/commit helpers and tests exist; write-capable tools do not call them on the canonical mutation path. |
 | Byte-level session integrity | **Source and installed proven** | One LF-only reader owns BOM, invalid-UTF-8, JSON/schema, duplicate, and non-monotonic boundaries across event/message/context/intent/summary projections. Append refuses a poisoned current tail without rewriting it; operator-facing corruption events remain a later diagnostics decision. |
 | Context compiler | **Shipped source path** | One builder compiles transcript plus checkpoint state and validates tool topology before provider dispatch. |

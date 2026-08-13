@@ -405,7 +405,14 @@ test "batch groups scale through one bounded pool at 1 5 20 and 100 tasks" {
         for (messages) |message| {
             if (std.mem.startsWith(u8, message.id, "child-convergence-")) convergence_messages += 1;
         }
-        try std.testing.expectEqual(task_count, convergence_messages);
+        try std.testing.expectEqual(@as(usize, 0), convergence_messages);
+        const convergence_events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, parent.id);
+        defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, convergence_events);
+        var mailbox_deliveries: usize = 0;
+        for (convergence_events) |event| {
+            if (std.mem.eql(u8, event.event_type, VAR1.core.agent_mailbox.received_event_type)) mailbox_deliveries += 1;
+        }
+        try std.testing.expectEqual(task_count, mailbox_deliveries);
 
         const records = try VAR1.core.session_store.listSessionRecords(std.testing.allocator, workspace_root);
         defer VAR1.shared.types.deinitSessionRecords(std.testing.allocator, records);
@@ -422,6 +429,85 @@ test "batch groups scale through one bounded pool at 1 5 20 and 100 tasks" {
         }
         try std.testing.expectEqual(task_count, receipt_count);
     }
+}
+
+test "ticket claim notice uses mailbox evidence without transcript or bespoke event" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try tmpWorkspacePath(allocator, &tmp, "ticket-mailbox");
+    defer allocator.free(workspace_root);
+    const config = try makeConfig(allocator, workspace_root);
+    defer config.deinit(allocator);
+    var transport_state = ScaleTransport{};
+    var service = VAR1.core.agent_runtime.Service.initWithTransport(&config, .{
+        .context = &transport_state,
+        .sendFn = ScaleTransport.send,
+    });
+    defer service.deinit();
+    var parent = try VAR1.core.session_store.initSession(allocator, workspace_root, "ticket parent");
+    defer parent.deinit(allocator);
+
+    const ticket_store = VAR1.core.tickets.TicketStore.init(allocator, workspace_root);
+    const now_ms = std.time.milliTimestamp();
+    var created = try ticket_store.create(.{
+        .title = "Mailbox ticket",
+        .description = "Return bounded ticket evidence.",
+        .category = "bug",
+        .severity = "high",
+        .workspace_root = workspace_root,
+        .session_id = parent.id,
+        .idempotency_key = "ticket-mail-create",
+        .created_at_ms = now_ms,
+    });
+    defer created.deinit(allocator);
+    var assigned = try ticket_store.transition(.{
+        .ticket_id = created.ticket_id,
+        .status = .assigned,
+        .reason = "admit to queue",
+        .idempotency_key = "ticket-mail-assign",
+        .transitioned_at_ms = now_ms + 1,
+    });
+    defer assigned.deinit(allocator);
+
+    var launch = try service.handle().launchTicket(allocator, .{
+        .ticket_id = created.ticket_id,
+        .title = "Mailbox ticket",
+        .description = "Return bounded ticket evidence.",
+        .category = "bug",
+        .source_session_id = parent.id,
+        .expected_revision = assigned.revision,
+        .worker_id = "ticket-mail-worker",
+        .worker_generation = 1,
+        .lease_token = "ticket-mail-lease",
+        .lease_expires_at_ms = now_ms + 60_000,
+        .attempt = 1,
+        .agent_hint = "recon",
+        .idempotency_key = "ticket-mail-claim",
+    });
+    defer launch.deinit(allocator);
+    _ = try waitForParent(service.handle(), parent.id);
+
+    const parent_events = try VAR1.core.session_store.readEvents(allocator, workspace_root, parent.id);
+    defer VAR1.shared.types.deinitSessionEvents(allocator, parent_events);
+    var claim_notice_count: usize = 0;
+    for (parent_events) |event| {
+        try std.testing.expect(!std.mem.eql(u8, event.event_type, "ticket_claimed"));
+        if (std.mem.eql(u8, event.event_type, VAR1.core.agent_mailbox.received_event_type) and
+            std.mem.indexOf(u8, event.message, "Ticket ") != null and
+            std.mem.indexOf(u8, event.message, " claimed by ") != null)
+        {
+            claim_notice_count += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), claim_notice_count);
+
+    const child_events = try VAR1.core.session_store.readEvents(allocator, workspace_root, launch.session_id);
+    defer VAR1.shared.types.deinitSessionEvents(allocator, child_events);
+    for (child_events) |event| try std.testing.expect(!std.mem.eql(u8, event.event_type, "ticket_claimed"));
+    const parent_messages = try VAR1.core.session_store.readSessionMessages(allocator, workspace_root, parent.id);
+    defer VAR1.shared.types.deinitSessionMessages(allocator, parent_messages);
+    for (parent_messages) |message| try std.testing.expect(std.mem.indexOf(u8, message.content, " claimed by ") == null);
 }
 
 test "first child result wakes the parent and each result converges exactly once" {
@@ -458,12 +544,12 @@ test "first child result wakes the parent and each result converges exactly once
     try std.testing.expectEqual(@as(usize, 1), first.completed);
     try handle.converge(std.testing.allocator, parent.id);
     {
-        const messages = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, parent.id);
-        defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, messages);
+        const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, parent.id);
+        defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
         var converged: usize = 0;
-        for (messages) |message| if (std.mem.startsWith(u8, message.id, "child-convergence-")) {
-            converged += 1;
-        };
+        for (events) |event| {
+            if (std.mem.eql(u8, event.event_type, VAR1.core.agent_mailbox.received_event_type)) converged += 1;
+        }
         try std.testing.expectEqual(@as(usize, 1), converged);
     }
 
@@ -473,12 +559,12 @@ test "first child result wakes the parent and each result converges exactly once
     try handle.converge(std.testing.allocator, parent.id);
     try handle.converge(std.testing.allocator, parent.id);
     {
-        const messages = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, parent.id);
-        defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, messages);
+        const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, parent.id);
+        defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
         var converged: usize = 0;
-        for (messages) |message| if (std.mem.startsWith(u8, message.id, "child-convergence-")) {
-            converged += 1;
-        };
+        for (events) |event| {
+            if (std.mem.eql(u8, event.event_type, VAR1.core.agent_mailbox.received_event_type)) converged += 1;
+        }
         try std.testing.expectEqual(@as(usize, 2), converged);
     }
 }
@@ -573,7 +659,7 @@ test "parent parks without provider dispatch and resumes once after convergence"
         previous_seq = event.seq;
         saw_wait = saw_wait or std.mem.eql(u8, event.event_type, "session_waiting");
         saw_group_finished = saw_group_finished or std.mem.eql(u8, event.event_type, "child_group_finished");
-        saw_convergence = saw_convergence or std.mem.eql(u8, event.event_type, "branch_converged");
+        saw_convergence = saw_convergence or std.mem.eql(u8, event.event_type, VAR1.core.agent_mailbox.received_event_type);
     }
     try std.testing.expect(saw_wait and saw_group_finished and saw_convergence);
 }
@@ -755,13 +841,14 @@ test "overlapping groups cancel and converge independently without cross consump
     try handle.converge(std.testing.allocator, parent.id);
     try handle.converge(std.testing.allocator, parent.id);
 
-    const messages = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, parent.id);
-    defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, messages);
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, parent.id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
     var first_convergence: usize = 0;
     var second_convergence: usize = 0;
-    for (messages) |message| {
-        if (std.mem.startsWith(u8, message.id, "child-convergence-") and std.mem.indexOf(u8, message.id, first_group_id) != null) first_convergence += 1;
-        if (std.mem.startsWith(u8, message.id, "child-convergence-") and std.mem.indexOf(u8, message.id, second_group_id) != null) second_convergence += 1;
+    for (events) |event| {
+        if (!std.mem.eql(u8, event.event_type, VAR1.core.agent_mailbox.received_event_type)) continue;
+        if (std.mem.indexOf(u8, event.message, first_group_id) != null) first_convergence += 1;
+        if (std.mem.indexOf(u8, event.message, second_group_id) != null) second_convergence += 1;
     }
     try std.testing.expectEqual(first_tasks.len, first_convergence);
     try std.testing.expectEqual(second_tasks.len, second_convergence);
@@ -855,11 +942,11 @@ test "cold start rebuilds receipt groups and reconciles stale owners once" {
     try std.testing.expectEqual(VAR1.shared.types.SessionStatus.failed, stale_after.status);
     try std.testing.expectEqualStrings("StaleAgentOwner", stale_after.failure_reason.?);
     try std.testing.expect(stale_after.execution_receipt != null);
-    const messages = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, parent.id);
-    defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, messages);
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, parent.id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
     var convergence_count: usize = 0;
-    for (messages) |message| {
-        if (std.mem.startsWith(u8, message.id, "child-convergence-group-recovery-")) convergence_count += 1;
+    for (events) |event| {
+        if (std.mem.eql(u8, event.event_type, VAR1.core.agent_mailbox.received_event_type)) convergence_count += 1;
     }
     try std.testing.expectEqual(@as(usize, 2), convergence_count);
 

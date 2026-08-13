@@ -18,9 +18,12 @@ requeued exactly once. Move 23 closes scheduler split-brain: one crash-released
 process lock and one read-back generation fence span each tick. Move 24 closes
 ticket admission split-brain: one process lock spans ticket projection,
 validation, and append; one winning row commits generation, lease, capability,
-attempt, and deterministic child identity before materialization. Child results still reach
-parents through convergence-specific code; no general durable direct/group/parent
-mailbox exists for restart-safe peer delivery.
+attempt, and deterministic child identity before materialization. Move 26 closes
+the source mailbox: one event-spine owner resolves direct, parent, and
+current-group delivery, persists recipient sequence and sender receipt, injects
+bounded unread input, and advances the cursor only after provider success.
+Child completion and ticket-claim notices now use that path without parent
+transcript injection.
 Move 25 closes assignment ambiguity: create-as-assigned and
 transition-to-assigned append queue state only, and the dead ticket execution
 policy is deleted.
@@ -47,6 +50,12 @@ policy is deleted.
 - [log_ticket.zig](../../../apps/backend/src/core/tools/builtin/log_ticket.zig)
   proves both assignment paths leave zero claims, active-session ids, and session
   records. `agent_routes.max_concurrency` remains the sole capacity setting.
+- [mailbox.zig](../../../apps/backend/src/core/agents/mailbox.zig) owns bounded
+  direct, parent, and current-group delivery, idempotent receipts, unread batches,
+  provider-success cursors, and queue/wake intent on `events.jsonl`.
+- [agent_message.zig](../../../apps/backend/src/core/tools/builtin/agent_message.zig)
+  exposes the sole model-facing collaboration write without assigning or
+  launching work.
 - [roadmap move 21](../../roadmap/21-persistent-execution-owner.md) proves one
   owner/kernel generation across client detach, 20 concurrent clients,
   duplicate-start pressure, graceful stop, forced crash, and zero cleanup.
@@ -58,11 +67,11 @@ Retain the shipped-source execution owner and its sole `AgentService`/
 generation projection. Retain the process-serialized ticket claim and
 deterministic child identity. Do not create a parallel pool or admission ledger.
 
-Use that same owner for one sequence-addressed agent mailbox. Resolve direct,
-parent, and current-group targets from session receipts. Queue bounded messages
-and references on the existing event spine; persist unread cursors and explicit
-wake intent. Reuse depth, capacity, and contact budgets. Do not add a topic
-registry, shared transcript, or message-created work lifecycle.
+Retain the shipped sequence-addressed mailbox. Resolve direct, parent, and
+current-group targets from session receipts. Keep bounded messages and references
+on the existing event spine with unread cursors and explicit wake intent. Reuse
+depth, capacity, and contact budgets. Do not add a topic registry, shared
+transcript, or message-created work lifecycle.
 
 ## Acceptance
 
@@ -80,8 +89,11 @@ Current receipt: TUI/CLI detach, duplicate-start exclusion, graceful owner stop,
 forced owner-tree cleanup, one-generation recovery, deletion of the dead
 per-session executor, two-kernel scheduler fencing, and one-claim/one-child ticket
 admission pass in source. Queue-only assignment and deletion of the unused ticket
-policy also pass. Installed replacement, active-turn owner-crash
-reconciliation, and mailbox delivery remain open; this finding stays pending.
+policy also pass. Direct/group/parent and nested-parent mailbox delivery,
+idempotent receipts, provider-failure replay, safe-boundary wake, ticket claim,
+and child-completion convergence pass in source without transcript replication.
+Installed replacement and active-turn owner-crash/delivery reconciliation remain
+open; this finding stays pending.
 
 ## Source and salvage
 

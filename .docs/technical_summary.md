@@ -104,6 +104,7 @@ log_ticket create/transition
   -> AgentService route validation
   -> Supervisor fixed-pool slot
   -> child session and typed evidence
+  -> sequence-addressed parent/child notice
   -> completed/failed/blocked ticket projection
 ```
 
@@ -120,6 +121,29 @@ across projection, validation, and append; one claim row commits generation,
 lease, attempt, capability, and deterministic child identity before the child
 exists. Owner-process death still stops the pool and cold recovery marks running
 receipts stale. Chain 036 therefore remains pending.
+
+## Agent mailbox
+
+`core/agents/mailbox.zig` owns bounded agent-to-agent information on the existing
+per-session `events.jsonl` spine. `send_agent_message` resolves an exact session
+inside the sender's tree, the immediate parent, or current-group siblings. A
+message carries a 4 KiB body, at most eight 512-byte references, and explicit
+`queue` or `wake` intent. It never assigns a ticket, launches work, grants
+authority, or copies another transcript.
+
+Each recipient receives `agent_message_received` at a durable event sequence;
+the sender receives one idempotent `agent_message_sent` receipt. The context
+compiler injects at most 16 messages/16 KiB as one transient `AGENT_MAILBOX`
+system segment. `agent_mailbox_cursor` advances only after provider success, so
+failure leaves the same bounded input unread. A live wake continues at the next
+safe provider boundary. Queue delivery waits for the recipient's next run.
+
+Child completion now sends the bounded canonical session summary to its parent
+through this mailbox. Ticket claim sends a child-to-parent wake notice after the
+claim and child session are durable. Neither path appends collaboration content
+to `messages.jsonl`; the old convergence-specific transcript append and bespoke
+`ticket_claimed` event are removed. Owner-process crash reconciliation remains
+roadmap move 29.
 
 ## TUI projection contract
 
@@ -149,7 +173,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,933/1,933 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,943/1,943 tests with zero skips.
   The reduced total is intentional: one registry loop executes all 53 declared
   cases and replaces 45 one-case wrappers that left ten cases undiscovered.
   Its host lane executes the stdio child, owner state/client, shared process
@@ -169,6 +193,12 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   tickets with zero claims, active sessions, or session records. The move-25
   94-segment audit found one import/declaration adjacency candidate, zero exact
   pairs, and no duplicate ticket policy, queue, or execution owner.
+- Direct, parent, current-group, nested-parent, queue, wake, provider-failure,
+  safe-boundary continuation, replay, child-completion, and real ticket-claim
+  probes pass through one mailbox owner. Parent transcripts contain no mailbox
+  body or convergence row. The move-26 116-segment audit found five
+  declaration/import adjacency candidates, zero exact pairs, and no second
+  mailbox, convergence, or runtime owner.
 - Parent-shell production-home probes kept 99,960 files, 693,051,144 bytes,
   config/auth hashes, and process inventory unchanged across graph and direct
   proof.
@@ -251,7 +281,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - The last installed-proven move-19 artifact remains SHA-256
   `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
   Current source ReleaseFast is
-  `77A2B111DCA35AA08E4D33973D83AB2FB9783E6C4D423A09611D24F0EE3142FD`.
+  `227CDA755E5A7E7BC3152DA4653DAB6AF1630D1288BB0919CFA648F69618C654`.
   Replacement is blocked while operator-owned installed PIDs 12028 and 14452
   remain active; source/installed equality is not claimed.
 - Installed `session/send` against a disposable local provider imported all
@@ -270,16 +300,17 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
   returned `requested` and exited with zero process. Its legacy terminal name is
   retained only as historical proof; move 19 removed that writer.
-- Moves 5–20 and 22–25 plus findings 10 and 13 are closed. Move 21 is source-complete
+- Moves 5–20 and 22–26 plus findings 10 and 13 are closed. Move 21 is source-complete
   and awaits the installed replacement gate. Six synchronized 100-way probes cover
   admission, summary, message, event, tracked-TUI replay, and shutdown. The
-  latest canonical graph passes 1,933/1,933. The native two-kernel admission
+  latest canonical graph passes 1,943/1,943. The native two-kernel admission
   proof retains one schedule attempt, one ticket claim, and one matching child
   session under one nonzero generation; mid-turn owner-crash recovery remains P0.
-- The hive direction is assigned to moves 26–30 and finding 11. The target is
-  one durable direct/group/parent mailbox over session/event ownership,
-  selective summary/artifact awareness, and nested normal sessions. No general
-  mailbox, restart-safe unread cursor, or peer wake path is shipped yet.
+- Move 26 ships the hive's source mailbox: durable direct/group/parent delivery,
+  selective summary/artifact references, nested normal sessions, queue/wake
+  intent, and a restart-readable unread cursor. Moves 27–30 retain model-selected
+  team awareness, capacity truth, owner-generation reconciliation, and installed
+  crash/restart proof.
 - `git diff --check` exits 0 with line-ending warnings only.
 
 See [`research/2026-08-12-full-harness-sitrep.md`](research/2026-08-12-full-harness-sitrep.md)

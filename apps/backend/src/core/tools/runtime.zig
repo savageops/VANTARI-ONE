@@ -23,6 +23,7 @@ const update_session_summary = @import("builtin/update_session_summary.zig");
 const memory = @import("builtin/memory.zig");
 pub const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
+const agent_message = @import("builtin/agent_message.zig");
 
 pub const max_error_arguments_json_echo_bytes: usize = 4096;
 
@@ -46,10 +47,13 @@ pub const AgentDiscoveryLedger = module.AgentDiscoveryLedger;
 pub const DelegationScope = module.DelegationScope;
 
 const agent_tool_definitions = agents.definitions;
+const collaboration_tool_definitions = agent_message.definitions;
+const agent_and_collaboration_tool_definitions = agent_tool_definitions ++ collaboration_tool_definitions;
 
 const workspace_state_tool_definitions = workspace_state_tools.definitions;
-const file_plus_workspace_state_tool_definitions = registry.file_tool_definitions ++ workspace_state_tool_definitions;
-const file_plus_agent_tool_definitions = registry.file_tool_definitions ++ agent_tool_definitions;
+const file_plus_collaboration_tool_definitions = registry.file_tool_definitions ++ collaboration_tool_definitions;
+const file_plus_workspace_state_tool_definitions = file_plus_collaboration_tool_definitions ++ workspace_state_tool_definitions;
+const file_plus_agent_tool_definitions = file_plus_collaboration_tool_definitions ++ agent_tool_definitions;
 const all_tool_definitions = file_plus_workspace_state_tool_definitions ++ agent_tool_definitions;
 const read_tool_definitions = [_]types.ToolDefinition{
     list_files.definition,
@@ -58,7 +62,7 @@ const read_tool_definitions = [_]types.ToolDefinition{
     skills.definition,
     memory.definitions[0],
     list_processes.definition,
-};
+} ++ collaboration_tool_definitions;
 const write_tool_definitions = read_tool_definitions ++ [_]types.ToolDefinition{
     write_file.definition,
     append_file.definition,
@@ -101,15 +105,15 @@ pub fn workspaceStateRelevant(prompt: []const u8) bool {
 }
 
 pub fn builtinDefinitions(include_agent_tools: bool) []const types.ToolDefinition {
-    return if (include_agent_tools) file_plus_agent_tool_definitions[0..] else registry.fileDefinitions();
+    return if (include_agent_tools) file_plus_agent_tool_definitions[0..] else file_plus_collaboration_tool_definitions[0..];
 }
 
 pub fn builtinDefinitionsForContext(execution_context: ExecutionContext) []const types.ToolDefinition {
     if (execution_context.orchestrator_only) {
         return if (execution_context.agent_service != null and execution_context.delegation_depth_remaining > 0)
-            agent_tool_definitions[0..]
+            agent_and_collaboration_tool_definitions[0..]
         else
-            no_tool_definitions[0..];
+            collaboration_tool_definitions[0..];
     }
     if (execution_context.capability_profile_id) |profile_id| {
         const profile = profile_contract.resolveProfile(profile_id) catch return no_tool_definitions[0..];
@@ -458,6 +462,9 @@ pub fn executeWithRunner(
     if (memory.handles(tool_call.name)) {
         return memory.execute(allocator, execution_context, tool_call.name, tool_call.arguments_json);
     }
+    if (agent_message.handles(tool_call.name)) {
+        return agent_message.execute(allocator, execution_context, tool_call.arguments_json, tool_call.id);
+    }
     if (workspace_state_tools.handles(tool_call.name)) {
         return workspace_state_tools.execute(allocator, execution_context.workspace_root, tool_call.name, tool_call.arguments_json, runner);
     }
@@ -471,8 +478,8 @@ pub fn executeWithRunner(
 /// Enforce the same resolved profile used to construct the provider catalog.
 fn ensureToolAllowed(execution_context: ExecutionContext, tool_name: []const u8) !void {
     if (execution_context.orchestrator_only) {
-        if (!agents.handles(tool_name)) return Error.CapabilityDenied;
-        if (!std.mem.eql(u8, tool_name, "agents")) {
+        if (!agents.handles(tool_name) and !agent_message.handles(tool_name)) return Error.CapabilityDenied;
+        if (agents.handles(tool_name) and !std.mem.eql(u8, tool_name, "agents")) {
             const ledger = execution_context.agent_discovery_ledger orelse return Error.AgentCatalogRequired;
             if (!ledger.hasDiscovered()) return Error.AgentCatalogRequired;
         }
@@ -503,6 +510,7 @@ pub fn toolClassForName(tool_name: []const u8) ?profile_contract.ToolClass {
         std.mem.eql(u8, tool_name, "update_session_summary")) return .file_write;
     if (std.mem.eql(u8, tool_name, "shell_exec")) return .command;
     if (std.mem.eql(u8, tool_name, "schedule_job")) return .scheduling;
+    if (agent_message.handles(tool_name)) return .collaboration;
     if (agents.handles(tool_name)) return .delegation;
     if (workspace_state_tools.handles(tool_name)) return .workspace_state;
     return null;

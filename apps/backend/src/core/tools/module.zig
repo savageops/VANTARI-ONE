@@ -328,6 +328,14 @@ pub const AgentService = struct {
         ctx: ?*anyopaque,
         sink: AgentEventSink,
     ) void = null,
+    notifySessionEventFn: ?*const fn (
+        ctx: ?*anyopaque,
+        session_id: []const u8,
+        seq: u64,
+        event_type: []const u8,
+        message: []const u8,
+        timestamp_ms: i64,
+    ) anyerror!void = null,
 
     pub fn launch(
         self: AgentService,
@@ -436,6 +444,19 @@ pub const AgentService = struct {
 
     pub fn bindEventSink(self: AgentService, sink: AgentEventSink) void {
         if (self.bindEventSinkFn) |bind| bind(self.context, sink);
+    }
+
+    pub fn notifySessionEvent(
+        self: AgentService,
+        session_id: []const u8,
+        seq: u64,
+        event_type: []const u8,
+        message: []const u8,
+        timestamp_ms: i64,
+    ) !void {
+        if (self.notifySessionEventFn) |notify| {
+            try notify(self.context, session_id, seq, event_type, message, timestamp_ms);
+        }
     }
 };
 

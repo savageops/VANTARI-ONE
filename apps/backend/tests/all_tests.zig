@@ -2,6 +2,7 @@ const VAR1 = @import("VAR1");
 const std = @import("std");
 
 test {
+    _ = @import("agent_mailbox_test.zig");
     _ = @import("agent_scale_test.zig");
     _ = @import("agent_registry_test.zig");
     _ = @import("agent_pipeline_deep_matrix_test.zig");

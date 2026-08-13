@@ -2,6 +2,7 @@ const std = @import("std");
 const docs_sync = @import("../docs/sync.zig");
 const config_file = @import("../config/file.zig");
 const fsutil = @import("../../shared/fsutil.zig");
+const mailbox = @import("mailbox.zig");
 const profile_contract = @import("profile.zig");
 const agent_spec = @import("spec.zig");
 const child_supervisor = @import("supervisor.zig");
@@ -68,6 +69,7 @@ pub const Service = struct {
             .cancelGroupFn = cancelGroupFromHandle,
             .cancelParentFn = cancelParentFromHandle,
             .bindEventSinkFn = bindEventSinkFromHandle,
+            .notifySessionEventFn = notifySessionEventFromHandle,
         };
     }
 };
@@ -268,6 +270,18 @@ fn cancelParentFromHandle(
 fn bindEventSinkFromHandle(ctx_ptr: ?*anyopaque, sink: tools.AgentEventSink) void {
     const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
     service.supervisor.bindEventSink(sink);
+}
+
+fn notifySessionEventFromHandle(
+    ctx_ptr: ?*anyopaque,
+    session_id: []const u8,
+    seq: u64,
+    event_type: []const u8,
+    message: []const u8,
+    timestamp_ms: i64,
+) anyerror!void {
+    const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
+    try service.supervisor.notifySessionEvent(session_id, seq, event_type, message, timestamp_ms);
 }
 
 /// Compatibility convergence for receipt-less children created before group
@@ -501,11 +515,24 @@ fn launchTicket(
 
     const claim_message = try std.fmt.allocPrint(allocator, "Ticket {s} claimed by {s}; group={s} task={s}", .{ request.ticket_id, spec.id, group_id, task_id });
     defer allocator.free(claim_message);
-    try store.appendEvent(allocator, service.config.workspace_root, child_session.id, .{
-        .event_type = "ticket_claimed",
-        .message = claim_message,
-        .timestamp_ms = created_at_ms,
+    const ticket_reference = try std.fmt.allocPrint(allocator, "ticket:{s}", .{request.ticket_id});
+    defer allocator.free(ticket_reference);
+    const group_reference = try std.fmt.allocPrint(allocator, "group:{s}", .{group_id});
+    defer allocator.free(group_reference);
+    const notice_references = [_][]const u8{ ticket_reference, group_reference };
+    var claim_notice = try mailbox.send(allocator, service.config.workspace_root, .{
+        .sender_session_id = child_session.id,
+        .tool_call_id = request.idempotency_key,
+        .target = .parent,
+        .delivery = .wake,
+        .body = claim_message,
+        .references = notice_references[0..],
+        .delivery_sink = .{
+            .context = service,
+            .notifyFn = notifySessionEventFromHandle,
+        },
     });
+    claim_notice.deinit(allocator);
     try docs_sync.writePending(allocator, service.config.workspace_root, .{
         .session_id = child_session.id,
         .status = types.statusLabel(child_session.status),
@@ -998,6 +1025,19 @@ fn recoverReceiptGroups(
                 group_stale_count += 1;
             }
 
+            const convergence_call_id = try child_supervisor.convergenceToolCallId(
+                allocator,
+                member_receipt.group_id,
+                member_receipt.task_id,
+            );
+            defer allocator.free(convergence_call_id);
+            const mailbox_converged = try mailbox.hasSentReceipt(
+                allocator,
+                service.config.workspace_root,
+                member.id,
+                convergence_call_id,
+            );
+
             const task = try service.supervisor.createRecoveredTask(.{
                 .parent_session_id = parent_session_id,
                 .parent_checkpoint_id = member_receipt.parent_checkpoint_id,
@@ -1009,7 +1049,7 @@ fn recoverReceiptGroups(
                 .capability_profile_id = member_receipt.capability_profile_id,
                 .branch_seq = member_receipt.branch_seq,
                 .lifecycle = lifecycle,
-                .converged = legacy_group_converged or taskHasConvergenceMessage(
+                .converged = mailbox_converged or legacy_group_converged or taskHasConvergenceMessage(
                     allocator,
                     parent_messages,
                     member_receipt.group_id,

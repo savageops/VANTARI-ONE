@@ -2,6 +2,7 @@ const std = @import("std");
 const docs_sync = @import("../docs/sync.zig");
 const executor = @import("../executor/loop.zig");
 const turn_payload = @import("../executor/turn_payload.zig");
+const mailbox = @import("mailbox.zig");
 const profile_contract = @import("profile.zig");
 const provider = @import("../providers/openai_compatible.zig");
 const provider_dispatch = @import("../providers/dispatch.zig");
@@ -209,6 +210,20 @@ pub const Supervisor = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         self.event_sink = sink;
+    }
+
+    pub fn notifySessionEvent(
+        self: *Supervisor,
+        session_id: []const u8,
+        seq: u64,
+        event_type: []const u8,
+        message: []const u8,
+        timestamp_ms: i64,
+    ) !void {
+        self.mutex.lock();
+        const sink = self.event_sink;
+        self.mutex.unlock();
+        try sink.notify(session_id, seq, event_type, message, timestamp_ms);
     }
 
     /// Allocate one admitted task. Ownership transfers to submitGroup on success.
@@ -664,7 +679,11 @@ pub const Supervisor = struct {
             group.id,
             types.statusLabel(session.status),
         });
-        if (output) |value| {
+        if (summaries.readSummary(output_allocator, group.workspace_root, task.session_id) catch null) |row_value| {
+            var row = row_value;
+            defer row.deinit(output_allocator);
+            try writer.print("{s}\n", .{row.summary});
+        } else if (output) |value| {
             try writer.print("{s}\n", .{value});
         } else if (session.failure_reason) |value| {
             try writer.print("Failure: {s}\n", .{value});
@@ -681,18 +700,29 @@ pub const Supervisor = struct {
             output orelse session.failure_reason orelse "Child terminated without output.",
         );
 
-        const message_id = try std.fmt.allocPrint(output_allocator, "child-convergence-{s}-{s}", .{ group.id, task.task_id });
-        defer output_allocator.free(message_id);
-        const appended = try store.appendSessionMessageOnce(
-            output_allocator,
-            group.workspace_root,
-            group.parent_session_id,
-            message_id,
-            .assistant,
-            summary.items,
-            std.time.milliTimestamp(),
-        );
-        if (appended) self.emitTaskEvent(task, "branch_converged", "parent_resume_ready", null) catch {};
+        if (summary.items.len > mailbox.max_body_bytes) {
+            summary.shrinkRetainingCapacity(boundedUtf8PrefixLen(summary.items, mailbox.max_body_bytes));
+        }
+        const tool_call_id = try convergenceToolCallId(output_allocator, group.id, task.task_id);
+        defer output_allocator.free(tool_call_id);
+        const summary_reference = try std.fmt.allocPrint(output_allocator, "summary:{s}", .{task.session_id});
+        defer output_allocator.free(summary_reference);
+        const group_reference = try std.fmt.allocPrint(output_allocator, "group:{s}", .{group.id});
+        defer output_allocator.free(group_reference);
+        const references = [_][]const u8{ summary_reference, group_reference };
+        var receipt = try mailbox.send(output_allocator, group.workspace_root, .{
+            .sender_session_id = task.session_id,
+            .tool_call_id = tool_call_id,
+            .target = .parent,
+            .delivery = .wake,
+            .body = summary.items,
+            .references = references[0..],
+            .delivery_sink = .{
+                .context = self,
+                .notifyFn = notifyMailboxDelivery,
+            },
+        });
+        receipt.deinit(output_allocator);
     }
 
     fn emitTaskEvent(
@@ -815,6 +845,29 @@ pub const Supervisor = struct {
     }
 };
 
+pub fn convergenceToolCallId(allocator_: std.mem.Allocator, group_id: []const u8, task_id: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator_, "child-convergence:{s}:{s}", .{ group_id, task_id });
+}
+
+fn boundedUtf8PrefixLen(value: []const u8, max_bytes: usize) usize {
+    if (value.len <= max_bytes) return value.len;
+    var end = max_bytes;
+    while (end > 0 and value[end] & 0xc0 == 0x80) end -= 1;
+    return end;
+}
+
+fn notifyMailboxDelivery(
+    ctx: ?*anyopaque,
+    session_id: []const u8,
+    seq: u64,
+    event_type: []const u8,
+    message: []const u8,
+    timestamp_ms: i64,
+) anyerror!void {
+    const supervisor: *Supervisor = @ptrCast(@alignCast(ctx.?));
+    try supervisor.notifySessionEvent(session_id, seq, event_type, message, timestamp_ms);
+}
+
 fn runTaskEntry(supervisor: *Supervisor, task: *Task) void {
     supervisor.mutex.lock();
     if (isTerminal(task.lifecycle)) {
@@ -853,14 +906,13 @@ fn runTaskEntry(supervisor: *Supervisor, task: *Task) void {
         return;
     }
 
-    const capability_profile = profile_contract.resolveProfile(task.capability_profile_id) catch {
+    _ = profile_contract.resolveProfile(task.capability_profile_id) catch {
         markSessionTerminal(task, .failed, "UnsupportedCapabilityProfile");
         disposeRoute(task);
         supervisor.finishTask(task, .failed, "UnsupportedCapabilityProfile");
         return;
     };
-    const child_agent_service = if (route.execution_kind == .agent_session and
-        task.remaining_depth > 0 and capability_profile.delegation_policy.allow_child_launch)
+    const child_agent_service = if (route.execution_kind == .agent_session)
         task.agent_service
     else
         null;

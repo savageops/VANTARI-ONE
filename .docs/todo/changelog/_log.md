@@ -2039,3 +2039,51 @@ and installed replacement remain open.
 
 **Next todo:** move 26 — route bounded direct, current-group, and parent messages
 through one sequence-addressed mailbox on the existing session/event spine.
+
+## 2026-08-13 - Roadmap move 26 sequence-addressed agent mailbox
+
+**Changed:**
+
+- Added one bounded mailbox owner at `core/agents/mailbox.zig` over existing
+  per-session `events.jsonl`; no broker, topic registry, shared transcript,
+  runtime state file, or background process was added.
+- Added `send_agent_message` for direct-session, immediate-parent, and
+  current-group delivery with explicit `queue` or `wake` intent. Scope,
+  availability, depth, body/reference bounds, and write review fail before
+  delivery.
+- Persisted `agent_message_received`, `agent_message_sent`, and
+  `agent_mailbox_cursor`. Stable sender/tool identity makes replay idempotent;
+  partial replay repairs a missing recipient row.
+- Injected at most 16 unread messages / 16 KiB as one transient system segment.
+  Provider failure leaves the cursor unchanged; success acknowledges through the
+  delivered event sequence. Live wake continues at the next safe provider
+  boundary; queue waits for the next run.
+- Replaced convergence-specific parent transcript writes and the bespoke ticket
+  claim event. Child completion sends the bounded canonical session summary;
+  ticket claim sends a child-to-parent wake notice after durable claim/session
+  creation. Collaboration content never enters `messages.jsonl`.
+
+**Proof:**
+
+- Debug and ReleaseFast graphs: 19/19 steps, 1,943/1,943 tests, zero skips.
+- ReleaseFast build: 9/9; source SHA-256
+  `227CDA755E5A7E7BC3152DA4653DAB6AF1630D1288BB0919CFA648F69618C654`.
+- Pressure covers direct, parent, current-group, nested-parent, cross-tree/self
+  rejection, bounds, replay, queue/wake, cursor reconstruction, provider failure,
+  safe-boundary continuation, child completion, cold convergence recovery, live
+  event notification, and real ticket claim.
+- GGUF duplicate-owner audit: seven files, 116 segments, five
+  declaration/import adjacency candidates, zero exact duplicates, and no second
+  mailbox, convergence, or runtime owner.
+- `git diff --check` exits 0 with line-ending warnings only. Installed SHA-256
+  remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
+  operator-owned PIDs 12028 and 14452 remain untouched.
+
+**Boundary:** Move 26 is source-closed. It provides at-least-once observation
+with idempotent delivery receipt and provider-success acknowledgement. Move 29
+owns exact owner-generation recovery across process death; move 38 owns installed
+replacement after the live operator processes exit.
+
+**Next todo:** move 27 — let the model choose from one compact eligible
+specialist/team snapshot while the kernel filters only invalid or unavailable
+routes, capacity, depth, and contact budgets.
