@@ -117,6 +117,14 @@ pub fn renderAvailabilityJson(
         try writer.print("{f}", .{std.json.fmt(dependencyKindLabel(dependency.kind), .{})});
         try writer.writeAll(",\"name\":");
         try writer.print("{f}", .{std.json.fmt(dependency.name, .{})});
+        if (dependency.alternatives.len > 0) {
+            try writer.writeAll(",\"alternatives\":[");
+            for (dependency.alternatives, 0..) |alternative, index| {
+                if (index > 0) try writer.writeAll(",");
+                try writer.print("{f}", .{std.json.fmt(alternative, .{})});
+            }
+            try writer.writeAll("]");
+        }
         if (resolved.dependency_available) |available| {
             try writer.writeAll(",\"available\":");
             try writer.writeAll(if (available) "true" else "false");
@@ -136,8 +144,20 @@ fn commandDependencyAvailable(
         return ixSearchCommandAvailable(allocator, probe, dependency.name);
     }
 
-    if (probe) |value| return value.commandExists(allocator, dependency.name);
-    return defaultCommandExists(allocator, dependency.name);
+    if (try commandNameAvailable(allocator, probe, dependency.name)) return true;
+    for (dependency.alternatives) |alternative| {
+        if (try commandNameAvailable(allocator, probe, alternative)) return true;
+    }
+    return false;
+}
+
+fn commandNameAvailable(
+    allocator: std.mem.Allocator,
+    probe: ?module.CommandProbe,
+    command_name: []const u8,
+) !bool {
+    if (probe) |value| return value.commandExists(allocator, command_name);
+    return defaultCommandExists(allocator, command_name);
 }
 
 fn isIxSearchDependency(tool_name: []const u8, dependency: module.Dependency) bool {
@@ -225,6 +245,10 @@ fn unavailableCommand(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8) anyer
     return false;
 }
 
+fn bunAlternativeCommand(_: ?*anyopaque, _: std.mem.Allocator, command_name: []const u8) anyerror!bool {
+    return std.mem.eql(u8, command_name, "bun.exe");
+}
+
 test "availability is owned by the selected tool definition" {
     const search_spec = search_files.definition.availability;
     try std.testing.expect(search_spec.dependency != null);
@@ -248,4 +272,27 @@ test "definition-owned availability fails closed when ix is unavailable" {
 
     const native = try resolveAvailability(std.testing.allocator, probe, list_files.definition);
     try std.testing.expectEqual(AvailabilityStatus.available, native.status);
+}
+
+test "definition-owned alternatives are probed and rendered" {
+    const definition = types.ToolDefinition{
+        .name = "alternative-probe",
+        .description = "test definition",
+        .parameters_json = "{}",
+        .review_risk = .read_only,
+        .availability = .{ .dependency = .{
+            .kind = .external_command,
+            .name = "python",
+            .alternatives = &.{"bun.exe"},
+        } },
+    };
+    const probe = module.CommandProbe{ .commandExistsFn = bunAlternativeCommand };
+    const resolved = try resolveAvailability(std.testing.allocator, probe, definition);
+    try std.testing.expectEqual(AvailabilityStatus.available, resolved.status);
+    try std.testing.expectEqual(@as(?bool, true), resolved.dependency_available);
+
+    var rendered = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer rendered.deinit();
+    try renderAvailabilityJson(rendered.writer(), std.testing.allocator, probe, definition);
+    try std.testing.expect(std.mem.indexOf(u8, rendered.items, "\"alternatives\":[\"bun.exe\"]") != null);
 }

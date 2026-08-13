@@ -497,6 +497,10 @@ pub const DependencyKind = enum {
 pub const Dependency = struct {
     kind: DependencyKind,
     name: []const u8,
+    /// Additional equivalent command names. The capability is available when
+    /// the primary command or any alternative resolves; this keeps one tool
+    /// definition truthful across installations with different runtimes.
+    alternatives: []const []const u8 = &.{},
 };
 
 pub const AvailabilitySpec = struct {

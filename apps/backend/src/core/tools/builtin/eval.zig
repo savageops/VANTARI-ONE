@@ -9,22 +9,30 @@ const module = @import("../module.zig");
 /// back into the agent's own tools — read, search, task — over a loopback
 /// bridge."
 ///
-/// Move 56 implements the Python half of that contract. The worker protocol is
-/// intentionally smaller than Jupyter's: one request line, one response line,
-/// one session-owned namespace. Move 57 owns Bun parity and Move 58 owns the
-/// shared process supervisor and tree teardown receipts.
+/// Moves 56-57 implement persistent Python and Bun workers. The worker protocol
+/// is intentionally smaller than Jupyter's: one request line, one response
+/// line, one session-owned namespace. Move 58 owns the shared process
+/// supervisor and tree teardown receipts.
 const worker_output_cap: usize = 64 * 1024;
 
 pub const Language = enum {
     auto,
     python,
+    bun,
 };
 
 fn languageLabel(language: Language) []const u8 {
     return switch (language) {
         .auto => "auto",
         .python => "python",
+        .bun => "bun",
     };
+}
+
+const bun_command_name: []const u8 = if (@import("builtin").os.tag == .windows) "bun.exe" else "bun";
+
+fn bunCommand() []const u8 {
+    return bun_command_name;
 }
 
 /// The worker keeps a single namespace while VANTARI owns the session
@@ -86,6 +94,42 @@ const python_worker_source =
     \\    }
     \\    sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
     \\    sys.stdout.flush()
+;
+
+const bun_worker_source =
+    \\const readline = require("node:readline");
+    \\const vm = require("node:vm");
+    \\const context = vm.createContext({});
+    \\let stdout = "";
+    \\let stderr = "";
+    \\const limit = 65536;
+    \\const append = (target, value) => {
+    \\  const text = String(value);
+    \\  return target.length >= limit ? target : target + text.slice(0, limit - target.length);
+    \\};
+    \\context.console = {
+    \\  log: (...args) => { stdout = append(stdout, args.join(" ") + "\n"); },
+    \\  info: (...args) => { stdout = append(stdout, args.join(" ") + "\n"); },
+    \\  warn: (...args) => { stderr = append(stderr, args.join(" ") + "\n"); },
+    \\  error: (...args) => { stderr = append(stderr, args.join(" ") + "\n"); },
+    \\};
+    \\context.globalThis = context;
+    \\const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+    \\input.on("line", (line) => {
+    \\  if (!line.trim()) return;
+    \\  stdout = "";
+    \\  stderr = "";
+    \\  let ok = true;
+    \\  try {
+    \\    const request = JSON.parse(line);
+    \\    const code = Buffer.from(request.code, "base64").toString("utf8");
+    \\    vm.runInContext(code, context, { filename: "<vantari-eval>" });
+    \\  } catch (error) {
+    \\    ok = false;
+    \\    stderr = append(stderr, error && error.stack ? error.stack : String(error));
+    \\  }
+    \\  process.stdout.write(JSON.stringify({ ok, stdout, stderr, truncated: stdout.length >= limit || stderr.length >= limit }) + "\n");
+    \\});
 ;
 
 const WorkerResponse = struct {
@@ -271,12 +315,27 @@ fn ensureKernelLocked(
     workspace_root: []const u8,
 ) !void {
     if (kernel.started) return;
-    if (kernel.language == .auto) kernel.language = .python;
-    if (kernel.language != .python) return error.UnsupportedLanguage;
-    if (!commandExists(allocator, "python")) return error.NoKernelAvailable;
+    if (kernel.language == .auto) {
+        if (commandExists(allocator, "python"))
+            kernel.language = .python
+        else if (commandExists(allocator, bunCommand()))
+            kernel.language = .bun
+        else
+            return error.NoKernelAvailable;
+    }
 
-    const argv = [_][]const u8{ "python", "-u", "-c", python_worker_source };
-    var child = std.process.Child.init(&argv, kernel.allocator);
+    var child: std.process.Child = undefined;
+    switch (kernel.language) {
+        .python => {
+            const argv = [_][]const u8{ "python", "-u", "-c", python_worker_source };
+            child = std.process.Child.init(&argv, kernel.allocator);
+        },
+        .bun => {
+            const argv = [_][]const u8{ bunCommand(), "-e", bun_worker_source };
+            child = std.process.Child.init(&argv, kernel.allocator);
+        },
+        .auto => return error.NoKernelAvailable,
+    }
     child.cwd = workspace_root;
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
@@ -299,8 +358,8 @@ pub fn executeCode(
     kernel.mutex.lock();
     defer kernel.mutex.unlock();
     try ensureKernelLocked(allocator, kernel, workspace_root);
-    if (kernel.language != .python or kernel.process == null) return error.NoKernelAvailable;
-    return executePythonPersistent(allocator, kernel, code, timeout_ms);
+    if (kernel.process == null) return error.NoKernelAvailable;
+    return executePersistent(allocator, kernel, code, timeout_ms);
 }
 
 pub const EvalResult = struct {
@@ -315,8 +374,8 @@ pub const EvalResult = struct {
     }
 };
 
-/// Execute one request in the persistent Python worker.
-fn executePythonPersistent(
+/// Execute one request in the persistent worker.
+fn executePersistent(
     allocator: std.mem.Allocator,
     kernel: *KernelState,
     code: []const u8,
@@ -351,7 +410,7 @@ fn executePythonPersistent(
     if (timed_out) {
         return .{
             .stdout = try allocator.dupe(u8, ""),
-            .stderr = try allocator.dupe(u8, "eval timed out; Python kernel was terminated"),
+            .stderr = try std.fmt.allocPrint(allocator, "eval timed out; {s} kernel was terminated", .{languageLabel(kernel.language)}),
             .exit_code = 124,
             .success = false,
         };
@@ -409,22 +468,22 @@ fn commandExists(allocator: std.mem.Allocator, command: []const u8) bool {
 
 pub const definition = types.ToolDefinition{
     .name = "eval",
-    .description = "Execute code in a persistent Python kernel. Variables, imports, and state persist across calls within the same session. This is trusted code execution and requires runtime.full_access_mode=true until a native sandbox is available.",
+    .description = "Execute Python or Bun JavaScript in a persistent session kernel. Variables, imports, and state persist across calls within the same session. This is trusted code execution and requires runtime.full_access_mode=true until a native sandbox is available.",
     .review_risk = .command_execution,
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "code": { "type": "string", "description": "Python code to execute. Multiline code is supported." },
-    \\    "language": { "type": "string", "enum": ["python"], "description": "Optional language hint. Defaults to Python." }
+    \\    "code": { "type": "string", "description": "Python or Bun JavaScript code to execute. Multiline code is supported." },
+    \\    "language": { "type": "string", "enum": ["python", "bun"], "description": "Optional language hint. Defaults to Python when available, otherwise Bun." }
     \\  },
     \\  "required": ["code"],
     \\  "additionalProperties": false
     \\}
     ,
-    .example_json = "{\"code\":\"import sys; print(sys.version)\"}",
-    .usage_hint = "Use only for trusted calculations, data processing, code validation, and scripting after full_access_mode is explicitly enabled. The Python kernel persists across calls in one session; define a function or variable in one eval and use it in the next.",
-    .availability = .{ .dependency = .{ .kind = .external_command, .name = "python" } },
+    .example_json = "{\"language\":\"python\",\"code\":\"import sys; print(sys.version)\"}",
+    .usage_hint = "Use only for trusted calculations, data processing, code validation, and scripting after full_access_mode is explicitly enabled. The selected Python or Bun kernel persists across calls in one session; define a function or variable in one eval and use it in the next.",
+    .availability = .{ .dependency = .{ .kind = .external_command, .name = "python", .alternatives = &.{bun_command_name} } },
 };
 
 pub const availability = definition.availability;
@@ -449,8 +508,9 @@ pub fn execute(
     if (!execution_context.full_access_mode) return module.Error.CapabilityDenied;
     const session_id = execution_context.session_id orelse return error.SessionRequired;
     const requested_language: Language = if (parsed.value.language) |lang| blk: {
-        if (!std.mem.eql(u8, lang, "python")) return module.Error.InvalidArguments;
-        break :blk .python;
+        if (std.mem.eql(u8, lang, "python")) break :blk .python;
+        if (std.mem.eql(u8, lang, "bun")) break :blk .bun;
+        return module.Error.InvalidArguments;
     } else .auto;
     const kernel = try acquireKernel(execution_context.workspace_root, session_id, requested_language);
 
@@ -494,6 +554,7 @@ test "eval tool definition is explicit about trusted Python execution" {
     try std.testing.expectEqual(types.ToolRiskClass.command_execution, definition.review_risk);
     try std.testing.expect(std.mem.indexOf(u8, definition.description, "full_access_mode=true") != null);
     try std.testing.expectEqualStrings("python", definition.availability.dependency.?.name);
+    try std.testing.expectEqualStrings(bun_command_name, definition.availability.dependency.?.alternatives[0]);
 }
 
 test "eval tool definition requires code field" {
@@ -541,4 +602,30 @@ test "persistent Python timeout terminates the session kernel" {
     try std.testing.expect(!result.success);
     try std.testing.expectEqual(@as(u8, 124), result.exit_code);
     try std.testing.expect(!kernel.started);
+}
+
+test "persistent Bun state is isolated by session" {
+    if (!commandExists(std.testing.allocator, bunCommand())) return error.SkipZigTest;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(workspace_root);
+    defer deinitAll();
+
+    const first = try acquireKernel(workspace_root, "bun-session-one", .bun);
+    const first_result = try executeCode(std.testing.allocator, first, "value = 41; console.log(value)", workspace_root, 20_000);
+    defer first_result.deinit(std.testing.allocator);
+    try std.testing.expect(first_result.success);
+    try std.testing.expectEqualStrings("41", std.mem.trim(u8, first_result.stdout, " \t\r\n"));
+
+    const second_result = try executeCode(std.testing.allocator, first, "console.log(value + 1)", workspace_root, 20_000);
+    defer second_result.deinit(std.testing.allocator);
+    try std.testing.expect(second_result.success);
+    try std.testing.expectEqualStrings("42", std.mem.trim(u8, second_result.stdout, " \t\r\n"));
+
+    const other = try acquireKernel(workspace_root, "bun-session-two", .bun);
+    const other_result = try executeCode(std.testing.allocator, other, "console.log(typeof value)", workspace_root, 20_000);
+    defer other_result.deinit(std.testing.allocator);
+    try std.testing.expect(other_result.success);
+    try std.testing.expectEqualStrings("undefined", std.mem.trim(u8, other_result.stdout, " \t\r\n"));
 }

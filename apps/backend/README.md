@@ -144,6 +144,9 @@ availability; it does not maintain a parallel name-keyed table. The same
 definition slice supplies the model catalog, provider schema, review risk, and
 dispatch path. `search_files` declares and probes the installed `ix` executable;
 when `ix` is absent, the catalog reports `unavailable` and dispatch fails closed.
+`eval` declares Python with the platform-correct Bun executable as an
+alternative; the catalog exposes both names while dispatch selects one
+persistent kernel per workspace and session.
 
 ### Interjection Protocol (Speak While Working)
 
@@ -505,7 +508,7 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Provider capability probing | **Frontier scaffold** | Cache code exists without a runtime adapter consumer. |
 | Arena/quota discipline | **Frontier scaffold** | Scoped allocators exist; quota counters are not maintained by the live turn path. |
 | DAP | **Non-composable prototype** | attach destroys its adapter before return; stacktrace and variables start fresh unattached adapters. |
-| eval | **Partial prototype** | Python state exists only inside a call-owned kernel; Bun is one-shot and does not enforce the advertised timeout. |
+| eval | **Source-complete; installed promotion pending** | One workspace+session-owned persistent kernel supports Python or Bun JavaScript with bounded newline protocol, output cap, timeout termination, and session isolation. Move 58 still routes worker teardown through the canonical process supervisor. |
 | Scheduler leadership | **Source and two-process proven** | One crash-released OS lock spans the tick; `lease.json` carries a nonzero generation and is read back before dispatch. Two complete source kernels produced one reserved/completed attempt and zero survivors. |
 
 The current evidence and ordered repair ledger live in the
