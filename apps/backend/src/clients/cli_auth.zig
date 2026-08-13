@@ -37,6 +37,7 @@ pub const help_text =
     \\  VAR1 auth status [--json]
     \\  VAR1 auth login <provider-id> --api-key-stdin [--base-url <url>] --model <id> [--wire-api <api>] [--json]
     \\  VAR1 auth login <provider-id> --api-key-env <name> [--base-url <url>] --model <id> [--wire-api <api>] [--json]
+    \\  VAR1 auth login <provider-id> --base-url <url> --model <id> --auth-scheme none [--wire-api <api>] [--json]
     \\  VAR1 auth logout <provider-id>
     \\  VAR1 auth use <provider-id>
     \\
@@ -51,6 +52,7 @@ pub const help_text =
     \\
     \\Status never prints API keys, access tokens, or refresh tokens. Login prints
     \\the provider authorization URL and accepts a pasted redirect/code fallback;
+    \\a `none` auth scheme may omit a key source entirely.
     \\logout removes only the named provider record.
     \\
 ;
@@ -127,11 +129,13 @@ pub fn parseArguments(iter: *std.process.ArgIterator) !ParsedAuthArguments {
                 return error.InvalidArgs;
             }
         }
-        if (!login.api_key_stdin and login.api_key_env == null and std.mem.eql(u8, provider_id, "openai-codex")) {
+        const key_source_present = login.api_key_stdin or login.api_key_env != null;
+        const keyless_auth = login.auth_scheme == .none;
+        if (!key_source_present and std.mem.eql(u8, provider_id, "openai-codex")) {
             parsed.options.action = .{ .login = login };
             return parsed;
         }
-        if (!login.api_key_stdin and login.api_key_env == null) return error.InvalidArgs;
+        if (!key_source_present and !keyless_auth) return error.InvalidArgs;
         parsed.options.action = .{ .login = login };
         return parsed;
     }

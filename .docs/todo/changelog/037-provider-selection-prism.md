@@ -26,9 +26,9 @@ Supported paths:
 ## Evidence
 
 - `apps/backend/scripts/zigw.ps1 build test --summary all`: `19/19`,
-  `2,007/2,007` passed.
+  `2,008/2,008` passed.
 - ReleaseFast and installed binary SHA-256:
-  `D8DE4697FD11350269D586455A4859CE0B7B8DDCB9050A230C88F387FCA411F1`.
+  `0C15D5DAEECF8879ECDFDA3E47BB5EF515550E0158284C0B7CE2FD76426833E5`.
 - Disposable installed proof logged Anthropic, OpenRouter, and custom records;
   `auth use anthropic`, `providers/list`, and `providers --json` returned the
   expected metadata with no fixture secret leakage.

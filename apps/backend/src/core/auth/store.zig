@@ -655,7 +655,10 @@ pub fn upsertApiKeyProvider(
     workspace_root: []const u8,
     record: ApiKeyProviderRecord,
 ) !void {
-    if (record.provider_id.len == 0 or record.base_url.len == 0 or record.model.len == 0 or record.api_key.len == 0) {
+    const effective_auth_scheme = record.auth_scheme orelse provider_profile.defaults(record.provider_id, record.base_url).auth_scheme;
+    if (record.provider_id.len == 0 or record.base_url.len == 0 or record.model.len == 0 or
+        (record.api_key.len == 0 and effective_auth_scheme != .none))
+    {
         return Error.InvalidAuthState;
     }
 
@@ -710,7 +713,7 @@ pub fn upsertApiKeyProvider(
     try putString(arena_allocator, provider, "base_url", record.base_url);
     try putString(arena_allocator, provider, "model", record.model);
     try putString(arena_allocator, provider, "wire_api", provider_profile.effectiveWireApi(record.provider_id, record.base_url, record.wire_api).label());
-    try putString(arena_allocator, provider, "auth_scheme", (record.auth_scheme orelse provider_profile.defaults(record.provider_id, record.base_url).auth_scheme).label());
+    try putString(arena_allocator, provider, "auth_scheme", effective_auth_scheme.label());
     _ = provider.orderedRemove("access_token");
     _ = provider.orderedRemove("refresh_token");
     _ = provider.orderedRemove("id_token");

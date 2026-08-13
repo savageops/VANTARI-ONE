@@ -199,6 +199,28 @@ test "provider-scoped API-key login preserves records and cycles through secret-
     try std.testing.expectEqual(types.AuthScheme.api_key, active.auth_scheme);
 }
 
+test "keyless custom provider accepts no-auth selection without a credential" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/workspace", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "local-gateway",
+        .base_url = "http://127.0.0.1:43199/v1",
+        .api_key = "",
+        .model = "local-model",
+        .wire_api = .chat_completions,
+        .auth_scheme = .none,
+    });
+
+    var resolved = try auth_store.readProviderById(std.testing.allocator, workspace_root, "local-gateway");
+    defer resolved.deinit(std.testing.allocator);
+    try std.testing.expectEqual(types.AuthScheme.none, resolved.auth_scheme);
+    try std.testing.expectEqual(@as(usize, 0), resolved.api_key.len);
+}
+
 const types = VAR1.shared.types;
 
 fn writeAuthFile(

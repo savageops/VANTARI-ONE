@@ -1585,7 +1585,10 @@ fn executeApiKeyLogin(
     const base_url = login.base_url orelse provider_profile.defaultBaseUrl(login.provider_id) orelse return error.InvalidArgs;
     const model = login.model orelse return error.InvalidArgs;
     const profile_defaults = provider_profile.defaults(login.provider_id, base_url);
-    const api_key = if (login.api_key_env) |name|
+    const effective_auth_scheme = login.auth_scheme orelse profile_defaults.auth_scheme;
+    const api_key = if (effective_auth_scheme == .none and login.api_key_env == null and !login.api_key_stdin)
+        try allocator.dupe(u8, "")
+    else if (login.api_key_env) |name|
         std.process.getEnvVarOwned(allocator, name) catch return error.InvalidArgs
     else
         try readApiKeyFromStdin(allocator);
@@ -1597,7 +1600,7 @@ fn executeApiKeyLogin(
         .model = model,
         .api_key = api_key,
         .wire_api = login.wire_api orelse profile_defaults.wire_api,
-        .auth_scheme = login.auth_scheme orelse profile_defaults.auth_scheme,
+        .auth_scheme = effective_auth_scheme,
     });
 
     const auth_path = try auth_store.authFilePath(allocator, workspace_root);
@@ -1608,7 +1611,7 @@ fn executeApiKeyLogin(
             .provider_id = login.provider_id,
             .auth_type = "api_key",
             .wire_api = (login.wire_api orelse profile_defaults.wire_api).label(),
-            .auth_scheme = (login.auth_scheme orelse profile_defaults.auth_scheme).label(),
+            .auth_scheme = effective_auth_scheme.label(),
             .model = model,
             .auth_file = auth_path,
         });

@@ -664,7 +664,7 @@ Provider-scoped API-key login and selection use the same ledger:
 ```powershell
 vantari auth login anthropic --api-key-stdin --model claude-sonnet-4-20250514
 vantari auth login openrouter --api-key-env OPENROUTER_API_KEY --model openai/gpt-4o-mini
-vantari auth login private-gateway --api-key-stdin --base-url http://127.0.0.1:43199/v1 --model custom-model --wire-api chat_completions --auth-scheme none
+vantari auth login private-gateway --base-url http://127.0.0.1:43199/v1 --model custom-model --wire-api chat_completions --auth-scheme none
 vantari auth use anthropic
 vantari providers --json
 vantari models --provider anthropic --json
