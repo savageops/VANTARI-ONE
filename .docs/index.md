@@ -35,6 +35,7 @@ This directory contains project records, research, planning chains, and complete
 - [`research/2026-08-13-installed-ticket-lifecycle-mesh.md`](research/2026-08-13-installed-ticket-lifecycle-mesh.md) — Move 30 composed Windows process tracer, detached-owner crash repair, source restart/mailbox proof, and hash-matched installed promotion boundary.
 - [`research/2026-08-13-tui-projection-move41.md`](research/2026-08-13-tui-projection-move41.md) — Move 41 sequence-addressed TUI projection, canonical child summaries, replay parity, and bounded latest-session selection.
 - [`research/2026-08-13-tui-composer-move42.md`](research/2026-08-13-tui-composer-move42.md) — Move 42 seven-source TUI harvest, composer surface hierarchy, conditional cancellation, and narrow/wide proof.
+- [`research/2026-08-13-prompt-mode-move43.md`](research/2026-08-13-prompt-mode-move43.md) — Move 43 seven-source prompt-mode harvest, Shift+Tab cycle, provider-visible layer, and rejected executor/registry complexity.
 - [`todo/findings/00-INDEX.md`](todo/findings/00-INDEX.md) — executable P0/P1/P2 closure order; current authority over older completion claims.
 - [`roadmap/24-harness-capability-next-90.md`](roadmap/24-harness-capability-next-90.md) — 90 dependency-ordered moves ranked by operator value, capability leverage, integrity risk, and friction removed.
 - [`roadmap/21-persistent-execution-owner.md`](roadmap/21-persistent-execution-owner.md) — closed single-owner lifecycle: reconnect, duplicate exclusion, graceful/crash recovery, process cleanup, and installed proof.

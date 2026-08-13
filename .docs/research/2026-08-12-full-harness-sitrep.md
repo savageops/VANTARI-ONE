@@ -465,3 +465,23 @@ inspection, blank TUI, and `vantari -c` continuation pass with source/installed
 SHA-256 `A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072`.
 The exact owner tree was torn down after presentation detach and the final
 VANTARI process census is zero. Move 43 is the active frontier.
+
+## Superseding current evidence — Move 43 (2026-08-13)
+
+Move 43 closes the session-local prompt-mode boundary. The dedicated harvest and
+subtractive decision are recorded at
+`[2026-08-13-prompt-mode-move43.md](2026-08-13-prompt-mode-move43.md)`. One
+`PromptMode` enum cycles `orchestrate -> build -> align -> plan`; the TUI owns
+Shift+Tab, and the next `session/send` carries the selected lower-case label.
+The host rejects unknown labels with JSON-RPC `-32602` before session/provider
+execution. The executor carries the typed value through every context rebuild,
+while `core/prompts/builder.zig` inserts one provider-visible guidance layer.
+No tool, access, model, capacity, registry, settings schema, or alternate
+executor branch was added.
+
+The Debug graph passes 19/19 steps and 1,996/1,996 tests; focused TUI passes
+76/76; ReleaseFast/install passes 9/9. Installed TUI startup accepted
+Shift+Tab and blank startup/exit passed. Source and installed SHA-256 match
+`145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`. The
+proof-owned owner/kernel tree was explicitly torn down and the final VANTARI
+process census is zero. Move 44 is the active frontier.

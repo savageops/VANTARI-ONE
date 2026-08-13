@@ -205,6 +205,13 @@ typed failure, not a downgrade to `/v1/chat/completions`.
 
 The system prompt is assembled in ordered layers: internal guardrails → operator guardrails → system prompt → persona → developer prompt → operator context → tool contract.
 
+The TUI's session-local prompt lens sits in that same builder. Shift+Tab cycles
+`orchestrate`, `build`, `align`, and `plan`; the next `session/send` carries the
+exact label and the kernel hot-loads one provider-visible guidance layer.
+`orchestrate` is the default. Unknown labels fail before execution. This lens
+does not select tools, change access, alter the executor, or change model/agent
+capacity; prompts remain the behavior control plane.
+
 ### Per-Agent Effort & Temperature
 
 ```json
@@ -387,6 +394,7 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - Buffer speculation (concurrent navigation previews + next-turn injection)
 - Interjection protocol (speak while working — USER_STEER_MESSAGE at step boundary)
 - Per-turn config hot-loading
+- Session-local prompt-mode cycling with provider-visible guidance on the next turn
 - Default-restricted agent filesystem/process boundary with explicit `runtime.full_access_mode` opt-in
 - Per-agent effort/temperature/thinking controls
 - Knowledge scaffolding (research/plans/advice/roadmap/tickets/processes)
@@ -422,6 +430,7 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Message transcript writer | **Source and installed proven** | One per-session owner serializes every message role and initializes sequence from a bounded valid tail. Multi-process writer ownership remains coupled to the persistent-host work. |
 | Persistent execution owner | **Source and installed proven** | One workspace lease converges 20 concurrent clients on one owner/kernel tree. Explicit workspace selection defeats inherited/configured redirection. Client detach preserves the generation; graceful stop drains; forced owner death leaves zero descendants; the next client creates one new generation. Installed owner lifecycle evidence is retained under `.zig-cache/owner-proofs/9cc5d7b8a1624e49937cb3b78716e1bb`. |
 | Session submission | **Source proven** | `run --session-id` routes through `LocalClient` and owner `session/send`; the retired per-session `run-session` process no longer bypasses shared capacity or nested delegation. |
+| Prompt-mode lens | **Source and installed proven** | `PromptMode` cycles through the TUI, exact labels cross `session/send`, unknown labels fail closed, and the provider envelope changes without an executor or capability branch. Debug `19/19` / `1,996/1,996`; ReleaseFast/install `9/9`; source/installed SHA-256 `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`. |
 | Child branch/convergence | **Source and installed proven** | Fixed-pool convergence survives presentation-client exit. The process tracer kills the exact owner/kernel tree, waits for lease expiry, then resumes the same ticket child and immutable receipt under a new generation. Ordinary non-ticket orphan receipts still become `StaleAgentOwner`. Installed ticket evidence is retained under `.zig-cache/owner-proofs/825a25155fa64fe78b26a47789025ec9`. |
 | Agent mailbox | **Source and installed proven** | Direct, parent, and current-group delivery uses recipient event sequence, sender receipt, queue/wake intent, and provider-success unread cursor. The process tracer observes nested sibling and parent context once, with zero copied transcript rows. Installed ticket evidence is retained under `.zig-cache/owner-proofs/825a25155fa64fe78b26a47789025ec9`. |
 | Agent eligibility | **Source proven** | One hot-loaded `AgentService` snapshot advertises only route-resolvable specialists with capacity/team/communication state and an exact SHA-256 receipt. Quiet and hive prompt profiles choose different actions through the same executor; the dedicated installed snapshot probe has not run. |

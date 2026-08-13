@@ -8,6 +8,7 @@ const settings_view = @import("settings_view.zig");
 const protocol = VAR1.core.protocol_types;
 const protocol_events = VAR1.shared.protocol.events;
 const stdio_rpc = VAR1.host.stdio_rpc;
+const prompt_modes = VAR1.core.prompts;
 
 const TextInput = tui.widgets.TextInput;
 const Window = tui.Window;
@@ -146,6 +147,7 @@ const ChatState = struct {
     subscription_status: []const u8,
     effort: []const u8 = "",
     thinking_mode: []const u8 = "",
+    prompt_mode: prompt_modes.PromptMode = .orchestrate,
     context_window_tokens: u64 = 0,
     reserve_output_tokens: u64 = 0,
     agent_pool_max: usize = 0,
@@ -223,6 +225,10 @@ const ChatState = struct {
         if (self.buffer_preview) |preview| self.allocator.free(preview);
         if (self.settings_state) |*ss| ss.deinit();
         self.search_buffer.deinit(self.allocator);
+    }
+
+    fn cyclePromptMode(self: *ChatState) void {
+        self.prompt_mode = self.prompt_mode.next();
     }
 
     fn appendHistory(self: *ChatState, prompt: []const u8) !void {
@@ -527,11 +533,13 @@ const ChatState = struct {
                 .session_id = session_id,
                 .prompt = prompt,
                 .enable_agent_tools = true,
+                .prompt_mode = self.prompt_mode.label(),
             })
         else
             try renderJsonAlloc(self.allocator, .{
                 .session_id = session_id,
                 .enable_agent_tools = true,
+                .prompt_mode = self.prompt_mode.label(),
             });
         var send_job = SendJob{
             .allocator = self.allocator,
@@ -1812,6 +1820,14 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                 }
 
                 if (key.matches('c', .{ .ctrl = true })) break;
+
+                // Shift+Tab cycles only the session's prompt lens. The next
+                // session/send carries the selected label to the kernel; no
+                // executor or capability branch is involved.
+                if (key.matches(tui.Key.tab, .{ .shift = true })) {
+                    state.cyclePromptMode();
+                    continue;
+                }
 
                 // Ctrl+R — enter/continue reverse history search.
                 if (key.matches('r', .{ .ctrl = true })) {
@@ -5057,4 +5073,27 @@ test "tui turn_started refreshes window estimate without accumulating cost" {
     try std.testing.expectEqual(@as(u64, 5000), state.context_used_tokens);
     try std.testing.expectEqual(@as(u64, 0), state.session_prompt_tokens);
     try std.testing.expect(!state.has_session_cost);
+}
+
+test "tui prompt mode defaults to orchestrate and cycles for the session" {
+    var state = ChatState{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .workspace_root = ".",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    try std.testing.expectEqual(prompt_modes.PromptMode.orchestrate, state.prompt_mode);
+    state.cyclePromptMode();
+    try std.testing.expectEqual(prompt_modes.PromptMode.build, state.prompt_mode);
+    state.cyclePromptMode();
+    try std.testing.expectEqual(prompt_modes.PromptMode.@"align", state.prompt_mode);
+    state.cyclePromptMode();
+    state.cyclePromptMode();
+    try std.testing.expectEqual(prompt_modes.PromptMode.orchestrate, state.prompt_mode);
 }

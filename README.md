@@ -12,7 +12,7 @@ One binary; one protocol; one owner for runtime truth.
 
 [![Release](https://img.shields.io/github/v/release/savageops/VANTARI-ONE?display_name=tag&sort=semver&label=Release&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/savageops/VANTARI-ONE/total?label=Downloads&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases)
-[![Tests](https://img.shields.io/badge/Tests-1%2C967%20cases-0f766e)](#validation)
+[![Tests](https://img.shields.io/badge/Tests-1%2C996%20cases-0f766e)](#validation)
 [![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-f7a41d?logo=zig)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-0f766e)](./LICENSE)
 
@@ -92,7 +92,7 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
 | **Kernel surface** | 115 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 1,957 passing backend cases across source and adversarial pipeline suites |
+| **Proof surface** | 1,996 passing backend cases across source and adversarial pipeline suites |
 | **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
 | **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |
@@ -638,6 +638,12 @@ The model receives a four-layer prompt envelope assembled at compile time:
 
 System and developer prompts are user-editable workspace files. The internal guardrail layer and tool-use contract are kernel-owned — they enforce workspace boundaries, tool protocol, and streaming discipline regardless of what the user prompt says. Prompt paths in `config.json` must reference existing, non-empty files when explicitly configured.
 
+The TUI adds one session-local behavioral lens on top of this envelope. Shift+Tab
+cycles `orchestrate → build → align → plan`; the next `session/send` applies
+the selected provider-visible layer and defaults to `orchestrate`. The lens
+changes guidance only — not executor logic, tools, access, model, or agent
+capacity — so the model remains the behavior authority.
+
 <br/>
 
 ## Configuration
@@ -934,6 +940,7 @@ vantari auth status|login|logout <provider>    identity and provider auth
 | [`.docs/research/2026-08-12-full-harness-sitrep.md`](./.docs/research/2026-08-12-full-harness-sitrep.md) | Current full-harness design, pipeline, proof, concerns, and closure order |
 | [`.docs/research/2026-08-13-sequence-addressed-agent-mailbox.md`](./.docs/research/2026-08-13-sequence-addressed-agent-mailbox.md) | Agent-mailbox competitive harvest, event grammar, context boundary, and residual risk |
 | [`.docs/research/2026-08-13-tui-composer-move42.md`](./.docs/research/2026-08-13-tui-composer-move42.md) | Seven-source TUI harvest, composer surface hierarchy, conditional cancellation, and narrow/wide proof |
+| [`.docs/research/2026-08-13-prompt-mode-move43.md`](./.docs/research/2026-08-13-prompt-mode-move43.md) | Seven-source prompt-mode harvest, Shift+Tab cycle, provider-visible layer, and rejected executor/registry complexity |
 | [`.docs/research/2026-08-13-model-selected-agent-eligibility.md`](./.docs/research/2026-08-13-model-selected-agent-eligibility.md) | Eight-reference selection harvest, deterministic eligibility receipt, prompt-profile tracer, and rejected selector architecture |
 | [`.docs/todo/findings/00-INDEX.md`](./.docs/todo/findings/00-INDEX.md) | Priority-ordered executable readiness findings |
 
@@ -941,7 +948,7 @@ vantari auth status|login|logout <provider>    identity and provider auth
 
 ## Validation
 
-The pinned Debug and ReleaseFast graphs currently pass 1,991 test cases across `apps/backend/src/`
+The pinned Debug and ReleaseFast graphs currently pass 1,996 test cases across `apps/backend/src/`
 and `apps/backend/tests/`. They target state transitions, protocol edges, and
 failure pressure rather than line coverage:
 
@@ -959,6 +966,8 @@ failure pressure rather than line coverage:
   transcript replication
 - Deterministic route eligibility, unavailable-route filtering, depth and
   capacity pressure, and quiet-versus-hive prompt behavior through one executor
+- Session-local prompt-mode cycle, provider-visible selected layer, and
+  fail-closed unknown `session/send.prompt_mode`
 
 ```powershell
 cd apps/backend

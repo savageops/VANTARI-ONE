@@ -99,6 +99,7 @@ pub const RunOptions = struct {
     execution_context: tools.ExecutionContext,
     session_id: ?[]const u8 = null,
     hooks: Hooks = .{},
+    prompt_mode: prompts.PromptMode = .orchestrate,
 };
 
 pub fn runPrompt(allocator: std.mem.Allocator, config: types.Config, prompt: []const u8) !types.SessionRunResult {
@@ -242,6 +243,7 @@ pub fn runPromptWithOptions(
         session,
         &messages,
         0,
+        options.prompt_mode,
     ) catch |err| {
         try failSession(allocator, config.workspace_root, options.hooks, &session, run_seq, .failed, provider.failureDiagnosticForError(err), run_start_ms);
         return err;
@@ -316,6 +318,7 @@ pub fn runPromptWithOptions(
                     session,
                     &messages,
                     messages.items.len,
+                    options.prompt_mode,
                 );
             }
         }
@@ -369,6 +372,7 @@ pub fn runPromptWithOptions(
             session,
             &messages,
             base_message_count,
+            options.prompt_mode,
         ) catch |err| {
             try failSession(allocator, config.workspace_root, options.hooks, &session, run_seq, .failed, provider.failureDiagnosticForError(err), run_start_ms);
             return err;
@@ -406,6 +410,7 @@ pub fn runPromptWithOptions(
             &messages,
             &base_message_count,
             options.transport,
+            options.prompt_mode,
         ) catch |err| {
             // Connection-level failures are genuinely unrecoverable — the
             // server is unreachable. Propagate immediately.
@@ -692,6 +697,7 @@ pub fn runPromptWithOptions(
                         session,
                         &messages,
                         messages.items.len,
+                        options.prompt_mode,
                     );
                     continue;
                 }
@@ -714,6 +720,7 @@ pub fn runPromptWithOptions(
                         session,
                         &messages,
                         messages.items.len,
+                        options.prompt_mode,
                     );
                     const after_convergence = try agent_service.waitParent(session.id, 0);
                     requires_child_supervision = !after_convergence.terminal or after_convergence.ready;
@@ -790,6 +797,7 @@ pub fn runPromptWithOptions(
                     session,
                     &messages,
                     messages.items.len,
+                    options.prompt_mode,
                 );
                 continue;
             }
@@ -862,6 +870,7 @@ pub fn runPromptWithOptions(
                 session,
                 &messages,
                 messages.items.len,
+                options.prompt_mode,
             );
             continue;
         }
@@ -1056,6 +1065,7 @@ fn rebuildProviderBaseMessages(
     session: types.SessionRecord,
     messages: *std.array_list.Managed(types.ChatMessage),
     preserve_from_index: usize,
+    prompt_mode: prompts.PromptMode,
 ) !usize {
     const preserve_start = @min(preserve_from_index, messages.items.len);
     var preserved = std.array_list.Managed(types.ChatMessage).init(allocator);
@@ -1079,12 +1089,13 @@ fn rebuildProviderBaseMessages(
     const hot_prompt_policy = config_file.loadPromptPolicy(allocator, config.workspace_root, config.prompt_policy) catch config.prompt_policy;
     defer hot_prompt_policy.deinit(allocator);
 
-    const system_prompt = try prompts.buildAgentSystemPromptWithMemory(
+    const system_prompt = try prompts.buildAgentSystemPromptWithMemoryAndMode(
         allocator,
         execution_context,
         hot_prompt_policy,
         config.memory_policy,
         session.prompt,
+        prompt_mode,
     );
     defer allocator.free(system_prompt);
 
@@ -1120,6 +1131,7 @@ fn ensureContextWithinBudget(
     session: types.SessionRecord,
     messages: *std.array_list.Managed(types.ChatMessage),
     base_message_count: usize,
+    prompt_mode: prompts.PromptMode,
 ) !usize {
     const estimate = context_builder.budget.estimateChatMessages(messages.items);
     if (!context_builder.budget.shouldCompact(estimate, config.context_policy)) return base_message_count;
@@ -1141,6 +1153,7 @@ fn ensureContextWithinBudget(
         session,
         messages,
         base_message_count,
+        prompt_mode,
     );
 }
 
@@ -1153,6 +1166,7 @@ fn completeWithContextRecovery(
     messages: *std.array_list.Managed(types.ChatMessage),
     base_message_count: *usize,
     transport: provider.Transport,
+    prompt_mode: prompts.PromptMode,
 ) !types.CompletionResponse {
     var stream_context = ProviderDeltaContext{
         .allocator = allocator,
@@ -1193,6 +1207,7 @@ fn completeWithContextRecovery(
             session,
             messages,
             base_message_count.*,
+            prompt_mode,
         );
 
         return dispatch.completeWithTransportAndHooks(allocator, config, .{

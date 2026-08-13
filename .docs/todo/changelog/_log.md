@@ -2642,3 +2642,31 @@ sequence-bearing events and canonical summaries.
 
 **Next todo:** Move 43 — make prompt-mode selection session-scoped and prompt-
 controlled, with provider-visible capture and no executor behavior branches.
+
+## Closure receipt — Move 43 (2026-08-13)
+
+- The seven-source prompt-mode harvest is recorded in
+  `.docs/research/2026-08-13-prompt-mode-move43.md`. The compression decision
+  keeps one typed prompt layer and rejects a mode registry, settings schema,
+  tool branches, and alternate executors.
+- `PromptMode` cycles `orchestrate -> build -> align -> plan` in the TUI. The
+  next `session/send` carries the session-local label; omission defaults to
+  `orchestrate`, and unknown labels fail with JSON-RPC `-32602` before session
+  or provider execution. Every executor prompt rebuild preserves the value.
+- The provider system-envelope test captures the selected guidance layer. The
+  mode changes model-visible method only; executor, tool catalog, access policy,
+  model, and agent capacity remain unchanged.
+- Debug returned `19/19` build steps and `1,996/1,996` tests; focused TUI
+  returned `9/9` steps and `76/76` tests; `git diff --check` had no whitespace
+  errors. ReleaseFast/install returned `9/9`.
+- Installed TUI startup accepted Shift+Tab and blank startup/exit passed. Source
+  and installed SHA-256 match
+  `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`. The
+  proof-owned owner/kernel tree was explicitly torn down and the final process
+  census was zero.
+- Updated roadmap, research/index records, root/backend README, architecture,
+  technical summary, workspace record, findings receipt, and `AGENTS.md`.
+
+**Next todo:** Move 44 — one compact status row for active prompt mode, model,
+effort, context used/capacity/percent, and remaining context with graceful
+truncation.

@@ -179,3 +179,24 @@ Do not erase historical closeout records or fabricate proof to make a chain gree
   owner-tree teardown leaves zero VANTARI processes.
 - The active boundary is Move 43. Move 50 Agent Hub and the installed visual
   matrix remain later boundaries; no completion is inferred for them.
+
+## Closure receipt — Move 43 (2026-08-13)
+
+- `PromptMode` is the sole owner for the session-local behavioral lens. The TUI
+  cycles `orchestrate -> build -> align -> plan` on Shift+Tab; the next
+  `session/send` carries the exact label and omission defaults to `orchestrate`.
+- The prompt builder emits the selected mode in the provider system envelope.
+  The executor carries it through initial, interjection, compaction, child,
+  wake, and overflow rebuilds without a tool, access, model, capacity, or
+  executor branch. Unknown labels return JSON-RPC `-32602` before execution.
+- The seven-source harvest and subtraction decision are durable at
+  `.docs/research/2026-08-13-prompt-mode-move43.md`. No mode registry, settings
+  schema field, or prompt scaffolding was added.
+- Debug is `19/19` with `1,996/1,996`; focused TUI is `76/76`; ReleaseFast and
+  install are `9/9`. Installed TUI startup accepted Shift+Tab and blank startup/
+  exit passed. Source and installed SHA-256 match
+  `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`; the
+  exact owner-tree teardown leaves zero VANTARI processes.
+- The active boundary is Move 44: one compact status row for prompt mode,
+  model, effort, context, and remaining capacity. Agent Hub and the installed
+  visual matrix remain later boundaries.

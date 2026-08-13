@@ -16,7 +16,7 @@ child-agent execution, and recovery evidence. TUI and CLI render kernel
 projections. `apps/frontend` is an ignored local prototype, not a shipped
 tracked client.
 
-## Current frontier — Move 42
+## Current frontier — Move 43
 
 Move 34 closes the Codex subscription transport slice. `core/auth/store.zig`
 remains the single credential owner for workspace `.var/auth.json` and installed
@@ -133,6 +133,26 @@ Installed ANSI inspection observed transcript `(8,17,15)`, metadata
 `A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072`; exact
 owner-tree teardown leaves zero VANTARI processes.
 
+Move 43 closes the prompt-mode control boundary. `PromptMode` is one typed,
+session-local prompt lens with the fixed cycle `orchestrate -> build -> align
+-> plan -> orchestrate`; the default is `orchestrate`. Shift+Tab is owned by
+the TUI and the next `session/send` carries the exact lower-case label. The
+host rejects unknown labels before session lookup or provider execution. The
+executor carries the typed value through initial prompt assembly, interjection,
+compaction, child parking/convergence, wake, and provider-overflow rebuilds.
+`core/prompts/builder.zig` inserts one provider-visible layer; mode selection
+does not change the executor, tool catalog, access policy, model, or agent
+capacity. Other clients retain the compatibility default.
+
+Move 43 proof: Debug passes `19/19` build steps and `1,996/1,996` tests;
+ReleaseFast/install passes `9/9`; installed TUI startup accepted Shift+Tab and
+blank startup/exit completed. Source and installed SHA-256 match
+`145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`; the
+proof-owned owner/kernel tree was explicitly torn down and the final installed
+VANTARI process census is zero. The seven-source harvest and rejected
+registry/executor complexity are recorded in
+`.docs/research/2026-08-13-prompt-mode-move43.md`.
+
 ## Behavior plane
 
 The model chooses the next eligible action. The prompt envelope controls voice,
@@ -154,10 +174,11 @@ conservative/aggressive, and low/high update cadence. Runtime logic is valid
 only when prompting cannot enforce the capability boundary.
 
 The accepted prompt-mode contract names `orchestrate`, `build`, `align`, and
-`plan`, with `orchestrate` as the default. Shift+Tab cycling and provider-visible
-profile proof are assigned to roadmap moves 43 and 65–66; they are not shipped
-in the current TUI. A mode changes one hot-loaded prompt layer, not executor or
-tool capability.
+`plan`, with `orchestrate` as the default. Shift+Tab cycles the session-local
+selection and the next `session/send` applies one hot-loaded provider-visible
+layer. A mode changes guidance only, not executor, tool capability, access
+policy, or agent capacity. Broader behavior-profile proof remains a later
+roadmap boundary.
 
 ## Durable execution
 
@@ -325,14 +346,14 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,991/1,991 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,996/1,996 tests with zero skips.
   The reduced total is intentional: one registry loop executes all 53 declared
   cases and replaces 45 one-case wrappers that left ten cases undiscovered.
   Its host lane executes the stdio child, owner state/client, shared process
   lock, bridge, and process-tree contracts; the integration lane includes
   exact owner route, lease, stalled-loopback deadline, and explicit-workspace
   precedence probes. The backend
-  TUI lane passes 75/75.
+  TUI lane passes 76/76.
 - A barrier-synchronized leadership race returns one guard and one
   `LeaseUnavailable`. Native proof root
   `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1` starts two
@@ -431,10 +452,10 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   exactly. No CRC fields, sidecar quarantine ledger, auto-truncation path, or
   repair daemon was added.
 - The current source ReleaseFast and installed artifact share SHA-256
-  `A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072`.
-  Moves 37–42, Move 34 Codex transport, owner lifecycle, and ticket lifecycle
+  `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`.
+  Moves 37–43, Move 34 Codex transport, owner lifecycle, and ticket lifecycle
   promotion all pass; the installed catalog excludes `manage_plugin`, latest
-  session selection is bounded, composer/cancellation proof is installed, and
+  session selection is bounded, composer/cancellation/prompt-mode proof is installed, and
   the final installed process census is zero.
 - Installed Codex OAuth consumer proof used a valid disposable `$VANTARI_HOME`
   fixture with a pinned context window to avoid unrelated local-model discovery.

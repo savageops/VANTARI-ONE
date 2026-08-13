@@ -11,6 +11,12 @@ VANTARI is a local Zig agent kernel. Prompts control voice, pace, initiative,
 delegation, and interaction cadence. The kernel controls executable capability,
 durability, budgets, evidence, recovery, and irreversible-action gates.
 
+TUI Shift+Tab cycles the session-local prompt mode `orchestrate`, `build`,
+`align`, `plan`; the next `session/send` carries the exact label, omission
+defaults to `orchestrate`, and unknown labels fail before execution. Prompt mode
+changes provider guidance only; it does not change the executor, tools, access,
+model, or capacity.
+
 Canonical execution path:
 operator input -> public LocalClient facade -> project-local execution owner ->
 private ChildClient -> kernel-stdio -> transcript/context/provider/tools/events ->

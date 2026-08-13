@@ -48,6 +48,50 @@ pub const Error = error{
     PromptLayerUnavailable,
 };
 
+/// Session-scoped behavioral lens. A mode changes the prompt layer only; it
+/// never changes the tool catalog, access policy, or executor state machine.
+pub const PromptMode = enum {
+    orchestrate,
+    build,
+    @"align",
+    plan,
+
+    pub fn label(self: PromptMode) []const u8 {
+        return switch (self) {
+            .orchestrate => "orchestrate",
+            .build => "build",
+            .@"align" => "align",
+            .plan => "plan",
+        };
+    }
+
+    pub fn fromString(value: []const u8) ?PromptMode {
+        if (std.mem.eql(u8, value, "orchestrate")) return .orchestrate;
+        if (std.mem.eql(u8, value, "build")) return .build;
+        if (std.mem.eql(u8, value, "align")) return .@"align";
+        if (std.mem.eql(u8, value, "plan")) return .plan;
+        return null;
+    }
+
+    pub fn next(self: PromptMode) PromptMode {
+        return switch (self) {
+            .orchestrate => .build,
+            .build => .@"align",
+            .@"align" => .plan,
+            .plan => .orchestrate,
+        };
+    }
+
+    pub fn instruction(self: PromptMode) []const u8 {
+        return switch (self) {
+            .orchestrate => "Coordinate the request as the primary agent. Decide whether to inspect, delegate, ask, or act. Keep the work moving and expose meaningful checkpoints.",
+            .build => "Bias toward direct implementation. Inspect the canonical owner, make the smallest durable change, run proof, and keep the operator informed. Delegate only independent work.",
+            .@"align" => "Resolve material ambiguity before irreversible work. When preference discovery is needed, ask concise multiple-choice questions in bounded rounds, using 12 to 60 questions when the operator requests deep alignment. Otherwise state assumptions and proceed.",
+            .plan => "Turn the request into bounded executable tickets. Name the owner, dependencies, acceptance proof, and next action, then keep the plan connected to delivery instead of using planning as work avoidance.",
+        };
+    }
+};
+
 pub fn buildAgentSystemPrompt(
     allocator: std.mem.Allocator,
     execution_context: tools.ExecutionContext,
@@ -62,6 +106,17 @@ pub fn buildAgentSystemPromptWithMemory(
     prompt_policy: types.PromptPolicy,
     memory_policy: types.MemoryPolicy,
     query: []const u8,
+) ![]u8 {
+    return buildAgentSystemPromptWithMemoryAndMode(allocator, execution_context, prompt_policy, memory_policy, query, .orchestrate);
+}
+
+pub fn buildAgentSystemPromptWithMemoryAndMode(
+    allocator: std.mem.Allocator,
+    execution_context: tools.ExecutionContext,
+    prompt_policy: types.PromptPolicy,
+    memory_policy: types.MemoryPolicy,
+    query: []const u8,
+    prompt_mode: PromptMode,
 ) ![]u8 {
     const system_prompt = try readPromptLayer(
         allocator,
@@ -109,6 +164,13 @@ pub fn buildAgentSystemPromptWithMemory(
     const current_mode = try std.fmt.allocPrint(allocator, "# Current Mode\n{s}\n{s}", .{ workspace_state_note, agent_mode_note });
     defer allocator.free(current_mode);
 
+    const prompt_mode_layer = try std.fmt.allocPrint(
+        allocator,
+        "# Prompt Mode: {s}\n{s}\nMode selection changes behavior guidance only; preserve the core safety, capability, and evidence contracts.",
+        .{ prompt_mode.label(), prompt_mode.instruction() },
+    );
+    defer allocator.free(prompt_mode_layer);
+
     const guardrails_layer = if (prompt_policy.guardrails) |gr|
         try std.fmt.allocPrint(allocator, "# Operator Guardrails\n{s}", .{gr})
     else
@@ -131,7 +193,7 @@ pub fn buildAgentSystemPromptWithMemory(
     errdefer output.deinit();
     const writer = output.writer();
 
-    // Envelope order: header -> current mode -> identity -> persona -> guardrails
+    // Envelope order: header -> current mode -> prompt mode -> identity -> persona -> guardrails
     // -> developer -> operator context -> operating core (5 consolidated protocols)
     // -> capsules -> memory -> closing -> catalog.
     // Identity-first ordering anchors the model before constraints. Catalog is
@@ -140,6 +202,8 @@ pub fn buildAgentSystemPromptWithMemory(
         \\# VAR1 Prompt Envelope
         \\Workspace root: `{s}`
         \\Provider role transport: system-compatible envelope with explicit internal, system, developer, and tool-contract sections.
+        \\
+        \\{s}
         \\
         \\{s}
         \\
@@ -206,6 +270,7 @@ pub fn buildAgentSystemPromptWithMemory(
     , .{
         execution_context.workspace_root,
         current_mode,
+        prompt_mode_layer,
         system_prompt,
         persona_layer,
         internal_guardrails,
@@ -256,4 +321,30 @@ fn readPromptLayer(
     }
 
     return content;
+}
+
+test "prompt modes use a canonical cycle and reject unknown labels" {
+    try std.testing.expectEqual(PromptMode.build, PromptMode.orchestrate.next());
+    try std.testing.expectEqual(PromptMode.@"align", PromptMode.build.next());
+    try std.testing.expectEqual(PromptMode.plan, PromptMode.@"align".next());
+    try std.testing.expectEqual(PromptMode.orchestrate, PromptMode.plan.next());
+    try std.testing.expectEqual(PromptMode.@"align", PromptMode.fromString("align").?);
+    try std.testing.expect(PromptMode.fromString("unknown") == null);
+}
+
+test "prompt mode layer is present in the provider system envelope" {
+    const allocator = std.testing.allocator;
+    const system_prompt = try buildAgentSystemPromptWithMemoryAndMode(
+        allocator,
+        .{ .workspace_root = "." },
+        .{},
+        .{ .enabled = false },
+        "mode proof",
+        .build,
+    );
+    defer allocator.free(system_prompt);
+
+    try std.testing.expect(std.mem.indexOf(u8, system_prompt, "# Prompt Mode: build") != null);
+    try std.testing.expect(std.mem.indexOf(u8, system_prompt, "smallest durable change") != null);
+    try std.testing.expect(std.mem.indexOf(u8, system_prompt, "# Prompt Mode: orchestrate") == null);
 }

@@ -2,6 +2,7 @@ const std = @import("std");
 const context_compactor = @import("../core/context/compactor.zig");
 const config_file = @import("../core/config/file.zig");
 const loop = @import("../core/executor/loop.zig");
+const prompts = @import("../core/prompts/index.zig");
 const protocol_events = @import("../shared/protocol/events.zig");
 const protocol_types = @import("../shared/protocol/types.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
@@ -768,10 +769,16 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         prompt: ?[]const u8 = null,
         enable_agent_tools: ?bool = null,
         model_override: ?[]const u8 = null,
+        prompt_mode: ?[]const u8 = null,
     };
 
     var parsed = try parseParams(Args, server.allocator, params);
     defer parsed.deinit();
+
+    const prompt_mode = if (parsed.value.prompt_mode) |label|
+        prompts.PromptMode.fromString(label) orelse return Error.InvalidParams
+    else
+        prompts.PromptMode.orchestrate;
 
     // Extract optional u64 overrides manually — std.json's optional-u64
     // static parser overflows at comptime (f64 cannot represent maxInt(u64)).
@@ -881,6 +888,7 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         },
         .session_id = session.id,
         .hooks = hooks,
+        .prompt_mode = prompt_mode,
     }) catch |err| switch (err) {
         loop.Error.Cancelled => {
             var cancelled = try store.readSessionRecord(server.allocator, server.config.workspace_root, session.id);
@@ -2188,6 +2196,23 @@ test "processRequest returns method-not-found errors for unknown methods" {
     try std.testing.expect(response != null);
     try std.testing.expect(std.mem.indexOf(u8, response.?, "\"id\":\"req-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, response.?, "\"code\":-32601") != null);
+}
+
+test "session/send rejects unknown prompt modes before session execution" {
+    var server = makeTestServer();
+    defer server.deinit();
+
+    const payload = try std.testing.allocator.dupe(
+        u8,
+        "{\"jsonrpc\":\"2.0\",\"id\":\"req-prompt-mode\",\"method\":\"session/send\",\"params\":{\"session_id\":\"missing\",\"prompt_mode\":\"unknown\"}}",
+    );
+    defer std.testing.allocator.free(payload);
+    const response = try processRequest(&server, payload);
+    defer if (response) |value| std.testing.allocator.free(value);
+
+    try std.testing.expect(response != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.?, "\"id\":\"req-prompt-mode\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.?, "\"code\":-32602") != null);
 }
 
 test "processRequest treats id-less initialize requests as notifications" {

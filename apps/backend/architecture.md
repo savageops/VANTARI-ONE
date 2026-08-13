@@ -379,6 +379,15 @@ Every session directory contains:
 
 `src/core/prompts/` owns the model-presented prompt envelope. When no project prompt override is configured, it uses compiled system/developer layers. When an override path is configured, the file must exist and contain non-whitespace content; missing or empty configured prompt layers fail closed. The builder then injects the hidden runtime guardrail layer and appends the live catalog plus a runtime-owned burst/checkpoint contract. Long work interleaves one bounded observable step, one tool/delegation action batch, evidence inspection, and one compact checkpoint naming changed state, proof, blocker or residual risk, and next action. The assistant checkpoint is persisted in `messages.jsonl`, included by later context rebuilds, and never requests private chain-of-thought. A checkpoint does not terminate the run; the loop continues until terminal proof or a named blocker. Provider transport remains OpenAI-compatible by sending the resulting envelope as a system-role message while preserving internal/system/developer/tool boundaries inside the prompt text.
 
+`PromptMode` is the one session-local behavioral lens layered into that envelope.
+The TUI owns the Shift+Tab cycle `orchestrate -> build -> align -> plan` and
+passes the exact label on the next `session/send`; omission defaults to
+`orchestrate`, and an unknown label fails before session/provider execution.
+`executor/loop.zig` carries the typed value through every prompt rebuild,
+including compaction, child convergence, wake, and provider-overflow recovery.
+The layer changes provider-visible guidance only. It does not branch the
+executor, tool catalog, access policy, model, or agent capacity.
+
 `store.ensureStoreReady(...)` creates the canonical sessions directory and initializes execution-owner-local sequence state. It never scans or rewrites existing `session.json` records. Explicit migrations own schema changes; this prevents startup cost from scaling with session count and prevents mixed-version processes from erasing additive fields they do not understand.
 
 ## Role-routed agent execution
@@ -579,11 +588,11 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-13:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Debug and ReleaseFast test graphs -> 19/19 steps and 1,991/1,991 tests passed. The lower
+- Debug and ReleaseFast test graphs -> 19/19 steps and 1,996/1,996 tests passed. The lower
   total is intentional: 45 one-case registry wrappers were replaced by one loop
   that executes every one of the 53 declared cases, including ten that had no
   test declaration.
-- Focused backend TUI -> 75/75 passed.
+- Focused backend TUI -> 76/76 passed.
 - Host lifecycle lane passes, including atomic same-session admission,
   session-keyed buffer state, exact-generation cancellation,
   cancellation-before-join shutdown, RPC deadlines, late-response retirement,
@@ -617,10 +626,10 @@ Latest local Windows validation on 2026-08-13:
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Current source and installed SHA-256 match at
-  `A6E93FA6671256E2755C5DC397747F5E350C6ED7D3DE4BF242AC557B96953072`.
+  `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`.
   Move 37/38 installation, the installed owner/ticket lifecycle proofs, Move 33
   auth help/status redaction, Move 34 Codex `/codex/responses` consumer proof,
-  the Move 37 TUI cost consumer proof, and Move 41 sequence-addressed
+  the Move 37 TUI cost consumer proof, Move 41 sequence-addressed
   replay/continuation proof pass; the final installed process census is zero.
 - Move 41 installed `vantari -c` against a workspace with 19,213 sessions.
   The TUI now requests `session/list { limit: 1 }`, hydrates the latest
@@ -630,6 +639,12 @@ Latest local Windows validation on 2026-08-13:
   `(10,22,20)`, and composer `(16,34,31)`; no persistent cancellation hint was
   rendered. The exact owner tree was torn down after the blank and continuation
   checks, leaving zero VANTARI processes.
+- Move 43 installed TUI startup accepted Shift+Tab and blank startup/exit
+  completed. Source prompt capture contains the selected provider layer;
+  `session/send` rejects an unknown mode with JSON-RPC `-32602` before
+  execution. Source and installed SHA-256 match
+  `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`; the
+  exact owner/kernel tree was torn down and the final process census is zero.
 - The source ticket lifecycle mesh at
   `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`
   proves assignment without launch, one claim, noninteractive TUI detach, exact
@@ -799,10 +814,10 @@ intended separation and are tracked for consolidation.
 
 The system prompt is the steering surface of the harness. VAR1 is capable of anything — chatbot, orchestrator, silent worker — but the prompt determines what it *becomes*. The shipped default makes it a senior engineering orchestrator. An operator can replace the entire behavior via `.var/prompts/system.md` without touching code.
 
-The accepted next profile layer names `orchestrate`, `build`, `align`, and
-`plan`. Roadmap move 43 assigns Shift+Tab cycling and moves 65–66 assign the
-profile prompts and behavior proof. This layer is not shipped yet. It must
-change provider-visible method without changing executor or tool capability.
+The accepted prompt-mode layer names `orchestrate`, `build`, `align`, and `plan`.
+Move 43 ships the session-local Shift+Tab cycle and provider-visible layer;
+later behavior-profile matrix work remains separate. It must change method
+without changing executor or tool capability.
 
 The prompt embodies behavior; it does not reveal strategy. Internal mechanics (causal chain, context compiler, event spine, kernel architecture) live in this documentation, never in the prompt the model sees. The prompt plays the card; it does not reveal the card.
 
@@ -811,9 +826,11 @@ The system prompt is assembled in ordered layers by `src/core/prompts/builder.zi
 ```text
 header + workspace root
   ↓
-current mode (orchestrator-only / workspace-state — operational, first)
+  current mode (orchestrator-only / workspace-state — operational, first)
   ↓
-identity (compiled default or workspace override)
+  prompt mode (session-local behavioral lens — next turn)
+  ↓
+  identity (compiled default or workspace override)
   ↓
 persona (config: prompts.persona — tone/voice/technical level)
   ↓

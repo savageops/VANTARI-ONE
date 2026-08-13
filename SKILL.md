@@ -52,6 +52,10 @@ second runtime owner.
   next safe boundary of a live run. A message never assigns or launches work.
 - Change behavior through prompt layers. Keep kernel logic for capability truth,
   durability, budgets, evidence, recovery, and irreversible-action gates.
+- In the TUI, Shift+Tab cycles the session-local prompt lens
+  `orchestrate -> build -> align -> plan`; the next `session/send` applies one
+  provider-visible layer and defaults to `orchestrate`. It does not change
+  tools, access, model, capacity, or executor behavior.
 - Use `vantari auth status --json` for secret-free provider/account/plan state.
   Run `vantari auth login openai-codex` for the browser PKCE path or its manual
   redirect fallback; use `vantari auth logout <provider-id>` for one-record
