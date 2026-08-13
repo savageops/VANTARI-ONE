@@ -47,6 +47,100 @@ test "auth resolution keeps explicit workspace auth ahead of installed auth" {
     try std.testing.expectEqualStrings("local-model", resolved.model);
 }
 
+test "oauth ledger persists refreshed credentials, redacts status, and preserves logout parity" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/workspace", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var seeded = try auth_store.resolveOrSeed(std.testing.allocator, workspace_root, .{
+        .provider_id = "local-api",
+        .base_url = "https://local.example/v1",
+        .api_key = "fake-api-key",
+        .model = "local-model",
+        .subscription_plan_label = "local",
+        .subscription_status = "active",
+        .subscription_source = "test",
+    });
+    defer seeded.deinit(std.testing.allocator);
+
+    try auth_store.upsertOAuthProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "openai-codex",
+        .base_url = "https://chatgpt.com/backend-api",
+        .model = "gpt-5.4-mini",
+        .access_token = "fake-access-token",
+        .refresh_token = "fake-refresh-token",
+        .id_token = "fake-id-token",
+        .expires_at_ms = 1000,
+        .account_id = "acct-fake",
+        .user_id = "user-fake",
+        .email = "fake@example.invalid",
+        .plan_type = "pro",
+        .subscription_plan_label = "ChatGPT Pro",
+        .subscription_status = "active",
+        .subscription_source = "openai-codex-oauth",
+        .last_verified_at_ms = 900,
+    });
+
+    var resolved = try auth_store.readProviderById(std.testing.allocator, workspace_root, "openai-codex");
+    defer resolved.deinit(std.testing.allocator);
+    try std.testing.expectEqual(types.AuthType.oauth, resolved.auth_type);
+    try std.testing.expectEqualStrings("fake-access-token", resolved.api_key);
+    try std.testing.expectEqualStrings("fake-refresh-token", resolved.refresh_token.?);
+    try std.testing.expectEqualStrings("acct-fake", resolved.account_id.?);
+
+    var status = try auth_store.readAuthStatus(std.testing.allocator, workspace_root);
+    defer status.deinit(std.testing.allocator);
+    const rendered = try VAR1.clients.cli_auth.renderAuthStatus(std.testing.allocator, status, true);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "openai-codex") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "ChatGPT Pro") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "fake@example.invalid") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "fake-access-token") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "fake-refresh-token") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "fake-id-token") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "fake-api-key") == null);
+
+    try auth_store.upsertOAuthProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "openai-codex",
+        .base_url = "https://chatgpt.com/backend-api",
+        .model = "gpt-5.4-mini",
+        .access_token = "fake-refreshed-access",
+        .refresh_token = "fake-refreshed-token",
+        .id_token = "fake-refreshed-id-token",
+        .expires_at_ms = 20_000,
+        .account_id = "acct-fake",
+        .user_id = "user-fake",
+        .email = "fake@example.invalid",
+        .plan_type = "pro",
+        .subscription_plan_label = "ChatGPT Pro",
+        .subscription_status = "active",
+        .subscription_source = "openai-codex-oauth",
+        .last_verified_at_ms = 19_000,
+    });
+
+    var refreshed = try auth_store.readProviderById(std.testing.allocator, workspace_root, "openai-codex");
+    defer refreshed.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("fake-refreshed-access", refreshed.api_key);
+    try std.testing.expectEqualStrings("fake-refreshed-token", refreshed.refresh_token.?);
+    try std.testing.expectEqual(@as(i64, 20_000), refreshed.expires_at_ms.?);
+
+    try auth_store.removeProvider(std.testing.allocator, workspace_root, "openai-codex");
+    var remaining = try auth_store.resolveOrSeed(std.testing.allocator, workspace_root, null);
+    defer remaining.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("local-api", remaining.provider_id);
+    try std.testing.expectEqualStrings("fake-api-key", remaining.api_key);
+
+    try auth_store.removeProvider(std.testing.allocator, workspace_root, "local-api");
+    try std.testing.expectError(
+        auth_store.Error.MissingAuth,
+        auth_store.readProviderById(std.testing.allocator, workspace_root, "local-api"),
+    );
+}
+
+const types = VAR1.shared.types;
+
 fn writeAuthFile(
     dir: std.fs.Dir,
     sub_path: []const u8,

@@ -9,6 +9,7 @@ pub const agent_supervisor = @import("agents/supervisor.zig");
 pub const auth = @import("auth/index.zig");
 pub const auth_resolver = auth.resolver;
 pub const auth_store = auth.store;
+pub const auth_openai_codex = auth.openai_codex;
 pub const config = @import("config/resolver.zig");
 pub const config_file = @import("config/file.zig");
 pub const workspace = @import("config/workspace.zig");
@@ -59,6 +60,7 @@ test "core namespace exposes executor and store" {
     try std.testing.expect(@hasDecl(@This(), "config_file"));
     try std.testing.expect(@hasDecl(@This(), "workspace"));
     try std.testing.expect(@hasDecl(@This(), "auth_store"));
+    try std.testing.expect(@hasDecl(@This(), "auth_openai_codex"));
     try std.testing.expect(@hasDecl(@This(), "context"));
     try std.testing.expect(@hasDecl(@This(), "evaluation"));
     try std.testing.expect(@hasDecl(@This(), "memory"));

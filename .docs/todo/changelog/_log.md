@@ -2370,3 +2370,37 @@ finds no current-state references to the old installed PIDs or open 036/finding
 
 **Next todo:** Move 33 — execute 021c Codex OAuth login, persistence, refresh,
 logout, and sanitized CLI status through the canonical auth ledger.
+
+## 2026-08-13 - Move 33 Codex OAuth login and CLI surfaces
+
+**State:** closed.
+
+**Changed:**
+
+- Added one `auth` CLI surface with `status`, `login`, and `logout` actions.
+- Added the named OpenAI Codex PKCE provider descriptor, localhost callback
+  owner, redirect/code parser, injected token exchange/refresh hooks, and JWT
+  account/plan claim extraction.
+- Extended the canonical auth store with OAuth upsert, refresh-compatible token
+  persistence, secret-free status projection, and provider-preserving removal.
+- Exported the auth helper through the existing client/core namespaces. No
+  provider completion transport or second auth ledger was added; Move 34 owns
+  Codex request routing.
+- Updated AGENTS, README, SKILL, llms, architecture, technical summary, index,
+  findings, workspace record, and roadmap to the shipped/source-only boundary.
+
+**Proof:**
+
+- Debug backend graph: `19/19` steps, `1,957/1,957` tests, zero leaks.
+- ReleaseFast build/install: `9/9`; installed `auth --help` lists login,
+  logout, and status.
+- Disposable installed OAuth fixture: `auth status --json` returned provider,
+  model, account, plan, expiry, and verification metadata; access, refresh, and
+  ID token redaction probe passed.
+- `ix search` auth ownership probe: `ix.result.v1`, status `ok`, 5 files, 57
+  matches. No real provider login was executed.
+- Built and installed SHA-256:
+  `2A1DF56B967A01F2E8934B80FC006FA5D502E07F12CC30B1959D3F64A75FF2D2`.
+
+**Next todo:** Move 34 — execute the Codex subscription transport through the
+canonical provider dispatch.

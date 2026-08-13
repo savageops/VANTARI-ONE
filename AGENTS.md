@@ -38,6 +38,7 @@ only when consolidation or deletion cannot close the canonical consumer path.
 - An explicit execution-owner workspace is authoritative through `config.loadDefaultForExplicitWorkspace`; inherited `VANTARI_WORKSPACE`, `.env` `WORKSPACE`, and config workspace entries must not redirect its config, auth, ledgers, or owner projection.
 - Owner RPC/event/shutdown routes remain loopback-only, token-gated, generation-bound, and exact. Browser routes remain separately token-gated and redacted. A presentation client exit must not change owner lifetime.
 - `apps/backend/src/core/tickets/` is the canonical ticket ledger and queue projection. `assigned` admits work; it does not launch a child session.
+- `apps/backend/src/core/auth/store.zig` is the sole credential/provider ledger owner. Installed credentials live at `$VANTARI_HOME/auth.json`; workspace credentials live at `.var/auth.json`; nested/AppData paths are migration inputs only. `VAR1 auth status --json` is secret-free, `auth login openai-codex` owns PKCE persistence, and `auth logout <provider-id>` removes one provider without touching unrelated records. Codex completion transport remains a separate provider owner.
 - Ticket execution semantics are not configurable. `agent_routes.max_concurrency`
   is the sole capacity setting; do not restore `tickets.auto_assign`,
   `tickets.proactive_workpool`, or another assignment-to-launch branch.

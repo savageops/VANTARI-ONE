@@ -92,7 +92,7 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
 | **Kernel surface** | 115 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 1,970 passing backend cases across source and adversarial pipeline suites |
+| **Proof surface** | 1,957 passing backend cases across source and adversarial pipeline suites |
 | **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
 | **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |
@@ -652,6 +652,8 @@ Installed state has two sibling owners under `$VANTARI_HOME` (normally `~/.vanta
 
 Use `vantari config path|show|init|validate` to locate and validate the configuration. Because JSON has no comment syntax, the canonical template carries non-operative `_about` notes and a typed `_help` map beside every configurable value; validation rejects malformed or undocumented metadata while older configs may omit help for newer known values. The runtime never prints or merges `auth.json` into config output.
 
+Use `vantari auth status --json` for a secret-free provider projection, `vantari auth login openai-codex` for local ChatGPT/Codex PKCE login, and `vantari auth logout <provider-id>` to remove one provider record. Login stores OAuth credentials and subscription metadata through the same auth ledger; the Codex completion transport remains the next frontier. Status and health output never includes API keys, access tokens, refresh tokens, or ID tokens.
+
 ### Provider
 
 | Parameter | Required | Default | Description |
@@ -794,6 +796,7 @@ Every tool call, context window, and model interaction is recorded in structured
 | Model-selected route eligibility and team snapshot | **Source proven; dedicated installed snapshot proof not run** |
 | Plugin runtime with typed socket execution | **In progress** |
 | Provider fallback chains | Planned |
+| Local Codex subscription auth — CLI PKCE login, durable ledger, logout, and secret-free status | Source shipped; transport pending |
 | Identity auth against `auth.vantari.one` — PKCE OAuth mirroring the openai-codex pattern | Planned |
 | Remote relay — authenticated WebSocket fan-out with no session ownership | Planned |
 | Multi-client session binding — connected clients as capability peers, not parallel authority. Client-offered tools must route through the existing module-owned catalog, not a parallel tool system | Planned |

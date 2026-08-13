@@ -52,6 +52,10 @@ second runtime owner.
   next safe boundary of a live run. A message never assigns or launches work.
 - Change behavior through prompt layers. Keep kernel logic for capability truth,
   durability, budgets, evidence, recovery, and irreversible-action gates.
+- Use `vantari auth status --json` for secret-free provider/account/plan state.
+  Run `vantari auth login openai-codex` for the browser PKCE path or its manual
+  redirect fallback; use `vantari auth logout <provider-id>` for one-record
+  removal. Never inspect or print token-bearing auth fields.
 
 ## Validate owner lifecycle
 

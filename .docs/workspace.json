@@ -39,6 +39,7 @@
     "owner_client": "apps/backend/src/host/owner_client.zig",
     "owner_state": "apps/backend/src/host/owner_state.zig",
     "process_lock": "apps/backend/src/shared/process_lock.zig",
+    "auth": "apps/backend/src/core/auth/store.zig + apps/backend/src/core/auth/openai_codex.zig + apps/backend/src/core/auth/resolver.zig",
     "private_child_transport": "apps/backend/src/host/stdio_client.zig:ChildClient",
     "workspace_resolution": "apps/backend/src/core/config/workspace.zig",
     "health_projection": "apps/backend/src/host/http_bridge.zig:/owner/health -> apps/backend/src/host/stdio_rpc.zig"
@@ -63,12 +64,12 @@
     "release_fast": "9/9 steps succeeded",
     "focused_tui": "61/61 passed; 0 skipped",
     "host_lifecycle": "245/245 passed; shared crash-released process locks, deterministic ticket-child identity, 100-way atomic admission, session-keyed buffer projection, exact-generation cancellation, single terminal settlement, 100-owner admission-fenced shutdown, deadlines, and Job Object ownership",
-    "isolated_broad": "latest Debug and ReleaseFast runs 19/19 steps; 1953/1953 passed; 0 skipped; one registry loop executes all declared cases",
+    "isolated_broad": "latest Debug run 19/19 steps; 1957/1957 passed; 0 skipped; ReleaseFast install 9/9; one registry loop executes all declared cases",
     "test_runtime_isolation": "six build artifacts plus direct zig test receive generated VANTARI_HOME and VANTARI_TEST_ROOT; direct proof kept 99960 files and 693051144 bytes unchanged",
     "installed_binary": "C:/Users/Savage/AppData/Local/Vantari/bin/vantari.exe",
     "install_script": "apps/backend/scripts/install_windows.ps1",
-    "built_sha256": "F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727",
-    "installed_sha256": "F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727",
+    "built_sha256": "2A1DF56B967A01F2E8934B80FC006FA5D502E07F12CC30B1959D3F64A75FF2D2",
+    "installed_sha256": "2A1DF56B967A01F2E8934B80FC006FA5D502E07F12CC30B1959D3F64A75FF2D2",
     "installed_hash_matches": true,
     "installed_settings_smoke": "initialize ok; config/set var1.config_set.v1 in 5 ms; isolated runtime removed; live root unchanged; zero processes",
     "host_shutdown": "blocked provider request observed cancellation before join, returned cancelled, and passed 20 repeat runs; move 19 now routes the terminal through one turn_terminal commit owner",
@@ -95,10 +96,11 @@
     "owner_connection_cleanup": "detached owner /owner/health crash repaired: ConnectionJob lifecycle reference is released before its page-allocated job storage is destroyed; owner lifecycle, owner tracer, and ticket lifecycle process meshes pass",
     "ticket_repair_projection": "completed child closes cleanly; failed and cancelled terminal children settle ticket work with repair_required=true; TicketStore.close rejects repair closure without approval, exact original-input rerun, and regression evidence",
     "installed_summary_migration": "disposable VANTARI_HOME imported 1176/1176 legacy rows, appended one terminal summary through session/send, retained 1177 unique summary sequences, wrote four contiguous unique user/assistant/tool/assistant message rows, emitted 12 unique monotonic event notifications, returned contiguous event seq 2-12 after after_seq 1, reconstructed stdout 0080E280A8FF and capped stderr FF010080E280A8FE from two typed deltas, ended on the sole stored/notified turn_terminal seq 12 with schema var1.turn_terminal.v1, outcome completed, and run_seq 1, preserved live legacy SHA-256 5D3FF92999B433FF90CA65D1C68A9A960AB24F11979893360DB58710C41BBF1B, and left zero processes",
+    "auth_cli": "Move 33 source and installed proof: PKCE/redirect parsing, fake exchange and refresh hooks, fake JWT claims, OAuth upsert/redaction/provider-preserving logout tests; installed auth --help lists login/logout/status; disposable installed auth status --json returns provider/model/account/plan/expiry metadata without fixture access/refresh/id tokens; redaction probe passes; source/installed SHA-256 matches; no real provider login was executed",
     "active_installed_processes_preserved": []
   },
   "wip": {
-    "021": "021a-b archived; 021c-f pending; frontier 021c",
+    "021": "021a-c archived; 021d-f pending; frontier 021d",
     "035": "035a-f archived; 035g-h pending; current binary installed; live provider /status proof still missing",
     "036": "036a-h and parent archived; findings 10, 11, and 13 closed; moves 21-31 and 38 closed; external-effect certainty remains a separate frontier",
     "PLUG": "parent and PLUGa-h pending; unstarted"
@@ -107,7 +109,7 @@
     "Both test-isolation incidents, 877 older context-poison fixtures, and legacy backend owners are repaired reversibly; quarantine/archive manifests and rollback paths remain retained evidence.",
     "The fixed agent pool survives presentation detach in one source and installed owner tree; scheduler leadership and ticket claim/lease/child admission are process-exclusive; assignment is ledger-only and has no config policy branch. Source and installed Windows lifecycle meshes close exact tree death, generation replacement, same-session resume, nested direct/group/parent delivery, terminal settlement, cold readback, and zero-process cleanup. Arbitrary external-effect certainty remains a separate gate.",
     "The tracked TUI consumes exact stored event seq and the in-process 100-way mesh is closed; ignored browser routes keep a compatibility transport SSE id, and multi-process writer ownership remains coupled to scheduler/claim arbitration.",
-    "Current source ReleaseFast and installed binary share SHA-256 F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727. Move 38 installed promotion, owner lifecycle, and ticket lifecycle proof passed; final installed process census is zero.",
+    "Current source ReleaseFast and installed binary share SHA-256 2A1DF56B967A01F2E8934B80FC006FA5D502E07F12CC30B1959D3F64A75FF2D2. Move 33 auth CLI proof and prior Move 38 owner/ticket promotion pass; final installed process census is zero.",
     "Autonomous repair remains a gated evidence workflow, not an implicit background mutator."
   ]
 }

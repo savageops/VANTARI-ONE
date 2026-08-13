@@ -154,7 +154,9 @@ The `manage_plugin` tool discovers, inspects, and toggles plugins from `.var/plu
 
 ## Configuration Surface
 
-All config lives in `~/.vantari/config.json` (non-secret) and `~/.vantari/auth.json` (credentials). The config is hot-loaded per-turn.
+All config lives in `~/.vantari/config.json` (non-secret) and `~/.vantari/auth.json` (credentials). Workspace-local auth uses `.var/auth.json`; nested and AppData auth paths are migration inputs only. The config is hot-loaded per-turn.
+
+Use `vantari auth status --json` for a secret-free active-provider projection, `vantari auth login openai-codex` for the browser PKCE flow with a pasted redirect fallback, and `vantari auth logout <provider-id>` to remove one provider record. The login helper persists OAuth tokens and subscription metadata through the canonical auth store; the current Move 34 frontier owns Codex completion transport. Status, health, logs, and docs never print API keys or OAuth tokens.
 
 ### Agent filesystem and process access
 

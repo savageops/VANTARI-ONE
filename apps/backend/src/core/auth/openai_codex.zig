@@ -176,6 +176,106 @@ pub const AuthorizationInput = struct {
     }
 };
 
+/// Small localhost callback owner for the browser PKCE path. Manual redirect
+/// paste remains the fallback when port 1455 is unavailable or the browser
+/// cannot reach the callback.
+pub const CallbackServer = struct {
+    allocator: std.mem.Allocator,
+    listener: std.net.Server,
+    expected_state: []const u8,
+    result: ?AuthorizationInput = null,
+    thread: ?std.Thread = null,
+
+    pub fn start(allocator: std.mem.Allocator, expected_state: []const u8) !*CallbackServer {
+        const address = try std.net.Address.parseIp("127.0.0.1", 1455);
+        const listener = try address.listen(.{ .reuse_address = true });
+        const server = try allocator.create(CallbackServer);
+        server.* = .{
+            .allocator = allocator,
+            .listener = listener,
+            .expected_state = expected_state,
+        };
+        server.thread = std.Thread.spawn(.{}, callbackThread, .{server}) catch |err| {
+            server.listener.deinit();
+            allocator.destroy(server);
+            return err;
+        };
+        return server;
+    }
+
+    pub fn takeResult(self: *CallbackServer) ?AuthorizationInput {
+        self.stopAndJoin();
+        const result = self.result;
+        self.result = null;
+        return result;
+    }
+
+    pub fn deinit(self: *CallbackServer) void {
+        self.stopAndJoin();
+        if (self.result) |result| result.deinit(self.allocator);
+        self.listener.deinit();
+        self.allocator.destroy(self);
+    }
+
+    fn stopAndJoin(self: *CallbackServer) void {
+        if (self.thread == null) return;
+        const address = self.listener.listen_address;
+        var wake = std.net.tcpConnectToAddress(address) catch null;
+        if (wake) |*stream| {
+            defer stream.close();
+            stream.writeAll("GET /cancel HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n") catch {};
+        }
+        self.thread.?.join();
+        self.thread = null;
+    }
+
+    fn callbackThread(self: *CallbackServer) void {
+        while (true) {
+            var connection = self.listener.accept() catch return;
+            defer connection.stream.close();
+
+            var buffer: [8192]u8 = undefined;
+            const count = connection.stream.read(&buffer) catch return;
+            const request = buffer[0..count];
+            const target = requestTarget(request) orelse continue;
+            if (std.mem.eql(u8, target, "/cancel")) return;
+            if (!std.mem.startsWith(u8, target, "/auth/callback")) {
+                writeCallbackResponse(&connection, "404 Not Found", "VANTARI OAuth callback route not found.");
+                continue;
+            }
+
+            const callback_url = std.fmt.allocPrint(self.allocator, "http://localhost{s}", .{target}) catch return;
+            defer self.allocator.free(callback_url);
+            var input = parseAuthorizationInput(self.allocator, callback_url) catch {
+                writeCallbackResponse(&connection, "400 Bad Request", "VANTARI OAuth callback was invalid.");
+                continue;
+            };
+            if (input.state == null or !std.mem.eql(u8, input.state.?, self.expected_state)) {
+                input.deinit(self.allocator);
+                writeCallbackResponse(&connection, "400 Bad Request", "VANTARI OAuth state mismatch.");
+                continue;
+            }
+
+            self.result = input;
+            writeCallbackResponse(&connection, "200 OK", "VANTARI OAuth login received. Return to the terminal.");
+            return;
+        }
+    }
+};
+
+fn requestTarget(request: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, request, "GET ")) return null;
+    const start = 4;
+    const relative_end = std.mem.indexOfScalar(u8, request[start..], ' ') orelse return null;
+    return request[start .. start + relative_end];
+}
+
+fn writeCallbackResponse(connection: *std.net.Server.Connection, status: []const u8, body: []const u8) void {
+    var response: [1024]u8 = undefined;
+    const rendered = std.fmt.bufPrint(&response, "HTTP/1.1 {s}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ status, body.len, body }) catch return;
+    connection.stream.writeAll(rendered) catch {};
+}
+
 pub fn parseAuthorizationInput(allocator: std.mem.Allocator, input: []const u8) !AuthorizationInput {
     const value = std.mem.trim(u8, input, " \t\r\n");
     if (value.len == 0) return Error.InvalidAuthorizationInput;
@@ -393,4 +493,111 @@ fn cloneOptionalString(allocator: std.mem.Allocator, object: std.json.ObjectMap,
     const value = object.get(key) orelse return null;
     if (value != .string) return null;
     return try allocator.dupe(u8, value.string);
+}
+
+test "codex oauth helper preserves PKCE and redirect state boundaries" {
+    var flow = try generatePkce(std.testing.allocator);
+    defer flow.deinit(std.testing.allocator);
+
+    const url = try authorizationUrl(std.testing.allocator, flow);
+    defer std.testing.allocator.free(url);
+    try std.testing.expect(std.mem.startsWith(u8, url, descriptor.authorize_url));
+    try std.testing.expect(std.mem.indexOf(u8, url, flow.challenge) != null);
+    try std.testing.expect(std.mem.indexOf(u8, url, flow.state) != null);
+    try std.testing.expect(std.mem.indexOf(u8, url, "redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback") != null);
+
+    var input = try parseAuthorizationInput(
+        std.testing.allocator,
+        "http://localhost:1455/auth/callback?code=auth%2Fcode&state=state%2Bvalue",
+    );
+    defer input.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("auth/code", input.code);
+    try std.testing.expectEqualStrings("state+value", input.state.?);
+
+    var fragment = try parseAuthorizationInput(std.testing.allocator, "auth-code#state-token");
+    defer fragment.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("auth-code", fragment.code);
+    try std.testing.expectEqualStrings("state-token", fragment.state.?);
+}
+
+const FakeTokenTransport = struct {
+    response: []const u8,
+    endpoint: ?[]u8 = null,
+    form: ?[]u8 = null,
+
+    fn post(
+        context: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        endpoint: []const u8,
+        form: []const u8,
+    ) ![]u8 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (self.endpoint) |value| allocator.free(value);
+        if (self.form) |value| allocator.free(value);
+        self.endpoint = try allocator.dupe(u8, endpoint);
+        self.form = try allocator.dupe(u8, form);
+        return allocator.dupe(u8, self.response);
+    }
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        if (self.endpoint) |value| allocator.free(value);
+        if (self.form) |value| allocator.free(value);
+    }
+};
+
+test "codex oauth helper exchanges and refreshes only through injected transport" {
+    const response =
+        "{\"access_token\":\"fake-access-token\",\"refresh_token\":\"fake-refresh-token\",\"expires_in\":3600,\"id_token\":\"fake-id-token\"}";
+    var fake = FakeTokenTransport{ .response = response };
+    defer fake.deinit(std.testing.allocator);
+
+    var exchanged = try exchangeAuthorizationCode(
+        std.testing.allocator,
+        .{ .context = &fake, .postFn = FakeTokenTransport.post },
+        "code with spaces",
+        "verifier-value",
+        1000,
+    );
+    defer exchanged.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("fake-access-token", exchanged.access_token);
+    try std.testing.expectEqualStrings("fake-refresh-token", exchanged.refresh_token);
+    try std.testing.expectEqual(@as(i64, 3_601_000), exchanged.expires_at_ms);
+    try std.testing.expect(std.mem.indexOf(u8, fake.endpoint.?, descriptor.token_url) != null);
+    try std.testing.expect(std.mem.indexOf(u8, fake.form.?, "grant_type=authorization_code") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fake.form.?, "code=code%20with%20spaces") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fake.form.?, "code_verifier=verifier-value") != null);
+
+    fake.response =
+        "{\"access_token\":\"fake-refreshed-access\",\"expires_in\":1800}";
+    var refreshed = try refreshAccessToken(
+        std.testing.allocator,
+        .{ .context = &fake, .postFn = FakeTokenTransport.post },
+        "fake-refresh-token",
+        5000,
+    );
+    defer refreshed.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("fake-refreshed-access", refreshed.access_token);
+    try std.testing.expectEqualStrings("fake-refresh-token", refreshed.refresh_token);
+    try std.testing.expectEqual(@as(i64, 1_805_000), refreshed.expires_at_ms);
+    try std.testing.expect(std.mem.indexOf(u8, fake.form.?, "grant_type=refresh_token") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fake.form.?, "refresh_token=fake-refresh-token") != null);
+}
+
+test "codex oauth helper extracts account and subscription claims from fake jwt" {
+    const payload =
+        "{\"https://api.openai.com/auth\":{\"chatgpt_account_id\":\"acct-fake\",\"chatgpt_user_id\":\"user-fake\",\"chatgpt_plan_type\":\"pro\"},\"email\":\"fake@example.invalid\"}";
+    const encoded_len = std.base64.url_safe_no_pad.Encoder.calcSize(payload.len);
+    const encoded = try std.testing.allocator.alloc(u8, encoded_len);
+    defer std.testing.allocator.free(encoded);
+    _ = std.base64.url_safe_no_pad.Encoder.encode(encoded, payload);
+
+    const jwt = try std.fmt.allocPrint(std.testing.allocator, "e30.{s}.e30", .{encoded});
+    defer std.testing.allocator.free(jwt);
+    var claims = try extractClaims(std.testing.allocator, jwt);
+    defer claims.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("acct-fake", claims.account_id.?);
+    try std.testing.expectEqualStrings("user-fake", claims.user_id.?);
+    try std.testing.expectEqualStrings("pro", claims.plan_type.?);
+    try std.testing.expectEqualStrings("fake@example.invalid", claims.email.?);
 }

@@ -36,6 +36,7 @@ This directory contains project records, research, planning chains, and complete
 - [`todo/findings/00-INDEX.md`](todo/findings/00-INDEX.md) — executable P0/P1/P2 closure order; current authority over older completion claims.
 - [`roadmap/24-harness-capability-next-90.md`](roadmap/24-harness-capability-next-90.md) — 90 dependency-ordered moves ranked by operator value, capability leverage, integrity risk, and friction removed.
 - [`roadmap/21-persistent-execution-owner.md`](roadmap/21-persistent-execution-owner.md) — closed single-owner lifecycle: reconnect, duplicate exclusion, graceful/crash recovery, process cleanup, and installed proof.
+- [`todo/changelog/021c-codex-subscription-auth.md`](todo/changelog/021c-codex-subscription-auth.md) — shipped Codex OAuth PKCE login, durable provider upsert, logout, refresh hooks, and secret-free CLI status; Codex completion transport remains 021d.
 - [`roadmap/20-adversarial-concurrency-mesh.md`](roadmap/20-adversarial-concurrency-mesh.md) — closed six-seam 100-way contention mesh with exact ledger, replay, and shutdown evidence and no new harness.
 - [`roadmap/19-single-terminal-event.md`](roadmap/19-single-terminal-event.md) — closed single-settlement contract, seven-source harvest, generation binding, cold-start validation, and installed Windows proof.
 - [`roadmap/18-generation-bound-cancellation.md`](roadmap/18-generation-bound-cancellation.md) — closed exact-run cancellation contract, seven-source harvest, stale-generation race, and installed Windows proof.

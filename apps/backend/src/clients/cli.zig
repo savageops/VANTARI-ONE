@@ -1,5 +1,8 @@
 const std = @import("std");
 const agents = @import("../core/agents/service.zig");
+const cli_auth = @import("cli_auth.zig");
+const auth_store = @import("../core/auth/store.zig");
+const openai_codex = @import("../core/auth/openai_codex.zig");
 const config = @import("../core/config/resolver.zig");
 const config_file = @import("../core/config/file.zig");
 const workspace = @import("../core/config/workspace.zig");
@@ -230,6 +233,7 @@ pub const root_help_text =
     \\  health   Report local runtime readiness through the kernel protocol.
     \\  schedule List or inspect durable scheduler jobs through the kernel protocol.
     \\  config   Locate, materialize, inspect, or validate ~/.vantari/config.json.
+    \\  auth     Login, logout, or inspect the active provider without printing secrets.
     \\  workspace Show or set an explicit installed-client workspace override.
     \\  serve    Start the HTTP bridge for /rpc, /events, and /api/health.
     \\  tools    Print the built-in tool catalog and schemas through the kernel protocol.
@@ -249,6 +253,7 @@ pub const root_help_text =
     \\  VAR1 run --prompt-file .\prompt.txt --json
     \\  VAR1 run --session-id session-1776778021956-42e781c4c8b4efb8
     \\  VAR1 health
+    \\  VAR1 auth status --json
     \\  VAR1 schedule list
     \\  VAR1 serve --port 4310
     \\  VAR1 tools --json
@@ -558,6 +563,21 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
         const workspace_root = try resolveWorkspaceRoot(allocator);
         defer allocator.free(workspace_root);
         try executeConfigCommand(allocator, workspace_root, action);
+        return;
+    }
+
+    if (std.mem.eql(u8, command, "auth")) {
+        const parsed = cli_auth.parseArguments(iter) catch |err| {
+            try printInvalidArguments("auth", cli_auth.help_text);
+            return err;
+        };
+        if (parsed.help_requested) {
+            try writeStdout(cli_auth.help_text);
+            return;
+        }
+        const workspace_root = try resolveWorkspaceRoot(allocator);
+        defer allocator.free(workspace_root);
+        try executeAuthCommand(allocator, workspace_root, parsed.options);
         return;
     }
 
@@ -1349,6 +1369,144 @@ fn executeConfigCommand(allocator: std.mem.Allocator, workspace_root: []const u8
     return error.InvalidArgs;
 }
 
+fn executeAuthCommand(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    options: cli_auth.AuthCliOptions,
+) !void {
+    switch (options.action) {
+        .status => {
+            var status = try auth_store.readAuthStatus(allocator, workspace_root);
+            defer status.deinit(allocator);
+            const rendered = try cli_auth.renderAuthStatus(allocator, status, options.json_output);
+            defer allocator.free(rendered);
+            try writeStdout(rendered);
+            try writeStdout("\n");
+        },
+        .logout => |provider_id| {
+            try auth_store.removeProvider(allocator, workspace_root, provider_id);
+            if (options.json_output) {
+                const rendered = try renderJsonAlloc(allocator, .{
+                    .status = "logged_out",
+                    .provider_id = provider_id,
+                });
+                defer allocator.free(rendered);
+                try writeStdout(rendered);
+                try writeStdout("\n");
+            } else {
+                try writeStdout("logged out provider: ");
+                try writeStdout(provider_id);
+                try writeStdout("\n");
+            }
+        },
+        .login => |provider_id| {
+            if (!std.mem.eql(u8, provider_id, openai_codex.descriptor.provider_id)) {
+                try printInvalidArguments("auth", cli_auth.help_text);
+                return error.InvalidArgs;
+            }
+            try executeCodexLogin(allocator, workspace_root, options.json_output);
+        },
+    }
+}
+
+fn executeCodexLogin(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    json_output: bool,
+) !void {
+    var flow = try openai_codex.generatePkce(allocator);
+    defer flow.deinit(allocator);
+
+    const url = try openai_codex.authorizationUrl(allocator, flow);
+    defer allocator.free(url);
+
+    try writeStdout("Open this URL to authenticate VANTARI:\n");
+    try writeStdout(url);
+    try writeStdout("\n");
+
+    const callback_server = openai_codex.CallbackServer.start(allocator, flow.state) catch null;
+    defer if (callback_server) |server| server.deinit();
+
+    if (callback_server != null) {
+        try writeStdout("After approval, press Enter here; the localhost callback will be collected automatically.\n");
+    } else {
+        try writeStdout("Paste the redirect URL (or code#state) here, then press Enter:\n");
+    }
+
+    var stdin_buffer: [8192]u8 = undefined;
+    var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
+    const raw_line = stdin_reader.interface.takeDelimiterExclusive('\n') catch |err| switch (err) {
+        error.EndOfStream => return openai_codex.Error.InvalidAuthorizationInput,
+        error.StreamTooLong => return openai_codex.Error.InvalidAuthorizationInput,
+        else => return err,
+    };
+    const line = std.mem.trim(u8, raw_line, " \t\r\n");
+
+    var input = if (line.len > 0)
+        try openai_codex.parseAuthorizationInput(allocator, line)
+    else if (callback_server) |server|
+        server.takeResult() orelse return openai_codex.Error.InvalidAuthorizationInput
+    else
+        return openai_codex.Error.InvalidAuthorizationInput;
+    defer input.deinit(allocator);
+
+    if (input.state == null or !std.mem.eql(u8, input.state.?, flow.state)) {
+        return openai_codex.Error.InvalidAuthorizationInput;
+    }
+
+    const now_ms = std.time.milliTimestamp();
+    var tokens = try openai_codex.exchangeAuthorizationCode(
+        allocator,
+        .{ .context = null, .postFn = openai_codex.postTokenForm },
+        input.code,
+        flow.verifier,
+        now_ms,
+    );
+    defer tokens.deinit(allocator);
+
+    const id_token = tokens.id_token orelse return openai_codex.Error.InvalidTokenResponse;
+    var claims = try openai_codex.extractClaims(allocator, id_token);
+    defer claims.deinit(allocator);
+
+    try auth_store.upsertOAuthProvider(allocator, workspace_root, .{
+        .provider_id = openai_codex.descriptor.provider_id,
+        .base_url = openai_codex.descriptor.base_url,
+        .model = openai_codex.descriptor.model,
+        .access_token = tokens.access_token,
+        .refresh_token = tokens.refresh_token,
+        .id_token = tokens.id_token,
+        .expires_at_ms = tokens.expires_at_ms,
+        .account_id = claims.account_id,
+        .user_id = claims.user_id,
+        .email = claims.email,
+        .plan_type = claims.plan_type,
+        .subscription_plan_label = claims.plan_type,
+        .subscription_status = "active",
+        .subscription_source = openai_codex.descriptor.subscription_source,
+        .last_verified_at_ms = now_ms,
+    });
+
+    const auth_path = try auth_store.authFilePath(allocator, workspace_root);
+    defer allocator.free(auth_path);
+    if (json_output) {
+        const rendered = try renderJsonAlloc(allocator, .{
+            .status = "logged_in",
+            .provider_id = openai_codex.descriptor.provider_id,
+            .auth_type = "oauth",
+            .auth_file = auth_path,
+        });
+        defer allocator.free(rendered);
+        try writeStdout(rendered);
+        try writeStdout("\n");
+    } else {
+        try writeStdout("saved auth provider ");
+        try writeStdout(openai_codex.descriptor.provider_id);
+        try writeStdout(" to ");
+        try writeStdout(auth_path);
+        try writeStdout("\n");
+    }
+}
+
 fn makeCliSessionSummary(session: shared_types.SessionRecord, output: ?[]const u8) protocol_types.SessionSummary {
     return .{
         .session_id = session.id,
@@ -1416,6 +1574,7 @@ pub fn helpText(command: ?[]const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "sessions")) return sessions_help_text;
     if (std.mem.eql(u8, name, "workspace")) return workspace_help_text;
     if (std.mem.eql(u8, name, "config")) return config_help_text;
+    if (std.mem.eql(u8, name, "auth")) return cli_auth.help_text;
     if (std.mem.eql(u8, name, "health")) return health_help_text;
     if (std.mem.eql(u8, name, "schedule")) return schedule_help_text;
     if (std.mem.eql(u8, name, "serve")) return serve_help_text;

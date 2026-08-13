@@ -16,6 +16,26 @@ child-agent execution, and recovery evidence. TUI and CLI render kernel
 projections. `apps/frontend` is an ignored local prototype, not a shipped
 tracked client.
 
+## Current frontier — Move 33
+
+Move 33 closes the operator-facing Codex OAuth slice. `core/auth/store.zig`
+remains the single credential owner for workspace `.var/auth.json` and installed
+`$VANTARI_HOME/auth.json`; `core/auth/openai_codex.zig` owns the named provider
+descriptor, PKCE, localhost callback, redirect parsing, token exchange/refresh
+hooks, and JWT claim extraction. `VAR1 auth status --json` exposes only provider,
+model, account, plan, expiry, and verification metadata. `auth login
+openai-codex` persists OAuth tokens and subscription metadata through the store;
+`auth logout <provider-id>` removes one provider and retains unrelated records.
+The completion transport is intentionally still Move 34: login state exists and
+resolves, but it does not masquerade as the OpenAI-compatible chat-completions
+wire.
+
+Move 33 proof: Debug `19/19` build steps and `1,957/1,957` tests pass with zero
+leaks; ReleaseFast install is `9/9`; installed help lists all auth commands; a
+disposable installed OAuth fixture returns redacted JSON and the redaction probe
+passes. Source and installed SHA-256 are
+`2A1DF56B967A01F2E8934B80FC006FA5D502E07F12CC30B1959D3F64A75FF2D2`.
+
 ## Behavior plane
 
 The model chooses the next eligible action. The prompt envelope controls voice,
@@ -207,7 +227,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,953/1,953 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,957/1,957 tests with zero skips.
   The reduced total is intentional: one registry loop executes all 53 declared
   cases and replaces 45 one-case wrappers that left ten cases undiscovered.
   Its host lane executes the stdio child, owner state/client, shared process
@@ -313,7 +333,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   exactly. No CRC fields, sidecar quarantine ledger, auto-truncation path, or
   repair daemon was added.
 - The current source ReleaseFast and installed artifact share SHA-256
-  `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`.
+  `2A1DF56B967A01F2E8934B80FC006FA5D502E07F12CC30B1959D3F64A75FF2D2`.
   Move 38 installation, owner lifecycle, and ticket lifecycle promotion all
   pass; the final installed process census is zero.
 - Installed `session/send` against a disposable local provider imported all
@@ -332,10 +352,10 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
   returned `requested` and exited with zero process. Its legacy terminal name is
   retained only as historical proof; move 19 removed that writer.
-- Moves 5–31 and 38 plus findings 10, 11, and 13 are closed. Six synchronized
+- Moves 5–33 and 38 plus findings 10, 11, and 13 are closed. Six synchronized
   100-way probes cover
   admission, summary, message, event, tracked-TUI replay, and shutdown. The
-  latest Debug and ReleaseFast graphs pass 1,953/1,953. The native two-kernel admission
+  latest Debug graph passes 1,957/1,957; ReleaseFast install passes 9/9. The native two-kernel admission
   proof retains one schedule attempt, one ticket claim, and one matching child
   session under one nonzero generation. Source recovery now generation-fences the
   same durable session. The source Windows lifecycle mesh then proves queue-only

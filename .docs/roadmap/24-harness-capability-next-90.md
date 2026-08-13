@@ -78,6 +78,7 @@ advance the queue until the real installed consumer path proves it.
 | 30 | consolidate/add-tests | closed | `prove-ticket-lifecycle.ps1` composes the canonical owner, scheduler, ticket, session, fixed-pool, and event-mailbox owners. Source and installed ReleaseFast prove queue-only assignment, noninteractive TUI detach, exact owner/kernel tree death, lease expiry, a new owner generation, one same-session resume, two nested children, direct/group/parent delivery, six unique received messages, zero transcript copies, one completion row, cold post-shutdown replay, and final zero processes. It exposed and fixed a `ConnectionJob` defer-order use-after-free. Failed and cancelled terminal sessions project `repair_required`; repair closure rejects missing approval/rerun/regression evidence. Core 1,953/1,953 and TUI 61/61 pass; the 10-file, 139-segment audit finds six candidates and zero exact duplicates. Source and installed SHA-256 are `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`; installed evidence is `.zig-cache/owner-proofs/825a25155fa64fe78b26a47789025ec9`. 036h terminal review passes and the parent is archived. |
 | 31 | delete/consolidate | closed | Retired prompt leak and brittle prose assertions removed; broad graph green. |
 | 32 | delete/consolidate | closed | Reconciled the 021 parent manifest with the archived 021a/021b units and active 021c frontier; archived the reopened 036 parent and 036h terminal review; aligned findings, workspace, roadmap, public docs, and current installed proof. Dedicated installed eligibility/capacity snapshot probes remain explicitly unrun rather than implied by the composed lifecycle mesh. |
+| 33 | consolidate/add-tests | closed | `VAR1 auth login openai-codex`, `auth logout <provider-id>`, and secret-free `auth status --json` are wired through the canonical auth ledger. PKCE, localhost callback, redirect parsing, fake exchange/refresh, JWT claims, OAuth upsert/refresh persistence, unrelated-provider preservation, and redaction tests pass. Debug is 19/19 and 1,957/1,957 with zero leaks; ReleaseFast install is 9/9; installed help and disposable OAuth status proof pass with source/installed SHA-256 `2A1DF56B967A01F2E8934B80FC006FA5D502E07F12CC30B1959D3F64A75FF2D2`. Codex completion transport remains Move 34. |
 | 38 | consolidate | closed | Current ReleaseFast was installed after the operator-owned pair exited. Installer staged a backup, validated `--help`, retained operator config/auth, and source/installed SHA-256 now match at `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`. |
 
 > [!note] Closure-ledger supersession
@@ -86,6 +87,9 @@ advance the queue until the real installed consumer path proves it.
 > source-state wording; Move 38 now proves the current artifact is installed.
 > No dedicated eligibility or capacity snapshot rerun is being inferred from
 > the composed ticket lifecycle mesh.
+> Move 33 supersedes the installed artifact hash recorded by the historical
+> Move 38 receipt; the current source/installed hash is
+> `2A1DF56B967A01F2E8934B80FC006FA5D502E07F12CC30B1959D3F64A75FF2D2`.
 
 ## Competitive basis
 
@@ -247,9 +251,10 @@ advance the queue until the real installed consumer path proves it.
 
 ## Immediate frontier
 
-Move 30, finding 11, and parent 036 are closed after the installed hash-matched
-mesh and 036h terminal review. Moves 1-32 and 38 are closed. The next frontier
-is Move 33: execute the next 021 auth unit through the canonical auth ledger.
+Move 30, finding 11, parent 036, and Move 33 are closed after the installed
+hash-matched proofs and 036h terminal review. Moves 1-33 and 38 are closed. The
+next frontier is Move 34: execute the Codex subscription transport through the
+canonical provider dispatch.
 035 remains a separate installed provider/cost gate.
 Do not spend implementation time on PLUG, context sharding, or autonomous repair
 while that band remains red.

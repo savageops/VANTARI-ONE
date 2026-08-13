@@ -5,7 +5,7 @@ protocol_version: "2.0"
 spec_status: approved
 category: feature
 status: pending
-next_todo: /todo/pending/021c-codex-subscription-auth.md
+next_todo: /todo/pending/021d-codex-subscription-auth.md
 epic_boundary: "Add Codex subscription authentication to VAR1 by extending the canonical `.var/auth/auth.json` ledger, resolver, login flow, and provider transport without introducing a second auth store."
 subtodo_start: /todo/changelog/021a-codex-subscription-auth.md
 subtodo_final: /todo/pending/021f-codex-subscription-auth.md
@@ -76,12 +76,12 @@ The current VAR1 runtime already persists provider API-key state under `.var/aut
 | `/todo/pending/021-codex-subscription-auth.md` | parent | Chain root | pending |
 | `/todo/changelog/021a-codex-subscription-auth.md` | a | Baseline / contract lock | archived |
 | `/todo/changelog/021b-codex-subscription-auth.md` | b | Auth ledger schema and resolver | archived |
-| `/todo/pending/021c-codex-subscription-auth.md` | c | Codex OAuth login and CLI surfaces | pending |
+| `/todo/changelog/021c-codex-subscription-auth.md` | c | Codex OAuth login and CLI surfaces | archived |
 | `/todo/pending/021d-codex-subscription-auth.md` | d | Codex subscription provider transport | pending |
 | `/todo/pending/021e-codex-subscription-auth.md` | e | Docs, fixtures, and operator status hardening | pending |
 | `/todo/pending/021f-codex-subscription-auth.md` | f | Verification / closeout | pending |
 
-Units 021a and 021b are archived with evidence. The active frontier is 021c;
+Units 021a, 021b, and 021c are archived with evidence. The active frontier is 021d;
 the chain is complete when 021c-021f also read `archived` and all files are in
 `/todo/changelog/`.
 

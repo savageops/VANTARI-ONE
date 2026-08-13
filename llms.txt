@@ -48,6 +48,10 @@ Rules:
   checkpoint ledger, not a transcript.
 - Use typed tools and advertised availability. search_files requires iex.
 - runtime.full_access_mode is false by default and never relocates .var.
+- Auth uses one provider ledger: installed `$VANTARI_HOME/auth.json` or
+  workspace `.var/auth.json`; `auth status --json` is secret-free, `auth login
+  openai-codex` owns PKCE persistence, and `auth logout <provider-id>` removes
+  one record. Codex completion transport is a separate next frontier.
 - Scheduler leadership is process-exclusive and generation-fenced in source.
 - Ticket claim, worker generation, lease, capability, and deterministic child
   identity commit in one process-serialized ticket row before child creation.

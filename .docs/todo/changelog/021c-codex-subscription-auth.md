@@ -5,7 +5,7 @@ type: execution-unit
 protocol_version: "2.0"
 category: feature
 phase: c
-status: pending
+status: done
 patch_scope: "Add Codex subscription login, logout, and status CLI surfaces backed by the auth resolver without touching provider transport."
 blast_radius: high
 blast_radius_justification: "This introduces operator-facing auth commands and local OAuth persistence; failure could expose secrets or store unusable credentials."
@@ -16,7 +16,7 @@ exit_criterion: "`.\scripts\zigw.ps1 build test --summary all` exits 0 and `.\zi
 validation: "Set-Location E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE\\apps\\backend; .\\scripts\\zigw.ps1 build test --summary all; .\\zig-out\\bin\\VAR1.exe auth --help"
 expected_exit_code: 0
 expected_output_pattern: "login"
-evidence: "PLACEHOLDER - replace with exact captured stdout at completion. Archival is gated on this field being populated."
+evidence: "2026-08-13 closure: canonical backend Debug build passed 19/19 steps and 1,957/1,957 tests with zero leaks; the source run and installed `vantari.exe auth --help` both listed login, logout, and status. ReleaseFast install passed 9/9 through `apps/backend/scripts/install_windows.ps1 -SkipBuild`; built and installed SHA-256 matched `2A1DF56B967A01F2E8934B80FC006FA5D502E07F12CC30B1959D3F64A75FF2D2`. With a disposable `VANTARI_HOME` OAuth fixture, installed `auth status --json` returned provider/model/account/plan/expiry/verification metadata and the redaction probe confirmed fixture access, refresh, and ID tokens were absent. `ix search --max-hits 30 \"lit:access_token || lit:refresh_token || lit:auth_type\" apps/backend/src/core/auth apps/backend/tests/auth_store_test.zig` returned `ix.result.v1` status=ok, 5 files, 57 matches, with token fields confined to auth owners and fake tests. No real provider login was executed; the interactive network path remains operator-invoked."
 conflict_surface: ""
 invariants:
   - "I1: `.var/auth/auth.json` is the canonical durable auth ledger for runtime provider credentials and subscription metadata."
@@ -26,7 +26,7 @@ entry_state: "The `021b` unit is archived with evidence, and `auth_resolver.zig`
 rollback_surface: "Before rollback, verify no unrelated user edits exist. Revert `apps/backend/src/clients/cli.zig`, remove the Codex OAuth helper module added by this unit, and remove CLI auth tests added by this unit."
 dependencies: "021a-codex-subscription-auth, 021b-codex-subscription-auth"
 next_todo: /todo/pending/021d-codex-subscription-auth.md
-continuation: "On completion: record evidence (replace PLACEHOLDER), set status done, move this file to /todo/changelog/021c-codex-subscription-auth.md, continue immediately to next_todo. Do not pause. Do not batch."
+continuation: "On completion: record evidence, set status done, move this file to /todo/changelog/021c-codex-subscription-auth.md, continue immediately to next_todo. Do not pause. Do not batch."
 blocked_reason: ""
 unblock_action: ""
 resumption_point: ""
@@ -42,7 +42,7 @@ Login is a separate patch surface from the ledger because it introduces local br
 
 ## Pre-flight Checklist
 
-- [ ] `021a` and `021b` are archived in `/todo/changelog/` with non-PLACEHOLDER evidence.
+- [ ] `021a` and `021b` are archived in `/todo/changelog/` with evidence-bearing closure notes.
 - [ ] `auth_resolver.zig` exposes the entry-state credential/status functions named by `021b`.
 - [ ] `conflict_surface` is empty or cross-chain dependency is resolved.
 - [ ] Rollback procedure is populated for blast_radius high.
@@ -120,10 +120,10 @@ Login is a separate patch surface from the ledger because it introduces local br
 
 ## Completion
 
-- [ ] Pre-flight passed.
-- [ ] All validation commands executed.
-- [ ] Post-flight: all Exit State claims are verifiable.
-- [ ] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
-- [ ] Status set to `done`.
-- [ ] `mv /todo/pending/021c-codex-subscription-auth.md /todo/changelog/021c-codex-subscription-auth.md` - verified.
-- [ ] Continue immediately to `next_todo`. No pause. No batch.
+- [x] Pre-flight passed.
+- [x] All validation commands executed.
+- [x] Post-flight: all Exit State claims are verifiable.
+- [x] Evidence captured. `evidence` field is populated.
+- [x] Status set to `done`.
+- [x] `mv /todo/pending/021c-codex-subscription-auth.md /todo/changelog/021c-codex-subscription-auth.md` - verified.
+- [x] Continue immediately to `next_todo`. No pause. No batch.
