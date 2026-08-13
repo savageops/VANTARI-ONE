@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("../../../shared/types.zig");
 const module = @import("../module.zig");
+const process = @import("../process.zig");
 
 /// Persistent code execution sandbox for VANTARI.
 ///
@@ -139,69 +140,6 @@ const WorkerResponse = struct {
     truncated: bool = false,
 };
 
-/// Read one newline-delimited worker response without blocking the evaluator
-/// thread. The reader continues draining after the display cap so a large
-/// response cannot leave the child blocked on a full pipe.
-const WorkerResponseReader = struct {
-    allocator: std.mem.Allocator,
-    file: *std.fs.File,
-    output: std.array_list.Managed(u8),
-    mutex: std.Thread.Mutex = .{},
-    condition: std.Thread.Condition = .{},
-    done: bool = false,
-    read_error: ?anyerror = null,
-    truncated: bool = false,
-
-    fn init(allocator: std.mem.Allocator, file: *std.fs.File) WorkerResponseReader {
-        return .{
-            .allocator = allocator,
-            .file = file,
-            .output = std.array_list.Managed(u8).init(allocator),
-        };
-    }
-
-    fn deinit(self: *WorkerResponseReader) void {
-        self.output.deinit();
-    }
-
-    fn finish(self: *WorkerResponseReader, read_error: ?anyerror) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        self.read_error = read_error;
-        self.done = true;
-        self.condition.broadcast();
-    }
-
-    fn run(self: *WorkerResponseReader) void {
-        var buffer: [4096]u8 = undefined;
-        while (true) {
-            const count = self.file.read(&buffer) catch |err| {
-                self.finish(err);
-                return;
-            };
-            if (count == 0) {
-                self.finish(null);
-                return;
-            }
-
-            for (buffer[0..count]) |byte| {
-                if (byte == '\n') {
-                    self.finish(null);
-                    return;
-                }
-                if (self.output.items.len < worker_output_cap) {
-                    self.output.append(byte) catch |err| {
-                        self.finish(err);
-                        return;
-                    };
-                } else {
-                    self.truncated = true;
-                }
-            }
-        }
-    }
-};
-
 const KernelRegistry = struct {
     mutex: std.Thread.Mutex = .{},
     kernels: std.StringHashMapUnmanaged(*KernelState) = .{},
@@ -234,7 +172,7 @@ pub fn deinitAll() void {
 /// across eval calls.
 pub const KernelState = struct {
     allocator: std.mem.Allocator,
-    process: ?std.process.Child = null,
+    process: ?process.PersistentProcess = null,
     language: Language = .auto,
     started: bool = false,
     mutex: std.Thread.Mutex = .{},
@@ -247,12 +185,7 @@ pub const KernelState = struct {
 
     fn stopLocked(self: *KernelState) void {
         if (self.process) |*proc| {
-            if (proc.stdin) |*stdin| {
-                stdin.close();
-                proc.stdin = null;
-            }
-            _ = proc.kill() catch {};
-            _ = proc.wait() catch {};
+            proc.deinit();
         }
         self.process = null;
         self.started = false;
@@ -324,26 +257,17 @@ fn ensureKernelLocked(
             return error.NoKernelAvailable;
     }
 
-    var child: std.process.Child = undefined;
     switch (kernel.language) {
         .python => {
             const argv = [_][]const u8{ "python", "-u", "-c", python_worker_source };
-            child = std.process.Child.init(&argv, kernel.allocator);
+            kernel.process = try process.PersistentProcess.spawn(kernel.allocator, workspace_root, &argv);
         },
         .bun => {
             const argv = [_][]const u8{ bunCommand(), "-e", bun_worker_source };
-            child = std.process.Child.init(&argv, kernel.allocator);
+            kernel.process = try process.PersistentProcess.spawn(kernel.allocator, workspace_root, &argv);
         },
         .auto => return error.NoKernelAvailable,
     }
-    child.cwd = workspace_root;
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    // The worker serializes stderr into its response. Keeping a second pipe
-    // here would recreate the independent-pipe deadlock Python documents.
-    child.stderr_behavior = .Ignore;
-    try child.spawn();
-    kernel.process = child;
     kernel.started = true;
 }
 
@@ -367,6 +291,8 @@ pub const EvalResult = struct {
     stderr: []u8,
     exit_code: u8,
     success: bool,
+    truncated: bool = false,
+    termination: process.PersistentTerminationReceipt = .{},
 
     pub fn deinit(self: EvalResult, allocator: std.mem.Allocator) void {
         allocator.free(self.stdout);
@@ -382,52 +308,43 @@ fn executePersistent(
     timeout_ms: u64,
 ) !EvalResult {
     const proc = &(kernel.process.?);
-    const stdin = proc.stdin orelse return error.NoStdin;
-    const stdout = if (proc.stdout) |*file| file else return error.NoStdout;
 
     var encoded: [std.base64.standard.Encoder.calcSize(worker_output_cap)]u8 = undefined;
     if (code.len > worker_output_cap) return error.CodeTooLarge;
     const encoded_text = std.base64.standard.Encoder.encode(&encoded, code);
     const request = try std.fmt.allocPrint(allocator, "{{\"code\":\"{s}\"}}\n", .{encoded_text});
     defer allocator.free(request);
-    stdin.writeAll(request) catch {
+    proc.writeLine(request) catch {
         kernel.stopLocked();
         return error.KernelDied;
     };
 
-    var reader = WorkerResponseReader.init(allocator, stdout);
-    defer reader.deinit();
-    const reader_thread = try std.Thread.spawn(.{}, WorkerResponseReader.run, .{&reader});
+    const response = try proc.readLine(allocator, @as(usize, @intCast(timeout_ms)), worker_output_cap);
+    defer response.deinit(allocator);
 
-    reader.mutex.lock();
-    if (!reader.done) reader.condition.timedWait(&reader.mutex, timeoutToNs(timeout_ms)) catch {};
-    const timed_out = !reader.done;
-    reader.mutex.unlock();
-
-    if (timed_out) kernel.stopLocked();
-    reader_thread.join();
-
-    if (timed_out) {
+    if (response.timed_out) {
+        const termination = response.termination;
+        kernel.stopLocked();
         return .{
             .stdout = try allocator.dupe(u8, ""),
             .stderr = try std.fmt.allocPrint(allocator, "eval timed out; {s} kernel was terminated", .{languageLabel(kernel.language)}),
             .exit_code = 124,
             .success = false,
+            .termination = termination,
         };
     }
-    if (reader.read_error) |err| return err;
-    if (reader.truncated) {
+    if (response.truncated) {
         return .{
             .stdout = try allocator.dupe(u8, ""),
             .stderr = try allocator.dupe(u8, "eval response exceeded the bounded worker output"),
             .exit_code = 1,
             .success = false,
+            .truncated = true,
+            .termination = response.termination,
         };
     }
 
-    const raw = try reader.output.toOwnedSlice();
-    defer allocator.free(raw);
-    var parsed = std.json.parseFromSlice(WorkerResponse, allocator, raw, .{}) catch return error.InvalidKernelResponse;
+    var parsed = std.json.parseFromSlice(WorkerResponse, allocator, response.line, .{}) catch return error.InvalidKernelResponse;
     defer parsed.deinit();
 
     return .{
@@ -435,11 +352,9 @@ fn executePersistent(
         .stderr = try allocator.dupe(u8, parsed.value.stderr),
         .exit_code = if (parsed.value.ok) 0 else 1,
         .success = parsed.value.ok,
+        .truncated = parsed.value.truncated,
+        .termination = response.termination,
     };
-}
-
-fn timeoutToNs(timeout_ms: u64) u64 {
-    return timeout_ms * std.time.ns_per_ms;
 }
 
 /// Check if a command exists in PATH.
@@ -541,6 +456,17 @@ pub fn execute(
     if (result.stdout.len == 0 and result.stderr.len == 0) {
         try writer.writeAll("(no output)\n");
     }
+    if (result.truncated) try writer.writeAll("OUTPUT_TRUNCATED: true\n");
+    if (result.termination.termination_requested) {
+        try writer.print(
+            "PROCESS_RECEIPT: tree_teardown_attempted={} child_reaped={} pipes_drained={}\n",
+            .{
+                result.termination.tree_teardown_attempted,
+                result.termination.child_reaped,
+                result.termination.pipes_drained,
+            },
+        );
+    }
     try writer.print("EXIT_CODE: {d}\n", .{result.exit_code});
 
     return module.okEnvelope(allocator, "eval", output.items);
@@ -601,7 +527,34 @@ test "persistent Python timeout terminates the session kernel" {
     defer result.deinit(std.testing.allocator);
     try std.testing.expect(!result.success);
     try std.testing.expectEqual(@as(u8, 124), result.exit_code);
+    try std.testing.expect(result.termination.termination_requested);
+    try std.testing.expect(result.termination.child_reaped);
+    try std.testing.expect(result.termination.pipes_drained);
+    if (@import("builtin").os.tag == .windows) {
+        try std.testing.expect(result.termination.tree_teardown_attempted);
+    }
     try std.testing.expect(!kernel.started);
+}
+
+test "persistent Python output cap drains the response and preserves the kernel" {
+    if (!commandExists(std.testing.allocator, "python")) return error.SkipZigTest;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(workspace_root);
+    defer deinitAll();
+
+    const kernel = try acquireKernel(workspace_root, "output-cap-session", .python);
+    const oversized = try executeCode(std.testing.allocator, kernel, "print('x' * 70000)", workspace_root, 5_000);
+    defer oversized.deinit(std.testing.allocator);
+    try std.testing.expect(!oversized.success);
+    try std.testing.expect(oversized.truncated);
+    try std.testing.expect(oversized.termination.pipes_drained);
+
+    const after = try executeCode(std.testing.allocator, kernel, "print('still alive')", workspace_root, 5_000);
+    defer after.deinit(std.testing.allocator);
+    try std.testing.expect(after.success);
+    try std.testing.expectEqualStrings("still alive", std.mem.trim(u8, after.stdout, " \t\r\n"));
 }
 
 test "persistent Bun state is isolated by session" {
