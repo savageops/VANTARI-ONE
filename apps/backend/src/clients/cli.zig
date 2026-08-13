@@ -1185,7 +1185,10 @@ fn writeScheduleSummary(schedule: protocol_types.ScheduleSummary) !void {
     try writer.flush();
 }
 
-fn ensureKernelConfigAvailable(allocator: std.mem.Allocator, workspace_root: []const u8) !void {
+/// Pre-flight the workspace config before any kernel or owner process starts.
+/// On failure, print the typed config envelope and exit, so clients observe
+/// the real cause (e.g. MissingAuth) instead of a spawned owner dying silently.
+pub fn ensureKernelConfigAvailable(allocator: std.mem.Allocator, workspace_root: []const u8) !void {
     const loaded_config = config.loadDefault(allocator, workspace_root) catch |err| {
         try writeConfigLoadErrorEnvelope(err, workspace_root);
         std.process.exit(1);
