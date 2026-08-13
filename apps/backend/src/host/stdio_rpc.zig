@@ -7,6 +7,7 @@ const protocol_events = @import("../shared/protocol/events.zig");
 const input_protocol = @import("../shared/protocol/input.zig");
 const protocol_types = @import("../shared/protocol/types.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
+const provider_profile = @import("../core/providers/profile.zig");
 const models = @import("../core/providers/models.zig");
 const scheduler = @import("../core/scheduler/index.zig");
 const tickets = @import("../core/tickets/index.zig");
@@ -14,6 +15,7 @@ const buffer_service = @import("../core/executor/buffer.zig");
 const store = @import("../core/sessions/store.zig");
 const auth_store = @import("../core/auth/store.zig");
 const tools = @import("../core/tools/runtime.zig");
+const eval_tool = @import("../core/tools/builtin/eval.zig");
 const types = @import("../shared/types.zig");
 const stdio_client = @import("stdio_client.zig");
 const owner_client = @import("owner_client.zig");
@@ -571,6 +573,9 @@ const Server = struct {
             if (self.buffer_thread) |thread| thread.join();
             bsrv.deinit();
         }
+        // Request workers and services are joined above. Only then may the
+        // process-local session-owned eval workers be terminated.
+        eval_tool.deinitAll();
         self.buffer_projection.deinit(self.allocator);
         self.runtime.deinit(self.allocator);
         self.input_broker.deinit(self.allocator);
@@ -943,6 +948,12 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         prompts.PromptMode.fromString(label) orelse return Error.InvalidParams
     else
         prompts.PromptMode.orchestrate;
+    var prompt_mode_override = config_file.loadPromptModeOverride(
+        server.allocator,
+        server.config.workspace_root,
+        prompt_mode.label(),
+    ) catch return Error.InvalidParams;
+    defer prompt_mode_override.deinit(server.allocator);
 
     // Extract optional u64 overrides manually — std.json's optional-u64
     // static parser overflows at comptime (f64 cannot represent maxInt(u64)).
@@ -1001,9 +1012,22 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
 
     var selected_auth: ?auth_store.ResolvedAuth = null;
     defer if (selected_auth) |value| value.deinit(server.allocator);
-    if (parsed.value.provider_id) |provider_id| {
-        const active_provider = server.config.auth_provider orelse "openai-compatible";
+    const requested_provider_id = parsed.value.provider_id orelse prompt_mode_override.provider_id;
+    const requested_model = parsed.value.model_override orelse prompt_mode_override.model;
+    var selected_provider_id: ?[]const u8 = null;
+    var selected_model: ?[]const u8 = null;
+    if (requested_provider_id) |provider_id| {
         if (provider_id.len == 0) return Error.InvalidParams;
+        selected_provider_id = provider_profile.canonicalProviderId(provider_id);
+    }
+    if (requested_model) |model| {
+        if (model.len == 0) return Error.InvalidParams;
+        const selection = provider_profile.resolveModelSelection(model, selected_provider_id);
+        selected_provider_id = selection.provider_id orelse selected_provider_id;
+        selected_model = selection.model_id;
+    }
+    if (selected_provider_id) |provider_id| {
+        const active_provider = server.config.auth_provider orelse "openai-compatible";
         if (!std.mem.eql(u8, provider_id, active_provider)) {
             selected_auth = auth_store.readProviderById(
                 server.allocator,
@@ -1027,6 +1051,11 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
     // run. This lets the operator test a lesser model or a smaller context
     // window without editing auth.json or config.json.
     var effective_config = server.config.*;
+    // Chat posture is hot-loaded so settings changes apply on the next turn
+    // without mutating the server's provider/auth snapshot.
+    var runtime_policy = config_file.loadRuntimePolicy(server.allocator, server.config.workspace_root) catch config_file.RuntimePolicy{};
+    defer runtime_policy.deinit(server.allocator);
+    effective_config.log_level = runtime_policy.log_level;
     // Access scope is immutable session state. A config reload must not widen
     // or narrow a live transcript behind the operator's back.
     effective_config.full_access_mode = session.full_access_mode;
@@ -1068,10 +1097,16 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         effective_config.subscription_status = provider_status_owned;
         effective_config.wire_api = resolved.wire_api;
     }
-    if (parsed.value.model_override) |model| {
+    if (selected_model) |model| {
         model_override_owned = try server.allocator.dupe(u8, model);
         effective_config.openai_model = model_override_owned.?;
     }
+    if (prompt_mode_override.wire_api) |wire_api| effective_config.wire_api = wire_api;
+    if (prompt_mode_override.thinking_mode) |thinking_mode| effective_config.thinking_mode = thinking_mode;
+    if (prompt_mode_override.effort) |effort| effective_config.effort = effort;
+    if (prompt_mode_override.temperature) |temperature| effective_config.temperature = temperature;
+    if (prompt_mode_override.context_window_tokens) |window| effective_config.context_policy.context_window_tokens = window;
+    if (prompt_mode_override.reserve_output_tokens) |tokens| effective_config.context_policy.reserve_output_tokens = tokens;
     if (context_window_override) |window| {
         effective_config.context_policy.context_window_tokens = window;
     }
@@ -1601,6 +1636,8 @@ fn handleEventsSubscribe(allocator: std.mem.Allocator) ![]u8 {
 /// capacity is explicit rather than a healthy zero pool. Evidence: Move 28 RPC
 /// projection tests.
 fn handleHealthGet(server: *Server) ![]u8 {
+    var runtime_policy = config_file.loadRuntimePolicy(server.allocator, server.config.workspace_root) catch config_file.RuntimePolicy{};
+    defer runtime_policy.deinit(server.allocator);
     var agent_pool_healthy = true;
     const capacity = server.agent_service.capacity() catch blk: {
         agent_pool_healthy = false;
@@ -1616,6 +1653,7 @@ fn handleHealthGet(server: *Server) ![]u8 {
         .subscription_plan_label = server.config.subscription_plan_label,
         .subscription_status = server.config.subscription_status,
         .scheduler_supervisor = server.scheduler_thread != null,
+        .log_level = runtime_policy.log_level.label(),
         .effort = server.config.effort,
         .thinking_mode = server.config.thinking_mode,
         .context_window_tokens = server.config.context_policy.context_window_tokens,

@@ -17,6 +17,7 @@
       "max_tool_calls_per_turn": "Maximum tool calls accepted from a single provider turn. This limits oversized or cyclic tool batches before effects execute.",
       "max_tool_calls_per_session": "Maximum cumulative tool calls across one session. It is the session-wide safety budget and must be at least as large as the per-turn limit.",
       "full_access_mode": "When false (default), agent file and process paths stay inside the active workspace. Set true only when the operator explicitly wants agents to work in other directories.",
+      "log_level": "Chat detail posture: silent (default) hides internal telemetry and repetition, normal shows concise operational checkpoints, and full permits diagnostic lifecycle detail. Durable event and session ledgers remain complete at every level.",
       "effort": "Provider effort/reasoning level: low, medium, high, or max. Controls reasoning depth on models that accept the effort parameter. Null uses the provider default.",
       "temperature": "Provider sampling temperature (0.0-2.0). Lower is more deterministic. Null uses the provider default; the compiled default sends 0 for determinism."
     },
@@ -25,6 +26,7 @@
     "max_tool_calls_per_turn": 16,
     "max_tool_calls_per_session": 96,
     "full_access_mode": false,
+    "log_level": "silent",
     "effort": null,
     "temperature": null
   },
@@ -37,10 +39,12 @@
   "agent_routes": {
     "_help": {
       "max_concurrency": "Maximum in-process agent or model-task workers allowed to execute concurrently. Additional admitted tasks remain queued in the same parent-owned supervisor. A changed value replaces the one physical pool at the next idle capacity boundary; active work drains under the actual prior ceiling.",
-      "roles": "Optional operator-owned overrides keyed by general, recon, planning, compaction, implementation, review, or validation. Each role accepts provider_id, model, wire_api, thinking_mode, effort, temperature, context_window_tokens, and reserve_output_tokens. A provider_id references auth.json; credentials, execution kind, and capability profile never appear here."
+      "roles": "Optional operator-owned overrides keyed by general, recon, planning, compaction, implementation, review, or validation. Each role accepts provider_id, model, wire_api, thinking_mode, effort, temperature, context_window_tokens, and reserve_output_tokens. A provider_id references auth.json; credentials, execution kind, and capability profile never appear here.",
+      "prompt_modes": "Optional model/provider overrides keyed by orchestrate, build, align, or plan. They reuse the same unified route identity and apply only to the next root turn; omitted fields inherit the active route."
     },
     "max_concurrency": 6,
-    "roles": {}
+    "roles": {},
+    "prompt_modes": {}
   },
   "agents": {
     "_help": {

@@ -20,6 +20,7 @@ const list_processes = @import("builtin/list_processes.zig");
 const session_summaries = @import("builtin/session_summaries.zig");
 const update_session_summary = @import("builtin/update_session_summary.zig");
 const memory = @import("builtin/memory.zig");
+const eval_tool = @import("builtin/eval.zig");
 pub const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
 const agent_message = @import("builtin/agent_message.zig");
@@ -53,7 +54,8 @@ const interactive_tool_definitions = ask_user.definitions;
 const agent_and_collaboration_tool_definitions = agent_tool_definitions ++ collaboration_tool_definitions;
 
 const workspace_state_tool_definitions = workspace_state_tools.definitions;
-const file_plus_collaboration_tool_definitions = registry.file_tool_definitions ++ collaboration_tool_definitions;
+const base_tool_definitions = registry.file_tool_definitions ++ [_]types.ToolDefinition{eval_tool.definition};
+const file_plus_collaboration_tool_definitions = base_tool_definitions ++ collaboration_tool_definitions;
 const file_plus_interactive_tool_definitions = file_plus_collaboration_tool_definitions ++ interactive_tool_definitions;
 const file_plus_workspace_state_tool_definitions = file_plus_interactive_tool_definitions ++ workspace_state_tool_definitions;
 const file_plus_agent_tool_definitions = file_plus_interactive_tool_definitions ++ agent_tool_definitions;
@@ -73,6 +75,7 @@ const write_tool_definitions = read_tool_definitions ++ [_]types.ToolDefinition{
     shell_exec.definition,
     log_ticket.definition,
     memory.definitions[1],
+    eval_tool.definition,
 };
 const subagent_tool_definitions = write_tool_definitions ++ agent_tool_definitions;
 const no_tool_definitions = [_]types.ToolDefinition{};
@@ -300,6 +303,14 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
         return "search_files is unavailable because its required ix executable dependency is not resolvable. Use list_files and read_file until capability availability reports search_files as available.";
     }
 
+    if (std.mem.eql(u8, error_name, "CapabilityDenied") and std.mem.eql(u8, tool_name, "eval")) {
+        return "eval is trusted code execution and is gated until runtime.full_access_mode=true. Use the bounded file and shell tools in restricted workspace mode, or have the operator explicitly enable full access.";
+    }
+
+    if (std.mem.eql(u8, error_name, "SessionRequired") and std.mem.eql(u8, tool_name, "eval")) {
+        return "eval requires a canonical session-owned execution context; retry through session/send rather than a detached tool call.";
+    }
+
     if (std.mem.eql(u8, error_name, "AgentEligibilityRequired")) {
         return "Call agents with an empty JSON object first. Select only a route-eligible id from that current specialist/team snapshot, then call launch_agent or configure_agent.";
     }
@@ -441,6 +452,9 @@ pub fn executeWithRunner(
     if (std.mem.eql(u8, tool_call.name, "shell_exec")) {
         return shell_exec.executeToolCall(allocator, execution_context, tool_call.arguments_json, runner, tool_call.id);
     }
+    if (std.mem.eql(u8, tool_call.name, "eval")) {
+        return eval_tool.execute(allocator, execution_context, tool_call.arguments_json, runner);
+    }
     if (std.mem.eql(u8, tool_call.name, "schedule_job")) {
         return schedule_job.execute(allocator, execution_context, tool_call.arguments_json);
     }
@@ -480,6 +494,9 @@ pub fn executeWithRunner(
 
 /// Enforce the same resolved profile used to construct the provider catalog.
 fn ensureToolAllowed(execution_context: ExecutionContext, tool_name: []const u8) !void {
+    if (std.mem.eql(u8, tool_name, "eval") and !execution_context.full_access_mode) {
+        return Error.CapabilityDenied;
+    }
     if (execution_context.orchestrator_only) {
         if (!agents.handles(tool_name) and !agent_message.handles(tool_name)) return Error.CapabilityDenied;
         if (agents.handles(tool_name) and !std.mem.eql(u8, tool_name, "agents")) {
@@ -510,7 +527,7 @@ pub fn toolClassForName(tool_name: []const u8) ?profile_contract.ToolClass {
         std.mem.eql(u8, tool_name, "memory_write") or
         std.mem.eql(u8, tool_name, "log_ticket") or
         std.mem.eql(u8, tool_name, "update_session_summary")) return .file_write;
-    if (std.mem.eql(u8, tool_name, "shell_exec")) return .command;
+    if (std.mem.eql(u8, tool_name, "shell_exec") or std.mem.eql(u8, tool_name, "eval")) return .command;
     if (std.mem.eql(u8, tool_name, "schedule_job")) return .scheduling;
     if (ask_user.handles(tool_name)) return .interaction;
     if (agent_message.handles(tool_name)) return .collaboration;

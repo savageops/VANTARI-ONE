@@ -1,8 +1,9 @@
 /// In-TUI settings overlay — reveals ALL config sections with sub-menus,
 /// current values, help text, and inline editing. Writes via config/set RPC.
 ///
-/// Opened by the /settings slash command. Renders as a full-screen overlay
-/// replacing the normal transcript+footer when active. Navigation:
+/// Opened by the registry-backed `settings` command (slash syntax remains a
+/// compatibility alias). Renders as a full-screen overlay replacing the
+/// normal transcript+footer when active. Navigation:
 ///   Left/Right or Tab — switch section
 ///   Up/Down           — navigate entries within section
 ///   Enter             — edit entry (or toggle for bools)
@@ -46,6 +47,8 @@ pub const SettingsState = struct {
         value_text: []u8,
         help_text: []u8,
         is_bool: bool = false,
+        is_string: bool = false,
+        is_log_level: bool = false,
     };
 
     pub fn init(allocator: std.mem.Allocator, workspace_root: []const u8) SettingsState {
@@ -173,6 +176,8 @@ pub const SettingsState = struct {
             .value_text = value_text,
             .help_text = help_text,
             .is_bool = value == .bool,
+            .is_string = value == .string,
+            .is_log_level = std.mem.eql(u8, key_text, "log_level"),
         });
     }
 
@@ -182,11 +187,18 @@ pub const SettingsState = struct {
         const entry = self.entries.items[self.entry_cursor];
         const section_name = section_names[self.section_cursor];
 
-        // Build config/set params.
+        const encoded_value = if (entry.is_string)
+            try std.fmt.allocPrint(self.allocator, "{f}", .{std.json.fmt(self.edit_buffer.items, .{})})
+        else
+            try self.allocator.dupe(u8, self.edit_buffer.items);
+        defer self.allocator.free(encoded_value);
+
+        // Build config/set params. String values must remain JSON strings;
+        // older settings editing passed bare text and could reject the write.
         const params = try std.fmt.allocPrint(self.allocator, "{{\"section\":\"{s}\",\"key\":\"{s}\",\"value\":{s}}}", .{
             section_name,
             entry.key,
-            self.edit_buffer.items,
+            encoded_value,
         });
         defer self.allocator.free(params);
 
@@ -270,6 +282,12 @@ pub const SettingsState = struct {
                     const new_val = !std.mem.eql(u8, entry.value_text, "true");
                     self.edit_buffer.clearRetainingCapacity();
                     try self.edit_buffer.appendSlice(self.allocator, if (new_val) "true" else "false");
+                    try self.saveCurrentEntry(rpc_client);
+                    self.edit_buffer.clearRetainingCapacity();
+                    try self.loadSection();
+                } else if (entry.is_log_level) {
+                    self.edit_buffer.clearRetainingCapacity();
+                    try self.edit_buffer.appendSlice(self.allocator, nextLogLevel(entry.value_text));
                     try self.saveCurrentEntry(rpc_client);
                     self.edit_buffer.clearRetainingCapacity();
                     try self.loadSection();
@@ -391,6 +409,12 @@ pub fn drawSettings(win: tui.Window, state: *SettingsState) void {
     );
 }
 
+fn nextLogLevel(value: []const u8) []const u8 {
+    if (std.mem.eql(u8, value, "silent")) return "normal";
+    if (std.mem.eql(u8, value, "normal")) return "full";
+    return "silent";
+}
+
 const Color = struct {
     const bg = tui.Cell.Color.rgbFromUint(0x08110f);
     const fg = tui.Cell.Color.rgbFromUint(0x8ce6c8);
@@ -491,7 +515,43 @@ test "settings exposes default keys omitted by an older config" {
             try std.testing.expect(entry.is_bool);
         }
     }
+    var log_level_found = false;
+    for (state.entries.items) |entry| {
+        if (std.mem.eql(u8, entry.key, "log_level")) {
+            log_level_found = true;
+            try std.testing.expectEqualStrings("silent", entry.value_text);
+            try std.testing.expect(entry.is_string);
+            try std.testing.expect(entry.is_log_level);
+        }
+    }
     try std.testing.expect(found);
+    try std.testing.expect(log_level_found);
+}
+
+test "log level setting cycles in the compact order" {
+    try std.testing.expectEqualStrings("normal", nextLogLevel("silent"));
+    try std.testing.expectEqualStrings("full", nextLogLevel("normal"));
+    try std.testing.expectEqualStrings("silent", nextLogLevel("full"));
+    try std.testing.expectEqualStrings("silent", nextLogLevel("unknown"));
+}
+
+test "settings serializes log level as a JSON string" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var state = SettingsState.init(allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    try state.loadSection();
+    try selectRuntimeEntry(&state, "log_level");
+
+    var client = SettingsSuccessClient{};
+    try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = tui.Key.enter }, &client));
+    try std.testing.expectEqual(@as(usize, 1), client.calls);
+    try std.testing.expect(client.saw_json_string_value);
 }
 
 test "settings accepts newer values with older help metadata" {
@@ -529,10 +589,12 @@ const SettingsTestResult = struct {
 
 const SettingsSuccessClient = struct {
     calls: usize = 0,
+    saw_json_string_value: bool = false,
 
     fn call(self: *SettingsSuccessClient, method: []const u8, params: []const u8) anyerror!SettingsTestResult {
         try std.testing.expectEqualStrings(protocol.methods.config_set, method);
         try std.testing.expect(std.mem.indexOf(u8, params, "\"section\":\"runtime\"") != null);
+        self.saw_json_string_value = std.mem.indexOf(u8, params, "\"value\":\"normal\"") != null;
         self.calls += 1;
         return .{};
     }
@@ -548,6 +610,16 @@ fn selectRuntimeBool(state: *SettingsState, key: []const u8) !void {
     for (state.entries.items, 0..) |entry, index| {
         if (std.mem.eql(u8, entry.key, key)) {
             try std.testing.expect(entry.is_bool);
+            state.entry_cursor = index;
+            return;
+        }
+    }
+    return error.TestExpectedEqual;
+}
+
+fn selectRuntimeEntry(state: *SettingsState, key: []const u8) !void {
+    for (state.entries.items, 0..) |entry, index| {
+        if (std.mem.eql(u8, entry.key, key)) {
             state.entry_cursor = index;
             return;
         }

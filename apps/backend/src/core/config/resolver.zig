@@ -195,6 +195,7 @@ fn applyRuntimePolicy(
     config.max_tool_calls_per_turn = policy.max_tool_calls_per_turn;
     config.max_tool_calls_per_session = policy.max_tool_calls_per_session;
     config.full_access_mode = policy.full_access_mode;
+    config.log_level = policy.log_level;
     if (allow_workspace_override) if (policy.workspace) |workspace| {
         const replacement = try allocator.dupe(u8, workspace);
         allocator.free(config.workspace_root);

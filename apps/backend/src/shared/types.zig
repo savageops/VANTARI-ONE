@@ -80,6 +80,9 @@ pub const Config = struct {
     /// Agent-facing file/process access boundary. False keeps operations
     /// inside workspace_root; true enables explicit cross-directory access.
     full_access_mode: bool = false,
+    /// Operator-facing chat detail posture. Durable event/session evidence is
+    /// retained at every level; only projections and prompt guidance change.
+    log_level: LogLevel = .silent,
     context_policy: ContextPolicy = .{},
     prompt_policy: PromptPolicy = .{},
     memory_policy: MemoryPolicy = .{},
@@ -188,6 +191,34 @@ pub const SessionStatus = enum {
     completed,
     failed,
     cancelled,
+};
+
+/// Operator-facing chat detail posture. The durable event and session ledgers
+/// remain complete; this value only controls the client projection and the
+/// matching model instruction.
+pub const LogLevel = enum {
+    silent,
+    normal,
+    full,
+
+    pub fn label(self: LogLevel) []const u8 {
+        return @tagName(self);
+    }
+
+    pub fn fromString(value: []const u8) ?LogLevel {
+        if (std.ascii.eqlIgnoreCase(value, "silent")) return .silent;
+        if (std.ascii.eqlIgnoreCase(value, "normal")) return .normal;
+        if (std.ascii.eqlIgnoreCase(value, "full") or std.ascii.eqlIgnoreCase(value, "debug")) return .full;
+        return null;
+    }
+
+    pub fn instruction(self: LogLevel) []const u8 {
+        return switch (self) {
+            .silent => "Reader-serving output is active. Do not narrate internal tools, skills, memories, mailbox traffic, waits, raw lifecycle events, or transient implementation mechanics. Speak only when it advances the task, avoid repetition, and state a blocker only when the operator must take an action. Keep durable evidence in the ledgers and present the useful consequence, not the internal burden.",
+            .normal => "Concise operational output is active. Surface meaningful checkpoints and useful child, tool, skill, memory, and wait activity when it helps the operator understand progress. Keep raw payloads, repetition, and transient mechanics out of the response.",
+            .full => "Full diagnostic output is active. You may expose relevant tools, skills, memory, mailbox, wait, lifecycle, and failure detail in chat when it helps inspect behavior. Keep the final task answer coherent and distinguish diagnostics from the requested result.",
+        };
+    }
 };
 
 pub const ExecutionBudget = struct {

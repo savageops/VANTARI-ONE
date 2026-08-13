@@ -395,7 +395,21 @@ Every session directory contains:
 
 `messages.jsonl` is the complete append-only transcript. One execution-owner-local per-session ledger state serializes user, assistant, assistant-tool-call, tool-result, and idempotent convergence appends. It initializes sequence from the last valid bounded tail row instead of reparsing transcript history; append failure invalidates the cached cursor before retry. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested. `events.jsonl` assigns the sole durable render identity. Live notifications carry that stored sequence after append; the tracked TUI requests `session/get { after_seq, events_only }` only when it detects a gap and once after turn completion. `shared/jsonl.zig:PrefixReader` is the one LF-framed read boundary for events, messages, context, intents, and summaries. It accepts a leading BOM, rejects invalid UTF-8/JSON/typed schema and non-increasing sequence rows, and ends every projection at the same valid prefix. `fsutil.appendJsonlRecord` validates the bounded current tail through that owner and refuses poison without truncating or appending behind it.
 
-`$VANTARI_HOME/config.json` is the canonical non-secret policy file. Its typed sections own runtime limits, wire API selection, role routing, editable agent definitions, context policy, prompt paths, and supported environment-style overrides. Built-in agent rows may tune persona/condition/route/budgets or be disabled; custom ids must inherit a compiled capability floor. `$VANTARI_HOME/auth.json` is the sibling credential/provider ledger; workspace-local auth is `.var/auth.json`. API keys, OAuth tokens, account identity, and active-provider state never move into config output. Nested/AppData auth paths are one-time migration inputs; `settings.toml` is no longer a runtime reader. `auth status --json` projects provider, model, account, plan, expiry, and verification metadata without secrets. `auth login openai-codex` owns browser PKCE callback collection at `127.0.0.1:1455/auth/callback` plus manual redirect fallback; `auth logout <provider-id>` removes one provider while preserving unrelated records. `core/providers/dispatch.zig` routes typed OAuth `openai-codex` records to `core/providers/openai_codex.zig`, which builds `POST /codex/responses`, carries account/originator metadata, maps Responses/SSE into the canonical completion result, and never falls back to `/v1/chat/completions`; API-key records remain on the existing `wire_api` route. The Windows installer preserves valid config byte-for-byte and backs up plus materializes the current schema only when the retained file fails validation.
+`$VANTARI_HOME/config.json` is the canonical non-secret policy file. Its typed sections own runtime limits, wire API selection, role routing, prompt-mode routes, editable agent definitions, context policy, prompt paths, and supported environment-style overrides. Built-in agent rows may tune persona/condition/route/budgets or be disabled; custom ids must inherit a compiled capability floor. `$VANTARI_HOME/auth.json` is the sibling credential/provider ledger; workspace-local auth is `.var/auth.json`. API keys, OAuth tokens, account identity, and active-provider state never move into config output. Nested/AppData auth paths are one-time migration inputs; `settings.toml` is no longer a runtime reader. `auth status --json` projects provider, model, account, plan, expiry, and verification metadata without secrets. `auth login openai-codex` owns browser PKCE callback collection at `127.0.0.1:1455/auth/callback` plus manual redirect fallback; `auth logout <provider-id>` removes one provider while preserving unrelated records. `core/providers/dispatch.zig` routes typed OAuth `openai-codex` records to `core/providers/openai_codex.zig`, which builds `POST /codex/responses`, carries account/originator metadata, maps Responses/SSE into the canonical completion result, and never falls back to `/v1/chat/completions`; API-key records remain on the existing `wire_api` route. Anthropic has a canonical Messages transport but not a shipped OAuth login, and OpenCode OAuth remains an explicit provider-parity gap. The Windows installer preserves valid config byte-for-byte and backs up plus materializes the current schema only when the retained file fails validation.
+
+`runtime.log_level` is the operator-facing chat posture. `silent` is the
+default and suppresses internal telemetry/repetition, `normal` keeps useful
+checkpoints, and `full` permits diagnostic lifecycle detail. This is a
+projection and prompt-policy change only: the event, message, and recovery
+ledgers remain complete. The TUI settings owner writes it through validated
+`config/set`, and the host hot-loads it for the next turn.
+
+`agent_routes.prompt_modes.<orchestrate|build|align|plan>` reuses the existing
+`AgentRouteOverride` shape. A configured mode may select provider, model, wire
+API, effort, temperature, context, and output reserve; explicit `session/send`
+fields win. No mode-specific provider registry, tool catalog, or executor state
+machine exists. Runtime theme and menu-position keys remain deferred until the
+renderer has a real consumer for them.
 
 ### Agent access boundary
 
@@ -409,8 +423,9 @@ passes the exact label on the next `session/send`; omission defaults to
 `orchestrate`, and an unknown label fails before session/provider execution.
 `executor/loop.zig` carries the typed value through every prompt rebuild,
 including compaction, child convergence, wake, and provider-overflow recovery.
-The layer changes provider-visible guidance only. It does not branch the
-executor, tool catalog, access policy, model, or agent capacity.
+The layer changes provider-visible guidance and may select a configured route
+through `agent_routes.prompt_modes`. It does not branch the executor, tool
+catalog, access policy, or agent capacity.
 
 `store.ensureStoreReady(...)` creates the canonical sessions directory and initializes execution-owner-local sequence state. It never scans or rewrites existing `session.json` records. Explicit migrations own schema changes; this prevents startup cost from scaling with session count and prevents mixed-version processes from erasing additive fields they do not understand.
 
@@ -612,10 +627,10 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-13:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Debug and ReleaseFast test graphs -> 19/19 steps and 2,023/2,023 tests passed;
+- Debug and ReleaseFast test graphs -> 19/19 steps and 2,102/2,102 tests passed;
   the current graph includes the session-scoped access and root interactive-input
   slices.
-- Focused backend TUI -> 77/77 passed.
+- Focused backend TUI -> 120/120 passed.
 - Host lifecycle lane passes, including atomic same-session admission,
   session-keyed buffer state, exact-generation cancellation,
   cancellation-before-join shutdown, RPC deadlines, late-response retirement,
@@ -730,7 +745,17 @@ Latest local Windows validation on 2026-08-13:
   installed health plus tool-catalog probes. Source and installed SHA-256 match
   `739F0D10D366738D01CEB3879D5B9487F7C99FB7CDB4D7FF9DB3418386A0DEED`; the
   exact proof-owned owner/kernel process census is zero. Provider-driven
-  installed question response remains the explicit next consumer probe.
+   installed question response remains the explicit next consumer probe.
+
+- Current installed TUI/input and capability-manifest proof is closed at `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+  The executable command registry drives the bounded bare-prefix/slash-compatible
+  palette; settings renders through the normal Vaxis frame boundary, shows
+  compiled defaults on unavailable workspace config, and maps Tab/Right forward
+  with Shift+Tab/Left backward. The selected `ToolDefinition` now carries its
+  availability declaration; the registry probes it without a duplicate table.
+  Focused TUI `120/120`, Debug `2,102/2,102`, ReleaseFast/install `9/9`, installed
+  `tools --json` reports 25 tools with `search_files -> ix -> available`, and zero
+  proof-owned installed processes passed.
 
 ## Cognitive architecture (frontier capabilities)
 
@@ -785,7 +810,7 @@ The dock is 4 rows with a 1024-byte scan window (`max_reasoning_dock_scan_bytes`
 
 ### Per-turn config hot-loading
 
-`rebuildProviderBaseMessages` (`src/core/executor/loop.zig`) re-reads `prompt_policy` from disk on every prompt rebuild. Changes to `persona`, `guardrails`, `user_context`, `system_prompt_file`, and `developer_prompt_file` take effect on the next turn — no restart, no recompilation. Falls back to cached policy if the disk read fails.
+`rebuildProviderBaseMessages` (`src/core/executor/loop.zig`) re-reads `prompt_policy` from disk on every prompt rebuild. Changes to `persona`, `guardrails`, `user_context`, `system_prompt_file`, and `developer_prompt_file` take effect on the next turn — no restart, no recompilation. `runtime.log_level` and `agent_routes.prompt_modes` are loaded at the `session/send` boundary so settings and prompt-mode changes use the same next-turn contract. Falls back to cached policy if the disk read fails.
 
 ### Per-agent effort and temperature
 
@@ -958,6 +983,9 @@ The projection does not create a bubble event, timer, poller, transcript copy, o
 second summary ledger. The composer also owns a bounded registry-backed command
 palette above the input: bare first-token prefixes discover local commands,
 slash-prefixed input remains compatible, and the existing command registry handles
-selection and dispatch. `clients/footer_effects.zig` is the sole optional
+selection and dispatch. Settings reuses the same Vaxis render/flush boundary;
+Tab/Right moves forward through sections and Shift+Tab/Left moves backward. A
+missing or invalid workspace config projects compiled defaults with a visible
+status message instead of blocking the overlay. `clients/footer_effects.zig` is the sole optional
 orchestrate-only campaign owner; it supplies a bounded frame projection and
 timed wake only during the active sweep, with no plugin manager or global ticker.

@@ -1,4 +1,5 @@
 const std = @import("std");
+const config_file = @import("../config/file.zig");
 const docs_sync = @import("../docs/sync.zig");
 const executor = @import("../executor/loop.zig");
 const turn_payload = @import("../executor/turn_payload.zig");
@@ -984,6 +985,12 @@ fn runTaskEntry(supervisor: *Supervisor, task: *Task) void {
         task.agent_service
     else
         null;
+    // Provider route construction stays provider-owned. Load the canonical
+    // operator posture at the execution seam so every child receives the
+    // same prompt policy as the parent without a second config owner.
+    var runtime_policy = config_file.loadRuntimePolicy(std.heap.page_allocator, route.config.workspace_root) catch config_file.RuntimePolicy{};
+    defer runtime_policy.deinit(std.heap.page_allocator);
+    route.config.log_level = runtime_policy.log_level;
     const hooks = executor.Hooks{
         .context = task,
         .onSessionEventFn = onChildSessionEvent,

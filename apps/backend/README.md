@@ -136,6 +136,15 @@ same-session resume, nested direct/group/parent delivery, one terminal ticket,
 and zero proof-owned processes. Installed promotion requires the same tracer
 against a source-hash-matched installed binary.
 
+### Definition-owned tool capability
+
+`ToolDefinition.availability` carries each built-in dependency declaration.
+`core/tools/registry.zig` probes that selected definition and emits live
+availability; it does not maintain a parallel name-keyed table. The same
+definition slice supplies the model catalog, provider schema, review risk, and
+dispatch path. `search_files` declares and probes the installed `ix` executable;
+when `ix` is absent, the catalog reports `unavailable` and dispatch fails closed.
+
 ### Interjection Protocol (Speak While Working)
 
 The operator can send messages while the agent is actively working. Messages are:
@@ -358,9 +367,31 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - **Minimal agent group rows** — `Agents completed/total`; no persistent `waiting on N` filler; failure/cancel markers remain explicit
 - **Replay-safe activity** — live and cold TUI projections consume contiguous sequence-bearing parent events; legacy sequence-less activity rows are not rendered
 - **Live streaming** — assistant deltas, reasoning deltas, and tool progress rendered in real-time
+- **Command discovery** — the composer shows a bounded registry-backed popover for bare first-token prefixes (`s`, `set`, `settings`) and slash-prefixed input; matches disappear for prose or no results, and Up/Down, Tab, Enter, and Escape remain transient input controls
+- **Settings overlay** — `settings` renders through the normal Vaxis frame boundary; Tab/Right advances sections, Shift+Tab/Left reverses them, and unavailable persisted config shows compiled defaults instead of freezing or falling through to the model
 - **Operator metadata row** — one non-wrapping row for status, prompt mode, model, effort, context used/capacity/remaining, and signal-bearing agent/queue/cost pressure; active/max and queue appear only when useful, finite priced session cost is compact, unknown context stays `ctx —`, and persistent `Esc cancel` text is omitted
 - **Root question controller** — event-backed `ask_user` questions with Enter select, Space check, inline `f / Other`, and one `input/respond` RPC; no polling overlay or second status bus
 - **Composer hierarchy** — transcript surface < metadata surface < focused input surface; `cancelling` appears only during an active cancellation request and disappears at the terminal boundary
+
+### Runtime chat posture and mode routes
+
+`runtime.log_level` is a validated, hot-loaded projection setting:
+
+| Value | Chat behavior |
+|---|---|
+| `silent` | Default. Suppresses internal tools, skills, memories, mailbox, waits, and repeated lifecycle noise. |
+| `normal` | Shows concise operational checkpoints and useful child/tool activity. |
+| `full` | Permits diagnostic lifecycle detail for inspection. |
+
+The event and session ledgers remain complete at all three levels. Enter on the
+runtime `log_level` setting cycles the value and applies it on the next turn.
+
+`agent_routes.prompt_modes` reuses the existing route override shape for
+`orchestrate`, `build`, `align`, and `plan`. It can select `provider_id`,
+`model`, `wire_api`, effort, temperature, context, and output reserve. Explicit
+`session/send` provider/model fields win over the configured mode; credentials
+remain owned by `auth.json`. No mode-specific executor, tool registry, or
+provider pipeline exists.
 
 ## Quick Start
 

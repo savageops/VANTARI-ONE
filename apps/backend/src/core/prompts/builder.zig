@@ -164,7 +164,16 @@ pub fn buildAgentSystemPromptWithMemoryAndMode(
     else
         "Orchestrator-only mode is disabled. Agent discovery remains available through agents {}, and every launched child still receives only explicit context rather than the parent transcript.";
 
-    const current_mode = try std.fmt.allocPrint(allocator, "# Current Mode\n{s}\n{s}", .{ workspace_state_note, agent_mode_note });
+    const current_mode = try std.fmt.allocPrint(
+        allocator,
+        "# Current Mode\n{s}\n{s}\n\n# Operator Log Level: {s}\n{s}\nThis changes chat detail and response posture only; the durable event and session ledgers remain complete.",
+        .{
+            workspace_state_note,
+            agent_mode_note,
+            execution_context.log_level.label(),
+            execution_context.log_level.instruction(),
+        },
+    );
     defer allocator.free(current_mode);
 
     const prompt_mode_layer = try std.fmt.allocPrint(
@@ -350,4 +359,19 @@ test "prompt mode layer is present in the provider system envelope" {
     try std.testing.expect(std.mem.indexOf(u8, system_prompt, "# Prompt Mode: build") != null);
     try std.testing.expect(std.mem.indexOf(u8, system_prompt, "smallest durable change") != null);
     try std.testing.expect(std.mem.indexOf(u8, system_prompt, "# Prompt Mode: orchestrate") == null);
+}
+
+test "prompt envelope carries the selected operator log posture" {
+    const context = tools.ExecutionContext{ .workspace_root = ".", .log_level = .silent };
+    const system_prompt = try buildAgentSystemPromptWithMemoryAndMode(
+        std.testing.allocator,
+        context,
+        .{},
+        .{ .enabled = false },
+        "task",
+        .orchestrate,
+    );
+    defer std.testing.allocator.free(system_prompt);
+    try std.testing.expect(std.mem.indexOf(u8, system_prompt, "# Operator Log Level: silent") != null);
+    try std.testing.expect(std.mem.indexOf(u8, system_prompt, "Do not narrate internal tools") != null);
 }

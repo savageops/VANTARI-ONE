@@ -594,6 +594,9 @@ pub const ExecutionContext = struct {
     capability_profile_id: ?[]const u8 = null,
     delegation_depth_remaining: usize = std.math.maxInt(usize),
     memory_policy: @import("../../shared/types.zig").MemoryPolicy = .{},
+    /// Prompt-facing operator detail posture. The TUI owns projection
+    /// filtering; this field keeps root and child prompts on one policy.
+    log_level: @import("../../shared/types.zig").LogLevel = .silent,
 };
 
 pub const AgentEligibilityLedger = struct {

@@ -164,6 +164,7 @@ pub const HealthGetResult = struct {
     scheduler_supervisor: bool = false,
     /// Resolved runtime values used by operator-facing clients. These are
     /// additive so older clients can continue to parse health responses.
+    log_level: []const u8 = "silent",
     effort: []const u8 = "",
     thinking_mode: []const u8 = "",
     context_window_tokens: u64 = 0,

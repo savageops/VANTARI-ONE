@@ -15,6 +15,7 @@ pub const RuntimePolicy = struct {
     /// Permit agent-facing file and process paths outside the active workspace.
     /// Restricted mode remains the default safety boundary.
     full_access_mode: bool = false,
+    log_level: types.LogLevel = .silent,
     effort: ?[]u8 = null,
     temperature: ?f64 = null,
 
@@ -151,6 +152,10 @@ pub fn loadRuntimePolicy(allocator: std.mem.Allocator, workspace_root: []const u
         result.max_tool_calls_per_turn = try optionalUsize(runtime, "max_tool_calls_per_turn", result.max_tool_calls_per_turn);
         result.max_tool_calls_per_session = try optionalUsize(runtime, "max_tool_calls_per_session", result.max_tool_calls_per_session);
         result.full_access_mode = try optionalBool(runtime, "full_access_mode", result.full_access_mode);
+        if (runtime.get("log_level")) |value| {
+            if (value != .string) return Error.InvalidConfig;
+            result.log_level = types.LogLevel.fromString(value.string) orelse return Error.InvalidConfig;
+        }
         result.effort = try optionalStringClone(allocator, runtime, "effort");
         result.temperature = try optionalFloat(runtime, "temperature");
     }
@@ -207,6 +212,29 @@ pub fn loadAgentRouteOverride(
     const routes = objectField(parsed.value.object, "agent_routes") orelse return .{};
     const roles = objectField(routes, "roles") orelse return .{};
     const role = objectField(roles, role_id) orelse return .{};
+
+    return try loadAgentRouteOverrideValue(allocator, role);
+}
+
+/// Load the optional model/provider route attached to one prompt mode. Mode
+/// routing shares the existing route override shape; it changes only the
+/// provider identity and turn budgets, never tools, capability, or executor
+/// behavior.
+pub fn loadPromptModeOverride(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    mode_id: []const u8,
+) !AgentRouteOverride {
+    var parsed = try parseDocument(allocator, workspace_root);
+    defer parsed.deinit();
+    const routes = objectField(parsed.value.object, "agent_routes") orelse return .{};
+    const prompt_modes = objectField(routes, "prompt_modes") orelse return .{};
+    const mode = objectField(prompt_modes, mode_id) orelse return .{};
+
+    return try loadAgentRouteOverrideValue(allocator, mode);
+}
+
+fn loadAgentRouteOverrideValue(allocator: std.mem.Allocator, role: std.json.ObjectMap) !AgentRouteOverride {
 
     var result = AgentRouteOverride{};
     errdefer result.deinit(allocator);
@@ -343,10 +371,13 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
     try validateAbout(root);
     try validateHelp(root, &.{"version"});
     if (try validatedObjectField(root, "runtime")) |value| {
-        const keys = &.{ "workspace", "max_steps", "max_tool_calls_per_turn", "max_tool_calls_per_session", "full_access_mode", "effort", "temperature" };
-        try rejectUnknownKeys(value, &.{ "_help", "workspace", "max_steps", "max_tool_calls_per_turn", "max_tool_calls_per_session", "full_access_mode", "effort", "temperature" });
+        const keys = &.{ "workspace", "max_steps", "max_tool_calls_per_turn", "max_tool_calls_per_session", "full_access_mode", "log_level", "effort", "temperature" };
+        try rejectUnknownKeys(value, &.{ "_help", "workspace", "max_steps", "max_tool_calls_per_turn", "max_tool_calls_per_session", "full_access_mode", "log_level", "effort", "temperature" });
         try validateHelp(value, keys);
         _ = try optionalBool(value, "full_access_mode", false);
+        if (value.get("log_level")) |log_level| {
+            if (log_level != .string or types.LogLevel.fromString(log_level.string) == null) return Error.InvalidConfig;
+        }
     }
     if (try validatedObjectField(root, "provider")) |value| {
         try rejectUnknownKeys(value, &.{ "_help", "wire_api" });
@@ -359,14 +390,30 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
         }
     }
     if (try validatedObjectField(root, "agent_routes")) |value| {
-        try rejectUnknownKeys(value, &.{ "_help", "max_concurrency", "roles" });
-        try validateHelp(value, &.{ "max_concurrency", "roles" });
+        try rejectUnknownKeys(value, &.{ "_help", "max_concurrency", "roles", "prompt_modes" });
+        try validateHelp(value, &.{ "max_concurrency", "roles", "prompt_modes" });
         const max_concurrency = try optionalUsize(value, "max_concurrency", 6);
         if (max_concurrency == 0 or max_concurrency > 64) return Error.InvalidConfig;
         if (try validatedObjectField(value, "roles")) |roles| {
             var iterator = roles.iterator();
             while (iterator.next()) |entry| {
                 if (!isKnownAgentRouteRole(entry.key_ptr.*)) return Error.InvalidConfig;
+                if (entry.value_ptr.* != .object) return Error.InvalidConfig;
+                try rejectUnknownKeys(entry.value_ptr.object, &.{
+                    "provider_id",
+                    "model",
+                    "wire_api",
+                    "thinking_mode",
+                    "context_window_tokens",
+                    "reserve_output_tokens",
+                });
+                try validateAgentRoute(entry.value_ptr.object);
+            }
+        }
+        if (try validatedObjectField(value, "prompt_modes")) |prompt_modes| {
+            var iterator = prompt_modes.iterator();
+            while (iterator.next()) |entry| {
+                if (!isKnownPromptMode(entry.key_ptr.*)) return Error.InvalidConfig;
                 if (entry.value_ptr.* != .object) return Error.InvalidConfig;
                 try rejectUnknownKeys(entry.value_ptr.object, &.{
                     "provider_id",
@@ -643,6 +690,13 @@ fn isKnownAgentRouteRole(value: []const u8) bool {
     return false;
 }
 
+fn isKnownPromptMode(value: []const u8) bool {
+    return std.mem.eql(u8, value, "orchestrate") or
+        std.mem.eql(u8, value, "build") or
+        std.mem.eql(u8, value, "align") or
+        std.mem.eql(u8, value, "plan");
+}
+
 /// Autonomy vocabulary is closed (mirrors spec.zig): directed / bounded /
 /// self_directed. Anything else is a schema violation, not a fallback.
 fn isValidAutonomyValue(value: []const u8) bool {
@@ -744,6 +798,7 @@ test "config file is created beside runtime state and loads typed defaults" {
     try std.testing.expectEqual(@as(usize, 4096), policy.max_steps);
     try std.testing.expectEqual(@as(usize, 16), policy.max_tool_calls_per_turn);
     try std.testing.expect(!policy.full_access_mode);
+    try std.testing.expectEqual(types.LogLevel.silent, policy.log_level);
 
     const config_path = try path(std.testing.allocator, workspace);
     defer std.testing.allocator.free(config_path);
@@ -789,6 +844,55 @@ test "new config values remain valid when older help metadata omits them" {
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
     defer parsed.deinit();
     try validateDocumentShape(parsed.value.object);
+}
+
+test "runtime log level accepts the three canonical postures and rejects noise" {
+    const valid = [_][]const u8{ "silent", "normal", "full" };
+    for (valid) |value| {
+        const document = try std.fmt.allocPrint(std.testing.allocator, "{{\"version\":1,\"runtime\":{{\"log_level\":\"{s}\"}}}}", .{value});
+        defer std.testing.allocator.free(document);
+        var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
+        defer parsed.deinit();
+        try validateDocumentShape(parsed.value.object);
+    }
+
+    const invalid =
+        \\{"version":1,"runtime":{"log_level":"verbose"}}
+    ;
+    var parsed_invalid = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, invalid, .{});
+    defer parsed_invalid.deinit();
+    try std.testing.expectError(Error.InvalidConfig, validateDocumentShape(parsed_invalid.value.object));
+}
+
+test "prompt mode route overrides validate and load through the shared route shape" {
+    const document =
+        \\{"version":1,"agent_routes":{"prompt_modes":{"build":{"provider_id":"anthropic","model":"claude-sonnet"}}}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
+    defer parsed.deinit();
+    try validateDocumentShape(parsed.value.object);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+    const config_path = try ensure(std.testing.allocator, workspace);
+    defer std.testing.allocator.free(config_path);
+    try fsutil.writeText(config_path, document);
+
+    var override = try loadPromptModeOverride(std.testing.allocator, workspace, "build");
+    defer override.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("anthropic", override.provider_id.?);
+    try std.testing.expectEqualStrings("claude-sonnet", override.model.?);
+}
+
+test "prompt mode route overrides reject invented mode ids" {
+    const document =
+        \\{"version":1,"agent_routes":{"prompt_modes":{"turbo":{"model":"fast"}}}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
+    defer parsed.deinit();
+    try std.testing.expectError(Error.InvalidConfig, validateDocumentShape(parsed.value.object));
 }
 
 test "wire api auto is a valid provider floor value" {

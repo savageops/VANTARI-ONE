@@ -12,7 +12,7 @@ One binary; one protocol; one owner for runtime truth.
 
 [![Release](https://img.shields.io/github/v/release/savageops/VANTARI-ONE?display_name=tag&sort=semver&label=Release&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/savageops/VANTARI-ONE/total?label=Downloads&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases)
-[![Tests](https://img.shields.io/badge/Tests-2%2C023%20cases-0f766e)](#validation)
+[![Tests](https://img.shields.io/badge/Tests-2%2C102%20cases-0f766e)](#validation)
 [![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-f7a41d?logo=zig)](https://ziglang.org/)
 
 [![Stars](https://img.shields.io/github/stars/savageops/VANTARI-ONE?label=Stars&color=111111)](https://github.com/savageops/VANTARI-ONE/stargazers)
@@ -91,7 +91,7 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
 | **Kernel surface** | 122 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 2,023 passing backend cases across source and adversarial pipeline suites |
+| **Proof surface** | 2,102 passing backend cases across source and adversarial pipeline suites |
 | **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
 | **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |
@@ -355,6 +355,8 @@ The installed `vantari` client renders a full terminal interface with:
 - **Session continuation** — `vantari -c` resumes the latest session with full transcript hydration
 - **Exact event replay** — the TUI renders activity only from contiguous persisted event sequences and canonical child summaries; sequence-less legacy activity is ignored, a gap fetches only the missing suffix, and a completed turn performs one final suffix check
 - **Concurrent execution model** — RPC runs on a background thread while the main thread handles UI events and drains live notifications without owning transcript or event truth
+- **Command discovery** — type a bare first word such as `s`, `set`, or `settings` to open the bounded palette above the composer; `/` remains compatible, and Up/Down, Tab, Enter, and Escape stay in one input path
+- **Settings navigation** — `settings` opens the same-frame overlay; Tab/Right moves forward, Shift+Tab/Left moves backward, and a missing or damaged workspace config falls back to visible compiled defaults
 
 ### Scoped Delegation
 
@@ -442,7 +444,7 @@ Schedules are kernel records, not wrappers around OS cron. The scheduler persist
 
 ## Tool Catalog
 
-The model-visible catalog is generated from module-owned definitions. Each entry owns its JSON schema, availability probe, review risk, execution contract, and operator-facing description; the prompt does not maintain a second list.
+The model-visible catalog is generated from module-owned definitions. Each entry owns its JSON schema, availability declaration, review risk, execution contract, and operator-facing description; the registry probes the selected definition but does not maintain a second name-keyed list. The same definition slice feeds the catalog, provider schema, review gate, and dispatch.
 
 | Tool | Risk | Description |
 |---|---|---|
@@ -641,9 +643,11 @@ System and developer prompts are user-editable workspace files. The internal gua
 
 The TUI adds one session-local behavioral lens on top of this envelope. Shift+Tab
 cycles `orchestrate → build → align → plan`; the next `session/send` applies
-the selected provider-visible layer and defaults to `orchestrate`. The lens
-changes guidance only — not executor logic, tools, access, model, or agent
-capacity — so the model remains the behavior authority.
+the selected provider-visible layer and defaults to `orchestrate`. Optional
+`agent_routes.prompt_modes` entries can select a provider/model and turn budget
+for each lens through the same route owner; explicit per-turn overrides win.
+The lens changes guidance and route selection only — not executor logic, tools,
+access, or agent capacity — so the model remains the behavior authority.
 
 <br/>
 
@@ -720,6 +724,34 @@ Wire shape defaults to `auto` and resolves from the endpoint; set `provider.wire
 ```
 
 The setting is hot-loaded for the next turn and is available through the TUI Settings surface or the validated `config/set` path. In full access mode, relative paths remain anchored at the active workspace and explicit absolute paths or `..` traversal may target another directory. The canonical VANTARI runtime root, session ledgers, `.var/` state, and configured prompt files remain separate protected owners; full access does not relocate or rewrite them.
+
+### Chat detail and prompt-mode routes
+
+`runtime.log_level` controls only what the TUI projects and how the prompt
+frames operator-facing narration: `silent` is the default and suppresses
+internal telemetry/repetition, `normal` shows concise checkpoints, and `full`
+allows diagnostic lifecycle detail. Durable events, transcript messages, and
+recovery records remain complete at every level. The TUI Settings surface
+cycles the value with Enter; the validated write applies on the next turn.
+
+Prompt lenses can reuse the same unified provider/auth pipeline without editing
+the active provider:
+
+```json
+"agent_routes": {
+  "prompt_modes": {
+    "orchestrate": { "provider_id": "openai-codex", "model": "gpt-5.4-mini" },
+    "build": { "provider_id": "anthropic", "model": "claude-sonnet-4-20250514" },
+    "align": { "model": "openrouter/anthropic/claude-sonnet" },
+    "plan": { "model": "glm-5-turbo", "effort": "low" }
+  }
+}
+```
+
+Only configured fields override the active route. `session/send` fields have
+higher precedence, and credentials remain in `auth.json`. Runtime theme and
+menu-position settings are intentionally not advertised yet: the renderer
+must consume a setting before it becomes a valid capability.
 
 ### Context Policy
 
@@ -971,7 +1003,7 @@ vantari auth status|login|use|logout <provider> identity and provider auth
 
 ## Validation
 
-The pinned Debug and ReleaseFast graphs currently pass 2,023 test cases across `apps/backend/src/`
+The pinned Debug and ReleaseFast graphs currently pass 2,102 test cases across `apps/backend/src/`
 and `apps/backend/tests/`. They target state transitions, protocol edges, and
 failure pressure rather than line coverage:
 

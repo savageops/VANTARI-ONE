@@ -184,6 +184,7 @@ pub fn runPromptWithOptions(
     var execution_context = options.execution_context;
     execution_context.workspace_root = config.workspace_root;
     execution_context.full_access_mode = config.full_access_mode;
+    execution_context.log_level = config.log_level;
     execution_context.session_id = session.id;
     execution_context.memory_policy = config.memory_policy;
     if (execution_context.parent_session_id == null) {

@@ -9,6 +9,7 @@ const footer_effects = @import("footer_effects.zig");
 
 const protocol = VAR1.core.protocol_types;
 const protocol_events = VAR1.shared.protocol.events;
+const shared_types = VAR1.shared.types;
 const stdio_rpc = VAR1.host.stdio_rpc;
 const prompt_modes = VAR1.core.prompts;
 
@@ -157,6 +158,10 @@ const ChatState = struct {
     subscription_status: []const u8,
     effort: []const u8 = "",
     thinking_mode: []const u8 = "",
+    // Production hydrates this from health_get before the first frame. Keep
+    // the constructor fallback at normal so existing read-model fixtures
+    // retain their historical projection unless they opt into silent.
+    log_level: shared_types.LogLevel = .normal,
     prompt_mode: prompt_modes.PromptMode = .orchestrate,
     footer_effect: footer_effects.Controller = .{},
     context_window_tokens: u64 = 0,
@@ -213,7 +218,7 @@ const ChatState = struct {
     /// model (draft/buffer layer). When null or empty, the dock collapses.
     buffer_preview: ?[]u8 = null,
     /// In-TUI settings overlay state. Null when closed. Initialized by the
-    /// /settings command. When non-null and .open, the draw function renders
+    /// registry-backed settings command. When non-null and .open, the draw function renders
     /// the settings overlay instead of the normal transcript+footer.
     settings_state: ?settings_view.SettingsState = null,
     /// One event-backed interactive input controller. The kernel owns the
@@ -517,7 +522,7 @@ const ChatState = struct {
             if (event.seq != try nextProgressSeq(self.last_event_seq)) return error.EventSequenceGap;
             self.trackRunEvent(event.seq, event.event_type);
             self.last_event_seq = event.seq;
-            if (replayProgressEvent(event.event_type)) try self.addProgress(event.event_type, event.message);
+            if (replayProgressEvent(self.log_level, event.event_type)) try self.addProgress(event.event_type, event.message);
         }
         self.jumpToBottom();
     }
@@ -527,6 +532,7 @@ const ChatState = struct {
     /// must not recompute idle or queue semantics. Preserves: old kernels remain
     /// parseable through additive defaults. Evidence: Move 28 telemetry test.
     fn applyHealthTelemetry(self: *ChatState, health: protocol.HealthGetResult) void {
+        self.log_level = shared_types.LogLevel.fromString(health.log_level) orelse .silent;
         self.agent_pool_known = true;
         self.agent_pool_healthy = health.agent_pool_healthy;
         self.agent_pool_max = health.agent_pool_max;
@@ -868,22 +874,28 @@ const ChatState = struct {
             self.clearInputRequest();
         }
         const recorded_telemetry = try self.recordTurnTelemetry(event_type, message);
-        if (recorded_telemetry and !std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type)) return true;
+        if (recorded_telemetry and self.log_level != .full and
+            !std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type)) return true;
         if (std.mem.eql(u8, event_type, "assistant_delta")) {
             try self.addAssistantDelta(message);
             return true;
         }
         if (std.mem.eql(u8, event_type, "reasoning_delta")) {
+            if (self.log_level == .silent) {
+                self.clearReasoningBuffer();
+                return false;
+            }
             try self.addReasoningDelta(message);
             return true;
         }
         if (std.mem.eql(u8, event_type, "buffer_preview")) {
+            if (self.log_level == .silent) return false;
             try self.setBufferPreview(message);
             return true;
         }
         if (std.mem.eql(u8, event_type, "user_message_queued")) return true;
         if (std.mem.eql(u8, event_type, "user_message_injected")) return true;
-        if (skipProgressEvent(event_type)) return false;
+        if (!shouldRenderProgressEvent(self.log_level, event_type)) return false;
 
         try self.addProgress(event_type, message);
         return true;
@@ -928,13 +940,13 @@ const ChatState = struct {
     }
 
     fn addProgress(self: *ChatState, event_type: []const u8, message: []const u8) !void {
-        if (std.mem.eql(u8, event_type, "child_convergence_started") or
-            std.mem.eql(u8, event_type, "session_waiting")) return;
+        if (!shouldRenderProgressEvent(self.log_level, event_type)) return;
         if (std.mem.startsWith(u8, event_type, "child_")) {
             try self.upsertChildProgress(event_type, message);
             return;
         }
-        if (std.mem.eql(u8, event_type, "tool_requested") or std.mem.eql(u8, event_type, "tool_completed")) return;
+        if ((std.mem.eql(u8, event_type, "tool_requested") or std.mem.eql(u8, event_type, "tool_completed")) and
+            self.log_level != .full) return;
         if (std.mem.eql(u8, event_type, "tool_started")) {
             try self.upsertToolStarted(message);
             return;
@@ -1848,7 +1860,7 @@ fn cmdAgents(state: *ChatState, _: []const u8) anyerror!commands.CommandResult {
         const status_str = if (enabled) "enabled" else "disabled";
         try output.writer().print("  {s: <16} [{s}] role={s}\n", .{ id, status_str, role });
     }
-    try output.writer().writeAll("\nUse /settings to edit agent definitions. Use configure_agent tool for programmatic mutation.");
+    try output.writer().writeAll("\nUse settings to edit agent definitions. The /settings alias remains compatible. Use configure_agent for programmatic mutation.");
     try state.add(.system, output.items);
     return .handled;
 }
@@ -1872,7 +1884,7 @@ fn escapeForJson(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
 
 fn cmdStub(state: *ChatState, args: []const u8) anyerror!commands.CommandResult {
     _ = args;
-    try state.add(.system, "This command is not yet available. Use /settings to configure.");
+    try state.add(.system, "This command is not yet available. Use settings to configure.");
     return .handled;
 }
 
@@ -2015,6 +2027,7 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
         .subscription_status = parsed_health.value.subscription_status orelse "unknown",
         .effort = parsed_health.value.effort,
         .thinking_mode = parsed_health.value.thinking_mode,
+        .log_level = shared_types.LogLevel.fromString(parsed_health.value.log_level) orelse .silent,
         .context_window_tokens = parsed_health.value.context_window_tokens,
         .reserve_output_tokens = parsed_health.value.reserve_output_tokens,
         .agent_pool_max = parsed_health.value.agent_pool_max,
@@ -2508,6 +2521,7 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
                     .base = styles.meta_value,
                     .edge = styles.footer_sweep_edge,
                     .core = styles.footer_sweep_core,
+                    .fade = styles.footer_sweep_fade,
                 },
             );
             _ = input_win.print(footer_segments[0..footer_segment_count], .{
@@ -2771,7 +2785,8 @@ const styles = struct {
     const text: Style = .{ .fg = Color.rgbFromUint(0xd9f7ef), .bg = Color.rgbFromUint(0x08110f) };
     const meta_label: Style = .{ .fg = Color.rgbFromUint(0x5d746e), .bg = Color.rgbFromUint(0x0a1614), .dim = true };
     const meta_value: Style = .{ .fg = Color.rgbFromUint(0x9bbab1), .bg = Color.rgbFromUint(0x0a1614), .dim = true };
-    const footer_sweep_edge: Style = .{ .fg = Color.rgbFromUint(0x43c58b), .bg = Color.rgbFromUint(0x0a1614), .bold = true };
+    const footer_sweep_fade: Style = .{ .fg = Color.rgbFromUint(0x78958d), .bg = Color.rgbFromUint(0x0a1614) };
+    const footer_sweep_edge: Style = .{ .fg = Color.rgbFromUint(0x43c58b), .bg = Color.rgbFromUint(0x0a1614) };
     const footer_sweep_core: Style = .{ .fg = Color.rgbFromUint(0x8ff5d2), .bg = Color.rgbFromUint(0x0a1614), .bold = true };
     const autocomplete: Style = .{ .fg = Color.rgbFromUint(0x9bbab1), .bg = Color.rgbFromUint(0x0a1614) };
     const autocomplete_name: Style = .{ .fg = Color.rgbFromUint(0xb7f7df), .bg = Color.rgbFromUint(0x0a1614), .bold = true };
@@ -3996,6 +4011,22 @@ fn normalizeTerminalChunk(allocator: std.mem.Allocator, value: []const u8) ![]u8
     return allocator.dupe(u8, trimmed);
 }
 
+fn shouldRenderProgressEvent(log_level: shared_types.LogLevel, event_type: []const u8) bool {
+    // Assistant output and reasoning have dedicated projections. Rendering
+    // them as generic progress would duplicate the operator's answer.
+    if (std.mem.eql(u8, event_type, "assistant_response") or
+        std.mem.eql(u8, event_type, "reasoning_delta")) return false;
+
+    if (log_level == .full) return true;
+    if (log_level == .silent) {
+        return std.mem.startsWith(u8, event_type, "child_") or
+            std.mem.eql(u8, event_type, "input_requested") or
+            std.mem.eql(u8, event_type, "session_failed") or
+            std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type);
+    }
+    return !skipProgressEvent(event_type);
+}
+
 fn skipProgressEvent(event_type: []const u8) bool {
     // Internal lifecycle events that carry typed schema payloads must never
     // render in the operator chat — only agent responses, compact tool rows,
@@ -4014,7 +4045,8 @@ fn skipProgressEvent(event_type: []const u8) bool {
         std.mem.startsWith(u8, event_type, "context_compaction_");
 }
 
-fn replayProgressEvent(event_type: []const u8) bool {
+fn replayProgressEvent(log_level: shared_types.LogLevel, event_type: []const u8) bool {
+    if (log_level == .full) return true;
     return std.mem.startsWith(u8, event_type, "child_") or
         std.mem.eql(u8, event_type, "session_waiting") or
         std.mem.eql(u8, event_type, "input_requested");
@@ -5653,9 +5685,61 @@ test "tui child replay keeps one keyed row per group and task" {
     try std.testing.expectEqual(@as(usize, 2), state.messages.items.len);
     try std.testing.expectEqualStrings("Agents 1/1 - 1 failed, 0 cancelled", state.messages.items[0].text);
     try std.testing.expectEqual(ActivityState.failed, state.messages.items[0].activity_state);
-    try std.testing.expect(replayProgressEvent("child_progress"));
-    try std.testing.expect(replayProgressEvent("session_waiting"));
-    try std.testing.expect(!replayProgressEvent("assistant_delta"));
+    try std.testing.expect(replayProgressEvent(.normal, "child_progress"));
+    try std.testing.expect(replayProgressEvent(.normal, "session_waiting"));
+    try std.testing.expect(!replayProgressEvent(.normal, "assistant_delta"));
+}
+
+test "tui log posture filters internal chat detail without dropping durable sequencing" {
+    const allocator = std.testing.allocator;
+
+    var silent = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "workspace",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+        .log_level = .silent,
+    };
+    defer silent.deinit();
+    try std.testing.expect(!try silent.recordProgressEvent(1, "agent_message_received", "internal mailbox detail"));
+    try std.testing.expectEqual(@as(usize, 0), silent.messages.items.len);
+    try std.testing.expectEqual(@as(u64, 1), silent.last_event_seq);
+
+    var normal = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "workspace",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+        .log_level = .normal,
+    };
+    defer normal.deinit();
+    try std.testing.expect(try normal.recordProgressEvent(1, "agent_message_received", "mailbox checkpoint"));
+    try std.testing.expectEqual(@as(usize, 1), normal.messages.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, normal.messages.items[0].text, "mailbox checkpoint") != null);
+
+    var full = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "workspace",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+        .log_level = .full,
+    };
+    defer full.deinit();
+    try std.testing.expect(try full.recordProgressEvent(1, "tool_requested", "tool requested: search_files"));
+    try std.testing.expectEqual(@as(usize, 1), full.messages.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, full.messages.items[0].text, "search_files") != null);
 }
 
 test "tui agent child rows show a bounded turn summary instead of tool phases" {
