@@ -156,7 +156,7 @@ pub fn renderCatalog(allocator: std.mem.Allocator, execution_context: ExecutionC
             tool_definition.description,
         });
         try output.writer().print("  Review risk: {s}\n", .{review.riskLabel(tool_definition.review_risk)});
-        const availability = try registry.resolveAvailability(allocator, execution_context.command_probe, tool_definition.name);
+        const availability = try registry.resolveAvailability(allocator, execution_context.command_probe, tool_definition);
         try output.writer().print("  Availability: {s}\n", .{registry.statusLabel(availability.status)});
         if (availability.dependency) |dependency| {
             try output.writer().print("  Dependency: {s} {s}", .{
@@ -211,7 +211,7 @@ pub fn renderCatalogJson(allocator: std.mem.Allocator, execution_context: Execut
         }
 
         try output.writer().writeAll(",\"availability\":");
-        try registry.renderAvailabilityJson(output.writer(), allocator, execution_context.command_probe, tool_definition.name);
+        try registry.renderAvailabilityJson(output.writer(), allocator, execution_context.command_probe, tool_definition);
 
         try output.writer().writeAll("}");
     }

@@ -31,11 +31,6 @@ pub const ResolvedAvailability = struct {
     reason: ?[]const u8 = null,
 };
 
-const AvailabilityEntry = struct {
-    name: []const u8,
-    spec: module.AvailabilitySpec,
-};
-
 pub const file_tool_definitions = [_]types.ToolDefinition{
     list_files.definition,
     search_files.definition,
@@ -58,43 +53,30 @@ pub fn fileDefinitions() []const types.ToolDefinition {
     return file_tool_definitions[0..];
 }
 
-const availability_entries = [_]AvailabilityEntry{
-    .{ .name = list_files.definition.name, .spec = list_files.availability },
-    .{ .name = search_files.definition.name, .spec = search_files.availability },
-    .{ .name = read_file.definition.name, .spec = read_file.availability },
-    .{ .name = write_file.definition.name, .spec = write_file.availability },
-    .{ .name = append_file.definition.name, .spec = append_file.availability },
-    .{ .name = replace_in_file.definition.name, .spec = replace_in_file.availability },
-    .{ .name = shell_exec.definition.name, .spec = shell_exec.availability },
-    .{ .name = schedule_job.definition.name, .spec = schedule_job.availability },
-    .{ .name = log_ticket.definition.name, .spec = log_ticket.availability },
-    .{ .name = list_processes.definition.name, .spec = list_processes.availability },
-    .{ .name = session_summaries.definition.name, .spec = session_summaries.availability },
-    .{ .name = update_session_summary.definition.name, .spec = update_session_summary.availability },
-    .{ .name = skills.definition.name, .spec = skills.availability },
-    .{ .name = memory.definitions[0].name, .spec = .{} },
-    .{ .name = memory.definitions[1].name, .spec = .{} },
-};
-
+/// Legacy callers may resolve a definition by name, but the returned metadata
+/// still comes from the definition. Runtime catalog and dispatch paths pass the
+/// selected definition directly and never use this compatibility projection.
 pub fn availabilitySpec(tool_name: []const u8) ?module.AvailabilitySpec {
-    for (availability_entries) |entry| {
-        if (std.mem.eql(u8, tool_name, entry.name)) return entry.spec;
+    for (file_tool_definitions) |definition| {
+        if (std.mem.eql(u8, tool_name, definition.name)) return definition.availability;
     }
-    if (agents.availabilitySpec(tool_name)) |spec| return spec;
+    for (agents.definitions) |definition| {
+        if (std.mem.eql(u8, tool_name, definition.name)) return definition.availability;
+    }
     return null;
 }
 
 pub fn resolveAvailability(
     allocator: std.mem.Allocator,
     probe: ?module.CommandProbe,
-    tool_name: []const u8,
+    definition: types.ToolDefinition,
 ) !ResolvedAvailability {
-    const spec = availabilitySpec(tool_name) orelse module.AvailabilitySpec{};
+    const spec = definition.availability;
     const dependency = spec.dependency orelse return .{ .status = .available };
 
     const dependency_available = switch (dependency.kind) {
         .none => true,
-        .external_command => try commandDependencyAvailable(allocator, probe, tool_name, dependency),
+        .external_command => try commandDependencyAvailable(allocator, probe, definition.name, dependency),
     };
 
     return .{
@@ -108,9 +90,9 @@ pub fn resolveAvailability(
 pub fn ensureAvailable(
     allocator: std.mem.Allocator,
     probe: ?module.CommandProbe,
-    tool_name: []const u8,
+    definition: types.ToolDefinition,
 ) !void {
-    const resolved = try resolveAvailability(allocator, probe, tool_name);
+    const resolved = try resolveAvailability(allocator, probe, definition);
     if (resolved.status == .unavailable) return error.ToolUnavailable;
 }
 
@@ -118,9 +100,9 @@ pub fn renderAvailabilityJson(
     writer: anytype,
     allocator: std.mem.Allocator,
     probe: ?module.CommandProbe,
-    tool_name: []const u8,
+    definition: types.ToolDefinition,
 ) !void {
-    const resolved = try resolveAvailability(allocator, probe, tool_name);
+    const resolved = try resolveAvailability(allocator, probe, definition);
     try writer.writeAll("{\"status\":");
     try writer.print("{f}", .{std.json.fmt(statusLabel(resolved.status), .{})});
 
@@ -239,22 +221,31 @@ pub fn dependencyKindLabel(kind: module.DependencyKind) []const u8 {
     };
 }
 
-test "availability registry is derived from builtin module definitions" {
-    try std.testing.expectEqual(file_tool_definitions.len, availability_entries.len);
+fn unavailableCommand(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8) anyerror!bool {
+    return false;
+}
 
-    for (file_tool_definitions, availability_entries) |definition, entry| {
-        try std.testing.expectEqualStrings(definition.name, entry.name);
-    }
-
-    const search_spec = availabilitySpec(search_files.definition.name).?;
+test "availability is owned by the selected tool definition" {
+    const search_spec = search_files.definition.availability;
     try std.testing.expect(search_spec.dependency != null);
     try std.testing.expectEqual(module.DependencyKind.external_command, search_spec.dependency.?.kind);
     try std.testing.expectEqualStrings(search_files.command_name, search_spec.dependency.?.name);
 
+    const list_spec = list_files.definition.availability;
+    try std.testing.expect(list_spec.dependency == null);
+
     for (agents.definitions) |definition| {
-        const agent_spec = availabilitySpec(definition.name);
-        try std.testing.expect(agent_spec != null);
-        try std.testing.expect(agent_spec.?.dependency == null);
+        const agent_spec = definition.availability;
+        try std.testing.expect(agent_spec.dependency == null);
     }
-    try std.testing.expect(availabilitySpec("missing_tool") == null);
+}
+
+test "definition-owned availability fails closed when ix is unavailable" {
+    const probe = module.CommandProbe{ .commandExistsFn = unavailableCommand };
+    const resolved = try resolveAvailability(std.testing.allocator, probe, search_files.definition);
+    try std.testing.expectEqual(AvailabilityStatus.unavailable, resolved.status);
+    try std.testing.expectEqual(@as(?bool, false), resolved.dependency_available);
+
+    const native = try resolveAvailability(std.testing.allocator, probe, list_files.definition);
+    try std.testing.expectEqual(AvailabilityStatus.available, native.status);
 }

@@ -10,6 +10,12 @@ pub const definition = types.ToolDefinition{
     .name = "search_files",
     .description = "Find text or symbols with the IX expression engine under an existing path. Restricted mode keeps search inside the workspace; runtime.full_access_mode=true permits an explicit external path. Use for content discovery, not file reading. Arguments require pattern and optionally accept path, glob, and max_results.",
     .review_risk = .read_only,
+    .availability = .{
+        .dependency = .{
+            .kind = .external_command,
+            .name = command_name,
+        },
+    },
     .parameters_json =
     \\{
     \\  "type": "object",
@@ -27,12 +33,7 @@ pub const definition = types.ToolDefinition{
     .usage_hint = "Use list_files first when unsure about the search root. Use read_file after search_files identifies a target. Paths stay inside the workspace unless runtime.full_access_mode is explicitly true. pattern is a native IX expression or literal: lit:needle, re:TODO|FIXME, lit:a || lit:b. Do not invent rg flags, grep syntax, or shell pipelines.",
 };
 
-pub const availability = module.AvailabilitySpec{
-    .dependency = .{
-        .kind = .external_command,
-        .name = command_name,
-    },
-};
+pub const availability = definition.availability;
 
 pub fn execute(
     allocator: std.mem.Allocator,
@@ -40,7 +41,7 @@ pub fn execute(
     arguments_json: []const u8,
     runner: module.CommandRunner,
 ) ![]u8 {
-    try registry.ensureAvailable(allocator, execution_context.command_probe, definition.name);
+    try registry.ensureAvailable(allocator, execution_context.command_probe, definition);
 
     const Args = struct {
         pattern: []const u8,

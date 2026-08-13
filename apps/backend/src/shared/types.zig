@@ -455,6 +455,23 @@ pub const ToolRiskClass = enum {
     unknown_high_impact,
 };
 
+/// Runtime dependency metadata travels with the tool definition that exposes it.
+/// The registry may probe the dependency, but it does not own a second catalog
+/// of tool-name-to-availability mappings.
+pub const DependencyKind = enum {
+    none,
+    external_command,
+};
+
+pub const Dependency = struct {
+    kind: DependencyKind,
+    name: []const u8,
+};
+
+pub const AvailabilitySpec = struct {
+    dependency: ?Dependency = null,
+};
+
 /// Parse a risk class label string into the enum, or null if invalid.
 pub fn parseReviewRiskLabel(text: []const u8) ?ToolRiskClass {
     if (std.mem.eql(u8, text, "read_only")) return .read_only;
@@ -473,6 +490,7 @@ pub const ToolDefinition = struct {
     review_risk: ToolRiskClass,
     example_json: ?[]const u8 = null,
     usage_hint: ?[]const u8 = null,
+    availability: AvailabilitySpec = .{},
 };
 
 pub const ToolCall = struct {

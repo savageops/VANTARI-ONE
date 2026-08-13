@@ -1,22 +1,13 @@
 const std = @import("std");
 const agent_scope = @import("../agents/scope.zig");
 const fsutil = @import("../../shared/fsutil.zig");
+const types = @import("../../shared/types.zig");
 
 pub const DelegationScope = agent_scope.DelegationScope;
 
-pub const DependencyKind = enum {
-    none,
-    external_command,
-};
-
-pub const Dependency = struct {
-    kind: DependencyKind,
-    name: []const u8,
-};
-
-pub const AvailabilitySpec = struct {
-    dependency: ?Dependency = null,
-};
+pub const DependencyKind = types.DependencyKind;
+pub const Dependency = types.Dependency;
+pub const AvailabilitySpec = types.AvailabilitySpec;
 
 pub const CommandProbe = struct {
     context: ?*anyopaque = null,
