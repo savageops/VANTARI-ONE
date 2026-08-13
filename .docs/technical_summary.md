@@ -16,7 +16,7 @@ child-agent execution, and recovery evidence. TUI and CLI render kernel
 projections. `apps/frontend` is an ignored local prototype, not a shipped
 tracked client.
 
-## Current frontier — Move 44
+## Current frontier — Move 45
 
 Move 34 closes the Codex subscription transport slice. `core/auth/store.zig`
 remains the single credential owner for workspace `.var/auth.json` and installed
@@ -172,6 +172,23 @@ match `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`;
 the final installed VANTARI process census is zero. The eight-source harvest
 and rejected gauge/registry complexity are recorded in
 `.docs/research/2026-08-13-status-row-move44.md`.
+
+Move 45 closes the signal-bearing footer policy. `formatFooterMetaWithPool`
+keeps existing active/max agent and queue pressure conditional, then reuses
+the same lower-signal segment for a known session total formatted as
+`cost $0.######`. The value is projected only from finite, nonnegative
+`turn_terminal.cost_total_usd`; unknown provider pricing stays omitted and
+`/status` remains the detailed cost surface. No cost poller, event, registry,
+second row, or status bus was added.
+
+Move 45 proof: focused TUI passes `9/9` steps and `77/77` tests; Debug passes
+`19/19` build steps and `1,998/1,998` tests; ReleaseFast/install passes `9/9`.
+Installed TUI rendered `ready · orchestrate · glm-5.2 · max · ctx — / 500k`
+and blank startup/exit passed. Source and installed SHA-256 match
+`D83E9A843286E79861FD5FA25514DD18C17B3307DDEC7A2842216B9DA3AB38EA`; the
+exact owner-tree teardown leaves zero VANTARI processes. The seven-source
+harvest and rejected status-registry/poller complexity are recorded in
+`.docs/research/2026-08-13-agent-queue-cost-move45.md`.
 
 ## Behavior plane
 

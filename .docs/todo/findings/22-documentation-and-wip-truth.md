@@ -214,3 +214,18 @@ Do not erase historical closeout records or fabricate proof to make a chain gree
   owner-tree teardown leaves zero VANTARI processes.
 - The active boundary is Move 45: agent/queue/cost signal policy. Agent Hub and
   the installed visual matrix remain later boundaries.
+
+## Closure receipt — Move 45 (2026-08-13)
+
+- The existing footer read model now adds known session cost only when terminal
+  telemetry carries finite, nonnegative pricing. Active/max agents and queue
+  pressure remain signal-gated; unpriced sessions stay quiet. No second row,
+  poller, registry, event, or status bus was added.
+- Focused TUI is `77/77`; Debug is `19/19` with `1,998/1,998`; ReleaseFast and
+  install are `9/9`. Installed TUI rendered the compact row and blank startup/
+  exit passed. Source and installed SHA-256 match
+  `D83E9A843286E79861FD5FA25514DD18C17B3307DDEC7A2842216B9DA3AB38EA`; exact
+  owner-tree teardown leaves zero VANTARI processes.
+- The active boundary is Move 46: explicit unknown context after compaction or
+  incomplete provider accounting. Agent Hub and the installed visual matrix
+  remain later boundaries.

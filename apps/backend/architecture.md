@@ -651,6 +651,14 @@ Latest local Windows validation on 2026-08-13:
   SHA-256 match
   `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`; exact
   owner/kernel tree teardown leaves zero VANTARI processes.
+- Move 45 installed TUI retained the same compact row; the existing footer
+  projection now appends finite, nonnegative priced session cost as
+  `cost $0.######` only when terminal telemetry carries it, while unknown
+  provider pricing remains absent. Focused TUI is `77/77`; Debug is `19/19`
+  with `1,998/1,998`; ReleaseFast/install is `9/9`. Source and installed
+  SHA-256 match
+  `D83E9A843286E79861FD5FA25514DD18C17B3307DDEC7A2842216B9DA3AB38EA`; exact
+  owner/kernel tree teardown leaves zero VANTARI processes.
 - The source ticket lifecycle mesh at
   `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`
   proves assignment without launch, one claim, noninteractive TUI detach, exact

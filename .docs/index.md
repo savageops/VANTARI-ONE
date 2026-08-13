@@ -37,6 +37,7 @@ This directory contains project records, research, planning chains, and complete
 - [`research/2026-08-13-tui-composer-move42.md`](research/2026-08-13-tui-composer-move42.md) — Move 42 seven-source TUI harvest, composer surface hierarchy, conditional cancellation, and narrow/wide proof.
 - [`research/2026-08-13-prompt-mode-move43.md`](research/2026-08-13-prompt-mode-move43.md) — Move 43 seven-source prompt-mode harvest, Shift+Tab cycle, provider-visible layer, and rejected executor/registry complexity.
 - [`research/2026-08-13-status-row-move44.md`](research/2026-08-13-status-row-move44.md) — Move 44 eight-source status-row harvest, compact footer order, truthful context display, and rejected gauge/registry complexity.
+- [`research/2026-08-13-agent-queue-cost-move45.md`](research/2026-08-13-agent-queue-cost-move45.md) — Move 45 agent/queue/cost signal harvest, conditional footer policy, priced-session boundary, and rejected status-registry complexity.
 - [`todo/findings/00-INDEX.md`](todo/findings/00-INDEX.md) — executable P0/P1/P2 closure order; current authority over older completion claims.
 - [`roadmap/24-harness-capability-next-90.md`](roadmap/24-harness-capability-next-90.md) — 90 dependency-ordered moves ranked by operator value, capability leverage, integrity risk, and friction removed.
 - [`roadmap/21-persistent-execution-owner.md`](roadmap/21-persistent-execution-owner.md) — closed single-owner lifecycle: reconnect, duplicate exclusion, graceful/crash recovery, process cleanup, and installed proof.

@@ -2691,3 +2691,25 @@ controlled, with provider-visible capture and no executor behavior branches.
 
 **Next todo:** Move 45 — keep active/max agents, nonzero queue, and known session
 cost only when those values carry signal.
+
+## Closure receipt — Move 45 (2026-08-13)
+
+- The seven-source agent/queue/cost harvest is recorded in
+  `.docs/research/2026-08-13-agent-queue-cost-move45.md`. It keeps the existing
+  footer projection owner and rejects a cost poller, registry, event, second row,
+  or status bus.
+- `formatFooterMetaWithPool` now appends finite, nonnegative priced session cost
+  as `cost $0.######` in the existing lower-signal segment. Active/max and queue
+  remain conditional; unknown provider pricing remains absent.
+- Focused TUI returned `9/9` steps and `77/77` tests; Debug returned `19/19`
+  steps and `1,998/1,998` tests; ReleaseFast/install returned `9/9`.
+- Installed TUI rendered `ready · orchestrate · glm-5.2 · max · ctx — / 500k`.
+  Source and installed SHA-256 match
+  `D83E9A843286E79861FD5FA25514DD18C17B3307DDEC7A2842216B9DA3AB38EA`; the
+  exact owner/kernel tree was torn down and the final process census was zero.
+- Updated roadmap, research/index records, root/backend README, architecture,
+  technical summary, workspace record, findings receipt, `AGENTS.md`, `SKILL.md`,
+  and `llms.txt`.
+
+**Next todo:** Move 46 — preserve explicit unknown context after compaction or
+incomplete provider accounting; add no precision the kernel did not prove.

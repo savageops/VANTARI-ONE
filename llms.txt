@@ -18,8 +18,11 @@ changes provider guidance only; it does not change the executor, tools, access,
 model, or capacity.
 
 The TUI footer is one non-wrapping read model: status, prompt mode, model,
-effort, context used/capacity/percent, and remaining context. Unknown accounting
-is `ctx —`; no footer registry, progress gauge, second row, or status bus exists.
+effort, context used/capacity/percent, and remaining context. Active/max agents
+and queue pressure are signal-gated; finite priced session cost may share the
+lower-signal segment, while unknown accounting is `ctx —` and unknown pricing
+is omitted. No footer registry, cost poller, progress gauge, second row, or
+status bus exists.
 
 Canonical execution path:
 operator input -> public LocalClient facade -> project-local execution owner ->

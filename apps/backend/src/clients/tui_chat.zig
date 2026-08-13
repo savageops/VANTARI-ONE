@@ -2073,6 +2073,7 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
             .tickets_in_progress = state.tickets_in_progress,
             .ticket_ledger_healthy = state.ticket_ledger_healthy,
         },
+        if (state.has_session_cost) state.session_cost_usd else null,
         meta_width,
     );
     defer state.allocator.free(footer_meta);
@@ -2837,6 +2838,7 @@ fn formatFooterMeta(
         cancel_requested,
         scroll_offset,
         .{},
+        null,
         width,
     );
 }
@@ -2856,6 +2858,7 @@ fn formatFooterMetaWithPool(
     cancel_requested: bool,
     scroll_offset: usize,
     pool: FooterPool,
+    session_cost_usd: ?f64,
     width: usize,
 ) ![]u8 {
     if (width == 0) return allocator.dupe(u8, "");
@@ -2885,6 +2888,12 @@ fn formatFooterMetaWithPool(
             try agents.writer().print("queue {d}", .{pool.tickets_assigned});
         } else {
             try agents.appendSlice("queue ?");
+        }
+    }
+    if (session_cost_usd) |cost| {
+        if (std.math.isFinite(cost) and cost >= 0.0) {
+            if (agents.items.len > 0) try agents.appendSlice(" · ");
+            try agents.writer().print("cost ${d:.6}", .{cost});
         }
     }
 
@@ -4606,6 +4615,7 @@ test "tui footer maps runtime status and active prompt mode" {
         false,
         0,
         .{},
+        null,
         120,
     );
     defer allocator.free(working);
@@ -4629,6 +4639,7 @@ test "tui footer maps runtime status and active prompt mode" {
         false,
         0,
         .{},
+        null,
         120,
     );
     defer allocator.free(failed);
@@ -4785,6 +4796,8 @@ test "tui footer projects canonical pool and buffered ticket pressure" {
     try std.testing.expectEqual(@as(usize, 2), state.tickets_assigned);
     try std.testing.expectEqual(@as(usize, 1), state.tickets_in_progress);
     try std.testing.expect(state.ticket_ledger_healthy);
+    state.session_cost_usd = 0.001234;
+    state.has_session_cost = true;
 
     const footer = try formatFooterMetaWithPool(
         allocator,
@@ -4809,6 +4822,7 @@ test "tui footer projects canonical pool and buffered ticket pressure" {
             .tickets_in_progress = state.tickets_in_progress,
             .ticket_ledger_healthy = state.ticket_ledger_healthy,
         },
+        if (state.has_session_cost) state.session_cost_usd else null,
         140,
     );
     defer allocator.free(footer);
@@ -4819,6 +4833,7 @@ test "tui footer projects canonical pool and buffered ticket pressure" {
     try std.testing.expect(std.mem.indexOf(u8, footer, "agents 1/2") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "pool 1/4") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "queue 2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "cost $0.001234") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "Esc cancel") == null);
 
     const quiet = try formatFooterMeta(
@@ -4838,6 +4853,7 @@ test "tui footer projects canonical pool and buffered ticket pressure" {
     defer allocator.free(quiet);
     try std.testing.expect(std.mem.indexOf(u8, quiet, "pool") == null);
     try std.testing.expect(std.mem.indexOf(u8, quiet, "queue") == null);
+    try std.testing.expect(std.mem.indexOf(u8, quiet, "cost") == null);
 
     const unhealthy = try formatFooterMetaWithPool(
         allocator,
@@ -4854,6 +4870,7 @@ test "tui footer projects canonical pool and buffered ticket pressure" {
         false,
         0,
         .{ .known = true, .healthy = false, .ticket_ledger_healthy = false },
+        null,
         140,
     );
     defer allocator.free(unhealthy);

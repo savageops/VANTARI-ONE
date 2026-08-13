@@ -336,7 +336,7 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - **Minimal agent group rows** — `Agents completed/total`; no persistent `waiting on N` filler
 - **Replay-safe activity** — live and cold TUI projections consume contiguous sequence-bearing parent events; legacy sequence-less activity rows are not rendered
 - **Live streaming** — assistant deltas, reasoning deltas, and tool progress rendered in real-time
-- **Operator metadata row** — one non-wrapping row for status, prompt mode, model, effort, context used/capacity/remaining, and signal-bearing agent/queue pressure; unknown context stays `ctx —` and persistent `Esc cancel` text is omitted
+- **Operator metadata row** — one non-wrapping row for status, prompt mode, model, effort, context used/capacity/remaining, and signal-bearing agent/queue/cost pressure; active/max and queue appear only when useful, finite priced session cost is compact, unknown context stays `ctx —`, and persistent `Esc cancel` text is omitted
 - **Composer hierarchy** — transcript surface < metadata surface < focused input surface; `cancelling` appears only during an active cancellation request and disappears at the terminal boundary
 
 ## Quick Start

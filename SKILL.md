@@ -59,8 +59,10 @@ second runtime owner.
 - The single TUI footer row projects `status · prompt mode · model · effort ·
   context used/capacity/percent · remaining` without wrapping; unknown context
   stays `ctx —`, and narrow fitting drops lower-signal detail before
-  codepoint-safe truncation. Keep it a read model, not a settings registry or
-  status bus.
+  codepoint-safe truncation. Active/max agents and queue pressure appear only
+  when nonzero or unhealthy; priced session cost appears only for finite,
+  nonnegative terminal telemetry. Keep it a read model, not a settings registry,
+  cost poller, or status bus.
 - Use `vantari auth status --json` for secret-free provider/account/plan state.
   Run `vantari auth login openai-codex` for the browser PKCE path or its manual
   redirect fallback; use `vantari auth logout <provider-id>` for one-record

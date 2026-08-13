@@ -25,6 +25,7 @@
     "current_tui_composer_research": ".docs/research/2026-08-13-tui-composer-move42.md",
     "current_prompt_mode_research": ".docs/research/2026-08-13-prompt-mode-move43.md",
     "current_status_row_research": ".docs/research/2026-08-13-status-row-move44.md",
+    "current_agent_queue_cost_research": ".docs/research/2026-08-13-agent-queue-cost-move45.md",
     "current_execution_owner_decision": ".docs/roadmap/21-persistent-execution-owner.md"
   },
   "canonical_owners": {
@@ -107,9 +108,10 @@
     "codex_transport": "Move 34 source and installed proof: OAuth openai-codex dispatch builds /codex/responses with chatgpt-account-id, originator, OpenAI-Beta, and SSE headers; request includes stream:true and store:false; local fixture returns ok; /v1/chat/completions is not requested; bearer output is absent; owner/kernel pair is explicitly torn down and final installed process census is zero",
     "tui_cost_consumer": "Move 37/38/39 source and installed proof: multiline system rows preserve /status; installed Z.AI turns record measured prompt/completion/cached tokens and known/unknown cost states; historical graph 1964/1964; current artifact is superseded by Move40 hash 279A112A1D7CD94BF2C5678C961E83A3458951CB9D48E9C5CC21A6D01DF409AF; final installed VANTARI process census zero",
     "plugin_boundary": "Move40 deferred-delete: no installed plugin runtime consumer exists; default-visible manage_plugin placeholder and registry/runtime branches were removed; contract-only manifest/isolation/socket types remain for a future concrete need; installed tools catalog has 24 tools and excludes manage_plugin; final process census zero",
-    "tui_projection": "Move41/42/43/44 source and installed proof: cold activity hydration ignores seq 0, contiguous live/replay child rows match, child summaries come from summaries.jsonl, session/list limit 1 prevents oversized latest-session selection responses, composer background tokens are surface < metadata < composer, cancellation is active-only, Shift+Tab cycles the session-local prompt lens and the selected provider layer is captured without executor/capability branches, one non-wrapping footer row projects status/mode/model/effort/context/remaining with codepoint-safe fitting, installed TUI startup and blank exit pass, source/installed SHA-256 F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2, exact owner-tree teardown leaves zero VANTARI processes",
+    "tui_projection": "Move41/42/43/44/45 source and installed proof: cold activity hydration ignores seq 0, contiguous live/replay child rows match, child summaries come from summaries.jsonl, session/list limit 1 prevents oversized latest-session selection responses, composer background tokens are surface < metadata < composer, cancellation is active-only, Shift+Tab cycles the session-local prompt lens and the selected provider layer is captured without executor/capability branches, one non-wrapping footer row projects status/mode/model/effort/context/remaining with codepoint-safe fitting, active/max and queue pressure stay signal-gated, finite priced session cost shares the lower-signal segment and unknown pricing stays quiet, installed TUI startup and blank exit pass, source/installed SHA-256 D83E9A843286E79861FD5FA25514DD18C17B3307DDEC7A2842216B9DA3AB38EA, exact owner-tree teardown leaves zero VANTARI processes",
     "prompt_mode": "Move43 source and installed proof: PromptMode cycle orchestrate/build/align/plan, next session/send carries exact label, unknown labels return JSON-RPC -32602 before execution, all context rebuild paths preserve the typed mode, provider system envelope contains the selected layer, focused TUI 76/76, Debug 1996/1996, ReleaseFast/install 9/9",
     "status_row": "Move44 source and installed proof: one formatFooterMetaWithPool owner emits ready/working/cancelling/failed, prompt mode, model, effort, exact/unknown context, and remaining context; focused TUI 77/77, Debug 1998/1998, ReleaseFast/install 9/9; installed row and zero-process teardown pass",
+    "agent_queue_cost": "Move45 source and installed proof: existing active/max and queue segments remain conditional; finite nonnegative turn_terminal.cost_total_usd renders as cost $0.###### in the same lower-signal footer segment; unknown provider pricing is omitted; focused TUI 77/77, Debug 1998/1998, ReleaseFast/install 9/9; installed row and exact zero-process teardown pass",
     "active_installed_processes_preserved": []
   },
   "wip": {
@@ -117,13 +119,13 @@
     "035": "035a-h and parent archived; provider/cost chain closed",
     "036": "036a-h and parent archived; findings 10, 11, and 13 closed; moves 21-31 and 38-40 closed; external-effect certainty remains a separate frontier",
     "PLUG": "parent and PLUGa-h archived as superseded by Move40 deferred-delete; no active plugin runtime frontier",
-    "TUI": "Move44 closed; Move45 agent/queue/cost signal policy is next"
+    "TUI": "Move45 closed; Move46 explicit unknown context after compaction or incomplete provider accounting is next"
   },
   "residuals": [
     "Both test-isolation incidents, 877 older context-poison fixtures, and legacy backend owners are repaired reversibly; quarantine/archive manifests and rollback paths remain retained evidence.",
     "The fixed agent pool survives presentation detach in one source and installed owner tree; scheduler leadership and ticket claim/lease/child admission are process-exclusive; assignment is ledger-only and has no config policy branch. Source and installed Windows lifecycle meshes close exact tree death, generation replacement, same-session resume, nested direct/group/parent delivery, terminal settlement, cold readback, and zero-process cleanup. Arbitrary external-effect certainty remains a separate gate.",
     "The tracked TUI consumes exact stored event seq and the in-process 100-way mesh is closed; ignored browser routes keep a compatibility transport SSE id, and multi-process writer ownership remains coupled to scheduler/claim arbitration.",
-    "Current source ReleaseFast and installed binary share SHA-256 F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2. Moves 37-44, Move 34 Codex transport, Move 33 auth CLI proof, and prior owner/ticket promotion pass; installed tools catalog excludes manage_plugin, latest-session continuation is bounded, composer/cancellation/prompt-mode/status-row proof is installed, and final installed process census is zero.",
+    "Current source ReleaseFast and installed binary share SHA-256 D83E9A843286E79861FD5FA25514DD18C17B3307DDEC7A2842216B9DA3AB38EA. Moves 37-45, Move 34 Codex transport, Move 33 auth CLI proof, and prior owner/ticket promotion pass; installed tools catalog excludes manage_plugin, latest-session continuation is bounded, composer/cancellation/prompt-mode/status-row/agent-queue-cost proof is installed, and final installed process census is zero.",
     "Autonomous repair remains a gated evidence workflow, not an implicit background mutator."
   ]
 }

@@ -506,3 +506,23 @@ rendered `ready · orchestrate · glm-5.2 · max · ctx — / 500k` and exited a
 the exact owner/kernel tree was torn down. Source and installed SHA-256 match
 `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`; the final
 VANTARI process census is zero. Move 45 is the active frontier.
+
+## Superseding current evidence — Move 45 (2026-08-13)
+
+Move 45 closes the signal-bearing footer policy. The seven-source harvest and
+subtractive decision are recorded at
+`[2026-08-13-agent-queue-cost-move45.md](2026-08-13-agent-queue-cost-move45.md)`.
+The existing `formatFooterMetaWithPool` owner keeps active/max agent and queue
+segments conditional on nonzero or unhealthy signal, and now appends
+`cost $0.######` only when `turn_terminal.cost_total_usd` is finite and
+nonnegative. Unknown provider pricing stays omitted; `/status` remains the
+detailed cost surface. No cost poller, registry, event, row, status bus, or
+second owner was added.
+
+Focused TUI passes `9/9` steps and `77/77` tests; the Debug graph passes
+`19/19` steps and `1,998/1,998` tests; ReleaseFast/install passes `9/9`. The
+installed TUI rendered `ready · orchestrate · glm-5.2 · max · ctx — / 500k` and
+blank startup/exit passed. Source and installed SHA-256 match
+`D83E9A843286E79861FD5FA25514DD18C17B3307DDEC7A2842216B9DA3AB38EA`; the
+proof-owned owner/kernel tree was explicitly torn down and the final VANTARI
+process census is zero. Move 46 is the active frontier.

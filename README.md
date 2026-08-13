@@ -256,7 +256,7 @@ the exact session. The transcript, execution receipt, attempt, and mailbox curso
 do not move. This recovery is source and installed proven; arbitrary external
 side-effect certainty still requires the write-intent ledger.
 
-The TUI keeps this mechanic legible without adding a status forest: one non-wrapping footer row shows `status · prompt mode · model · effort · context used/capacity/percent · remaining`; unknown accounting stays `ctx —`, and narrow fitting drops lower-signal detail before codepoint-safe truncation. The footer shows pool and queue pressure only when non-zero; the activity group shows `Agents completed/total`; each keyed child row ends with a bounded turn summary sourced from the child session summary ledger. Tool lifecycle names remain typed event metadata, not the visible child summary. The composer is a focused surface above a quieter metadata row, and cancellation copy appears only while a run is actively cancelling; the persistent footer omits `Esc cancel`.
+The TUI keeps this mechanic legible without adding a status forest: one non-wrapping footer row shows `status · prompt mode · model · effort · context used/capacity/percent · remaining`; unknown accounting stays `ctx —`, and narrow fitting drops lower-signal detail before codepoint-safe truncation. The footer shows pool and queue pressure only when non-zero, and priced session cost only when terminal telemetry carries a finite value; the activity group shows `Agents completed/total`; each keyed child row ends with a bounded turn summary sourced from the child session summary ledger. Tool lifecycle names remain typed event metadata, not the visible child summary. The composer is a focused surface above a quieter metadata row, and cancellation copy appears only while a run is actively cancelling; the persistent footer omits `Esc cancel`.
 
 <br/>
 
@@ -942,6 +942,7 @@ vantari auth status|login|logout <provider>    identity and provider auth
 | [`.docs/research/2026-08-13-tui-composer-move42.md`](./.docs/research/2026-08-13-tui-composer-move42.md) | Seven-source TUI harvest, composer surface hierarchy, conditional cancellation, and narrow/wide proof |
 | [`.docs/research/2026-08-13-prompt-mode-move43.md`](./.docs/research/2026-08-13-prompt-mode-move43.md) | Seven-source prompt-mode harvest, Shift+Tab cycle, provider-visible layer, and rejected executor/registry complexity |
 | [`.docs/research/2026-08-13-status-row-move44.md`](./.docs/research/2026-08-13-status-row-move44.md) | Eight-source status-row harvest, compact footer order, truthful context display, and rejected gauge/registry complexity |
+| [`.docs/research/2026-08-13-agent-queue-cost-move45.md`](./.docs/research/2026-08-13-agent-queue-cost-move45.md) | Seven-source agent/queue/cost harvest, signal-gated footer policy, priced-session boundary, and rejected poller/registry complexity |
 | [`.docs/research/2026-08-13-model-selected-agent-eligibility.md`](./.docs/research/2026-08-13-model-selected-agent-eligibility.md) | Eight-reference selection harvest, deterministic eligibility receipt, prompt-profile tracer, and rejected selector architecture |
 | [`.docs/todo/findings/00-INDEX.md`](./.docs/todo/findings/00-INDEX.md) | Priority-ordered executable readiness findings |
 
@@ -971,6 +972,8 @@ failure pressure rather than line coverage:
   fail-closed unknown `session/send.prompt_mode`
 - Compact non-wrapping TUI status row: status mapping, prompt mode, model,
   effort, context remaining/unknown state, and codepoint-safe truncation
+- Signal-gated footer pressure and priced session cost: active/max agents,
+  queue, and finite `turn_terminal.cost_total_usd`; unknown pricing stays quiet
 
 ```powershell
 cd apps/backend
