@@ -118,7 +118,12 @@ test "workspace resolution uses installed override only when cwd has no owner" {
 }
 
 fn makeIsolatedTempRoot(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
-    const temp = std.process.getEnvVarOwned(allocator, "TEMP") catch try std.process.getEnvVarOwned(allocator, "TMP");
+    // Windows hosts always carry TEMP/TMP; POSIX hosts usually set neither.
+    // Fall back to the standard POSIX temp directory so the isolation tests
+    // run on Linux and macOS, not only on Windows.
+    const temp = std.process.getEnvVarOwned(allocator, "TEMP") catch
+        std.process.getEnvVarOwned(allocator, "TMP") catch
+        try allocator.dupe(u8, "/tmp");
     defer allocator.free(temp);
 
     const root = try std.fmt.allocPrint(allocator, "{s}{c}vantari-workspace-resolution-{s}-{d}", .{
