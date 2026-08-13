@@ -300,7 +300,13 @@ pub const State = struct {
         return input_protocol.serializeResponse(allocator, self.request_id, false, answers);
     }
 
-    pub fn draw(self: *const State, win: tui.Window, input: *TextInput, styles: DrawStyles) void {
+    pub fn draw(
+        self: *const State,
+        win: tui.Window,
+        input: *TextInput,
+        styles: DrawStyles,
+        frame_allocator: std.mem.Allocator,
+    ) void {
         win.fill(.{ .style = styles.panel });
         if (win.width == 0 or win.height == 0 or self.questions.items.len == 0) return;
         if (self.confirming) {
@@ -310,9 +316,7 @@ pub const State = struct {
             var row: usize = 3;
             for (self.questions.items) |question| {
                 if (row >= win.height) break;
-                const summary = formatAnswerSummary(self.allocator, question) catch continue;
-                defer self.allocator.free(summary);
-                _ = win.print(&.{.{ .text = summary, .style = styles.confirm }}, .{ .row_offset = @intCast(row), .col_offset = 1, .wrap = .none });
+                drawAnswerSummary(win, question, row, styles.confirm);
                 row += 1;
             }
             if (self.confirm_error and row < win.height) {
@@ -322,8 +326,14 @@ pub const State = struct {
         }
 
         const active_index = @min(self.question_index, self.questions.items.len - 1);
-        var header_buffer: [128]u8 = undefined;
-        const header = std.fmt.bufPrint(&header_buffer, " Questions {d}/{d} · ↑/↓ question · ←/→ option · Tab next", .{ active_index + 1, self.questions.items.len }) catch " Questions";
+        // Vaxis retains printed text until the outer frame reaches
+        // `vx.render`.  Header text therefore belongs to the frame arena, not
+        // a helper stack frame that ends before the render boundary.
+        const header = std.fmt.allocPrint(
+            frame_allocator,
+            " Questions {d}/{d} · ↑/↓ question · ←/→ option · Tab next",
+            .{ active_index + 1, self.questions.items.len },
+        ) catch " Questions";
         _ = win.print(&.{.{ .text = header, .style = styles.title }}, .{ .row_offset = 0, .wrap = .none });
         _ = win.print(&.{.{ .text = "────────────────────────────────────────────────────────────────", .style = styles.hint }}, .{ .row_offset = 1, .wrap = .none });
 
@@ -362,47 +372,84 @@ pub const State = struct {
     ) void {
         if (row >= win.height or win.width == 0) return;
         const prompt_width = @min(@as(usize, 28), @max(@as(usize, 10), @as(usize, win.width) / 3));
-        var prompt_buffer: [256]u8 = undefined;
         const prompt_limit = prompt_width -| 2;
         const prompt = truncate(question.prompt, prompt_limit);
-        const prompt_text = std.fmt.bufPrint(&prompt_buffer, "{s} {s}", .{ if (active) "›" else " ", prompt }) catch prompt;
-        _ = win.print(&.{.{ .text = prompt_text, .style = if (active) styles.selected else styles.prompt }}, .{ .row_offset = @intCast(row), .col_offset = 1, .wrap = .none });
+        const prompt_style = if (active) styles.selected else styles.prompt;
+        _ = win.print(
+            &.{
+                .{ .text = if (active) "› " else "  ", .style = prompt_style },
+                .{ .text = prompt, .style = prompt_style },
+            },
+            .{ .row_offset = @intCast(row), .col_offset = 1, .wrap = .none },
+        );
 
         var col: usize = prompt_width + 3;
         for (question.options.items, 0..) |option, option_index| {
             if (col >= win.width) break;
-            const label = optionDisplay(self.allocator, option, option_index, if (active) self.option_cursor else std.math.maxInt(usize)) catch continue;
-            defer self.allocator.free(label);
             const available = @as(usize, win.width) - col;
-            const visible_label = truncate(label, available);
+            const marker = if (option.selected) "✓ " else if (active and option_index == self.option_cursor) "› " else "  ";
+            const option_style = if (active and option_index == self.option_cursor)
+                styles.selected
+            else if (option.selected)
+                styles.confirm
+            else
+                styles.option;
+            const prefix_width = marker.len + option.id.len + 2;
+            const label_width = available -| prefix_width;
+            const visible_label = truncate(option.label, label_width);
             if (visible_label.len == 0) break;
-            _ = win.print(&.{.{ .text = visible_label, .style = if (active and option_index == self.option_cursor) styles.selected else if (option.selected) styles.confirm else styles.option }}, .{ .row_offset = @intCast(row), .col_offset = @intCast(col), .wrap = .none });
-            col += @min(available, label.len + 2);
+            _ = win.print(
+                &.{
+                    .{ .text = marker, .style = option_style },
+                    .{ .text = option.id, .style = option_style },
+                    .{ .text = ") ", .style = option_style },
+                    .{ .text = visible_label, .style = option_style },
+                },
+                .{ .row_offset = @intCast(row), .col_offset = @intCast(col), .wrap = .none },
+            );
+            col += @min(available, prefix_width + visible_label.len + 2);
         }
     }
 };
 
-fn optionDisplay(allocator: std.mem.Allocator, option: Option, index: usize, cursor: usize) ![]u8 {
-    const marker = if (option.selected) "✓" else if (index == cursor) "›" else " ";
-    return std.fmt.allocPrint(allocator, "{s} {s}) {s}", .{ marker, option.id, option.label });
+fn appendSegment(
+    segments: []tui.Cell.Segment,
+    count: *usize,
+    text: []const u8,
+    style: tui.Cell.Style,
+) void {
+    if (text.len == 0 or count.* >= segments.len) return;
+    segments[count.*] = .{ .text = text, .style = style };
+    count.* += 1;
 }
 
-fn formatAnswerSummary(allocator: std.mem.Allocator, question: Question) ![]u8 {
-    var selected = std.array_list.Managed(u8).init(allocator);
-    defer selected.deinit();
-    try selected.writer().print("{s}: ", .{question.prompt});
-    var first = true;
+fn drawAnswerSummary(win: tui.Window, question: Question, row: usize, style: tui.Cell.Style) void {
+    if (row >= win.height) return;
+
+    // Every segment points to static text or storage owned by State. Do not
+    // allocate a summary and free it before `vx.render`; the window keeps the
+    // segment text borrowed through that boundary.
+    var segments: [32]tui.Cell.Segment = undefined;
+    var count: usize = 0;
+    appendSegment(segments[0..], &count, question.prompt, style);
+    appendSegment(segments[0..], &count, ": ", style);
+
+    var selected_count: usize = 0;
     for (question.options.items) |option| {
         if (!option.selected) continue;
-        if (!first) try selected.writer().writeAll(", ");
-        first = false;
-        try selected.writer().writeAll(option.label);
+        if (selected_count > 0) appendSegment(segments[0..], &count, ", ", style);
+        appendSegment(segments[0..], &count, option.label, style);
         if (std.mem.eql(u8, option.id, "f")) {
-            if (question.other_text) |value| try selected.writer().print(" = {s}", .{value});
+            if (question.other_text) |value| {
+                appendSegment(segments[0..], &count, " = ", style);
+                appendSegment(segments[0..], &count, value, style);
+            }
         }
+        selected_count += 1;
     }
-    if (first) try selected.writer().writeAll("(none)");
-    return selected.toOwnedSlice();
+    if (selected_count == 0) appendSegment(segments[0..], &count, "(none)", style);
+
+    _ = win.print(segments[0..count], .{ .row_offset = @intCast(row), .col_offset = 1, .wrap = .none });
 }
 
 fn truncate(value: []const u8, width: usize) []const u8 {
@@ -416,6 +463,70 @@ fn truncate(value: []const u8, width: usize) []const u8 {
         codepoints += 1;
     }
     return value[0..byte_index];
+}
+
+fn sliceBorrowedFromQuestionOwner(slice: []const u8, owner: []const u8) bool {
+    if (slice.len == 0) return true;
+    if (owner.len == 0) return false;
+    const slice_start = @intFromPtr(slice.ptr);
+    const slice_end = slice_start + slice.len;
+    const owner_start = @intFromPtr(owner.ptr);
+    const owner_end = owner_start + owner.len;
+    return slice_start >= owner_start and slice_end <= owner_end;
+}
+
+fn sliceBorrowedFromQuestionState(slice: []const u8, questions: []const Question) bool {
+    for (questions) |question| {
+        if (sliceBorrowedFromQuestionOwner(slice, question.id) or
+            sliceBorrowedFromQuestionOwner(slice, question.prompt)) return true;
+        if (question.other_text) |value| {
+            if (sliceBorrowedFromQuestionOwner(slice, value)) return true;
+        }
+        for (question.options.items) |option| {
+            if (sliceBorrowedFromQuestionOwner(slice, option.id) or
+                sliceBorrowedFromQuestionOwner(slice, option.label)) return true;
+        }
+    }
+    return false;
+}
+
+fn sliceBorrowedFromQuestionStatic(slice: []const u8) bool {
+    const sources = [_][]const u8{
+        " Confirm answers",
+        "Enter submit · Esc back",
+        "────────────────────────────────────────────────────────────────",
+        " Questions",
+        "› ",
+        "✓ ",
+        ") ",
+        " Other: ",
+        " Review and submit · Tab from the last question",
+        "Choose an answer and complete every selected Other option.",
+        "(none)",
+        ": ",
+        ", ",
+        " = ",
+    };
+    for (sources) |source| {
+        if (sliceBorrowedFromQuestionOwner(slice, source)) return true;
+    }
+    return false;
+}
+
+fn expectQuestionScreenTextOwnership(
+    screen: tui.Screen,
+    state: *const State,
+    frame_storage: []const u8,
+) !void {
+    for (screen.buf) |cell| {
+        const text = cell.char.grapheme;
+        if (text.len == 0 or std.mem.eql(u8, text, " ")) continue;
+        try std.testing.expect(
+            sliceBorrowedFromQuestionState(text, state.questions.items) or
+                sliceBorrowedFromQuestionOwner(text, frame_storage) or
+                sliceBorrowedFromQuestionStatic(text),
+        );
+    }
 }
 
 test "question controller selects, confirms, and serializes answers" {
@@ -499,4 +610,48 @@ test "question controller guards empty panel dimensions and rejects malformed in
     defer state.deinit();
     try std.testing.expectEqual(@as(u16, 0), state.panelHeight(0));
     try std.testing.expectEqual(@as(u16, 0), state.panelHeight(10));
+}
+
+test "question panel render cells keep state or frame-owned text through the frame" {
+    const allocator = std.testing.allocator;
+    var unicode = try tui.Unicode.init(allocator);
+    defer unicode.deinit(allocator);
+    var screen = try tui.Screen.init(allocator, .{ .rows = 8, .cols = 120, .x_pixel = 0, .y_pixel = 0 });
+    defer screen.deinit(allocator);
+    var state = try State.initFromJson(allocator,
+        "{\"request_id\":\"call-render\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Direction\",\"options\":[{\"id\":\"a\",\"label\":\"Fast\"},{\"id\":\"b\",\"label\":\"Careful\"}]},{\"id\":\"q2\",\"prompt\":\"Scope\",\"options\":[{\"id\":\"a\",\"label\":\"Local\"},{\"id\":\"b\",\"label\":\"Full\"}]}]}",
+    );
+    defer state.deinit();
+    var input = TextInput.init(allocator, &unicode);
+    defer input.deinit();
+    var frame_storage: [2048]u8 = undefined;
+    var frame_allocator = std.heap.FixedBufferAllocator.init(&frame_storage);
+    const win = tui.Window{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = screen.width,
+        .height = screen.height,
+        .screen = &screen,
+        .unicode = &unicode,
+    };
+    const styles = DrawStyles{
+        .panel = .{},
+        .title = .{},
+        .prompt = .{},
+        .option = .{},
+        .selected = .{},
+        .hint = .{},
+        .input = .{},
+        .confirm = .{},
+    };
+
+    state.draw(win, &input, styles, frame_allocator.allocator());
+    try expectQuestionScreenTextOwnership(screen, &state, frame_storage[0..]);
+
+    state.questions.items[0].options.items[0].selected = true;
+    state.confirming = true;
+    state.draw(win, &input, styles, frame_allocator.allocator());
+    try expectQuestionScreenTextOwnership(screen, &state, frame_storage[0..]);
 }

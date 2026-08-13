@@ -2419,6 +2419,14 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         }
     }
 
+    // Vaxis retains printed text until this frame reaches `vx.render`.
+    // Interactive question rows use the same boundary, so give their bounded
+    // formatting one frame-owned arena instead of borrowing helper-stack or
+    // immediately-freed buffers.
+    var frame_arena = std.heap.ArenaAllocator.init(state.allocator);
+    defer frame_arena.deinit();
+    const frame_allocator = frame_arena.allocator();
+
     root.fill(.{ .style = styles.surface });
 
     const reasoning_body_width = @max(@as(usize, 1), @as(usize, root.width -| 8));
@@ -2488,16 +2496,21 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         .height = layout.footer_height,
     });
     if (state.input_state) |*active| {
-        active.draw(input_win, input, .{
-            .panel = styles.composer,
-            .title = styles.assistant,
-            .prompt = styles.text,
-            .option = styles.user_text,
-            .selected = styles.assistant,
-            .hint = styles.meta_value,
-            .input = styles.composer,
-            .confirm = styles.text,
-        });
+        active.draw(
+            input_win,
+            input,
+            .{
+                .panel = styles.composer,
+                .title = styles.assistant,
+                .prompt = styles.text,
+                .option = styles.user_text,
+                .selected = styles.assistant,
+                .hint = styles.meta_value,
+                .input = styles.composer,
+                .confirm = styles.text,
+            },
+            frame_allocator,
+        );
     } else {
         input_win.fill(.{ .style = styles.meta_surface });
         drawAutocomplete(input_win, state, layout.editor_y);
