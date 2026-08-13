@@ -448,7 +448,7 @@ The model-visible catalog is generated from module-owned definitions. Each entry
 |---|---|---|
 | `read_file` | `read_only` | Bounded text read; workspace-relative by default, explicit external paths in full access mode |
 | `list_files` | `read_only` | Native Zig directory and file discovery — no external dependencies; same access boundary |
-| `search_files` | `read_only` | Content search via external `iex` binary with structured JSON output; probes availability at startup |
+| `search_files` | `read_only` | Content search via external `ix` binary with structured JSON output; probes availability at startup |
 | `write_file` | `write_capable` | Atomic file creation/overwrite with `var1.tool_effect.v1` receipt and SHA-256 verification; same access boundary |
 | `append_file` | `write_capable` | Additive writes for ledgers and large artifact chunking with effect receipt; same access boundary |
 | `replace_in_file` | `write_capable` | Targeted find-replace with before/after verification and effect receipt; same access boundary |
@@ -467,7 +467,7 @@ The model-visible catalog is generated from module-owned definitions. Each entry
 | `list_agents` | Enumerate parent's active children |
 | `send_agent_message` | Queue or wake one exact recipient, parent, or current group without creating work |
 
-All tool definitions are schema-first. The registry resolves availability from module-owned specs — `search_files` probes the `iex` executable at startup and reports unavailable if absent, rather than failing at invocation time. `tools/list` and `vantari tools --json` expose the same catalog with availability metadata, examples, and usage hints.
+All tool definitions are schema-first. The registry resolves availability from module-owned specs — `search_files` probes the `ix` executable at startup and reports unavailable if absent, rather than failing at invocation time. `tools/list` and `vantari tools --json` expose the same catalog with availability metadata, examples, and usage hints.
 
 **Bounded output:** File tools accept full content when the provider delivers it; long generated artifacts still prefer `write_file` seed plus `append_file` chunks for progress and recovery. Shell output capture is capped at 64KB per stream. Output-budget violations return `ToolPayloadExceeded` with repair hints instead of silent truncation.
 
@@ -995,10 +995,15 @@ failure pressure rather than line coverage:
   effort, context remaining/unknown state, and codepoint-safe truncation
 - Signal-gated footer pressure and priced session cost: active/max agents,
   queue, and finite `turn_terminal.cost_total_usd`; unknown pricing stays quiet
-- Agent group/child `○`/`◉` markers, typed phase and elapsed snapshots, live
-  summary refresh at the existing summary-tool boundary, bounded quoted summary
-  retention through tool/terminal phases, and valid UTF-8
-  one-row summary truncation
+- Agent group/child `○`/`◉` markers and one-row `agent - state "latest summary"`
+  projection; typed phase and elapsed evidence stays out of the visible row,
+  while the existing summary-tool boundary refreshes the quoted detail
+- Registry-backed command autocomplete above the composer: bare first-token
+  prefixes such as `set` discover `settings`, `/` remains compatible, and
+  arrows, Escape, Tab, and Enter operate the bounded transient palette
+- Optional orchestrate-only footer sweep from the isolated campaign controller;
+  other prompt modes stay static and the loop remains event-driven outside the
+  bounded active animation window
 
 ```powershell
 cd apps/backend

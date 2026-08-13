@@ -30,7 +30,7 @@ pub const definition = types.ToolDefinition{
     \\  "additionalProperties": false
     \\}
     ,
-    .example_json = "{\"action\":\"create\",\"title\":\"search_files unavailable when iex missing\",\"description\":\"The iex dependency is unresolved on Windows installs.\",\"category\":\"tool\",\"severity\":\"high\"}",
+    .example_json = "{\"action\":\"create\",\"title\":\"search_files unavailable when ix missing\",\"description\":\"The ix dependency is unresolved on Windows installs.\",\"category\":\"tool\",\"severity\":\"high\"}",
     .usage_hint = "Create work as unassigned, transition it to assigned when it is admitted to the queue, and let the scheduler claim it through the configured agent pool. Use list for projected current state. Never use a direct transition to pretend that a provider task or repair review completed.",
 };
 
@@ -253,7 +253,7 @@ test "log_ticket creates a durable projected queue record" {
     const ctx = module.ExecutionContext{ .workspace_root = workspace, .session_id = "source-session" };
 
     const output = try execute(allocator, ctx,
-        \\{"title":"search_files unavailable when iex missing","description":"The advertised iex dependency is unresolved on Windows installs.","category":"tool","severity":"high","evidence":["registry.zig:141","health --json"],"proposed_owner":"apps/backend/src/core/tools/registry.zig"}
+        \\{"title":"search_files unavailable when ix missing","description":"The advertised ix dependency is unresolved on Windows installs.","category":"tool","severity":"high","evidence":["registry.zig:141","health --json"],"proposed_owner":"apps/backend/src/core/tools/registry.zig"}
     );
     defer allocator.free(output);
 

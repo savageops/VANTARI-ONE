@@ -266,7 +266,7 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
 
     if (std.mem.eql(u8, error_name, "FileNotFound")) {
         if (std.mem.eql(u8, tool_name, "search_files")) {
-            return "The search path or the iex executable was not found. Re-check the path with list_files, or switch to read_file if you already know the target file.";
+            return "The search path or the ix executable was not found. Re-check the path with list_files, or switch to read_file if you already know the target file.";
         }
         if (std.mem.eql(u8, tool_name, "list_files")) {
             return "The requested path was not found. Omit path or use . for the workspace root, then retry with an existing path.";
@@ -297,7 +297,7 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
     }
 
     if (std.mem.eql(u8, error_name, "ToolUnavailable") and std.mem.eql(u8, tool_name, "search_files")) {
-        return "search_files is unavailable because its required iex executable dependency is not resolvable. Use list_files and read_file until capability availability reports search_files as available.";
+        return "search_files is unavailable because its required ix executable dependency is not resolvable. Use list_files and read_file until capability availability reports search_files as available.";
     }
 
     if (std.mem.eql(u8, error_name, "AgentEligibilityRequired")) {

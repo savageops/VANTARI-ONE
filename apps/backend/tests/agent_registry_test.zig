@@ -247,7 +247,7 @@ fn verifyRegistryCase(index: usize) !void {
                 second.deinit(std.testing.allocator);
                 var registry = try VAR1.core.agent_spec.loadRegistry(std.testing.allocator, workspace);
                 defer registry.deinit();
-                try std.testing.expectEqualStrings("Read-only repository or evidence reconnaissance. IX/IEX search, exact provenance.", (try registry.resolve("recon")).description);
+                try std.testing.expectEqualStrings("Read-only repository or evidence reconnaissance. IX search, exact provenance.", (try registry.resolve("recon")).description);
             } else if (index == 39) {
                 const evidence = try VAR1.core.agent_spec.upsertConfiguredAgent(std.testing.allocator, workspace, .{ .id = "recon", .enabled = false });
                 defer evidence.deinit(std.testing.allocator);

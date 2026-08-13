@@ -118,12 +118,43 @@ pub fn Loop(comptime T: type) type {
 
             switch (builtin.os.tag) {
                 .windows => {
+                    if (@hasField(Event, "winsize")) {
+                        if (self.tty.getWinsize()) |winsize| {
+                            self.postEvent(.{ .winsize = winsize });
+                        } else |err| {
+                            // ConPTY stdin/stdout handles can reject the
+                            // console geometry API. Keep the client alive
+                            // with the same conservative viewport used by
+                            // headless terminal adapters.
+                            log.warn("console size unavailable: {s}; using 80x24", .{@errorName(err)});
+                            self.postEvent(.{ .winsize = .{
+                                .cols = 80,
+                                .rows = 24,
+                                .x_pixel = 0,
+                                .y_pixel = 0,
+                            } });
+                        }
+                    }
                     var parser: Parser = .{
                         .grapheme_data = grapheme_data,
                     };
                     while (!self.should_quit) {
-                        const event = try self.tty.nextEvent(&parser, paste_allocator);
-                        try handleEventGeneric(self, self.vaxis, &cache, Event, event, null);
+                        const event = self.tty.nextEvent(&parser, paste_allocator) catch |err| {
+                            log.err("tty input stopped: {s}", .{@errorName(err)});
+                            if (@hasField(Event, "input_error")) {
+                                self.postEvent(.{ .input_error = @errorName(err) });
+                                return;
+                            }
+                            return err;
+                        };
+                        handleEventGeneric(self, self.vaxis, &cache, Event, event, null) catch |err| {
+                            log.err("tty event handling stopped: {s}", .{@errorName(err)});
+                            if (@hasField(Event, "input_error")) {
+                                self.postEvent(.{ .input_error = @errorName(err) });
+                                return;
+                            }
+                            return err;
+                        };
                     }
                 },
                 else => {

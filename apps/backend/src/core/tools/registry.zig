@@ -161,7 +161,7 @@ fn commandDependencyAvailable(
 fn isIxSearchDependency(tool_name: []const u8, dependency: module.Dependency) bool {
     return dependency.kind == .external_command and
         std.mem.eql(u8, tool_name, search_files.definition.name) and
-        std.mem.eql(u8, dependency.name, "iex");
+        std.mem.eql(u8, dependency.name, search_files.command_name);
 }
 
 fn ixSearchCommandAvailable(
@@ -249,7 +249,7 @@ test "availability registry is derived from builtin module definitions" {
     const search_spec = availabilitySpec(search_files.definition.name).?;
     try std.testing.expect(search_spec.dependency != null);
     try std.testing.expectEqual(module.DependencyKind.external_command, search_spec.dependency.?.kind);
-    try std.testing.expectEqualStrings("iex", search_spec.dependency.?.name);
+    try std.testing.expectEqualStrings(search_files.command_name, search_spec.dependency.?.name);
 
     for (agents.definitions) |definition| {
         const agent_spec = availabilitySpec(definition.name);

@@ -337,6 +337,18 @@ inline fn parseCsi(input: []const u8, text_buf: []u8) Result {
 
     const final = sequence[sequence.len - 1];
     switch (final) {
+        'Z' => {
+            // The canonical terminal encoding for Shift+Tab is CSI Z.
+            // Treat it as the same logical key as a Kitty/Windows key event
+            // carrying the shift modifier so clients can keep one binding.
+            return .{
+                .event = .{ .key_press = .{
+                    .codepoint = Key.tab,
+                    .mods = .{ .shift = true },
+                } },
+                .n = sequence.len,
+            };
+        },
         'A', 'B', 'C', 'D', 'E', 'F', 'H', 'P', 'Q', 'R', 'S' => {
             // Legacy keys
             // CSI {ABCDEFHPQS}
@@ -1109,6 +1121,22 @@ test "parse(csi): primary da" {
     const result = parseCsi(input, &buf);
     const expected: Result = .{
         .event = .cap_da1,
+        .n = input.len,
+    };
+
+    try testing.expectEqual(expected.n, result.n);
+    try testing.expectEqual(expected.event, result.event);
+}
+
+test "parse(csi): shift tab" {
+    var buf: [1]u8 = undefined;
+    const input = "\x1b[Z";
+    const result = parseCsi(input, &buf);
+    const expected: Result = .{
+        .event = .{ .key_press = .{
+            .codepoint = Key.tab,
+            .mods = .{ .shift = true },
+        } },
         .n = input.len,
     };
 

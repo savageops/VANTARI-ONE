@@ -4,15 +4,17 @@ const types = @import("../../../shared/types.zig");
 const module = @import("../module.zig");
 const registry = @import("../registry.zig");
 
+pub const command_name = "ix";
+
 pub const definition = types.ToolDefinition{
     .name = "search_files",
-    .description = "Find text or symbols with the IX/IEX expression engine under an existing path. Restricted mode keeps search inside the workspace; runtime.full_access_mode=true permits an explicit external path. Use for content discovery, not file reading. Arguments require pattern and optionally accept path, glob, and max_results.",
+    .description = "Find text or symbols with the IX expression engine under an existing path. Restricted mode keeps search inside the workspace; runtime.full_access_mode=true permits an explicit external path. Use for content discovery, not file reading. Arguments require pattern and optionally accept path, glob, and max_results.",
     .review_risk = .read_only,
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "pattern": { "type": "string", "description": "Required iex expression or literal pattern to search for." },
+    \\    "pattern": { "type": "string", "description": "Required IX expression or literal pattern to search for." },
     \\    "path": { "type": "string", "description": "Optional existing file or directory path to search. Restricted mode requires a workspace-relative path; runtime.full_access_mode=true permits an explicit external path. Defaults to the workspace root when omitted or set to ." },
     \\    "glob": { "type": "string", "description": "Optional wildcard filter on matched file paths, for example *.zig or src/*.zig." },
     \\    "max_results": { "type": "integer", "minimum": 1, "description": "Optional maximum number of matching lines to return." }
@@ -22,13 +24,13 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"pattern\":\"read_file\",\"path\":\"src\",\"glob\":\"*.zig\",\"max_results\":20}",
-    .usage_hint = "Use list_files first when unsure about the search root. Use read_file after search_files identifies a target. Paths stay inside the workspace unless runtime.full_access_mode is explicitly true. pattern is a native IX/IEX expression or literal: lit:needle, re:TODO|FIXME, lit:a || lit:b. Do not invent rg flags, grep syntax, or shell pipelines.",
+    .usage_hint = "Use list_files first when unsure about the search root. Use read_file after search_files identifies a target. Paths stay inside the workspace unless runtime.full_access_mode is explicitly true. pattern is a native IX expression or literal: lit:needle, re:TODO|FIXME, lit:a || lit:b. Do not invent rg flags, grep syntax, or shell pipelines.",
 };
 
 pub const availability = module.AvailabilitySpec{
     .dependency = .{
         .kind = .external_command,
-        .name = "iex",
+        .name = command_name,
     },
 };
 
@@ -68,7 +70,7 @@ pub fn execute(
     var argv = std.array_list.Managed([]const u8).init(allocator);
     defer argv.deinit();
 
-    try argv.append("iex");
+    try argv.append(command_name);
     try argv.append("search");
     try argv.append("--json");
     try argv.append("--max-hits");
@@ -115,8 +117,11 @@ fn renderSearchHits(
         hits: ?[]SearchHit = null,
     };
 
+    // IX adds telemetry and absolute_path fields to its stable hit envelope.
+    // VANTARI consumes only the bounded hit projection and must tolerate those
+    // additive fields without turning a valid search into UnknownField.
     var parsed = try std.json.parseFromSlice(SearchResponse, allocator, search_json, .{
-        .ignore_unknown_fields = false,
+        .ignore_unknown_fields = true,
     });
     defer parsed.deinit();
 

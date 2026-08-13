@@ -5,6 +5,7 @@ const history = VAR1.core.session_history;
 const commands = @import("commands.zig");
 const settings_view = @import("settings_view.zig");
 const question_view = @import("question_view.zig");
+const footer_effects = @import("footer_effects.zig");
 
 const protocol = VAR1.core.protocol_types;
 const protocol_events = VAR1.shared.protocol.events;
@@ -20,6 +21,7 @@ const Event = union(enum) {
     key_press: tui.Key,
     mouse: tui.Mouse,
     winsize: tui.Winsize,
+    input_error: []const u8,
     focus_in,
     focus_out,
 };
@@ -85,6 +87,7 @@ const Message = struct {
     text_capacity: usize = 0,
     tool_call_id: ?[]u8 = null,
     activity_parent_id: ?[]u8 = null,
+    activity_name: ?[]u8 = null,
     activity_summary: ?[]u8 = null,
     activity_phase: ?[]u8 = null,
     activity_elapsed_ms: i64 = 0,
@@ -97,6 +100,7 @@ const Message = struct {
         self.freeText(allocator);
         if (self.tool_call_id) |tool_call_id| allocator.free(tool_call_id);
         if (self.activity_parent_id) |parent_id| allocator.free(parent_id);
+        if (self.activity_name) |name| allocator.free(name);
         if (self.activity_summary) |summary| allocator.free(summary);
         if (self.activity_phase) |phase| allocator.free(phase);
     }
@@ -154,6 +158,7 @@ const ChatState = struct {
     effort: []const u8 = "",
     thinking_mode: []const u8 = "",
     prompt_mode: prompt_modes.PromptMode = .orchestrate,
+    footer_effect: footer_effects.Controller = .{},
     context_window_tokens: u64 = 0,
     reserve_output_tokens: u64 = 0,
     full_access_mode: bool = false,
@@ -214,10 +219,13 @@ const ChatState = struct {
     /// One event-backed interactive input controller. The kernel owns the
     /// request lifecycle; this state owns only the active TUI projection.
     input_state: ?question_view.State = null,
-    /// Slash command autocomplete — when the composer input starts with '/',
-    /// a filtered dropdown of matching commands renders above the composer.
+    /// Reserved command autocomplete. A leading slash remains accepted for
+    /// compatibility, while a single bare command token (for example
+    /// `sett`) uses the same registry-backed popup.
     autocomplete_visible: bool = false,
     autocomplete_cursor: usize = 0,
+    autocomplete_scroll: usize = 0,
+    autocomplete_matches: std.ArrayList(usize) = .{},
     /// Reverse history search mode — activated by Ctrl+R. Filters the global
     /// history by the typed substring and shows the most recent match.
     search_mode: bool = false,
@@ -235,11 +243,78 @@ const ChatState = struct {
         if (self.buffer_preview) |preview| self.allocator.free(preview);
         if (self.settings_state) |*ss| ss.deinit();
         if (self.input_state) |*input_state| input_state.deinit();
+        self.autocomplete_matches.deinit(self.allocator);
         self.search_buffer.deinit(self.allocator);
     }
 
     fn cyclePromptMode(self: *ChatState) void {
         self.prompt_mode = self.prompt_mode.next();
+    }
+
+    fn clearAutocomplete(self: *ChatState) void {
+        self.autocomplete_visible = false;
+        self.autocomplete_cursor = 0;
+        self.autocomplete_scroll = 0;
+        self.autocomplete_matches.clearRetainingCapacity();
+    }
+
+    /// Rebuild the transient command palette from the existing command
+    /// metadata. Only the first, single token is reserved; prose and command
+    /// arguments remain ordinary model input. A slash is optional for new
+    /// input but stays supported for muscle memory and compatibility.
+    fn refreshAutocomplete(self: *ChatState, input: *const TextInput) !void {
+        self.clearAutocomplete();
+
+        const owned = try input.toOwnedCopy(self.allocator);
+        defer self.allocator.free(owned);
+        const token = std.mem.trimLeft(u8, owned, " \t");
+        if (token.len == 0) return;
+        if (std.mem.indexOfAny(u8, token, " \t\r\n") != null) return;
+
+        const slash = token[0] == '/';
+        const query = if (slash) token[1..] else token;
+        if (!slash and query.len == 0) return;
+
+        for (commands.builtin_command_info, 0..) |info, index| {
+            if (query.len > info.name.len) continue;
+            if (!std.ascii.eqlIgnoreCase(info.name[0..query.len], query)) continue;
+            try self.autocomplete_matches.append(self.allocator, index);
+        }
+        self.autocomplete_visible = self.autocomplete_matches.items.len > 0;
+    }
+
+    fn autocompleteHeight(self: *const ChatState) usize {
+        if (!self.autocomplete_visible) return 0;
+        return @min(@as(usize, 5), self.autocomplete_matches.items.len);
+    }
+
+    fn moveAutocompleteCursor(self: *ChatState, direction: i8) void {
+        const count = self.autocomplete_matches.items.len;
+        if (count == 0) return;
+
+        if (direction < 0) {
+            if (self.autocomplete_cursor == 0) {
+                self.autocomplete_cursor = count - 1;
+            } else {
+                self.autocomplete_cursor -= 1;
+            }
+        } else {
+            self.autocomplete_cursor = (self.autocomplete_cursor + 1) % count;
+        }
+
+        const visible = self.autocompleteHeight();
+        if (visible == 0) return;
+        if (self.autocomplete_cursor < self.autocomplete_scroll) {
+            self.autocomplete_scroll = self.autocomplete_cursor;
+        } else if (self.autocomplete_cursor >= self.autocomplete_scroll + visible) {
+            self.autocomplete_scroll = self.autocomplete_cursor - visible + 1;
+        }
+    }
+
+    fn selectedAutocompleteName(self: *const ChatState) ?[]const u8 {
+        if (!self.autocomplete_visible or self.autocomplete_matches.items.len == 0) return null;
+        const cursor = @min(self.autocomplete_cursor, self.autocomplete_matches.items.len - 1);
+        return commands.builtin_command_info[self.autocomplete_matches.items[cursor]].name;
     }
 
     fn beginInputRequest(self: *ChatState, message: []const u8) !void {
@@ -959,7 +1034,7 @@ const ChatState = struct {
             parsed.value.detail
         else
             null;
-        if (try self.updateChildActivity(key, parsed.value.name, state, phase, parsed.value.elapsed_ms, summary)) return;
+        if (try self.updateChildActivity(key, parsed.value.name, state, summary)) return;
 
         var compact_summary: ?[]u8 = null;
         defer if (compact_summary) |value| self.allocator.free(value);
@@ -968,14 +1043,12 @@ const ChatState = struct {
             self.allocator,
             parsed.value.name,
             state,
-            phase,
-            parsed.value.elapsed_ms,
             compact_summary,
             self.last_transcript_body_width,
         );
         defer self.allocator.free(text);
         try self.upsertActivityProgress(key, text, .item, state, parsed.value.group_id);
-        try self.setActivityMetadata(key, compact_summary, phase, parsed.value.elapsed_ms);
+        try self.setActivityMetadata(key, parsed.value.name, compact_summary, phase, parsed.value.elapsed_ms);
     }
 
     fn updateChildActivity(
@@ -983,8 +1056,6 @@ const ChatState = struct {
         activity_id: []const u8,
         name: []const u8,
         state: ActivityState,
-        phase: ?[]const u8,
-        elapsed_ms: i64,
         summary: ?[]const u8,
     ) !bool {
         for (self.messages.items) |*message| {
@@ -996,21 +1067,16 @@ const ChatState = struct {
             defer if (compact_summary) |value| self.allocator.free(value);
             if (summary) |value| compact_summary = try compactAgentSummary(self.allocator, value);
             const display_summary = compact_summary orelse message.activity_summary;
-            const display_phase = phase orelse message.activity_phase;
-            const display_elapsed_ms = if (elapsed_ms > 0) elapsed_ms else message.activity_elapsed_ms;
             const replacement = try formatAgentActivitySummary(
                 self.allocator,
                 name,
                 state,
-                display_phase,
-                display_elapsed_ms,
                 display_summary,
                 self.last_transcript_body_width,
             );
             errdefer self.allocator.free(replacement);
+            try self.replaceActivityName(message, name);
             if (compact_summary) |value| try self.replaceActivitySummary(message, value);
-            if (phase) |value| try self.replaceActivityPhase(message, value);
-            if (elapsed_ms > 0) message.activity_elapsed_ms = elapsed_ms;
             message.replaceTextOwned(self.allocator, replacement);
             message.activity_state = state;
             return true;
@@ -1021,6 +1087,7 @@ const ChatState = struct {
     fn setActivityMetadata(
         self: *ChatState,
         activity_id: []const u8,
+        name: []const u8,
         summary: ?[]const u8,
         phase: ?[]const u8,
         elapsed_ms: i64,
@@ -1029,6 +1096,7 @@ const ChatState = struct {
             if (message.role != .progress) continue;
             const existing = message.tool_call_id orelse continue;
             if (!std.mem.eql(u8, existing, activity_id)) continue;
+            try self.replaceActivityName(message, name);
             if (summary) |value| try self.replaceActivitySummary(message, value);
             if (phase) |value| try self.replaceActivityPhase(message, value);
             if (elapsed_ms > 0) message.activity_elapsed_ms = elapsed_ms;
@@ -1040,6 +1108,13 @@ const ChatState = struct {
         const replacement = try self.allocator.dupe(u8, summary);
         if (message.activity_summary) |existing| self.allocator.free(existing);
         message.activity_summary = replacement;
+    }
+
+    fn replaceActivityName(self: *ChatState, message: *Message, name: []const u8) !void {
+        if (name.len == 0) return;
+        const replacement = try self.allocator.dupe(u8, name);
+        if (message.activity_name) |existing| self.allocator.free(existing);
+        message.activity_name = replacement;
     }
 
     fn replaceActivityPhase(self: *ChatState, message: *Message, phase: []const u8) !void {
@@ -1347,6 +1422,24 @@ const ChatState = struct {
     fn maxScrollOffsetRows(self: *const ChatState) usize {
         const rows = transcriptRowCount(self, self.last_transcript_body_width);
         return if (rows == 0) 0 else rows - 1;
+    }
+
+    fn reflowActivityRows(self: *ChatState, body_width: usize) !void {
+        if (body_width == self.last_transcript_body_width) return;
+
+        for (self.messages.items) |*message| {
+            if (message.role != .progress) continue;
+            const name = message.activity_name orelse continue;
+            const replacement = try formatAgentActivitySummary(
+                self.allocator,
+                name,
+                message.activity_state,
+                message.activity_summary,
+                body_width,
+            );
+            message.replaceTextOwned(self.allocator, replacement);
+        }
+        self.last_transcript_body_width = body_width;
     }
 
     fn drainUiEventsDuringTurn(
@@ -1956,7 +2049,28 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
         state.refreshHealthIfDue() catch {};
         try draw(&vx, writer, &state, &input);
 
-        const event = loop.nextEvent();
+        const settings_open = if (state.settings_state) |settings| settings.open else false;
+        const footer_animation_visible = state.footer_effect.selected_effect != .none and
+            state.input_state == null and
+            !settings_open;
+        const event = if (!footer_animation_visible)
+            loop.nextEvent()
+        else blk: {
+            while (true) {
+                if (loop.tryEvent()) |queued_event| break :blk queued_event;
+
+                const now_ms = std.time.milliTimestamp();
+                const mode_label = state.prompt_mode.label();
+                if (state.footer_effect.needsRender(mode_label, now_ms)) {
+                    try draw(&vx, writer, &state, &input);
+                }
+
+                const wait_ms = state.footer_effect.nextWaitMs(mode_label, now_ms);
+                if (wait_ms > 0) {
+                    std.Thread.sleep(@as(u64, @intCast(wait_ms)) * std.time.ns_per_ms);
+                }
+            }
+        };
         switch (event) {
             .key_press => |key| {
                 // Settings overlay key routing — when the panel is open, all keys
@@ -2006,6 +2120,46 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                 if (key.matches(tui.Key.tab, .{ .shift = true })) {
                     state.cyclePromptMode();
                     continue;
+                }
+
+                // The palette owns navigation while it is visible. Enter
+                // activates the highlighted command; Tab accepts its spelling
+                // into the composer for a second look before submission.
+                if (state.autocomplete_visible) {
+                    if (key.matches(tui.Key.escape, .{})) {
+                        state.clearAutocomplete();
+                        continue;
+                    }
+                    if (key.matches(tui.Key.up, .{})) {
+                        state.moveAutocompleteCursor(-1);
+                        continue;
+                    }
+                    if (key.matches(tui.Key.down, .{})) {
+                        state.moveAutocompleteCursor(1);
+                        continue;
+                    }
+                    if (key.matches(tui.Key.tab, .{})) {
+                        if (state.selectedAutocompleteName()) |name| {
+                            input.clearAndFree();
+                            input.insertSliceAtCursor(name) catch {};
+                            state.refreshAutocomplete(&input) catch state.clearAutocomplete();
+                        }
+                        continue;
+                    }
+                    if (key.matches(tui.Key.enter, .{}) or key.matches('j', .{ .ctrl = true })) {
+                        if (state.selectedAutocompleteName()) |name| {
+                            const result = commands.dispatchBare(ChatState, &state, &command_registry, name) catch .not_a_command;
+                            state.clearAutocomplete();
+                            switch (result) {
+                                .exit => break,
+                                .handled => {
+                                    input.clearAndFree();
+                                    continue;
+                                },
+                                .not_a_command => {},
+                            }
+                        }
+                    }
                 }
 
                 // Ctrl+R — enter/continue reverse history search.
@@ -2073,13 +2227,16 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                 }
                 if (state.scroll_offset == 0 and key.matches(tui.Key.up, .{})) {
                     try state.historyNavigateUp(&input);
+                    state.refreshAutocomplete(&input) catch state.clearAutocomplete();
                     continue;
                 }
                 if (state.scroll_offset == 0 and key.matches(tui.Key.down, .{})) {
                     try state.historyNavigateDown(&input);
+                    state.refreshAutocomplete(&input) catch state.clearAutocomplete();
                     continue;
                 }
                 if (key.matches(tui.Key.enter, .{}) or key.matches('j', .{ .ctrl = true })) {
+                    state.clearAutocomplete();
                     const owned_prompt = try input.toOwnedSlice();
                     defer allocator.free(owned_prompt);
                     const prompt = std.mem.trim(u8, owned_prompt, " \t\r\n");
@@ -2098,11 +2255,23 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                     continue;
                 }
                 try input.update(.{ .key_press = key });
+                state.refreshAutocomplete(&input) catch state.clearAutocomplete();
             },
             .mouse => |mouse| {
                 if (applyMouseScroll(&state, mouse)) continue;
             },
-            .winsize => |ws| try vx.resize(allocator, tty.anyWriter(), ws),
+            .winsize => |ws| {
+                try vx.resize(allocator, tty.anyWriter(), ws);
+            },
+            .input_error => |err_name| {
+                const message = std.fmt.allocPrint(allocator, "Terminal input stopped: {s}", .{err_name}) catch null;
+                if (message) |value| {
+                    defer allocator.free(value);
+                    state.add(.system, value) catch {};
+                }
+                draw(&vx, writer, &state, &input) catch {};
+                break;
+            },
             else => {},
         }
     }
@@ -2163,11 +2332,19 @@ fn applyMouseScroll(state: *ChatState, mouse: tui.Mouse) bool {
 
 fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !void {
     const root = vx.window();
+    const footer_frame = state.footer_effect.markRendered(
+        state.prompt_mode.label(),
+        std.time.milliTimestamp(),
+    );
 
     // Settings overlay — when open, render full-screen instead of normal layout.
     if (state.settings_state) |*ss| {
         if (ss.open) {
             settings_view.drawSettings(root, ss);
+            // Settings paints the same Vaxis frame as the chat view. It must
+            // go through the normal render boundary or the operator sees the
+            // old frame and the panel appears frozen after the command.
+            try vx.render(writer);
             try writer.flush();
             return;
         }
@@ -2188,15 +2365,29 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         "";
     var reasoning_rows = try buildReasoningDockRows(state.allocator, dock_source, reasoning_body_width);
     defer reasoning_rows.deinit(state.allocator);
+    // Vaxis screen cells borrow printed text until vx.render completes.
+    // Keep the frame-owned footer backing bytes alive through that call.
+    var footer_meta_owned: ?[]u8 = null;
+    defer if (footer_meta_owned) |value| state.allocator.free(value);
+    const base_footer_height = @min(@as(u16, 3), root.height);
+    const available_autocomplete_height = root.height -| base_footer_height;
+    const autocomplete_height: u16 = if (state.input_state == null)
+        @intCast(@min(state.autocompleteHeight(), @as(usize, available_autocomplete_height)))
+    else
+        0;
     const question_footer_height = if (state.input_state) |*active|
         active.panelHeight(root.height)
     else
-        @min(@as(u16, 3), root.height);
-    const layout = computeLayoutWithReasoningDockAndFooter(
+        base_footer_height +| autocomplete_height;
+    var layout = computeLayoutWithReasoningDockAndFooter(
         root.height,
         @intCast(reasoning_rows.items.len),
         question_footer_height,
     );
+    if (state.input_state == null) {
+        layout.editor_y = @min(autocomplete_height, layout.footer_height -| 1);
+        layout.meta_y = @min(layout.footer_height -| 1, layout.editor_y +| 2);
+    }
 
     const transcript = root.child(.{
         .x_off = 0,
@@ -2235,6 +2426,7 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         });
     } else {
         input_win.fill(.{ .style = styles.meta_surface });
+        drawAutocomplete(input_win, state, layout.editor_y);
         const composer_row = input_win.child(.{
             .x_off = 0,
             .y_off = @intCast(layout.editor_y),
@@ -2251,7 +2443,7 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         input.drawWithStyle(editor, styles.composer);
         const agent_counts = state.agentCounts();
         const meta_width = @as(usize, input_win.width) -| 4;
-        const footer_meta = try formatFooterMetaWithScope(
+        footer_meta_owned = try formatFooterMetaWithScope(
             state.allocator,
             state.model,
             state.effort,
@@ -2278,7 +2470,6 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
             if (state.has_session_cost) state.session_cost_usd else null,
             meta_width,
         );
-        defer state.allocator.free(footer_meta);
 
         if (input_win.width > 1) {
             _ = input_win.print(&.{.{ .text = "●", .style = footerStatusStyle(state) }}, .{
@@ -2287,8 +2478,19 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
                 .wrap = .none,
             });
         }
-        if (footer_meta.len > 0 and input_win.width > 3) {
-            _ = input_win.print(&.{.{ .text = footer_meta, .style = styles.meta_value }}, .{
+        if (footer_meta_owned.?.len > 0 and input_win.width > 3) {
+            var footer_segments: [32]tui.Cell.Segment = undefined;
+            const footer_segment_count = footer_effects.writeSegments(
+                &footer_segments,
+                footer_meta_owned.?,
+                footer_frame,
+                .{
+                    .base = styles.meta_value,
+                    .edge = styles.footer_sweep_edge,
+                    .core = styles.footer_sweep_core,
+                },
+            );
+            _ = input_win.print(footer_segments[0..footer_segment_count], .{
                 .row_offset = layout.meta_y,
                 .col_offset = 3,
                 .wrap = .none,
@@ -2422,8 +2624,6 @@ fn activityTitle(tool_name: []const u8) []const u8 {
     return tool_name;
 }
 
-const max_agent_summary_width: usize = 144;
-
 fn compactAgentSummary(allocator: std.mem.Allocator, summary: []const u8) ![]u8 {
     var compact = std.array_list.Managed(u8).init(allocator);
     errdefer compact.deinit();
@@ -2436,94 +2636,27 @@ fn compactAgentSummary(allocator: std.mem.Allocator, summary: []const u8) ![]u8 
     return compact.toOwnedSlice();
 }
 
-fn activityPhaseLabel(phase: ?[]const u8) ?[]const u8 {
-    const value = phase orelse return null;
-    if (std.mem.eql(u8, value, "summary")) return null;
-    if (std.mem.eql(u8, value, "starting") or std.mem.eql(u8, value, "child_started")) return "starting";
-    if (std.mem.eql(u8, value, "session_started")) return "session";
-    if (std.mem.eql(u8, value, "tool_requested") or
-        std.mem.eql(u8, value, "tool_reviewed") or
-        std.mem.eql(u8, value, "tool_started") or
-        std.mem.eql(u8, value, "tool_finished") or
-        std.mem.eql(u8, value, "tool_completed")) return "tool";
-    if (std.mem.eql(u8, value, "model_task_provider_turn")) return "model";
-    if (std.mem.eql(u8, value, "waiting") or std.mem.eql(u8, value, "session_waiting")) return "waiting";
-    if (std.mem.eql(u8, value, "assistant_response")) return "response";
-    if (std.mem.eql(u8, value, "complete") or
-        std.mem.eql(u8, value, "child_finished") or
-        std.mem.eql(u8, value, protocol_events.turn_terminal_event_type)) return "complete";
-    if (std.mem.eql(u8, value, "cold_start_reconciliation")) return "reconcile";
-    return null;
-}
-
-fn formatActivityElapsed(allocator: std.mem.Allocator, elapsed_ms: i64) ![]u8 {
-    const value: i64 = @max(elapsed_ms, @as(i64, 0));
-    if (value < 1_000) return std.fmt.allocPrint(allocator, "{d}ms", .{value});
-    const seconds = @divTrunc(value, @as(i64, 1_000));
-    if (value < 60_000) return std.fmt.allocPrint(allocator, "{d}.{d}s", .{ seconds, @divTrunc(@rem(value, @as(i64, 1_000)), @as(i64, 100)) });
-    if (seconds < 3_600) return std.fmt.allocPrint(allocator, "{d}m {d}s", .{ @divTrunc(seconds, @as(i64, 60)), @rem(seconds, @as(i64, 60)) });
-    return std.fmt.allocPrint(allocator, "{d}h {d}m", .{ @divTrunc(seconds, @as(i64, 3_600)), @divTrunc(@rem(seconds, @as(i64, 3_600)), @as(i64, 60)) });
-}
-
 fn formatAgentActivityHeader(
     allocator: std.mem.Allocator,
     name: []const u8,
     state: ActivityState,
-    phase: ?[]const u8,
-    elapsed_ms: i64,
 ) ![]u8 {
-    var header = std.array_list.Managed(u8).init(allocator);
-    errdefer header.deinit();
-    const writer = header.writer();
-    try writer.print("{s} - {s}", .{ name, activityStateLabel(state) });
-    if (activityPhaseLabel(phase)) |label| {
-        if (!(state == .completed and std.mem.eql(u8, label, "complete"))) {
-            try writer.print(" · {s}", .{label});
-        }
-    }
-    if (elapsed_ms > 0) {
-        const elapsed = try formatActivityElapsed(allocator, elapsed_ms);
-        defer allocator.free(elapsed);
-        try writer.print(" · {s}", .{elapsed});
-    }
-    return header.toOwnedSlice();
+    return std.fmt.allocPrint(allocator, "{s} - {s}", .{ name, activityStateLabel(state) });
 }
 
 fn formatAgentActivitySummary(
     allocator: std.mem.Allocator,
     name: []const u8,
     state: ActivityState,
-    phase: ?[]const u8,
-    elapsed_ms: i64,
     summary: ?[]const u8,
     body_width: usize,
 ) ![]u8 {
-    const full_header = try formatAgentActivityHeader(allocator, name, state, phase, elapsed_ms);
-    defer allocator.free(full_header);
-    const value = summary orelse return truncateEnd(allocator, full_header, body_width);
-    if (value.len == 0) return truncateEnd(allocator, full_header, body_width);
+    const header = try formatAgentActivityHeader(allocator, name, state);
+    defer allocator.free(header);
+    const value = summary orelse return truncateEnd(allocator, header, body_width);
+    if (value.len == 0) return truncateEnd(allocator, header, body_width);
 
-    var phase_header: ?[]u8 = null;
-    defer if (phase_header) |owned| allocator.free(owned);
-    var core_header: ?[]u8 = null;
-    defer if (core_header) |owned| allocator.free(owned);
-    var header = full_header;
-    var available = @min(max_agent_summary_width, body_width -| (footerVisualWidth(header) + 3));
-    if (available == 0) {
-        if (phase != null) {
-            phase_header = try formatAgentActivityHeader(allocator, name, state, phase, 0);
-            if (footerVisualWidth(phase_header.?) + 3 <= body_width) {
-                header = phase_header.?;
-            } else {
-                core_header = try formatAgentActivityHeader(allocator, name, state, null, 0);
-                header = core_header.?;
-            }
-        } else {
-            core_header = try formatAgentActivityHeader(allocator, name, state, null, 0);
-            header = core_header.?;
-        }
-        available = @min(max_agent_summary_width, body_width -| (footerVisualWidth(header) + 3));
-    }
+    const available = body_width -| (footerVisualWidth(header) + 3);
     if (available == 0) return truncateEnd(allocator, header, body_width);
     const compact = try truncateEnd(allocator, value, available);
     defer allocator.free(compact);
@@ -2616,10 +2749,56 @@ const styles = struct {
     const text: Style = .{ .fg = Color.rgbFromUint(0xd9f7ef), .bg = Color.rgbFromUint(0x08110f) };
     const meta_label: Style = .{ .fg = Color.rgbFromUint(0x5d746e), .bg = Color.rgbFromUint(0x0a1614), .dim = true };
     const meta_value: Style = .{ .fg = Color.rgbFromUint(0x9bbab1), .bg = Color.rgbFromUint(0x0a1614), .dim = true };
+    const footer_sweep_edge: Style = .{ .fg = Color.rgbFromUint(0x43c58b), .bg = Color.rgbFromUint(0x0a1614), .bold = true };
+    const footer_sweep_core: Style = .{ .fg = Color.rgbFromUint(0x8ff5d2), .bg = Color.rgbFromUint(0x0a1614), .bold = true };
+    const autocomplete: Style = .{ .fg = Color.rgbFromUint(0x9bbab1), .bg = Color.rgbFromUint(0x0a1614) };
+    const autocomplete_name: Style = .{ .fg = Color.rgbFromUint(0xb7f7df), .bg = Color.rgbFromUint(0x0a1614), .bold = true };
+    const autocomplete_selected: Style = .{ .fg = Color.rgbFromUint(0xe8fff8), .bg = Color.rgbFromUint(0x18302b) };
+    const autocomplete_selected_name: Style = .{ .fg = Color.rgbFromUint(0xe8fff8), .bg = Color.rgbFromUint(0x18302b), .bold = true };
     const status_ready: Style = .{ .fg = Color.rgbFromUint(0x43c58b), .bg = Color.rgbFromUint(0x0a1614) };
     const status_working: Style = .{ .fg = Color.rgbFromUint(0xd7ad5a), .bg = Color.rgbFromUint(0x0a1614) };
     const status_failed: Style = .{ .fg = Color.rgbFromUint(0xe06c75), .bg = Color.rgbFromUint(0x0a1614) };
 };
+
+fn drawAutocomplete(win: Window, state: *const ChatState, rows: u16) void {
+    if (rows == 0 or state.autocomplete_matches.items.len == 0) return;
+
+    const visible = @min(@as(usize, rows), state.autocomplete_matches.items.len);
+    const max_scroll = state.autocomplete_matches.items.len - visible;
+    const start = @min(state.autocomplete_scroll, max_scroll);
+    for (state.autocomplete_matches.items[start .. start + visible], 0..) |command_index, row_index| {
+        const absolute_index = start + row_index;
+        const selected = absolute_index == @min(state.autocomplete_cursor, state.autocomplete_matches.items.len - 1);
+        const row = win.child(.{
+            .x_off = 0,
+            .y_off = @intCast(row_index),
+            .width = win.width,
+            .height = 1,
+        });
+        const row_style = if (selected) styles.autocomplete_selected else styles.autocomplete;
+        row.fill(.{ .style = row_style });
+
+        _ = row.print(&.{.{
+            .text = if (selected) "▸ " else "  ",
+            .style = row_style,
+        }}, .{ .col_offset = 1, .wrap = .none });
+
+        const info = commands.builtin_command_info[command_index];
+        const name_style = if (selected) styles.autocomplete_selected_name else styles.autocomplete_name;
+        _ = row.print(&.{.{ .text = info.name, .style = name_style }}, .{
+            .col_offset = 3,
+            .wrap = .none,
+        });
+
+        const description_col = 5 + info.name.len;
+        if (description_col < @as(usize, win.width)) {
+            _ = row.print(&.{.{ .text = info.description, .style = row_style }}, .{
+                .col_offset = @intCast(description_col),
+                .wrap = .none,
+            });
+        }
+    }
+}
 
 fn colorLevel(color: Color) u32 {
     return switch (color) {
@@ -2638,7 +2817,8 @@ fn drawTranscript(win: Window, state: *ChatState) void {
     });
     if (content.height <= 1) return;
 
-    state.last_transcript_body_width = @max(@as(usize, 1), @as(usize, content.width -| 4));
+    const body_width = @max(@as(usize, 1), @as(usize, content.width -| 4));
+    state.reflowActivityRows(body_width) catch return;
     var rows = buildTranscriptRows(state.allocator, content, state) catch return;
     defer rows.deinit(state.allocator);
 
@@ -5417,21 +5597,21 @@ test "tui child replay keeps one keyed row per group and task" {
     try std.testing.expectEqualStrings("Recon - running", state.messages.items[1].text);
     try std.testing.expectEqual(ActivityState.running, state.messages.items[1].activity_state);
     try state.addProgress("child_waiting", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"waiting\",\"elapsed_ms\":900}");
-    try std.testing.expectEqualStrings("Recon - running · waiting · 900ms", state.messages.items[1].text);
+    try std.testing.expectEqualStrings("Recon - running", state.messages.items[1].text);
     try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"tool_completed\",\"detail\":\"tool completed: read_file\",\"elapsed_ms\":1250}");
-    try std.testing.expectEqualStrings("Recon - running · tool · 1.2s", state.messages.items[1].text);
+    try std.testing.expectEqualStrings("Recon - running", state.messages.items[1].text);
     try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"assistant_response\",\"detail\":\"Mapped the workspace and found the backend owner.\",\"elapsed_ms\":2345}");
-    try std.testing.expectEqualStrings("Recon - running · response · 2.3s \"Mapped the workspace and found the backend owner.\"", state.messages.items[1].text);
+    try std.testing.expectEqualStrings("Recon - running \"Mapped the workspace and found the backend owner.\"", state.messages.items[1].text);
     try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"tool_completed\",\"detail\":\"tool completed: read_file\",\"elapsed_ms\":3125}");
-    try std.testing.expectEqualStrings("Recon - running · tool · 3.1s \"Mapped the workspace and found the backend owner.\"", state.messages.items[1].text);
+    try std.testing.expectEqualStrings("Recon - running \"Mapped the workspace and found the backend owner.\"", state.messages.items[1].text);
     try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"summary\",\"detail\":\"Found the tweet and queued the next check.\",\"elapsed_ms\":4125}");
-    try std.testing.expectEqualStrings("Recon - running · 4.1s \"Found the tweet and queued the next check.\"", state.messages.items[1].text);
+    try std.testing.expectEqualStrings("Recon - running \"Found the tweet and queued the next check.\"", state.messages.items[1].text);
     try state.addProgress("child_finished", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"completed\",\"phase\":\"complete\",\"elapsed_ms\":4567}");
     try state.addProgress("child_group_finished", "{\"group_id\":\"group-one\",\"completed\":1,\"terminal\":true}");
     try std.testing.expectEqual(@as(usize, 2), state.messages.items.len);
     try std.testing.expectEqualStrings("Agents 1/1", state.messages.items[0].text);
     try std.testing.expectEqual(ActivityState.completed, state.messages.items[0].activity_state);
-    try std.testing.expectEqualStrings("Recon - complete · 4.5s \"Found the tweet and queued the next check.\"", state.messages.items[1].text);
+    try std.testing.expectEqualStrings("Recon - complete \"Found the tweet and queued the next check.\"", state.messages.items[1].text);
     try std.testing.expectEqual(ActivityState.completed, state.messages.items[1].activity_state);
 
     try state.addProgress("child_group_recovered", "{\"group_id\":\"group-one\",\"tasks\":1,\"stale_owners_reconciled\":1,\"terminal\":true}");
@@ -5460,7 +5640,7 @@ test "tui agent child rows show a bounded turn summary instead of tool phases" {
 
     try state.addProgress("child_admitted", "{\"group_id\":\"group-two\",\"task_id\":\"task-two\",\"name\":\"Scout\",\"status\":\"queued\"}");
     try state.addProgress("child_progress", "{\"group_id\":\"group-two\",\"task_id\":\"task-two\",\"name\":\"Scout\",\"status\":\"running\",\"phase\":\"tool_completed\",\"detail\":\"tool completed: search_files\",\"elapsed_ms\":1250}");
-    try std.testing.expectEqualStrings("Scout - running · tool · 1.2s", state.messages.items[0].text);
+    try std.testing.expectEqualStrings("Scout - running", state.messages.items[0].text);
 
     try state.addProgress("child_progress", "{\"group_id\":\"group-two\",\"task_id\":\"task-two\",\"name\":\"Scout\",\"status\":\"running\",\"phase\":\"assistant_response\",\"detail\":\"This is a long agent turn summary that must stay on one compact row for the operator.\",\"elapsed_ms\":2345}");
     try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "tool_completed") == null);
@@ -5474,8 +5654,6 @@ test "tui agent summary truncation preserves utf8 and display width" {
         allocator,
         "Scout",
         .running,
-        "assistant_response",
-        2345,
         "分析 workspace 🛰️ and preserve the latest agent summary",
         32,
     );
@@ -5617,4 +5795,77 @@ test "tui prompt mode defaults to orchestrate and cycles for the session" {
     state.cyclePromptMode();
     state.cyclePromptMode();
     try std.testing.expectEqual(prompt_modes.PromptMode.orchestrate, state.prompt_mode);
+}
+
+test "tui command palette matches reserved bare tokens and hides on prose" {
+    const allocator = std.testing.allocator;
+    var unicode = try tui.Unicode.init(allocator);
+    defer unicode.deinit(allocator);
+    var input = TextInput.init(allocator, &unicode);
+    defer input.deinit();
+
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = ".",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    try input.insertSliceAtCursor("s");
+    try state.refreshAutocomplete(&input);
+    try std.testing.expect(state.autocomplete_visible);
+    try std.testing.expectEqual(@as(usize, 2), state.autocomplete_matches.items.len);
+    try std.testing.expectEqualStrings("status", state.selectedAutocompleteName().?);
+
+    input.clearAndFree();
+    try input.insertSliceAtCursor("settings");
+    try state.refreshAutocomplete(&input);
+    try std.testing.expectEqual(@as(usize, 1), state.autocomplete_matches.items.len);
+    try std.testing.expectEqualStrings("settings", state.selectedAutocompleteName().?);
+
+    input.clearAndFree();
+    try input.insertSliceAtCursor("settings now");
+    try state.refreshAutocomplete(&input);
+    try std.testing.expect(!state.autocomplete_visible);
+    try std.testing.expectEqual(@as(usize, 0), state.autocomplete_matches.items.len);
+}
+
+test "tui command palette preserves slash compatibility and caps its popover" {
+    const allocator = std.testing.allocator;
+    var unicode = try tui.Unicode.init(allocator);
+    defer unicode.deinit(allocator);
+    var input = TextInput.init(allocator, &unicode);
+    defer input.deinit();
+
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = ".",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    try input.insertSliceAtCursor("/");
+    try state.refreshAutocomplete(&input);
+    try std.testing.expect(state.autocomplete_visible);
+    try std.testing.expectEqual(@as(usize, 5), state.autocompleteHeight());
+    try std.testing.expectEqualStrings("help", state.selectedAutocompleteName().?);
+
+    state.moveAutocompleteCursor(1);
+    state.moveAutocompleteCursor(1);
+    state.moveAutocompleteCursor(1);
+    state.moveAutocompleteCursor(1);
+    state.moveAutocompleteCursor(1);
+    try std.testing.expectEqual(@as(usize, 5), state.autocomplete_cursor);
+    try std.testing.expectEqual(@as(usize, 1), state.autocomplete_scroll);
+    try std.testing.expect(state.selectedAutocompleteName() != null);
 }

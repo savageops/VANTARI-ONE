@@ -39,6 +39,7 @@ test "prompt builder emits ordered guardrails and tool contract" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Delegate ravenously") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Calibrate your confidence") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Meta-reason when stuck") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Keep the parent-facing agent row current during long work") != null);
 
     // Architecture-leak guard: these terms reveal the strategy, not embody it.
     // Note: "append-only" legitimately appears in tool descriptions (append_file,

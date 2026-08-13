@@ -335,7 +335,7 @@ fn verifyToolRuntimeCase(index: usize) !void {
         },
         6 => {
             const hint = VAR1.core.tool_runtime.toolErrorHint("search_files", "ToolUnavailable").?;
-            try expectContains(hint, "iex");
+            try expectContains(hint, "ix");
         },
         7 => {
             const prompt = try std.fmt.allocPrint(std.testing.allocator, "Please update .var workspace state case {d}.", .{index});

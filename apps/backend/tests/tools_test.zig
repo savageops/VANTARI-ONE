@@ -63,7 +63,7 @@ fn mockCommandAvailable(
     _: std.mem.Allocator,
     command_name: []const u8,
 ) anyerror!bool {
-    return std.mem.eql(u8, command_name, "iex");
+    return std.mem.eql(u8, command_name, "ix");
 }
 
 fn mockCommandUnavailable(
@@ -89,9 +89,9 @@ fn mockIxSearchShape(
     var ctx: *IxShapeProbeContext = @ptrCast(@alignCast(ctx_ptr.?));
     ctx.calls += 1;
 
-    try std.testing.expectEqualStrings("iex", command_name);
+    try std.testing.expectEqualStrings("ix", command_name);
     try std.testing.expectEqual(@as(usize, 3), argv.len);
-    try std.testing.expectEqualStrings("iex", argv[0]);
+    try std.testing.expectEqualStrings("ix", argv[0]);
     try std.testing.expectEqualStrings("search", argv[1]);
     try std.testing.expectEqualStrings("--help", argv[2]);
     var found_json_flag = false;
@@ -178,8 +178,8 @@ fn mockCommandRunner(
         defer allocator.free(tools_path);
         break :blk try std.fmt.allocPrint(
             allocator,
-            "{{\"hits\":[{{\"path\":{f},\"line\":12,\"column\":1,\"preview\":\"read_file\"}},{{\"path\":{f},\"line\":9,\"column\":1,\"preview\":\"search_files\"}}]}}",
-            .{ std.json.fmt(main_path, .{}), std.json.fmt(tools_path, .{}) },
+            "{{\"expression\":\"lit:read_file\",\"status\":\"ok\",\"hits\":[{{\"path\":{f},\"absolute_path\":{f},\"line\":12,\"column\":1,\"preview\":\"read_file\",\"extra\":true}},{{\"path\":{f},\"absolute_path\":{f},\"line\":9,\"column\":1,\"preview\":\"search_files\"}}],\"stats\":{{\"matches_found\":2}}}}",
+            .{ std.json.fmt(main_path, .{}), std.json.fmt(main_path, .{}), std.json.fmt(tools_path, .{}), std.json.fmt(tools_path, .{}) },
         );
     } else try allocator.dupe(u8, "");
 
@@ -692,7 +692,7 @@ test "search_files uses the command runner contract" {
     });
     defer std.testing.allocator.free(search_output);
 
-    try std.testing.expect(std.mem.indexOf(u8, context.last_command.?, "iex search --json --max-hits 5 read_file") != null);
+    try std.testing.expect(std.mem.indexOf(u8, context.last_command.?, "ix search --json --max-hits 5 read_file") != null);
     try std.testing.expect(std.mem.indexOf(u8, search_output, "src/main.zig:12:read_file") != null);
 }
 
@@ -700,7 +700,7 @@ test "tool availability registry derives agent capabilities from the agent modul
     const search_spec = VAR1.core.tools.registry.availabilitySpec("search_files").?;
     try std.testing.expect(search_spec.dependency != null);
     try std.testing.expectEqual(VAR1.core.tools.module.DependencyKind.external_command, search_spec.dependency.?.kind);
-    try std.testing.expectEqualStrings("iex", search_spec.dependency.?.name);
+    try std.testing.expectEqualStrings("ix", search_spec.dependency.?.name);
 
     const agent_names = [_][]const u8{
         "launch_agent",
@@ -1125,7 +1125,7 @@ test "tool execution errors include search_files contract details for file-not-f
     try std.testing.expect(std.mem.indexOf(u8, error_payload, "\"parameters_schema\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, error_payload, "\"contract_example\":\"{\\\"pattern\\\":\\\"read_file\\\",\\\"path\\\":\\\"src\\\",\\\"glob\\\":\\\"*.zig\\\",\\\"max_results\\\":20}\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, error_payload, "Use list_files first when unsure") != null);
-    try std.testing.expect(std.mem.indexOf(u8, error_payload, "iex executable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, error_payload, "ix executable") != null);
 }
 
 test "shell_exec forwards stdout stderr and cap deltas through the tool event sink" {
@@ -1444,7 +1444,7 @@ test "catalog json reports unavailable command-backed tools explicitly" {
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"search_files\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"availability\":{\"status\":\"unavailable\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"kind\":\"external_command\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"iex\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"ix\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"available\":false") != null);
 }
 
@@ -1452,7 +1452,7 @@ test "availability registry uses builtin module-owned names" {
     const search_spec = VAR1.core.tools.registry.availabilitySpec("search_files").?;
     try std.testing.expect(search_spec.dependency != null);
     try std.testing.expectEqual(VAR1.core.tools.module.DependencyKind.external_command, search_spec.dependency.?.kind);
-    try std.testing.expectEqualStrings("iex", search_spec.dependency.?.name);
+    try std.testing.expectEqualStrings("ix", search_spec.dependency.?.name);
 
     const agent_spec = VAR1.core.tools.registry.availabilitySpec("launch_agent").?;
     try std.testing.expect(agent_spec.dependency == null);
@@ -1467,11 +1467,11 @@ test "catalog json reports available command-backed tools when dependency resolv
 
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"search_files\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"availability\":{\"status\":\"available\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"iex\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"ix\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"available\":true") != null);
 }
 
-test "catalog json rejects an iex binary that does not expose the IX search contract" {
+test "catalog json rejects an ix binary that does not expose the IX search contract" {
     var shape_context = IxShapeProbeContext{ .available = false };
     const catalog = try VAR1.core.tool_runtime.renderCatalogJson(std.testing.allocator, execCtxWithShapeProbe(".", &shape_context));
     defer std.testing.allocator.free(catalog);
@@ -1479,11 +1479,11 @@ test "catalog json rejects an iex binary that does not expose the IX search cont
     try std.testing.expectEqual(@as(usize, 1), shape_context.calls);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"search_files\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"availability\":{\"status\":\"unavailable\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"iex\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"ix\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"available\":false") != null);
 }
 
-test "catalog json advertises search only after the iex search shape probe passes" {
+test "catalog json advertises search only after the ix search shape probe passes" {
     var shape_context = IxShapeProbeContext{ .available = true };
     const catalog = try VAR1.core.tool_runtime.renderCatalogJson(std.testing.allocator, execCtxWithShapeProbe(".", &shape_context));
     defer std.testing.allocator.free(catalog);
@@ -1494,7 +1494,7 @@ test "catalog json advertises search only after the iex search shape probe passe
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"available\":true") != null);
 }
 
-test "search_files stops before execution when iex is unavailable" {
+test "search_files stops before execution when ix is unavailable" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -1524,7 +1524,7 @@ test "agent system prompt teaches schema repair and file-tool roles" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "list_files discovers paths") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Example JSON: {\"pattern\":\"read_file\",\"path\":\"src\",\"glob\":\"*.zig\",\"max_results\":20}") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "search_files locates symbols or text") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "IX/IEX expression engine") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "IX expression engine") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Do not invent rg flags") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "branchable tasks") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "required SITREP") != null);

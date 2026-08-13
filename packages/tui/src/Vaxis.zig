@@ -252,6 +252,12 @@ pub fn exitAltScreen(self: *Vaxis, tty: *IoWriter) !void {
 /// This call will block until Vaxis.query_futex is woken up, or the timeout.
 /// Event loops can wake up this futex when cap_da1 is received
 pub fn queryTerminal(self: *Vaxis, tty: *IoWriter, timeout_ns: u64) !void {
+    if (builtin.os.tag == .windows) {
+        // Windows has no capability response path in this fork. Sending
+        // queries and waiting for DA1 only stalls ConPTY input fallback.
+        self.queries_done.store(true, .unordered);
+        return self.enableDetectedFeatures(tty);
+    }
     try self.queryTerminalSend(tty);
     // 1 second timeout
     std.Thread.Futex.timedWait(&self.query_futex, 0, timeout_ns) catch {};

@@ -38,10 +38,12 @@ fn runTui(mode: tui_chat.StartupMode) !void {
 
     switch (mode) {
         .blank => tui_chat.main(std.heap.page_allocator) catch |err| {
+            std.debug.print("VAR1_ERROR category=tui code={s}\n", .{@errorName(err)});
             tui_chat.writeStartupFailure(std.heap.page_allocator, err) catch {};
             std.process.exit(1);
         },
         .continue_latest => tui_chat.mainContinueLatest(std.heap.page_allocator) catch |err| {
+            std.debug.print("VAR1_ERROR category=tui code={s}\n", .{@errorName(err)});
             tui_chat.writeStartupFailure(std.heap.page_allocator, err) catch {};
             std.process.exit(1);
         },

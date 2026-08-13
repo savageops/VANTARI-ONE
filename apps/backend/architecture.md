@@ -74,7 +74,7 @@ flowchart TB
   supervisor --> store
   tools --> workspaceState["src/core/tools/workspace_runtime.zig"]
   tools --> review
-  toolModules --> iex["iex executable"]
+  toolModules --> ix["ix executable"]
   executor --> docs["src/core/docs/sync.zig"]
   executor --> config["src/core/config/file.zig"]
   kernel --> memory["src/core/memory/derivative.zig"]
@@ -272,7 +272,7 @@ sequenceDiagram
   participant M as core/tools/builtin/*.zig
   participant S as core/sessions/store.zig
   participant P as core/providers/openai_compatible.zig
-  participant I as iex executable
+  participant I as ix executable
 
   C->>H: tools/list or session/send
   H->>T: renderCatalogJson or execution context
@@ -293,7 +293,7 @@ sequenceDiagram
     L->>T: execute(tool_call)
     T->>M: dispatch to per-tool execute
     M->>R: ensureAvailable(search_files)
-    M->>I: search_files invokes iex search --json
+    M->>I: search_files invokes ix search --json
     I-->>M: JSON hits
     M-->>T: tool result envelope
     T-->>L: tool result envelope
@@ -304,7 +304,7 @@ sequenceDiagram
 
 Tool definitions are schema-first. The shared shape lives in `shared/types.zig` as `ToolDefinition { name, description, parameters_json, review_risk, example_json, usage_hint }`. Per-tool modules under `core/tools/builtin/` own their definition, review risk, availability contract, and execute path. The registry resolves availability from module-owned names/specs instead of duplicating string branches. Provider request construction, CLI catalog export, RPC catalog export, review classification, prompt guidance, and failure repair hints derive from those module-owned metadata surfaces. Backend primitives are not agent tools until this metadata-and-dispatch path exists.
 
-`search_files` is the content-search tool. It declares an `external_command("iex")` dependency, resolves the workspace path in Zig, then invokes `iex search --json --max-hits ...` through the command-runner boundary. The advertised pattern contract is native IX/IEX expression syntax (`lit:needle`, `re:TODO|FIXME`, `lit:a || lit:b`), not rg/grep flag emulation. `list_files` is the native Zig path-discovery tool and does not shell to `iex`. Installing `VAR1` therefore requires a real `iex` executable for content search; when it is absent, catalog availability reports `search_files` as unavailable and execution fails early with `ToolUnavailable`.
+`search_files` is the content-search tool. It declares an `external_command("ix")` dependency, resolves the workspace path in Zig, then invokes `ix search --json --max-hits ...` through the command-runner boundary. The advertised pattern contract is native IX expression syntax (`lit:needle`, `re:TODO|FIXME`, `lit:a || lit:b`), not rg/grep flag emulation. `list_files` is the native Zig path-discovery tool and does not shell to `ix`. Installing `VAR1` therefore requires a real `ix` executable for content search; when it is absent, catalog availability reports `search_files` as unavailable and execution fails early with `ToolUnavailable`.
 
 ## Capability governance flow
 
@@ -646,7 +646,7 @@ Latest local Windows validation on 2026-08-13:
   same-session replay retains one provider call, one mailbox delivery, and one
   cursor. A six-file, 139-segment audit found five candidates, zero exact
   duplicates, and no second recovery owner.
-- Installed tools reports search_files unavailable because the required iex
+- Installed tools reports search_files unavailable because the required ix
   executable is absent.
 - Current source and installed SHA-256 match at
   `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`.
@@ -948,10 +948,16 @@ is no active run.
 `ChatState.messages` is the sole TUI activity read model. A child is keyed by
 `group_id + task_id`; the supervisor supplies the canonical child summary from
 `sessions/summaries.jsonl` at `assistant_response` and refreshes it at the existing
-`update_session_summary` completion boundary. The row renders a compact
-state marker, known typed phase, elapsed snapshot, and bounded quoted summary.
-`○` represents queued/running, `◉` represents complete, and failure/cancel
-markers stay explicit. Later tool or terminal events update the same keyed row,
-retain the summary, and replace only the phase/time snapshot when present. The
-projection does not create a bubble event, timer, poller, transcript copy, or
-second summary ledger.
+`update_session_summary` completion boundary. The visible row renders only the
+compact state marker, agent name, and bounded quoted summary. Typed phase and
+elapsed snapshots remain available in the event spine for diagnostics and replay,
+but do not consume the operator's one-line activity budget. `○` represents
+queued/running, `◉` represents complete, and failure/cancel markers stay explicit.
+Later tool or terminal events update the same keyed row and retain the summary.
+The projection does not create a bubble event, timer, poller, transcript copy, or
+second summary ledger. The composer also owns a bounded registry-backed command
+palette above the input: bare first-token prefixes discover local commands,
+slash-prefixed input remains compatible, and the existing command registry handles
+selection and dispatch. `clients/footer_effects.zig` is the sole optional
+orchestrate-only campaign owner; it supplies a bounded frame projection and
+timed wake only during the active sweep, with no plugin manager or global ticker.

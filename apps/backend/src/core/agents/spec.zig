@@ -121,9 +121,9 @@ const built_in_specs = [_]AgentSpec{
     },
     .{
         .id = "recon",
-        .description = "Read-only repository or evidence reconnaissance. IX/IEX search, exact provenance.",
+        .description = "Read-only repository or evidence reconnaissance. IX search, exact provenance.",
         .when_to_use = "Use when ownership, architecture, dependencies, or exact source evidence must be mapped before any decision or mutation.",
-        .instruction_capsule = "INSPECT ONLY. Evidence-first: cite exact paths, file:line, and commands; record uncertainty and residual risk; never guess — source or retract. Use ix/IEX search contracts; never substitute ad hoc readers. Findings-ledger shape: defect/owner/evidence/acceptance. Keep the checkpoint summary current.",
+        .instruction_capsule = "INSPECT ONLY. Evidence-first: cite exact paths, file:line, and commands; record uncertainty and residual risk; never guess — source or retract. Use IX search contracts; never substitute ad hoc readers. Findings-ledger shape: defect/owner/evidence/acceptance. Keep the checkpoint summary current.",
         .route_role = .recon,
         .execution_kind = .agent_session,
         .capability_profile_id = "recon",

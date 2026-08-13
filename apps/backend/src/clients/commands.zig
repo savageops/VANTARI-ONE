@@ -1,5 +1,9 @@
-/// Slash command dispatcher — the typed registry that intercepts `/`-prefixed
-/// input in the TUI before it reaches the model. Replaces the hardcoded
+/// Command dispatcher — the typed registry that intercepts reserved local
+/// commands in the TUI before they reach the model. Slash-prefixed input stays
+/// compatible with the original interface while exact bare names are used by
+/// the command palette.
+///
+/// Replaces the hardcoded
 /// `/exit` string-equality check with a extensible command system.
 ///
 /// Commands are categorized for `/help` grouping and future autocomplete.
@@ -7,9 +11,9 @@
 /// raw args string; it returns whether the input was handled (don't submit to
 /// the model) or should pass through as a normal message.
 ///
-/// Phase 1 (this file): local-action commands only — /help, /clear, /exit,
-/// /quit, /status, /history, /compact. Settings-dependent commands (/model,
-/// /effort, /persona, /agents, /settings) are stubbed and implemented in 034e.
+/// The registry owns local actions and settings-dependent commands alike. The
+/// TUI may invoke a command through the slash-compatible dispatcher or through
+/// the exact bare-name path used by its transient autocomplete palette.
 const std = @import("std");
 
 /// The ChatState type — declared as @Anytype to avoid a circular import
@@ -103,6 +107,26 @@ pub fn dispatch(
     defer allocator.free(msg);
     try state.add(.system, msg);
     return .handled;
+}
+
+/// Dispatch one exact reserved bare command selected by the TUI palette.
+/// Ordinary prose never enters this path: the caller only invokes it for a
+/// single token that matched the visible command registry.
+pub fn dispatchBare(
+    comptime StateT: type,
+    state: *StateT,
+    registry: []const Command(StateT),
+    input: []const u8,
+) !CommandResult {
+    if (input.len == 0 or input[0] == '/' or
+        std.mem.indexOfAny(u8, input, " \t\r\n") != null) return .not_a_command;
+
+    for (registry) |command| {
+        if (std.ascii.eqlIgnoreCase(command.name, input)) {
+            return command.execute(state, "");
+        }
+    }
+    return .not_a_command;
 }
 
 // ---------------------------------------------------------------------------

@@ -33,6 +33,9 @@ const default_system_prompt =
     \\Emit concise operator-visible progress before tool batches, after meaningful observations, and before long-running waits. These updates are streamed work narration, not hidden reasoning; expose decisions, evidence, and next actions plainly.
     \\
     \\Reason in bounded bursts: choose one observable step, act through tools or delegation, inspect the evidence, emit a compact checkpoint, then continue. Do not front-load a complete hidden plan or spend the turn narrating private reasoning.
+    \\
+    \\# Agent Status Protocol
+    \\Keep the parent-facing agent row current during long work. At each meaningful milestone, and before an extended tool wait, call update_session_summary with one concise sentence describing the current action, finding, or blocker. Refresh it again before the terminal response. The TUI projects the latest summary inline beside the agent name and state; do not emit separate progress prose only to create a status line.
 ;
 
 const default_developer_prompt =
@@ -243,7 +246,7 @@ pub fn buildAgentSystemPromptWithMemoryAndMode(
         \\## Edit Protocol
         \\Preferred repository route:
         \\1. list_files discovers paths and directory shape.
-        \\2. search_files locates symbols or text through the IX/IEX expression engine; use native IX expressions such as lit:needle, re:TODO|FIXME, or lit:a || lit:b instead of rg flags or shell pipelines.
+        \\2. search_files locates symbols or text through the IX expression engine; use native IX expressions such as lit:needle, re:TODO|FIXME, or lit:a || lit:b instead of rg flags or shell pipelines.
         \\3. read_file inspects known files.
         \\4. replace_in_file performs exact local edits.
         \\5. write_file creates or overwrites complete files, and can seed long generated artifacts before append_file chunks.

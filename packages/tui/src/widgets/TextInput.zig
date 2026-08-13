@@ -87,6 +87,18 @@ pub fn sliceToCursor(self: *TextInput, buf: []u8) []const u8 {
     return buf[0..self.buf.cursor];
 }
 
+/// Return a copy of the complete editor value without moving the cursor or
+/// consuming the gap buffer. Callers such as autocomplete need the full
+/// value, while `toOwnedSlice` is intentionally destructive for submission.
+pub fn toOwnedCopy(self: *const TextInput, allocator: std.mem.Allocator) ![]u8 {
+    const first = self.buf.firstHalf();
+    const second = self.buf.secondHalf();
+    const result = try allocator.alloc(u8, first.len + second.len);
+    @memcpy(result[0..first.len], first);
+    @memcpy(result[first.len..], second);
+    return result;
+}
+
 /// calculates the display width from the draw_offset to the cursor
 pub fn widthToCursor(self: *TextInput, win: Window) u16 {
     var width: u16 = 0;

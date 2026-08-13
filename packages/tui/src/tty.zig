@@ -221,6 +221,9 @@ pub const WindowsTty = struct {
     initial_input_mode: CONSOLE_MODE_INPUT,
     initial_output_mode: CONSOLE_MODE_OUTPUT,
 
+    stream_buffer: [1024]u8 = undefined,
+    stream_len: usize = 0,
+
     // a buffer to write key text into
     buf: [4]u8 = undefined,
 
@@ -238,6 +241,7 @@ pub const WindowsTty = struct {
         .WINDOW_INPUT = 1, // resize events
         .MOUSE_INPUT = 1,
         .EXTENDED_FLAGS = 1, // allow mouse events
+        .VIRTUAL_TERMINAL_INPUT = 1,
     };
 
     /// The output mode set by init
@@ -341,17 +345,51 @@ pub const WindowsTty = struct {
     }
 
     pub fn nextEvent(self: *Tty, parser: *Parser, paste_allocator: ?std.mem.Allocator) !Event {
-        // We use a loop so we can ignore certain events
-        var state: EventState = .{};
-        while (true) {
-            var event_count: u32 = 0;
-            var input_record: INPUT_RECORD = undefined;
-            if (ReadConsoleInputW(self.stdin, &input_record, 1, &event_count) == 0)
-                return windows.unexpectedError(windows.kernel32.GetLastError());
+        return self.nextStreamEvent(parser, paste_allocator);
+    }
 
-            if (try self.eventFromRecord(&input_record, &state, parser, paste_allocator)) |ev| {
-                return ev;
+    /// Read the current console viewport once at startup and after resize.
+    /// VT input is the canonical ConPTY path; the console buffer still owns
+    /// geometry, so resize events use this direct query instead of parsing
+    /// host-specific escape responses.
+    pub fn getWinsize(self: *const WindowsTty) !Winsize {
+        var console_info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+        if (windows.kernel32.GetConsoleScreenBufferInfo(self.stdout, &console_info) == 0) {
+            return windows.unexpectedError(windows.kernel32.GetLastError());
+        }
+        const window_rect = console_info.srWindow;
+        return .{
+            .cols = @intCast(window_rect.Right - window_rect.Left + 1),
+            .rows = @intCast(window_rect.Bottom - window_rect.Top + 1),
+            .x_pixel = 0,
+            .y_pixel = 0,
+        };
+    }
+
+    fn nextStreamEvent(self: *Tty, parser: *Parser, paste_allocator: ?std.mem.Allocator) !Event {
+        while (true) {
+            if (self.stream_len == 0) {
+                const file = std.fs.File{ .handle = self.stdin };
+                const read_len = try file.read(self.stream_buffer[0..]);
+                if (read_len == 0) return error.EndOfStream;
+                self.stream_len = read_len;
             }
+
+            const result = try parser.parse(self.stream_buffer[0..self.stream_len], paste_allocator);
+            if (result.n == 0) {
+                if (self.stream_len == self.stream_buffer.len) return error.InputSequenceTooLong;
+                const file = std.fs.File{ .handle = self.stdin };
+                const read_len = try file.read(self.stream_buffer[self.stream_len..]);
+                if (read_len == 0) return error.EndOfStream;
+                self.stream_len += read_len;
+                continue;
+            }
+            if (result.n > self.stream_len) return error.InvalidInput;
+
+            const remaining = self.stream_len - result.n;
+            std.mem.copyForwards(u8, self.stream_buffer[0..remaining], self.stream_buffer[result.n..self.stream_len]);
+            self.stream_len = remaining;
+            if (result.event) |event| return event;
         }
     }
 
