@@ -51,6 +51,14 @@ only when consolidation or deletion cannot close the canonical consumer path.
 - `apps/backend/src/core/scheduler/` claims assigned tickets only when `apps/backend/src/core/agents/supervisor.zig` reports fixed-pool capacity, then routes through `core/agents/service.zig`. Do not add a second worker registry or direct assignment launcher.
 - `apps/backend/src/shared/process_lock.zig` owns crash-released inter-process exclusion. A scheduler tick holds `.var/schedules/lease.lock`, publishes and reads back one nonzero generation in `lease.json`, and releases only after scheduled-job and ticket mutations finish. Do not restore read/check/write leadership or add a scheduler-local lock primitive.
 - `apps/backend/src/core/tickets/index.zig` serializes every ticket projection and mutation through `.var/tickets/ledger.lock`. One claim row commits revision, worker generation, lease, attempt, capability hash, and deterministic child-session identity before session materialization. Do not create a child before the winning claim append or add a second admission ledger.
+- `resume` is the sole expired-claim ownership transition. It replaces worker id,
+  generation, lease token, and expiry while preserving ticket, attempt, active
+  session, execution receipt, transcript, and mailbox cursor. Requeue an expired
+  claim only when its active session is absent.
+- Reconcile terminal session evidence before expired ownership. Renew heartbeat
+  only while the current `Supervisor` owns the exact nonterminal session. Cold
+  receipt recovery defers ticket-owned sessions to the scheduler; it must not
+  convert them to `StaleAgentOwner`.
 - `.docs/index.md`, `.docs/technical_summary.md`, `.docs/workspace.json`, and `.refs/index.md` are the current project-record indexes. Keep them aligned with shipped runtime truth.
 
 ## II. Session Storage Contract
@@ -164,13 +172,16 @@ Sub-agents are normal VAR1 sessions launched by a parent and supervised through 
 - Use `list_agents` for inventory, `agent_status` for non-blocking progress, and `wait_agent` with explicit bounded `timeout_ms` when the parent is ready to collect a result. Avoid repeated tiny wait loops.
 - Do not delegate the immediate edit or decision if the parent needs that result before its next local action.
 - Child lifecycle state is append-only session/event evidence. Parent supervision must preserve heartbeat, terminal status, failure class, and resume-safe reconciliation.
-- Ticket assignment, scheduler claims, leases, heartbeat, stale-owner requeue, terminal reconciliation, and repair gating remain one typed queue-to-agent state machine; health fields are a read projection only.
+- Ticket assignment, scheduler claims, leases, live-owner heartbeat, generation-fenced same-session resume, absent-session requeue, terminal reconciliation, and repair gating remain one typed queue-to-agent state machine; health fields are a read projection only.
 - Ticket assignment remains side-effect-free. A winning process-serialized claim reserves one deterministic child identity; only that winner may materialize and submit the child through the existing `AgentService`/`Supervisor` path.
 - `agents {}` is the sole model-facing eligibility snapshot: route-resolved specialists, fixed-pool pressure, current-team aggregates, communication choices, and a deterministic SHA-256 receipt. Treat it as evidence, not an instruction to delegate. Require it before launch or agent-configuration mutation, but never mandate it as the first action of a turn.
 - Agent collaboration uses one sequence-addressed mailbox through the existing session/event owners. Permit direct-session, parent, and current-group targets; do not add a generic topic broker, shared global transcript, or second teammate runtime.
 - Mailbox messages carry bounded information and references. Tickets remain the only work lifecycle: a message never silently assigns, claims, or launches work.
 - Let the prompt envelope choose communication density, challenge posture, wake intent, and nested delegation. The kernel validates sender/recipient scope, capacity, depth, contact budget, ordering, delivery, replay, and acknowledgement.
 - Give each session selective awareness through agent inventory, canonical summaries, artifact references, and unread mailbox rows. Do not copy sibling transcripts into provider context.
+- Treat same-session resume as exactly one durable work identity and delivery
+  position, not exactly-once arbitrary external effects. `core/tools` write-intent
+  and effect reconciliation remains the owner of effect certainty.
 
 ## VII. Skill Routing Contract
 

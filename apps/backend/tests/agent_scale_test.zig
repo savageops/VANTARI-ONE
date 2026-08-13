@@ -1202,3 +1202,175 @@ test "cold start rebuilds receipt groups and reconciles stale owners once" {
     try std.testing.expectEqualStrings("bounded child result", resumed.output);
     try std.testing.expectEqual(@as(usize, 1), resume_transport_state.calls);
 }
+
+test "cold agent service defers a nonterminal receipt owned by a live ticket claim" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try tmpWorkspacePath(allocator, &tmp, "ticket-recovery-deferral");
+    defer allocator.free(workspace_root);
+    const config = try makeConfig(allocator, workspace_root);
+    defer config.deinit(allocator);
+    var parent = try VAR1.core.session_store.initSession(allocator, workspace_root, "ticket recovery parent");
+    defer parent.deinit(allocator);
+
+    const receipt = VAR1.shared.types.ExecutionReceiptView{
+        .execution_kind = "agent_session",
+        .agent_spec_id = "implementer",
+        .route_role = "implementation",
+        .provider_id = "active",
+        .model = "scale-model",
+        .wire_api = "chat_completions",
+        .thinking_mode = "",
+        .capability_profile_id = "write",
+        .capability_hash = "ticket-capability",
+        .parent_session_id = parent.id,
+        .parent_checkpoint_id = "parent-root",
+        .group_id = "group-ticket-recovery",
+        .task_id = "task-ticket-recovery",
+        .branch_seq = 1,
+        .budget = .{ .max_steps = 128, .max_tool_calls = 96, .max_children = 0 },
+        .output_schema_hash = "ticket-schema",
+        .created_at_ms = std.time.milliTimestamp(),
+    };
+    var child = try VAR1.core.session_store.initSessionWithExecutionReceipt(allocator, workspace_root, "resume this ticket", .{
+        .status = .running,
+        .parent_session_id = parent.id,
+        .display_name = "ticket-implementer",
+        .agent_profile = "write",
+    }, &receipt);
+    defer child.deinit(allocator);
+
+    const ticket_store = VAR1.core.tickets.TicketStore.init(allocator, workspace_root);
+    const now_ms = std.time.milliTimestamp();
+    var created = try ticket_store.create(.{ .title = "Recover child", .description = "Preserve the live session", .category = "feature", .severity = "high", .workspace_root = workspace_root, .session_id = parent.id, .idempotency_key = "recovery-deferral-create", .created_at_ms = now_ms });
+    defer created.deinit(allocator);
+    var assigned = try ticket_store.transition(.{ .ticket_id = created.ticket_id, .status = .assigned, .reason = "queue", .idempotency_key = "recovery-deferral-assign", .transitioned_at_ms = now_ms + 1 });
+    defer assigned.deinit(allocator);
+    var claim = try ticket_store.claim(.{ .ticket_id = created.ticket_id, .expected_revision = assigned.revision, .worker_id = "live-worker", .worker_generation = 11, .lease_token = "live-lease", .lease_expires_at_ms = now_ms + 60_000, .attempt = 1, .session_id = child.id, .agent_hint = "implementer", .capability_hash = "ticket-capability", .idempotency_key = "recovery-deferral-claim", .claimed_at_ms = now_ms + 2 });
+    defer claim.deinit(allocator);
+
+    var recovered = VAR1.core.agent_runtime.Service.init(&config);
+    defer recovered.deinit();
+    try std.testing.expectEqual(@as(usize, 0), try recovered.handle().reconcile(allocator, parent.id));
+    var child_after = try VAR1.core.session_store.readSessionRecord(allocator, workspace_root, child.id);
+    defer child_after.deinit(allocator);
+    try std.testing.expectEqual(VAR1.shared.types.SessionStatus.running, child_after.status);
+    try std.testing.expect(child_after.failure_reason == null);
+    try std.testing.expect(!recovered.supervisor.hasParent(parent.id));
+    try std.testing.expectEqual(@as(usize, 1), recovered.supervisor.coldStartDirectoryScanCount());
+}
+
+test "ticket recovery resumes the same session once and preserves its mailbox cursor" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try tmpWorkspacePath(allocator, &tmp, "ticket-same-session-resume");
+    defer allocator.free(workspace_root);
+    const config = try makeConfig(allocator, workspace_root);
+    defer config.deinit(allocator);
+    var parent = try VAR1.core.session_store.initSession(allocator, workspace_root, "resume parent");
+    defer parent.deinit(allocator);
+
+    var registry = try VAR1.core.agent_spec.loadRegistry(allocator, workspace_root);
+    defer registry.deinit();
+    const spec = try registry.resolve("implementer");
+    const capability_hash = try VAR1.core.agent_spec.capabilityHash(spec, spec.capability_profile_id);
+    const output_schema_hash = VAR1.core.agent_spec.contentHash("{}");
+    const receipt = VAR1.shared.types.ExecutionReceiptView{
+        .execution_kind = spec.execution_kind.label(),
+        .agent_spec_id = spec.id,
+        .route_role = spec.route_role.label(),
+        .provider_id = "active",
+        .model = "scale-model",
+        .wire_api = "chat_completions",
+        .thinking_mode = "",
+        .capability_profile_id = spec.capability_profile_id,
+        .capability_hash = capability_hash[0..],
+        .parent_session_id = parent.id,
+        .parent_checkpoint_id = "parent-root",
+        .group_id = "group-ticket-same-session",
+        .task_id = "task-ticket-same-session",
+        .branch_seq = 1,
+        .budget = .{ .max_steps = spec.max_steps, .max_tool_calls = spec.max_tool_calls, .max_children = spec.max_children },
+        .output_schema_hash = output_schema_hash[0..],
+        .created_at_ms = std.time.milliTimestamp(),
+    };
+    var child = try VAR1.core.session_store.initSessionWithExecutionReceipt(allocator, workspace_root, "finish the durable ticket", .{
+        .status = .running,
+        .parent_session_id = parent.id,
+        .display_name = "ticket-implementer",
+        .agent_profile = spec.capability_profile_id,
+    }, &receipt);
+    defer child.deinit(allocator);
+
+    var delivery = try VAR1.core.agent_mailbox.send(allocator, workspace_root, .{
+        .sender_session_id = parent.id,
+        .tool_call_id = "resume-mailbox-message",
+        .target = .direct,
+        .recipient_session_id = child.id,
+        .delivery = .queue,
+        .body = "Already observed before owner restart.",
+    });
+    defer delivery.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), delivery.recipients.len);
+    try VAR1.core.agent_mailbox.acknowledge(allocator, workspace_root, child.id, delivery.recipients[0].seq, 1);
+
+    const ticket_store = VAR1.core.tickets.TicketStore.init(allocator, workspace_root);
+    const now_ms = std.time.milliTimestamp();
+    var created = try ticket_store.create(.{ .title = "Resume same child", .description = "Keep transcript and mailbox identity", .category = "feature", .severity = "high", .workspace_root = workspace_root, .session_id = parent.id, .idempotency_key = "same-session-create", .created_at_ms = now_ms - 2000 });
+    defer created.deinit(allocator);
+    var assigned = try ticket_store.transition(.{ .ticket_id = created.ticket_id, .status = .assigned, .reason = "queue", .idempotency_key = "same-session-assign", .transitioned_at_ms = now_ms - 1900 });
+    defer assigned.deinit(allocator);
+    var claim = try ticket_store.claim(.{ .ticket_id = created.ticket_id, .expected_revision = assigned.revision, .worker_id = "retired-worker", .worker_generation = 41, .lease_token = "retired-lease", .lease_expires_at_ms = now_ms - 1, .attempt = 5, .session_id = child.id, .agent_hint = spec.id, .capability_hash = capability_hash[0..], .idempotency_key = "same-session-claim", .claimed_at_ms = now_ms - 1000 });
+    defer claim.deinit(allocator);
+
+    var transport_state = ScaleTransport{ .delay_ms = 25 };
+    var service = VAR1.core.agent_runtime.Service.initWithTransport(&config, .{
+        .context = &transport_state,
+        .sendFn = ScaleTransport.send,
+    });
+    defer service.deinit();
+    const handle = service.handle();
+    const resume_request = VAR1.core.tool_runtime.ResumeTicketRequest{
+        .ticket_id = created.ticket_id,
+        .expected_revision = claim.revision,
+        .worker_id = "replacement-worker",
+        .worker_generation = 42,
+        .lease_token = "replacement-lease",
+        .lease_expires_at_ms = now_ms + 60_000,
+        .session_id = child.id,
+        .idempotency_key = "same-session-resume",
+        .resumed_at_ms = now_ms,
+    };
+    var first = try handle.resumeTicket(allocator, resume_request);
+    defer first.deinit(allocator);
+    var replay = try handle.resumeTicket(allocator, resume_request);
+    defer replay.deinit(allocator);
+    try std.testing.expectEqualStrings(child.id, first.session_id);
+    try std.testing.expectEqualStrings(first.group_id, replay.group_id);
+    try std.testing.expectEqualStrings(first.task_id, replay.task_id);
+    const terminal = try waitForParent(handle, parent.id);
+    try std.testing.expectEqual(@as(usize, 1), terminal.completed);
+    try std.testing.expectEqual(@as(usize, 1), transport_state.calls);
+
+    var projection = try ticket_store.readProjection();
+    defer projection.deinit();
+    const ticket = projection.findConst(created.ticket_id).?;
+    try std.testing.expectEqual(VAR1.core.tickets.TicketStatus.in_progress, ticket.status);
+    try std.testing.expectEqualStrings(child.id, ticket.active_session_id);
+    try std.testing.expectEqual(@as(u32, 5), ticket.attempt);
+    try std.testing.expectEqual(@as(u64, 42), ticket.worker_generation);
+    try std.testing.expectEqual(@as(usize, 4), projection.valid_events);
+
+    const child_events = try VAR1.core.session_store.readEvents(allocator, workspace_root, child.id);
+    defer VAR1.shared.types.deinitSessionEvents(allocator, child_events);
+    var delivery_count: usize = 0;
+    var cursor_count: usize = 0;
+    for (child_events) |event| {
+        if (std.mem.eql(u8, event.event_type, VAR1.core.agent_mailbox.received_event_type)) delivery_count += 1;
+        if (std.mem.eql(u8, event.event_type, VAR1.core.agent_mailbox.cursor_event_type)) cursor_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), delivery_count);
+    try std.testing.expectEqual(@as(usize, 1), cursor_count);
+}

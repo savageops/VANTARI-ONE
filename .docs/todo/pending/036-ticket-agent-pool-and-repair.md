@@ -241,7 +241,7 @@ Every row above compounds the parent ratchet.
 
 [`../findings/11-persistent-agent-worker-and-scheduler-arbitration.md`](../findings/11-persistent-agent-worker-and-scheduler-arbitration.md)
 
-Moves 24–28 are closed in source. One shared ticket-ledger process lock serializes
+Moves 24–29 are closed in source. One shared ticket-ledger process lock serializes
 projection, revision validation, and append; the winning row commits lease,
 generation, capability, attempt, and deterministic child identity before one
 child is materialized. The two-kernel proof at
@@ -256,9 +256,13 @@ prompts choose different actions through the same executor. One canonical
 capacity constructor now separates active, idle, queued, and ticket-admission
 headroom. A 20-task pressure probe holds active work at three, exposes backlog,
 drains a live config reduction under the old ceiling, then replaces the same pool
-at one worker. Debug and ReleaseFast pass 1,947/1,947; a 256-segment audit finds
-zero exact duplicates. Move 29 is next: persist owner-generation heartbeat,
-expiry, mailbox cursor, and exactly-once resume-or-requeue reconciliation.
+at one worker. Expired claims now settle terminal evidence first; heartbeat
+requires exact `Supervisor` ownership; surviving sessions resume under a new
+generation with the same attempt, receipt, transcript, and mailbox cursor; only
+absent sessions requeue. Cold receipt recovery no longer races this path with
+`StaleAgentOwner`. Debug and ReleaseFast pass 1,953/1,953; the Move 29
+139-segment audit finds zero exact duplicates. Move 30 is next: installed assign,
+message, detach, kill, restart, terminal, repair, and delivery proof.
 
 ## Stop Condition
 

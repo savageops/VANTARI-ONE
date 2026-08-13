@@ -248,10 +248,14 @@ two-kernel proof produces one winner and one attempt. The same proof now seeds
 one assigned ticket and observes one process-serialized claim containing the
 worker generation, lease, capability, and deterministic child identity, followed
 by exactly one child session. The child then sends the parent one durable
-ticket-claim wake through the sequence-addressed agent mailbox. Exactly-once
-recovery after execution-owner death
-remains open; see the current full-harness SITREP before treating active work as
-crash-resumable.
+ticket-claim wake through the sequence-addressed agent mailbox. After lease
+expiry, terminal evidence settles first. A surviving nonterminal child resumes
+under a new worker generation on that same session; only a missing claimed
+session returns to `assigned`. Heartbeat advances only while the fixed pool owns
+the exact session. The transcript, execution receipt, attempt, and mailbox cursor
+do not move. This recovery is source-proven; installed worker-kill/restart proof
+remains open, and external side-effect certainty still requires the write-intent
+ledger.
 
 The TUI keeps this mechanic legible without adding a status forest: the footer shows pool and queue pressure when non-zero; the activity group shows `Agents completed/total`; each keyed child row ends with a bounded turn summary sourced from the child session summary ledger. Tool lifecycle names remain typed event metadata, not the visible child summary. The persistent footer omits `Esc cancel`.
 
@@ -425,7 +429,8 @@ concurrent starts converge through one workspace lease. Graceful owner shutdown
 drains accepted connections before closing the child Job Object. A stale or
 crashed owner is rejected and replaced once by the next client. Scheduler
 leadership is process-exclusive and generation-fenced in source; mid-turn
-owner-crash reconciliation remains an explicit roadmap gate.
+owner-crash reconciliation is source-proven through the same ticket session.
+The installed forced-kill/restart mesh remains an explicit roadmap gate.
 
 The invariant is cold-start legibility: after an interrupted process, the next client should be able to explain what completed, what did not, and which transition made that conclusion durable.
 
@@ -710,6 +715,9 @@ idle boundary; active work drains under the actual prior ceiling. Agent prompts
 can decide what work to admit and how to
 orchestrate it, but they cannot skip the claim, lease, session, or terminal
 evidence boundary. Agents may complete owned tickets but never close them.
+Expired ownership preserves the active session and attempt through one `resume`
+ticket row. Requeue occurs only when that session does not exist; mailbox
+delivery remains sequence/cursor-addressed on the preserved session.
 
 ### Prompt Policy
 
@@ -782,8 +790,8 @@ Every tool call, context window, and model interaction is recorded in structured
 | Wire-protocol routing — Chat Completions, Responses, Anthropic Messages | **Shipped** |
 | Provider model discovery and local context-window detection | **Shipped** |
 | Durable scheduler records and attempts | **Source proven; two-kernel leadership gate passed** |
-| Buffered ticket admission and fixed agent capacity | **Source proven; installed crash-recovery proof pending** |
-| Sequence-addressed direct/group/parent agent mailbox | **Source proven; owner-crash delivery reconciliation pending** |
+| Buffered ticket admission, fixed capacity, and same-session owner recovery | **Source proven; installed crash-restart proof pending** |
+| Sequence-addressed direct/group/parent agent mailbox | **Source proven; installed crash-restart proof pending** |
 | Model-selected route eligibility and team snapshot | **Source proven; installed replacement pending** |
 | Plugin runtime with typed socket execution | **In progress** |
 | Provider fallback chains | Planned |

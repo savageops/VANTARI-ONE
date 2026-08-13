@@ -361,7 +361,7 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - Per-agent effort/temperature/thinking controls
 - Knowledge scaffolding (research/plans/advice/roadmap/tickets/processes)
 - Full ticket lifecycle (create/transition/list — unassigned→assigned→in_progress→completed→closed)
-- Buffered ticket execution (assignment queue, fixed pool capacity, leases, heartbeat, stale-owner requeue, terminal reconciliation)
+- Buffered ticket execution (assignment queue, fixed pool capacity, live-owner heartbeat, generation-fenced same-session resume, absent-session requeue, terminal-first reconciliation)
 - Process tracking ledger
 - Dual-mode reasoning dock (4 rows, ∞/◊ glyphs, buffer preview)
 - TUI Unicode glyph system (○/◉/✓/✗/⊘ markers, ├──/└── connectors, ◍/◉ group headers)
@@ -393,8 +393,8 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Message transcript writer | **Source and installed proven** | One per-session owner serializes every message role and initializes sequence from a bounded valid tail. Multi-process writer ownership remains coupled to the persistent-host work. |
 | Persistent execution owner | **Source proven; install pending** | One workspace lease converges 20 concurrent clients on one owner/kernel tree. Explicit workspace selection defeats inherited/configured redirection. Client detach preserves the generation; graceful stop drains; forced owner death leaves zero descendants; the next client creates one new generation. The active installed operator pair blocks replacement only. |
 | Session submission | **Source proven** | `run --session-id` routes through `LocalClient` and owner `session/send`; the retired per-session `run-session` process no longer bypasses shared capacity or nested delegation. |
-| Child branch/convergence | **Owner-lifetime proven** | Fixed-pool convergence now survives presentation-client exit and routes the bounded child summary through the durable parent mailbox without transcript replication. Scheduler leadership is process-exclusive and generation-fenced; owner-process death still marks running receipts stale instead of resuming a worker. |
-| Agent mailbox | **Source proven** | Direct, parent, and current-group delivery uses recipient event sequence, sender receipt, queue/wake intent, and provider-success unread cursor. Owner-generation death/restart reconciliation remains open. |
+| Child branch/convergence | **Source recovery proven; installed kill pending** | Fixed-pool convergence survives presentation-client exit. After lease expiry, terminal evidence settles first; a surviving ticket child resumes on the same receipt/session under a new generation, while an absent session alone requeues. Ordinary non-ticket orphan receipts still become `StaleAgentOwner`. |
+| Agent mailbox | **Source recovery proven; installed kill pending** | Direct, parent, and current-group delivery uses recipient event sequence, sender receipt, queue/wake intent, and provider-success unread cursor. Same-session owner recovery preserves exactly one delivery position without copying the cursor. |
 | Agent eligibility | **Source proven** | One hot-loaded `AgentService` snapshot advertises only route-resolvable specialists with capacity/team/communication state and an exact SHA-256 receipt. Quiet and hive prompt profiles choose different actions through the same executor; installed replacement remains pending. |
 | Write-intent ledger | **Frontier scaffold** | Reserve/commit helpers and tests exist; write-capable tools do not call them on the canonical mutation path. |
 | Byte-level session integrity | **Source and installed proven** | One LF-only reader owns BOM, invalid-UTF-8, JSON/schema, duplicate, and non-monotonic boundaries across event/message/context/intent/summary projections. Append refuses a poisoned current tail without rewriting it; operator-facing corruption events remain a later diagnostics decision. |

@@ -51,6 +51,10 @@ Rules:
 - Scheduler leadership is process-exclusive and generation-fenced in source.
 - Ticket claim, worker generation, lease, capability, and deterministic child
   identity commit in one process-serialized ticket row before child creation.
+- Expired claims settle terminal evidence first. Existing nonterminal sessions
+  resume through one generation-fenced ticket row with the same attempt, receipt,
+  transcript, and mailbox cursor; only absent sessions requeue. Heartbeat requires
+  exact live Supervisor ownership.
 - agents {} returns var1.agent_eligibility.v1: sorted route-resolvable
   specialists, unavailable route classes, fixed-pool/team pressure,
   communication choices, and a SHA-256 receipt. Prompts choose solo, inspect,
@@ -58,8 +62,9 @@ Rules:
 - Agent messaging uses one events.jsonl mailbox: direct, parent, current_group;
   queue/wake; durable recipient sequence, sender receipt, and provider-success
   unread cursor. Messages never assign tickets, launch work, or copy transcripts.
-- Do not infer exactly-once owner-crash or mailbox-delivery reconciliation until
-  their remaining roadmap gates close.
+- Source recovery proves one durable work identity and mailbox position. Do not
+  infer installed crash/restart proof or exactly-once arbitrary external effects;
+  those remain separate roadmap gates.
 
 Commands from apps/backend:
 scripts/zigw.ps1 build test --summary all

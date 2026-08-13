@@ -92,7 +92,8 @@ The owner projection is project-local and is published only after a real kernel
 health response. Clients reject stale state, protocol drift, workspace mismatch,
 generation mismatch, and another executable. This source path survives
 presentation detach and recovers once after graceful stop or owner crash. It
-does not yet make a running child turn resume exactly once after owner death.
+now reconstructs one persisted ticket child on the same session after lease
+expiry; Move 30 still must prove that path through an installed forced kill.
 
 ## Buffered ticket execution
 
@@ -124,8 +125,14 @@ crash-released OS lock through the full tick and reads back a random nonzero
 generation before dispatch. Ticket mutation holds `.var/tickets/ledger.lock`
 across projection, validation, and append; one claim row commits generation,
 lease, attempt, capability, and deterministic child identity before the child
-exists. Owner-process death still stops the pool and cold recovery marks running
-receipts stale. Chain 036 therefore remains pending.
+exists. Terminal session evidence settles before lease recovery. Heartbeat
+renews only when `Supervisor` owns the exact session. An expired claim with an
+existing nonterminal session appends one revision-fenced `resume`, replaces only
+worker generation and lease, and submits the immutable receipt's same group,
+task, session, attempt, capability, transcript, and mailbox cursor. A missing
+session alone appends `requeue`. Cold receipt reconstruction defers active
+ticket-owned sessions instead of writing `StaleAgentOwner`. Chain 036 remains
+pending for installed kill/restart proof.
 
 ## Agent eligibility
 
@@ -166,8 +173,9 @@ Child completion now sends the bounded canonical session summary to its parent
 through this mailbox. Ticket claim sends a child-to-parent wake notice after the
 claim and child session are durable. Neither path appends collaboration content
 to `messages.jsonl`; the old convergence-specific transcript append and bespoke
-`ticket_claimed` event are removed. Owner-process crash reconciliation remains
-roadmap move 29.
+`ticket_claimed` event are removed. Same-session owner recovery preserves the
+existing recipient event spine and cursor; replay adds neither another delivery
+nor another cursor. Move 30 owns installed crash/restart proof.
 
 ## TUI projection contract
 
@@ -197,7 +205,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,943/1,943 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,953/1,953 tests with zero skips.
   The reduced total is intentional: one registry loop executes all 53 declared
   cases and replaces 45 one-case wrappers that left ten cases undiscovered.
   Its host lane executes the stdio child, owner state/client, shared process
@@ -305,7 +313,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - The last installed-proven move-19 artifact remains SHA-256
   `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
   Current source ReleaseFast is
-  `6E6A80054C4982AA9F1D86E9415B2422A4F7B7670080795243A91818279A360A`.
+  `ADDA84517C3DD1CC870E75C293E64BF1A7E1B3CE4525C1D56EC0B260E551ECD8`.
   Replacement is blocked while operator-owned installed PIDs 12028 and 14452
   remain active; source/installed equality is not claimed.
 - Installed `session/send` against a disposable local provider imported all
@@ -324,12 +332,13 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
   returned `requested` and exited with zero process. Its legacy terminal name is
   retained only as historical proof; move 19 removed that writer.
-- Moves 5–20 and 22–28 plus findings 10 and 13 are closed. Move 21 is source-complete
+- Moves 5–20 and 22–29 plus findings 10 and 13 are closed. Move 21 is source-complete
   and awaits the installed replacement gate. Six synchronized 100-way probes cover
   admission, summary, message, event, tracked-TUI replay, and shutdown. The
-  latest Debug and ReleaseFast graphs pass 1,947/1,947. The native two-kernel admission
+  latest Debug and ReleaseFast graphs pass 1,953/1,953. The native two-kernel admission
   proof retains one schedule attempt, one ticket claim, and one matching child
-  session under one nonzero generation; mid-turn owner-crash recovery remains P0.
+  session under one nonzero generation. Source recovery now generation-fences the
+  same durable session; installed owner-kill proof remains P0.
 - Move 26 ships the hive's source mailbox: durable direct/group/parent delivery,
   selective summary/artifact references, nested normal sessions, queue/wake
   intent, and a restart-readable unread cursor. Move 27 adds route-resolved,
@@ -337,8 +346,10 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   executor. Move 28 adds one coherent active/idle/queued/admission projection and
   idle-boundary config refresh; its 20-task pressure reaches three concurrent
   calls without exceeding the configured ceiling. A 256-segment audit finds zero
-  exact duplicates. Moves 29–30 retain owner-generation reconciliation and
-  installed crash/restart proof.
+  exact duplicates. Move 29 adds terminal-first same-session resume,
+  absent-session requeue, live-owner heartbeat, and cursor-preserving replay; its
+  139-segment audit finds zero exact duplicates. Move 30 retains installed
+  crash/restart proof. Move 62 retains arbitrary external-effect certainty.
 - `git diff --check` exits 0 with line-ending warnings only.
 
 See [`research/2026-08-12-full-harness-sitrep.md`](research/2026-08-12-full-harness-sitrep.md)

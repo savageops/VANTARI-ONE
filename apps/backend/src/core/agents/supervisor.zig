@@ -512,6 +512,20 @@ pub const Supervisor = struct {
         return self.groups.contains(group_id);
     }
 
+    /// Live session ownership / Scan the bounded fixed-pool inventory at one
+    /// mutex point. Terminal receipts are not liveness evidence.
+    pub fn ownsSession(self: *Supervisor, session_id: []const u8) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        var groups = self.groups.iterator();
+        while (groups.next()) |entry| {
+            for (entry.value_ptr.*.tasks) |task| {
+                if (std.mem.eql(u8, task.session_id, session_id) and !isTerminal(task.lifecycle)) return true;
+            }
+        }
+        return false;
+    }
+
     pub fn waitGroup(self: *Supervisor, group_id: []const u8, timeout_ms: usize) !tools.AgentGroupSnapshot {
         self.mutex.lock();
         defer self.mutex.unlock();

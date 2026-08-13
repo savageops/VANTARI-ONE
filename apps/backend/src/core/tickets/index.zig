@@ -23,6 +23,7 @@ pub const Error = error{
     InvalidInitialStatus,
     InvalidTransition,
     InvalidClaim,
+    InvalidResume,
     InvalidRenewal,
     InvalidTerminalEvidence,
     TicketNotFound,
@@ -137,6 +138,21 @@ pub const RenewInput = struct {
     session_id: []const u8,
     idempotency_key: []const u8,
     renewed_at_ms: i64,
+};
+
+/// Replace an expired claim owner without changing the durable work identity.
+/// The ticket, attempt, session, agent, and capability remain fixed; only the
+/// worker generation and its new lease move.
+pub const ResumeInput = struct {
+    ticket_id: []const u8,
+    expected_revision: u64,
+    worker_id: []const u8,
+    worker_generation: u64,
+    lease_token: []const u8,
+    lease_expires_at_ms: i64,
+    session_id: []const u8,
+    idempotency_key: []const u8,
+    resumed_at_ms: i64,
 };
 
 pub const RequeueInput = struct {
@@ -462,6 +478,53 @@ pub const TicketStore = struct {
         return self.claimFromRawWithAllocator(event, appended);
     }
 
+    /// Fence one expired owner onto the existing ticket session. This is the
+    /// only crash-recovery mutation that preserves an active attempt.
+    pub fn resumeExpired(self: *const TicketStore, input: ResumeInput) !ClaimReceipt {
+        if (input.ticket_id.len == 0 or input.worker_id.len == 0 or input.worker_generation == 0 or input.lease_token.len == 0 or input.session_id.len == 0 or input.idempotency_key.len == 0 or input.lease_expires_at_ms <= input.resumed_at_ms) return Error.InvalidResume;
+
+        var guard = try self.acquireLedgerGuard();
+        defer guard.deinit();
+
+        if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
+            defer self.allocator.free(existing);
+            var parsed = try std.json.parseFromSlice(RawEvent, self.allocator, existing, .{ .ignore_unknown_fields = true });
+            defer parsed.deinit();
+            if (!std.mem.eql(u8, eventType(parsed.value), "resume")) return Error.IdempotencyConflict;
+            return self.claimFromRaw(parsed.value, false);
+        }
+
+        var projection = try self.readProjectionLocked();
+        defer projection.deinit();
+        if (projection.poisoned_suffix) return Error.PoisonedSuffix;
+        const ticket = projection.find(input.ticket_id) orelse return Error.TicketNotFound;
+        if (ticket.status != .in_progress or !ticket.claim_complete) return Error.InvalidResume;
+        if (ticket.revision != input.expected_revision) return Error.RevisionConflict;
+        if (!std.mem.eql(u8, ticket.active_session_id, input.session_id)) return Error.InvalidResume;
+        if (ticket.lease_expires_at_ms <= 0 or ticket.lease_expires_at_ms > input.resumed_at_ms) return Error.LeaseNotExpired;
+
+        var event = RawEvent{
+            .schema = "var1.ticket_event.v2",
+            .event_type = "resume",
+            .ticket_id = input.ticket_id,
+            .status = @tagName(TicketStatus.in_progress),
+            .source = "scheduler",
+            .idempotency_key = input.idempotency_key,
+            .revision = ticket.revision + 1,
+            .worker_id = input.worker_id,
+            .worker_generation = input.worker_generation,
+            .lease_token = input.lease_token,
+            .lease_expires_at_ms = input.lease_expires_at_ms,
+            .attempt = ticket.attempt,
+            .session_id = ticket.active_session_id,
+            .agent_hint = ticket.agent_hint,
+            .capability_hash = ticket.capability_hash,
+            .transitioned_at_ms = input.resumed_at_ms,
+        };
+        const appended = try self.appendEventLocked(&event);
+        return self.claimFromRawWithAllocator(event, appended);
+    }
+
     pub fn renewClaim(self: *const TicketStore, input: RenewInput) !MutationReceipt {
         if (input.ticket_id.len == 0 or input.worker_id.len == 0 or input.lease_token.len == 0 or input.session_id.len == 0 or input.idempotency_key.len == 0 or input.lease_expires_at_ms <= input.renewed_at_ms) return Error.InvalidRenewal;
 
@@ -723,7 +786,7 @@ pub const TicketStore = struct {
         if (event.regression_artifact.len > 0) ticket.regression_artifact = try arena.dupe(u8, event.regression_artifact);
         if (event.repair_required) ticket.repair_required = true;
 
-        if (std.mem.eql(u8, kind, "claim")) {
+        if (std.mem.eql(u8, kind, "claim") or std.mem.eql(u8, kind, "resume")) {
             ticket.active_session_id = try arena.dupe(u8, event.session_id);
             ticket.claim_complete = event.worker_id.len > 0 and event.lease_token.len > 0 and event.session_id.len > 0 and event.capability_hash.len > 0 and event.lease_expires_at_ms > 0;
         } else if (std.mem.eql(u8, kind, "requeue")) {
@@ -920,6 +983,53 @@ test "ticket store claim is revision-bound and idempotent" {
     try std.testing.expectEqualStrings("worker-1", ticket.worker_id);
     try std.testing.expectEqualStrings("lease-1", ticket.lease_token);
     try std.testing.expectEqual(@as(u64, 3), projection.last_seq);
+}
+
+test "ticket store resumes one expired claim on the same session under a new generation" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+    const store = TicketStore.init(allocator, workspace);
+    var created = try store.create(.{ .title = "resume", .description = "same durable work", .category = "architecture", .severity = "high", .created_at_ms = 410 });
+    defer created.deinit(allocator);
+    var assigned = try store.transition(.{ .ticket_id = created.ticket_id, .status = .assigned, .reason = "queue", .idempotency_key = "assign-resume", .transitioned_at_ms = 411 });
+    defer assigned.deinit(allocator);
+    var claim = try store.claim(.{ .ticket_id = created.ticket_id, .expected_revision = assigned.revision, .worker_id = "worker-old", .worker_generation = 7, .lease_token = "lease-old", .lease_expires_at_ms = 500, .attempt = 3, .session_id = "session-stable", .agent_hint = "implementer", .capability_hash = "cap-stable", .idempotency_key = "claim-resume", .claimed_at_ms = 450 });
+    defer claim.deinit(allocator);
+
+    try std.testing.expectError(Error.LeaseNotExpired, store.resumeExpired(.{ .ticket_id = created.ticket_id, .expected_revision = claim.revision, .worker_id = "worker-new", .worker_generation = 8, .lease_token = "lease-new", .lease_expires_at_ms = 800, .session_id = "session-stable", .idempotency_key = "resume-early", .resumed_at_ms = 499 }));
+    var resumed = try store.resumeExpired(.{ .ticket_id = created.ticket_id, .expected_revision = claim.revision, .worker_id = "worker-new", .worker_generation = 8, .lease_token = "lease-new", .lease_expires_at_ms = 800, .session_id = "session-stable", .idempotency_key = "resume-once", .resumed_at_ms = 501 });
+    defer resumed.deinit(allocator);
+    try std.testing.expect(resumed.appended);
+    try std.testing.expectEqual(@as(u64, 4), resumed.revision);
+    try std.testing.expectEqual(@as(u32, 3), resumed.attempt);
+    try std.testing.expectEqualStrings("session-stable", resumed.session_id);
+    try std.testing.expectEqualStrings("worker-new", resumed.worker_id);
+    try std.testing.expectEqual(@as(u64, 8), resumed.worker_generation);
+    try std.testing.expectEqualStrings("lease-new", resumed.lease_token);
+
+    var replay = try store.resumeExpired(.{ .ticket_id = created.ticket_id, .expected_revision = 999, .worker_id = "wrong-worker", .worker_generation = 99, .lease_token = "wrong-lease", .lease_expires_at_ms = 9999, .session_id = "wrong-session", .idempotency_key = "resume-once", .resumed_at_ms = 501 });
+    defer replay.deinit(allocator);
+    try std.testing.expect(!replay.appended);
+    try std.testing.expectEqual(resumed.revision, replay.revision);
+    try std.testing.expectError(Error.InvalidResume, store.resumeExpired(.{ .ticket_id = created.ticket_id, .expected_revision = resumed.revision, .worker_id = "worker-next", .worker_generation = 9, .lease_token = "lease-next", .lease_expires_at_ms = 900, .session_id = "session-other", .idempotency_key = "resume-wrong-session", .resumed_at_ms = 801 }));
+
+    var projection = try store.readProjection();
+    defer projection.deinit();
+    const ticket = projection.findConst(created.ticket_id).?;
+    try std.testing.expectEqual(TicketStatus.in_progress, ticket.status);
+    try std.testing.expect(ticket.claim_complete);
+    try std.testing.expectEqualStrings("session-stable", ticket.active_session_id);
+    try std.testing.expectEqual(@as(u32, 3), ticket.attempt);
+    try std.testing.expectEqualStrings("cap-stable", ticket.capability_hash);
+    try std.testing.expectEqual(@as(usize, 4), projection.valid_events);
+
+    const ledger_path = try store.ledgerPath();
+    defer allocator.free(ledger_path);
+    try fsutil.appendText(ledger_path, "{poisoned resume suffix\n");
+    try std.testing.expectError(Error.PoisonedSuffix, store.resumeExpired(.{ .ticket_id = created.ticket_id, .expected_revision = resumed.revision, .worker_id = "worker-next", .worker_generation = 9, .lease_token = "lease-next", .lease_expires_at_ms = 1000, .session_id = "session-stable", .idempotency_key = "resume-poisoned", .resumed_at_ms = 801 }));
 }
 
 test "ticket store requeues only expired claims and preserves stale session evidence" {

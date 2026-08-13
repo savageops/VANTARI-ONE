@@ -38,6 +38,10 @@ second runtime owner.
   `available = idle - queued` saturated at zero. Config changes apply to the same
   physical pool at its next idle boundary. Do not invent a second pool, pending
   capacity ledger, or restore a `tickets` execution-policy section.
+- Treat `resume` as the sole expired ticket-owner transition. It preserves the
+  active session, attempt, receipt, transcript, and mailbox cursor under a new
+  worker generation. Requeue only when the claimed session is absent. Heartbeat
+  requires exact live `Supervisor` ownership.
 - Call `agents {}` when the current decision needs collaboration evidence. Read
   `var1.agent_eligibility.v1` for route-resolved specialists, pool/team pressure,
   communication choices, and its SHA-256 receipt. The snapshot is not an order:
@@ -73,8 +77,11 @@ requires source/installed SHA-256 equality and the installed consumer path.
   child materialization. Route-resolved specialist/team eligibility with a
   deterministic receipt, direct/group/parent mail, provider-success unread
   cursor, child completion, and ticket-claim notices are source-proven on
-  `events.jsonl`. Mid-turn owner-crash and delivery reconciliation remain roadmap
-  work. Do not infer them from admission or source-only proof.
+  `events.jsonl`. Generation-fenced same-session resume and absent-session
+  requeue are also source-proven without copying the cursor. Installed
+  worker-kill/restart proof remains roadmap work; exactly-once external effects
+  remain behind the write-intent ledger. Do not infer either from source-only
+  proof.
 
 Read `README.md`, `apps/backend/architecture.md`, and
 `.docs/roadmap/24-harness-capability-next-90.md` for deeper contracts.

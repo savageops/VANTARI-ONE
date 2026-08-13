@@ -118,7 +118,7 @@ and executor consumers receive owned exact-session copies.
 
 ## Ticket and buffered agent execution
 
-Ticket assignment is a durable queue transition, not a child-session launch. `core/tickets/index.zig` owns ticket records, queue projection, claim/lease state, heartbeat evidence, stale-owner repair, and terminal transitions. `core/scheduler/service.zig` claims assigned work only when the configured pool has capacity, then routes the ticket through the existing `core/agents/service.zig` and `core/agents/supervisor.zig` owners.
+Ticket assignment is a durable queue transition, not a child-session launch. `core/tickets/index.zig` owns ticket records, queue projection, claim/resume/lease state, heartbeat evidence, absent-session requeue, and terminal transitions. `core/scheduler/service.zig` claims assigned work only when the configured pool has capacity, then routes the ticket through the existing `core/agents/service.zig` and `core/agents/supervisor.zig` owners.
 
 `core/scheduler/store.zig` acquires the shared
 `shared/process_lock.zig` primitive before reading leadership state and holds it
@@ -134,7 +134,9 @@ log_ticket transition(assigned)
   -> AgentService route/receipt
   -> Supervisor fixed-pool slot
   -> child session events and summary
-  -> terminal evidence + ticket reconciliation
+  -> terminal-first reconciliation
+  -> heartbeat while Supervisor owns session
+  -> expired lease: resume same session | requeue absent session
 ```
 
 There is no second worker registry or ticket execution policy. Assignment is
@@ -393,9 +395,11 @@ idle boundary. A busy pool drains and reports its actual prior ceiling; queued
 backlog remains visible and may exceed `max` for a model-selected batch.
 
 The project-local execution owner keeps this sole service/pool/scheduler
-composition alive across TUI and CLI detach. It does not make in-memory child
-work crash-resumable: owner death still requires the generation-fenced
-reconciliation assigned to moves 29–30. Move 23 closes scheduler leadership.
+composition alive across TUI and CLI detach. Move 29 makes its durable child
+identity source-resumable after owner death: terminal evidence settles first;
+an existing nonterminal session receives one generation-fenced `resume`; only
+an absent claimed session requeues. Move 30 owns installed kill/restart proof.
+Move 23 closes scheduler leadership.
 Move 24 closes ticket admission split-brain: `core/tickets` holds one shared
 process lock across projection, validation, and append; the winning claim row
 commits worker generation, lease, attempt, capability hash, and a deterministic
@@ -408,6 +412,10 @@ capacity, team, communication, depth, contact, eligible, and unavailable state;
 quiet and hive prompts select different actions through the same executor.
 Move 28 makes configured capacity truthful across eligibility, health, CLI, and
 TUI read models and proves a 20-task batch never exceeds the physical ceiling.
+Move 29 also requires live `Supervisor` ownership before heartbeat, preserves
+the immutable execution receipt and mailbox cursor on same-session resume, and
+prevents cold receipt reconstruction from racing ticket recovery with
+`StaleAgentOwner`.
 
 `core/executor/loop.zig` parks a waiting parent on the supervisor condition without a provider call. The first unconsumed terminal child sends its bounded canonical summary through the parent mailbox, which wakes the parent, rebuilds through the context compiler, and permits the next routing/synthesis turn while unfinished siblings remain supervised. A parent cannot emit terminal output while any owned child remains active. Full specialists execute as ordinary isolated VAR1 child sessions. Tool-free `model_task` specialists use one provider turn and validate their supplied output schema without acquiring a second transcript or tool runtime.
 
@@ -426,8 +434,9 @@ The mailbox is source-shipped. Child completion and ticket claim use it instead
 of convergence-specific transcript messages or a bespoke claim event. Context
 compilation injects only the recipient's bounded unread batch and acknowledges it
 after provider success; it never copies sibling transcripts or creates a generic
-topic/subscription broker. Tickets remain the only work lifecycle. Move 29 owns
-exact owner-generation delivery reconciliation across process death.
+topic/subscription broker. Tickets remain the only work lifecycle. Move 29
+preserves the same recipient session and cursor across owner-generation recovery;
+it does not copy or reset delivery state. Move 30 owns installed crash proof.
 
 ## Module ownership
 
@@ -586,10 +595,16 @@ Latest local Windows validation on 2026-08-13:
   counts, drains under the old ceiling after a live reduction, then replaces the
   same pool at one worker. An eight-file, 256-segment GGUF audit found 12
   candidates, zero exact duplicates, and no second capacity owner.
+- Expired-ticket recovery settles terminal evidence first, renews only exact
+  live Supervisor ownership, resumes a surviving child on its immutable
+  group/task/session/attempt, and requeues only an absent session. Idempotent
+  same-session replay retains one provider call, one mailbox delivery, and one
+  cursor. A six-file, 139-segment audit found five candidates, zero exact
+  duplicates, and no second recovery owner.
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Current source SHA-256 is
-  `6E6A80054C4982AA9F1D86E9415B2422A4F7B7670080795243A91818279A360A`.
+  `ADDA84517C3DD1CC870E75C293E64BF1A7E1B3CE4525C1D56EC0B260E551ECD8`.
   Installed move-19 SHA-256 remains
   `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
   replacement waits for operator-owned PIDs 12028/14452 to exit naturally.

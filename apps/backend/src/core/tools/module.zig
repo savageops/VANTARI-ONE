@@ -223,6 +223,20 @@ pub const TicketTaskRequest = struct {
     idempotency_key: []const u8,
 };
 
+/// One expired claim fenced onto its existing child session. Recovery may
+/// replace process ownership, but it cannot replace the durable work identity.
+pub const ResumeTicketRequest = struct {
+    ticket_id: []const u8,
+    expected_revision: u64,
+    worker_id: []const u8,
+    worker_generation: u64,
+    lease_token: []const u8,
+    lease_expires_at_ms: i64,
+    session_id: []const u8,
+    idempotency_key: []const u8,
+    resumed_at_ms: i64,
+};
+
 pub const TicketLaunchReceipt = struct {
     ticket_id: []u8,
     group_id: []u8,
@@ -295,9 +309,18 @@ pub const AgentService = struct {
         allocator: std.mem.Allocator,
         request: TicketTaskRequest,
     ) anyerror!TicketLaunchReceipt = null,
+    resumeTicketFn: ?*const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        request: ResumeTicketRequest,
+    ) anyerror!TicketLaunchReceipt = null,
     capacityFn: ?*const fn (
         ctx: ?*anyopaque,
     ) anyerror!AgentCapacitySnapshot = null,
+    ownsSessionFn: ?*const fn (
+        ctx: ?*anyopaque,
+        session_id: []const u8,
+    ) anyerror!bool = null,
     eligibilityFn: ?*const fn (
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
@@ -396,9 +419,25 @@ pub const AgentService = struct {
         return launch_ticket(self.context, allocator, request);
     }
 
+    pub fn resumeTicket(
+        self: AgentService,
+        allocator: std.mem.Allocator,
+        request: ResumeTicketRequest,
+    ) anyerror!TicketLaunchReceipt {
+        const resume_ticket = self.resumeTicketFn orelse return Error.AgentServiceUnavailable;
+        return resume_ticket(self.context, allocator, request);
+    }
+
     pub fn capacity(self: AgentService) anyerror!AgentCapacitySnapshot {
         const read_capacity = self.capacityFn orelse return Error.AgentServiceUnavailable;
         return read_capacity(self.context);
+    }
+
+    /// Return live fixed-pool ownership. Missing capability is false so a
+    /// scheduler can never manufacture a heartbeat from absent evidence.
+    pub fn ownsSession(self: AgentService, session_id: []const u8) anyerror!bool {
+        const owns_session = self.ownsSessionFn orelse return false;
+        return owns_session(self.context, session_id);
     }
 
     pub fn eligibility(

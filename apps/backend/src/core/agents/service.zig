@@ -21,7 +21,10 @@ pub const Error = error{
     NoBranchesToConverge,
     InvalidBatch,
     MissingParentSession,
+    MissingExecutionReceipt,
     TicketClaimReplay,
+    TicketResumeMismatch,
+    TicketSessionTerminal,
 };
 
 pub const Service = struct {
@@ -59,7 +62,9 @@ pub const Service = struct {
             .launchFn = launchFromHandle,
             .launchBatchFn = launchBatchFromHandle,
             .launchTicketFn = launchTicketFromHandle,
+            .resumeTicketFn = resumeTicketFromHandle,
             .capacityFn = capacityFromHandle,
+            .ownsSessionFn = ownsSessionFromHandle,
             .eligibilityFn = eligibilityFromHandle,
             .statusFn = statusFromHandle,
             .waitFn = waitFromHandle,
@@ -118,9 +123,23 @@ fn launchTicketFromHandle(
     return launchTicket(service, allocator, request);
 }
 
+fn resumeTicketFromHandle(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    request: tools.ResumeTicketRequest,
+) anyerror!tools.TicketLaunchReceipt {
+    const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
+    return resumeTicket(service, allocator, request);
+}
+
 fn capacityFromHandle(ctx_ptr: ?*anyopaque) anyerror!tools.AgentCapacitySnapshot {
     const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
     return readCapacity(service);
+}
+
+fn ownsSessionFromHandle(ctx_ptr: ?*anyopaque, session_id: []const u8) anyerror!bool {
+    const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
+    return service.supervisor.ownsSession(session_id);
 }
 
 fn eligibilityFromHandle(
@@ -708,6 +727,145 @@ fn launchTicket(
     };
 }
 
+/// Resume one expired ticket on its original session. The immutable receipt
+/// fixes group, task, capability, and budget identity; current route resolution
+/// may refresh provider credentials and model selection only.
+fn resumeTicket(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    request: tools.ResumeTicketRequest,
+) !tools.TicketLaunchReceipt {
+    if (!hasText(request.ticket_id) or !hasText(request.worker_id) or request.worker_generation == 0 or
+        !hasText(request.lease_token) or !hasText(request.session_id) or !hasText(request.idempotency_key) or
+        request.lease_expires_at_ms <= request.resumed_at_ms) return Error.InvalidBatch;
+
+    service.recovery_mutex.lock();
+    defer service.recovery_mutex.unlock();
+
+    var child_session = try store.readSessionRecord(allocator, service.config.workspace_root, request.session_id);
+    defer child_session.deinit(allocator);
+    const receipt = child_session.execution_receipt orelse return Error.MissingExecutionReceipt;
+    if (!std.mem.eql(u8, child_session.id, request.session_id)) return Error.TicketResumeMismatch;
+
+    var registry = try agent_spec.loadRegistry(allocator, service.config.workspace_root);
+    defer registry.deinit();
+    const spec = try registry.resolve(receipt.agent_spec_id);
+    const receipt_kind = try routes.ExecutionKind.parse(receipt.execution_kind);
+    const receipt_role = try routes.RouteRole.parse(receipt.route_role);
+    const capability_hash = try agent_spec.capabilityHash(spec, receipt.capability_profile_id);
+    const output_schema_hash = agent_spec.contentHash("{}");
+    if (spec.execution_kind != receipt_kind or spec.route_role != receipt_role or
+        !std.mem.eql(u8, spec.capability_profile_id, receipt.capability_profile_id) or
+        spec.max_steps != receipt.budget.max_steps or spec.max_tool_calls != receipt.budget.max_tool_calls or
+        spec.max_children != receipt.budget.max_children or
+        !std.mem.eql(u8, capability_hash[0..], receipt.capability_hash) or
+        !std.mem.eql(u8, output_schema_hash[0..], receipt.output_schema_hash)) return Error.TicketResumeMismatch;
+
+    const ticket_store = tickets.TicketStore.init(allocator, service.config.workspace_root);
+    if (service.supervisor.hasGroup(receipt.group_id)) {
+        var replay = try ticket_store.resumeExpired(.{
+            .ticket_id = request.ticket_id,
+            .expected_revision = request.expected_revision,
+            .worker_id = request.worker_id,
+            .worker_generation = request.worker_generation,
+            .lease_token = request.lease_token,
+            .lease_expires_at_ms = request.lease_expires_at_ms,
+            .session_id = request.session_id,
+            .idempotency_key = request.idempotency_key,
+            .resumed_at_ms = request.resumed_at_ms,
+        });
+        defer replay.deinit(allocator);
+        return ticketReceiptFromExecution(allocator, request.ticket_id, child_session, receipt.*, receipt.model);
+    }
+    if (isTerminal(child_session.status)) return Error.TicketSessionTerminal;
+
+    const capacity = try readCapacity(service);
+    if (capacity.available == 0) return child_supervisor.Error.PoolFull;
+
+    const route = try std.heap.page_allocator.create(routes.ResolvedRoute);
+    var route_owned = true;
+    defer if (route_owned) {
+        route.deinit(std.heap.page_allocator);
+        std.heap.page_allocator.destroy(route);
+    };
+    route.* = routes.resolve(std.heap.page_allocator, service.config.*, receipt_role, .{
+        .max_steps = receipt.budget.max_steps,
+        .max_tool_calls = receipt.budget.max_tool_calls,
+        .execution_kind = receipt_kind,
+        .capability_profile_id = receipt.capability_profile_id,
+    }) catch |err| {
+        std.heap.page_allocator.destroy(route);
+        route_owned = false;
+        return err;
+    };
+    const resumed_model = try allocator.dupe(u8, route.config.openai_model);
+    defer allocator.free(resumed_model);
+
+    const prepared_task = try service.supervisor.createTask(.{
+        .parent_session_id = receipt.parent_session_id,
+        .parent_checkpoint_id = receipt.parent_checkpoint_id,
+        .session_id = child_session.id,
+        .task_id = receipt.task_id,
+        .name = child_session.display_name orelse child_session.id,
+        .agent_spec_id = receipt.agent_spec_id,
+        .route_role = receipt.route_role,
+        .capability_profile_id = receipt.capability_profile_id,
+        .branch_seq = receipt.branch_seq,
+        .remaining_depth = if (receipt.budget.max_children > 0) 1 else 0,
+        .output_schema_json = "{}",
+        .route = route,
+        .transport = service.transport,
+        .agent_service = service.handle(),
+    });
+    route_owned = false;
+    var submitted = false;
+    defer if (!submitted) service.supervisor.destroyPreparedTask(prepared_task);
+
+    var resumed = try ticket_store.resumeExpired(.{
+        .ticket_id = request.ticket_id,
+        .expected_revision = request.expected_revision,
+        .worker_id = request.worker_id,
+        .worker_generation = request.worker_generation,
+        .lease_token = request.lease_token,
+        .lease_expires_at_ms = request.lease_expires_at_ms,
+        .session_id = request.session_id,
+        .idempotency_key = request.idempotency_key,
+        .resumed_at_ms = request.resumed_at_ms,
+    });
+    defer resumed.deinit(allocator);
+    if (!std.mem.eql(u8, resumed.session_id, child_session.id) or
+        !std.mem.eql(u8, resumed.capability_hash, receipt.capability_hash)) return Error.TicketResumeMismatch;
+
+    try service.supervisor.submitTicketGroup(.{
+        .id = receipt.group_id,
+        .parent_session_id = receipt.parent_session_id,
+        .workspace_root = service.config.workspace_root,
+        .shared_context = "",
+    }, prepared_task);
+    submitted = true;
+    return ticketReceiptFromExecution(allocator, request.ticket_id, child_session, receipt.*, resumed_model);
+}
+
+fn ticketReceiptFromExecution(
+    allocator: std.mem.Allocator,
+    ticket_id: []const u8,
+    session: types.SessionRecord,
+    receipt: types.ExecutionReceipt,
+    model: []const u8,
+) !tools.TicketLaunchReceipt {
+    return .{
+        .ticket_id = try allocator.dupe(u8, ticket_id),
+        .group_id = try allocator.dupe(u8, receipt.group_id),
+        .task_id = try allocator.dupe(u8, receipt.task_id),
+        .session_id = try allocator.dupe(u8, session.id),
+        .agent_id = try allocator.dupe(u8, receipt.agent_spec_id),
+        .route_role = try allocator.dupe(u8, receipt.route_role),
+        .capability_profile_id = try allocator.dupe(u8, receipt.capability_profile_id),
+        .capability_hash = try allocator.dupe(u8, receipt.capability_hash),
+        .model = try allocator.dupe(u8, model),
+    };
+}
+
 fn launch(
     service: *Service,
     allocator: std.mem.Allocator,
@@ -1073,10 +1231,10 @@ pub const ChildBranchResult = struct {
 };
 
 /// Rebuild the live parent/group index from secret-free child receipts exactly
-/// once per Service lifetime. A process restart cannot resume in-process
-/// workers, so initialized/running receipts become typed StaleAgentOwner
-/// failures; already-terminal receipts remain eligible for idempotent group
-/// convergence.
+/// once per Service lifetime. The ticket ledger owns resumable nonterminal
+/// sessions, so this reader defers them to the scheduler. Ordinary orphaned
+/// receipts become typed StaleAgentOwner failures; terminal receipts remain
+/// eligible for idempotent group convergence.
 fn recoverReceiptGroups(
     service: *Service,
     allocator: std.mem.Allocator,
@@ -1092,10 +1250,15 @@ fn recoverReceiptGroups(
     service.supervisor.recordColdStartDirectoryScan();
     const parent_messages = try store.readSessionMessages(allocator, service.config.workspace_root, parent_session_id);
     defer types.deinitSessionMessages(allocator, parent_messages);
+    const ticket_store = tickets.TicketStore.init(allocator, service.config.workspace_root);
+    var ticket_projection = try ticket_store.readProjection();
+    defer ticket_projection.deinit();
+    if (ticket_projection.poisoned_suffix) return tickets.Error.PoisonedSuffix;
 
     var seen_groups: std.StringHashMapUnmanaged(void) = .{};
     defer seen_groups.deinit(allocator);
     var stale_count: usize = 0;
+    var deferred_ticket_group = false;
 
     for (sessions) |candidate| {
         const receipt = candidate.execution_receipt orelse continue;
@@ -1103,6 +1266,22 @@ fn recoverReceiptGroups(
         if (seen_groups.contains(receipt.group_id)) continue;
         try seen_groups.put(allocator, receipt.group_id, {});
         if (service.supervisor.hasGroup(receipt.group_id)) continue;
+
+        var group_has_ticket_owner = false;
+        for (sessions) |member| {
+            const member_receipt = member.execution_receipt orelse continue;
+            if (!std.mem.eql(u8, member_receipt.parent_session_id, parent_session_id) or
+                !std.mem.eql(u8, member_receipt.group_id, receipt.group_id)) continue;
+            if (member.status != .initialized and member.status != .running) continue;
+            if (ticketProjectionOwnsSession(&ticket_projection, member.id)) {
+                group_has_ticket_owner = true;
+                break;
+            }
+        }
+        if (group_has_ticket_owner) {
+            deferred_ticket_group = true;
+            continue;
+        }
 
         var prepared = std.array_list.Managed(*child_supervisor.Task).init(allocator);
         defer prepared.deinit();
@@ -1199,10 +1378,20 @@ fn recoverReceiptGroups(
         try appendGroupRecoveredEvent(service, allocator, parent_session_id, receipt.group_id, prepared.items.len, group_stale_count);
     }
 
-    const owned_parent_id = try std.heap.page_allocator.dupe(u8, parent_session_id);
-    errdefer std.heap.page_allocator.free(owned_parent_id);
-    try service.recovered_parents.put(std.heap.page_allocator, owned_parent_id, {});
+    if (!deferred_ticket_group) {
+        const owned_parent_id = try std.heap.page_allocator.dupe(u8, parent_session_id);
+        errdefer std.heap.page_allocator.free(owned_parent_id);
+        try service.recovered_parents.put(std.heap.page_allocator, owned_parent_id, {});
+    }
     return stale_count;
+}
+
+fn ticketProjectionOwnsSession(projection: *const tickets.TicketProjection, session_id: []const u8) bool {
+    for (projection.tickets.items) |ticket| {
+        if (ticket.status == .in_progress and ticket.claim_complete and
+            std.mem.eql(u8, ticket.active_session_id, session_id)) return true;
+    }
+    return false;
 }
 
 fn groupHasConvergenceMessage(

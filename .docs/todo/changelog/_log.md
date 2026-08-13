@@ -2188,3 +2188,64 @@ owner-generation crash recovery; move 38 owns installed replacement.
 
 **Next todo:** move 29 — persist heartbeat, owner generation, expiry, mailbox
 delivery cursor, and exactly-once resume-or-requeue reconciliation.
+
+## 2026-08-13 - Roadmap move 29 owner-generation reconciliation
+
+**Changed:**
+
+- Added one process-serialized `resume` ticket event. It replaces worker id,
+  generation, lease token, and expiry while preserving ticket revision lineage,
+  attempt, active child session, agent/capability identity, execution receipt,
+  transcript, and mailbox cursor.
+- Reordered ticket maintenance to settle terminal session evidence before lease
+  recovery. Expired claims resume only when the active session exists and is
+  nonterminal; absent sessions alone requeue.
+- Bound heartbeat to exact live `Supervisor` ownership. Matching worker id and
+  generation without a live fixed-pool task no longer manufactures liveness.
+- Added production `AgentService.resumeTicket`: reconstruct current credentials
+  and route from the immutable receipt, reject capability/budget drift, and
+  submit the original group/task/session through the sole fixed pool. Idempotent
+  replay observes the existing group without a second provider call.
+- Made cold receipt recovery defer nonterminal ticket-owned groups to the
+  scheduler instead of racing them into `StaleAgentOwner`. Ordinary non-ticket
+  orphan recovery remains unchanged.
+- Kept the mailbox schema and cursor owner unchanged. Same-session recovery
+  copies no delivery state and appends no recovery-specific mailbox row.
+
+**Proof:**
+
+- The red tracer first failed because `TicketStore.resumeExpired` did not exist;
+  the second tracer proved the old scheduler heartbeated a missing child.
+- Unit pressure rejects live-lease resume, wrong session, wrong revision,
+  conflicting replay, and poisoned ticket suffix. Positive heartbeat requires
+  a live owner; missing-session recovery requeues once; expired terminal work
+  completes before recovery.
+- The integration tracer resumes one real ticket child on its original session,
+  replays the same recovery request, records one provider call, retains attempt
+  5 and generation 42, and leaves exactly one recipient delivery plus one cursor.
+- Debug and ReleaseFast graphs pass 19/19 steps and 1,953/1,953 tests.
+  ReleaseFast build passes 9/9; source SHA-256 is
+  `ADDA84517C3DD1CC870E75C293E64BF1A7E1B3CE4525C1D56EC0B260E551ECD8`.
+- GGUF duplicate-owner audit: six production files, 139 segments, five
+  candidate pairs, zero exact duplicates, and no second scheduler, lease,
+  receipt, mailbox, or recovery owner.
+- `git diff --check` exits 0 with line-ending warnings only. Installed SHA-256
+  remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
+  operator-owned PIDs 12028 and 14452 remain untouched.
+
+**Competitive decision:** Prime Agent contributes generation-aware session
+leases and non-replay of uncertain effects; Temporal contributes heartbeat
+failure detection; BullMQ and Vercel Queues clarify redelivery/idempotence;
+Paperclip separates liveness from work state; Scion contributes CAS state
+versioning; Eve contributes committed delivery replay with retired cursors.
+VANTARI keeps fewer owners: one ticket ledger transition, one immutable child
+receipt, one fixed pool, and the existing event-spine mailbox.
+
+**Boundary:** Move 29 proves one durable work identity and delivery position in
+source. It does not claim exactly-once arbitrary external side effects; Move 62
+owns write-intent/effect reconciliation. Move 30 owns installed Windows
+kill/restart, message, terminal, repair, and cleanup proof.
+
+**Next todo:** move 30 — run the installed 036 terminal mesh across assignment,
+claim, messaging, detach, worker kill, restart, complete/fail/cancel/repair, and
+verify no lost or duplicate delivery.

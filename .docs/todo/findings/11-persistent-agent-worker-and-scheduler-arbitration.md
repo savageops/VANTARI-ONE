@@ -32,6 +32,12 @@ Move 28 closes capacity drift: one `AgentCapacitySnapshot.fromCounts` owner
 derives active, idle, queued, and admission headroom; the same physical pool
 applies changed config only at an idle boundary while busy projections retain
 the actual old ceiling.
+Move 29 closes source owner-generation drift: terminal session evidence settles
+first; heartbeat requires exact nonterminal `Supervisor` ownership; an expired
+claim with a surviving session appends one generation-fenced `resume` and runs
+the immutable receipt's same group/task/session/attempt; only an absent session
+requeues. Cold receipt reconstruction defers ticket-owned sessions, and
+same-session replay preserves one mailbox delivery and cursor.
 Move 25 closes assignment ambiguity: create-as-assigned and
 transition-to-assigned append queue state only, and the dead ticket execution
 policy is deleted.
@@ -76,6 +82,15 @@ policy is deleted.
 - [agent_scale_test.zig](../../../apps/backend/tests/agent_scale_test.zig) drives
   20 tasks through a three-worker ceiling, observes queued backlog, proves
   `running <= max`, drains a live reduction, and applies one worker at release.
+- [tickets/index.zig](../../../apps/backend/src/core/tickets/index.zig) owns the
+  serialized `resume` transition and rejects wrong revision, session, live lease,
+  or poisoned suffix.
+- [scheduler/service.zig](../../../apps/backend/src/core/scheduler/service.zig)
+  reconciles terminal evidence before owner recovery, renews only owned sessions,
+  resumes surviving sessions, and requeues absent sessions.
+- [agent_scale_test.zig](../../../apps/backend/tests/agent_scale_test.zig) proves
+  one real same-session resume and replay produce one provider call, preserve
+  attempt/generation/session, and retain exactly one mailbox delivery/cursor.
 - [roadmap move 21](../../roadmap/21-persistent-execution-owner.md) proves one
   owner/kernel generation across client detach, 20 concurrent clients,
   duplicate-start pressure, graceful stop, forced crash, and zero cleanup.
@@ -127,11 +142,14 @@ idempotent receipts, provider-failure replay, safe-boundary wake, ticket claim,
 and child-completion convergence pass in source without transcript replication.
 Route filtering, depth denial, queue-only pressure, receipt verification, and
 quiet-versus-hive prompt selection also pass through the canonical executor.
-Configured capacity now passes Debug and ReleaseFast at 1,947/1,947 tests; a
+Configured capacity now passes Debug and ReleaseFast at 1,953/1,953 tests; a
 20-task tracer reaches three active calls, preserves backlog separately, drains
 under the old ceiling, and applies the reduced ceiling at idle. The 256-segment
-audit finds zero exact duplicates. Installed replacement and active-turn
-owner-crash/delivery reconciliation remain open; this finding stays pending.
+capacity audit finds zero exact duplicates. Same-session owner recovery passes
+terminal-first, live-owner heartbeat, absent-session requeue, poisoned-tail,
+idempotent replay, and cursor-preservation pressure. Its 139-segment audit finds
+zero exact duplicates. Installed worker-kill/restart proof remains open; this
+finding stays pending through Move 30.
 
 ## Source and salvage
 

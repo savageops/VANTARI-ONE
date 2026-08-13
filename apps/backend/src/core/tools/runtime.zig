@@ -38,6 +38,7 @@ pub const AgentTaskRequest = module.AgentTaskRequest;
 pub const AgentGroupSnapshot = module.AgentGroupSnapshot;
 pub const AgentCapacitySnapshot = module.AgentCapacitySnapshot;
 pub const TicketTaskRequest = module.TicketTaskRequest;
+pub const ResumeTicketRequest = module.ResumeTicketRequest;
 pub const TicketLaunchReceipt = module.TicketLaunchReceipt;
 pub const AgentEventSink = module.AgentEventSink;
 pub const ToolEventSink = module.ToolEventSink;

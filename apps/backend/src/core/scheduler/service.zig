@@ -14,6 +14,7 @@ pub const TickResult = struct {
     failed_count: usize = 0,
     ticket_due_count: usize = 0,
     ticket_started_count: usize = 0,
+    ticket_resumed_count: usize = 0,
     ticket_renewed_count: usize = 0,
     ticket_requeued_count: usize = 0,
     ticket_completed_count: usize = 0,
@@ -113,13 +114,15 @@ pub const Service = struct {
 
     fn tickTickets(self: *Service, now_ms: i64, result: *TickResult) !void {
         const ticket_store = tickets.TicketStore.init(self.allocator, self.config.workspace_root);
-        try self.requeueExpiredTickets(&ticket_store, now_ms, result);
-        try self.renewLiveTickets(&ticket_store, now_ms, result);
         try self.reconcileTerminalTickets(&ticket_store, now_ms, result);
+        try self.recoverExpiredTickets(&ticket_store, now_ms, result);
+        try self.renewLiveTickets(&ticket_store, now_ms, result);
         try self.dispatchAssignedTickets(&ticket_store, now_ms, result);
     }
 
-    fn requeueExpiredTickets(self: *Service, ticket_store: *const tickets.TicketStore, now_ms: i64, result: *TickResult) !void {
+    /// Settle one expired claim from durable session truth. Existing sessions
+    /// resume under a new generation; only absent sessions return to the queue.
+    fn recoverExpiredTickets(self: *Service, ticket_store: *const tickets.TicketStore, now_ms: i64, result: *TickResult) !void {
         var projection = try ticket_store.readProjection();
         defer projection.deinit();
         if (projection.poisoned_suffix) {
@@ -129,6 +132,72 @@ pub const Service = struct {
 
         for (projection.tickets.items) |ticket| {
             if (ticket.status != .in_progress or !ticket.claim_complete or ticket.lease_expires_at_ms <= 0 or ticket.lease_expires_at_ms > now_ms) continue;
+
+            var child = sessions.readSessionRecord(self.allocator, self.config.workspace_root, ticket.active_session_id) catch |err| switch (err) {
+                error.FileNotFound => null,
+                else => {
+                    result.ticket_failed_count += 1;
+                    continue;
+                },
+            };
+            defer if (child) |*session| session.deinit(self.allocator);
+            if (child) |session| {
+                if (session.status == .completed or session.status == .failed or session.status == .cancelled) continue;
+                const agent_service = self.agent_service orelse {
+                    result.ticket_failed_count += 1;
+                    continue;
+                };
+                const lease_token = try std.fmt.allocPrint(self.allocator, "ticket-resume-lease:{s}:{d}:{d}:{d}", .{ ticket.id, ticket.revision, ticket.attempt, self.worker_generation });
+                defer self.allocator.free(lease_token);
+                const idempotency_key = try std.fmt.allocPrint(self.allocator, "ticket-resume:{s}:{d}:{d}:{s}", .{ ticket.id, ticket.revision, ticket.attempt, ticket.active_session_id });
+                defer self.allocator.free(idempotency_key);
+                const owns_session = agent_service.ownsSession(ticket.active_session_id) catch {
+                    result.ticket_failed_count += 1;
+                    continue;
+                };
+                if (owns_session) {
+                    var resumed = ticket_store.resumeExpired(.{
+                        .ticket_id = ticket.id,
+                        .expected_revision = ticket.revision,
+                        .worker_id = self.owner_id,
+                        .worker_generation = self.worker_generation,
+                        .lease_token = lease_token,
+                        .lease_expires_at_ms = now_ms + ticket_lease_ttl_ms,
+                        .session_id = ticket.active_session_id,
+                        .idempotency_key = idempotency_key,
+                        .resumed_at_ms = now_ms,
+                    }) catch |err| switch (err) {
+                        tickets.Error.RevisionConflict, tickets.Error.InvalidResume, tickets.Error.LeaseNotExpired => continue,
+                        else => {
+                            result.ticket_failed_count += 1;
+                            continue;
+                        },
+                    };
+                    resumed.deinit(self.allocator);
+                } else {
+                    var resumed = agent_service.resumeTicket(self.allocator, .{
+                        .ticket_id = ticket.id,
+                        .expected_revision = ticket.revision,
+                        .worker_id = self.owner_id,
+                        .worker_generation = self.worker_generation,
+                        .lease_token = lease_token,
+                        .lease_expires_at_ms = now_ms + ticket_lease_ttl_ms,
+                        .session_id = ticket.active_session_id,
+                        .idempotency_key = idempotency_key,
+                        .resumed_at_ms = now_ms,
+                    }) catch |err| {
+                        if (!isRecoveryRaceError(err)) result.ticket_failed_count += 1;
+                        continue;
+                    };
+                    defer resumed.deinit(self.allocator);
+                    if (!std.mem.eql(u8, resumed.ticket_id, ticket.id) or !std.mem.eql(u8, resumed.session_id, ticket.active_session_id)) {
+                        result.ticket_failed_count += 1;
+                        continue;
+                    }
+                }
+                result.ticket_resumed_count += 1;
+                continue;
+            }
 
             const idempotency_key = try std.fmt.allocPrint(self.allocator, "ticket-requeue:{s}:{d}:{d}", .{ ticket.id, ticket.revision, ticket.attempt });
             defer self.allocator.free(idempotency_key);
@@ -163,6 +232,12 @@ pub const Service = struct {
             if (ticket.status != .in_progress or !ticket.claim_complete or ticket.lease_expires_at_ms <= now_ms) continue;
             if (!std.mem.eql(u8, ticket.worker_id, self.owner_id) or ticket.worker_generation != self.worker_generation) continue;
             if (ticket.lease_expires_at_ms - now_ms > ticket_heartbeat_window_ms) continue;
+            const agent_service = self.agent_service orelse continue;
+            const owns_session = agent_service.ownsSession(ticket.active_session_id) catch {
+                result.ticket_failed_count += 1;
+                continue;
+            };
+            if (!owns_session) continue;
 
             const idempotency_key = try std.fmt.allocPrint(self.allocator, "ticket-heartbeat:{s}:{d}:{d}:{d}", .{ ticket.id, ticket.revision, ticket.attempt, ticket.lease_expires_at_ms });
             defer self.allocator.free(idempotency_key);
@@ -357,6 +432,15 @@ pub const Service = struct {
         return std.mem.eql(u8, @errorName(err), "TicketClaimReplay");
     }
 
+    fn isRecoveryRaceError(err: anyerror) bool {
+        const name = @errorName(err);
+        return std.mem.eql(u8, name, "RevisionConflict") or
+            std.mem.eql(u8, name, "InvalidResume") or
+            std.mem.eql(u8, name, "LeaseNotExpired") or
+            std.mem.eql(u8, name, "DuplicateGroup") or
+            std.mem.eql(u8, name, "TicketSessionTerminal");
+    }
+
     fn executeJob(self: *Service, job: scheduler.types.ScheduleJob) !bool {
         return switch (job.target_kind) {
             .prompt => try self.executePrompt(job),
@@ -414,6 +498,8 @@ const TicketHarness = struct {
     store: tickets.TicketStore,
     capacity_snapshot: tools.AgentCapacitySnapshot = tools.AgentCapacitySnapshot.fromCounts(1, 0, 0),
     launch_count: usize = 0,
+    resume_count: usize = 0,
+    owns_all_sessions: bool = false,
     permanent_failure: bool = false,
     backpressure: bool = false,
 };
@@ -421,6 +507,45 @@ const TicketHarness = struct {
 fn ticketHarnessCapacity(ctx: ?*anyopaque) anyerror!tools.AgentCapacitySnapshot {
     const harness: *TicketHarness = @ptrCast(@alignCast(ctx.?));
     return harness.capacity_snapshot;
+}
+
+fn ticketHarnessOwnsSession(ctx: ?*anyopaque, session_id: []const u8) anyerror!bool {
+    const harness: *TicketHarness = @ptrCast(@alignCast(ctx.?));
+    _ = session_id;
+    return harness.owns_all_sessions;
+}
+
+fn ticketHarnessResume(
+    ctx: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    request: tools.ResumeTicketRequest,
+) anyerror!tools.TicketLaunchReceipt {
+    const harness: *TicketHarness = @ptrCast(@alignCast(ctx.?));
+    harness.resume_count += 1;
+    var resumed = try harness.store.resumeExpired(.{
+        .ticket_id = request.ticket_id,
+        .expected_revision = request.expected_revision,
+        .worker_id = request.worker_id,
+        .worker_generation = request.worker_generation,
+        .lease_token = request.lease_token,
+        .lease_expires_at_ms = request.lease_expires_at_ms,
+        .session_id = request.session_id,
+        .idempotency_key = request.idempotency_key,
+        .resumed_at_ms = request.resumed_at_ms,
+    });
+    defer resumed.deinit(allocator);
+    harness.owns_all_sessions = true;
+    return .{
+        .ticket_id = try allocator.dupe(u8, request.ticket_id),
+        .group_id = try allocator.dupe(u8, "recovered-group"),
+        .task_id = try allocator.dupe(u8, "recovered-task"),
+        .session_id = try allocator.dupe(u8, request.session_id),
+        .agent_id = try allocator.dupe(u8, resumed.agent_hint),
+        .route_role = try allocator.dupe(u8, "implementation"),
+        .capability_profile_id = try allocator.dupe(u8, "write"),
+        .capability_hash = try allocator.dupe(u8, resumed.capability_hash),
+        .model = try allocator.dupe(u8, "recovered-model"),
+    };
 }
 
 fn ticketHarnessLaunch(
@@ -467,7 +592,9 @@ fn ticketHarnessAgentService(harness: *TicketHarness) tools.AgentService {
         .context = harness,
         .launchFn = undefined,
         .launchTicketFn = ticketHarnessLaunch,
+        .resumeTicketFn = ticketHarnessResume,
         .capacityFn = ticketHarnessCapacity,
+        .ownsSessionFn = ticketHarnessOwnsSession,
         .statusFn = undefined,
         .waitFn = undefined,
         .listFn = undefined,
@@ -806,7 +933,7 @@ test "scheduler preserves assignment across expected pool backpressure" {
     try std.testing.expectEqual(@as(usize, 2), projection.valid_events);
 }
 
-test "scheduler renews its live near-expiry claim and leaves missing child evidence live" {
+test "scheduler does not heartbeat a claimed session absent from its supervisor" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -824,7 +951,7 @@ test "scheduler renews its live near-expiry claim and leaves missing child evide
     try claimTicketForTest(allocator, &store, ticket_id, service.owner_id, "missing-child", "heartbeat-lease", now_ms + 1000, 1, service.worker_generation);
 
     const result = try service.tick();
-    try std.testing.expectEqual(@as(usize, 1), result.ticket_renewed_count);
+    try std.testing.expectEqual(@as(usize, 0), result.ticket_renewed_count);
     try std.testing.expectEqual(@as(usize, 0), result.ticket_requeued_count);
     try std.testing.expectEqual(@as(usize, 0), result.ticket_completed_count);
     try std.testing.expectEqual(@as(usize, 0), result.ticket_failed_count);
@@ -832,12 +959,42 @@ test "scheduler renews its live near-expiry claim and leaves missing child evide
     var projection = try store.readProjection();
     defer projection.deinit();
     const ticket = projection.findConst(ticket_id) orelse return error.TestExpectedTicket;
-    try std.testing.expectEqual(@as(usize, 4), projection.valid_events);
+    try std.testing.expectEqual(@as(usize, 3), projection.valid_events);
     try std.testing.expectEqual(tickets.TicketStatus.in_progress, ticket.status);
     try std.testing.expect(ticket.claim_complete);
-    try std.testing.expectEqual(@as(u64, 4), ticket.revision);
+    try std.testing.expectEqual(@as(u64, 3), ticket.revision);
     try std.testing.expectEqualStrings("missing-child", ticket.active_session_id);
     try std.testing.expectEqualStrings(service.owner_id, ticket.worker_id);
+    try std.testing.expectEqual(now_ms + 1000, ticket.lease_expires_at_ms);
+}
+
+test "scheduler heartbeats only the live session owned by its supervisor" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+    var config = try testConfig(allocator, workspace);
+    defer config.deinit(allocator);
+
+    const store = tickets.TicketStore.init(allocator, workspace);
+    const ticket_id = try createAssignedTicket(allocator, &store, workspace, "owned heartbeat", "architecture", 100);
+    defer allocator.free(ticket_id);
+    var harness = TicketHarness{ .store = store, .owns_all_sessions = true };
+    var service = try Service.initWithAgentService(allocator, &config, .{ .context = null, .sendFn = provider.httpSend }, ticketHarnessAgentService(&harness));
+    defer service.deinit();
+    const now_ms = std.time.milliTimestamp();
+    try claimTicketForTest(allocator, &store, ticket_id, service.owner_id, "owned-child", "owned-heartbeat-lease", now_ms + 1000, 1, service.worker_generation);
+
+    const result = try service.tick();
+    try std.testing.expectEqual(@as(usize, 1), result.ticket_renewed_count);
+    try std.testing.expectEqual(@as(usize, 0), result.ticket_requeued_count);
+    try std.testing.expectEqual(@as(usize, 0), result.ticket_failed_count);
+
+    var projection = try store.readProjection();
+    defer projection.deinit();
+    const ticket = projection.findConst(ticket_id) orelse return error.TestExpectedTicket;
+    try std.testing.expectEqual(@as(u64, 4), ticket.revision);
     try std.testing.expect(ticket.lease_expires_at_ms > now_ms + 1000);
 }
 
@@ -879,6 +1036,81 @@ test "scheduler requeues expired claims once and preserves the last child sessio
     const second = try service.tick();
     try std.testing.expectEqual(@as(usize, 0), second.ticket_requeued_count);
     try std.testing.expectEqual(@as(usize, 4), projection.valid_events);
+}
+
+test "scheduler resumes one expired nonterminal session under its generation" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+    var config = try testConfig(allocator, workspace);
+    defer config.deinit(allocator);
+
+    const store = tickets.TicketStore.init(allocator, workspace);
+    const ticket_id = try createAssignedTicket(allocator, &store, workspace, "resume", "feature", 100);
+    defer allocator.free(ticket_id);
+    var child = try sessions.initSessionWithOptions(allocator, workspace, "resume durable work", .{ .status = .running, .display_name = "ticket child" });
+    defer child.deinit(allocator);
+    const now_ms = std.time.milliTimestamp();
+    try claimTicketForTest(allocator, &store, ticket_id, "dead-worker", child.id, "expired-lease", now_ms - 1, 4, 77);
+
+    var harness = TicketHarness{ .store = store };
+    var service = try Service.initWithAgentService(allocator, &config, .{ .context = null, .sendFn = provider.httpSend }, ticketHarnessAgentService(&harness));
+    defer service.deinit();
+    const first = try service.tick();
+    try std.testing.expectEqual(@as(usize, 1), first.ticket_resumed_count);
+    try std.testing.expectEqual(@as(usize, 0), first.ticket_requeued_count);
+    try std.testing.expectEqual(@as(usize, 0), first.ticket_completed_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.resume_count);
+
+    var projection = try store.readProjection();
+    defer projection.deinit();
+    const ticket = projection.findConst(ticket_id) orelse return error.TestExpectedTicket;
+    try std.testing.expectEqual(tickets.TicketStatus.in_progress, ticket.status);
+    try std.testing.expectEqualStrings(child.id, ticket.active_session_id);
+    try std.testing.expectEqual(@as(u32, 4), ticket.attempt);
+    try std.testing.expectEqual(service.worker_generation, ticket.worker_generation);
+    try std.testing.expectEqualStrings(service.owner_id, ticket.worker_id);
+    try std.testing.expect(ticket.lease_expires_at_ms > now_ms);
+    try std.testing.expectEqual(@as(usize, 4), projection.valid_events);
+
+    const second = try service.tick();
+    try std.testing.expectEqual(@as(usize, 0), second.ticket_resumed_count);
+    try std.testing.expectEqual(@as(usize, 1), harness.resume_count);
+}
+
+test "scheduler settles an expired terminal child before owner recovery" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+    var config = try testConfig(allocator, workspace);
+    defer config.deinit(allocator);
+
+    const store = tickets.TicketStore.init(allocator, workspace);
+    const ticket_id = try createAssignedTicket(allocator, &store, workspace, "terminal first", "bug", 100);
+    defer allocator.free(ticket_id);
+    var child = try sessions.initSessionWithOptions(allocator, workspace, "done", .{ .display_name = "done child" });
+    defer child.deinit(allocator);
+    try sessions.setSessionStatus(allocator, workspace, &child, .completed);
+    const now_ms = std.time.milliTimestamp();
+    try claimTicketForTest(allocator, &store, ticket_id, "dead-worker", child.id, "expired-terminal-lease", now_ms - 1, 1, 9);
+
+    var harness = TicketHarness{ .store = store };
+    var service = try Service.initWithAgentService(allocator, &config, .{ .context = null, .sendFn = provider.httpSend }, ticketHarnessAgentService(&harness));
+    defer service.deinit();
+    const result = try service.tick();
+    try std.testing.expectEqual(@as(usize, 1), result.ticket_completed_count);
+    try std.testing.expectEqual(@as(usize, 0), result.ticket_resumed_count);
+    try std.testing.expectEqual(@as(usize, 0), result.ticket_requeued_count);
+    try std.testing.expectEqual(@as(usize, 0), harness.resume_count);
+
+    var projection = try store.readProjection();
+    defer projection.deinit();
+    const ticket = projection.findConst(ticket_id) orelse return error.TestExpectedTicket;
+    try std.testing.expectEqual(tickets.TicketStatus.completed, ticket.status);
 }
 
 test "scheduler completes terminal child sessions and marks failed work for repair" {
