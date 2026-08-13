@@ -56,6 +56,10 @@ second runtime owner.
   Run `vantari auth login openai-codex` for the browser PKCE path or its manual
   redirect fallback; use `vantari auth logout <provider-id>` for one-record
   removal. Never inspect or print token-bearing auth fields.
+- OAuth `openai-codex` records route through `core/providers/openai_codex.zig` to
+  `/codex/responses` with the stored account id and Codex headers. API-key records
+  stay on the existing OpenAI-compatible dispatch; a missing Codex capability is
+  an explicit error, never a chat-completions fallback.
 
 ## Validate owner lifecycle
 

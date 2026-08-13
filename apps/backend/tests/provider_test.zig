@@ -352,6 +352,21 @@ test "responses stream completed event usage" {
     try std.testing.expectEqual(@as(u64, 60), response.usage.total_tokens);
 }
 
+test "responses stream usage defaults cached tokens to zero when details omitted" {
+    const body =
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\r\n\r\n" ++
+        "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":50,\"output_tokens\":10,\"total_tokens\":60}}}\r\n\r\n" ++
+        "data: [DONE]\r\n\r\n";
+
+    const response = try responses.parseCompletionResponse(std.testing.allocator, "gpt-5", body);
+    defer response.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(u64, 50), response.usage.prompt_tokens);
+    try std.testing.expectEqual(@as(u64, 10), response.usage.completion_tokens);
+    try std.testing.expectEqual(@as(u64, 0), response.usage.cached_tokens);
+    try std.testing.expectEqual(@as(u64, 60), response.usage.total_tokens);
+}
+
 test "responses response without usage yields zeros" {
     const body =
         \\{"output":[{"type":"message","content":[{"type":"output_text","text":"plain"}]}],"model":"gpt-5"}

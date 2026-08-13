@@ -90,6 +90,6 @@ Test access: use the adapters' public parse entry points — check existing test
 ## Evidence
 
 - `zig build test` (apps/backend, zig 0.15.1): 1235/1484 main tests passed; failure set identical to pure-HEAD baseline (comm diff empty — zero regression). One transient flake (core_store docs-sync) observed in one run, passed on re-run — known environmental family.
-- 7 new tests pass: anthropic non-stream usage (cache_creation folds into prompt: 100+5=105), anthropic stream message_start+message_delta accumulation, anthropic no-usage zeros, anthropic tool_use+usage, responses non-stream usage+cached details, responses stream response.completed usage, responses no-usage zeros.
+- 8 new tests pass: anthropic non-stream usage (cache_creation folds into prompt: 100+5=105), anthropic stream message_start+message_delta accumulation, anthropic no-usage zeros, anthropic tool_use+usage, responses non-stream usage+cached details, responses stream response.completed usage, responses stream usage defaults cached tokens to zero when details are omitted, and responses no-usage zeros.
 - captureAnthropicUsage + captureResponsesUsage wired into all 4 parse surfaces (non-stream + stream per adapter).
 - core/index.zig now exports provider_anthropic + provider_responses for canonical test access.

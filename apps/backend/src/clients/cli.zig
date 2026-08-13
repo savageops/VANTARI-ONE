@@ -637,6 +637,8 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
             .context = null,
             .sendFn = provider.httpSend,
             .streamFn = provider.httpSendStreaming,
+            .sendWithHeadersFn = provider.httpSendWithHeaders,
+            .streamWithHeadersFn = provider.httpSendStreamingWithHeaders,
         };
         try web.serve(allocator, loaded_config, .{
             .host = "127.0.0.1",
@@ -678,6 +680,8 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
             .context = null,
             .sendFn = provider.httpSend,
             .streamFn = provider.httpSendStreaming,
+            .sendWithHeadersFn = provider.httpSendWithHeaders,
+            .streamWithHeadersFn = provider.httpSendStreamingWithHeaders,
         };
         try web.serve(allocator, loaded_config, .{
             .host = "127.0.0.1",
@@ -701,6 +705,8 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
             .context = null,
             .sendFn = provider.httpSend,
             .streamFn = provider.httpSendStreaming,
+            .sendWithHeadersFn = provider.httpSendWithHeaders,
+            .streamWithHeadersFn = provider.httpSendStreamingWithHeaders,
         };
         var agent_service = agents.Service.initWithTransport(&loaded_config, transport);
         defer agent_service.deinit();

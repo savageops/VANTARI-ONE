@@ -371,7 +371,7 @@ Every session directory contains:
 
 `messages.jsonl` is the complete append-only transcript. One execution-owner-local per-session ledger state serializes user, assistant, assistant-tool-call, tool-result, and idempotent convergence appends. It initializes sequence from the last valid bounded tail row instead of reparsing transcript history; append failure invalidates the cached cursor before retry. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested. `events.jsonl` assigns the sole durable render identity. Live notifications carry that stored sequence after append; the tracked TUI requests `session/get { after_seq, events_only }` only when it detects a gap and once after turn completion. `shared/jsonl.zig:PrefixReader` is the one LF-framed read boundary for events, messages, context, intents, and summaries. It accepts a leading BOM, rejects invalid UTF-8/JSON/typed schema and non-increasing sequence rows, and ends every projection at the same valid prefix. `fsutil.appendJsonlRecord` validates the bounded current tail through that owner and refuses poison without truncating or appending behind it.
 
-`$VANTARI_HOME/config.json` is the canonical non-secret policy file. Its typed sections own runtime limits, wire API selection, role routing, editable agent definitions, context policy, prompt paths, and supported environment-style overrides. Built-in agent rows may tune persona/condition/route/budgets or be disabled; custom ids must inherit a compiled capability floor. `$VANTARI_HOME/auth.json` is the sibling credential/provider ledger; workspace-local auth is `.var/auth.json`. API keys, OAuth tokens, account identity, and active-provider state never move into config output. Nested/AppData auth paths are one-time migration inputs; `settings.toml` is no longer a runtime reader. `auth status --json` projects provider, model, account, plan, expiry, and verification metadata without secrets. `auth login openai-codex` owns browser PKCE callback collection at `127.0.0.1:1455/auth/callback` plus manual redirect fallback; `auth logout <provider-id>` removes one provider while preserving unrelated records. Move 34 owns Codex completion transport. The Windows installer preserves valid config byte-for-byte and backs up plus materializes the current schema only when the retained file fails validation.
+`$VANTARI_HOME/config.json` is the canonical non-secret policy file. Its typed sections own runtime limits, wire API selection, role routing, editable agent definitions, context policy, prompt paths, and supported environment-style overrides. Built-in agent rows may tune persona/condition/route/budgets or be disabled; custom ids must inherit a compiled capability floor. `$VANTARI_HOME/auth.json` is the sibling credential/provider ledger; workspace-local auth is `.var/auth.json`. API keys, OAuth tokens, account identity, and active-provider state never move into config output. Nested/AppData auth paths are one-time migration inputs; `settings.toml` is no longer a runtime reader. `auth status --json` projects provider, model, account, plan, expiry, and verification metadata without secrets. `auth login openai-codex` owns browser PKCE callback collection at `127.0.0.1:1455/auth/callback` plus manual redirect fallback; `auth logout <provider-id>` removes one provider while preserving unrelated records. `core/providers/dispatch.zig` routes typed OAuth `openai-codex` records to `core/providers/openai_codex.zig`, which builds `POST /codex/responses`, carries account/originator metadata, maps Responses/SSE into the canonical completion result, and never falls back to `/v1/chat/completions`; API-key records remain on the existing `wire_api` route. The Windows installer preserves valid config byte-for-byte and backs up plus materializes the current schema only when the retained file fails validation.
 
 ### Agent access boundary
 
@@ -573,7 +573,7 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-13:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Debug and ReleaseFast test graphs -> 19/19 steps and 1957/1957 tests passed. The lower
+- Debug and ReleaseFast test graphs -> 19/19 steps and 1964/1964 tests passed. The lower
   total is intentional: 45 one-case registry wrappers were replaced by one loop
   that executes every one of the 53 declared cases, including ten that had no
   test declaration.
@@ -611,10 +611,11 @@ Latest local Windows validation on 2026-08-13:
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Current source and installed SHA-256 match at
-  `2A1DF56B967A01F2E8934B80FC006FA5D502E07F12CC30B1959D3F64A75FF2D2`.
-  Move 38 installation and the installed owner/ticket lifecycle proofs pass;
-  Move 33 installed auth help and disposable OAuth-status redaction proof pass;
-  the final installed process census is zero.
+  `09758F2AFE34AC5DCD94F786B5A307F8BB0DF9A11E5DA65B743A6EBB62354834`.
+  Move 37/38 installation, the installed owner/ticket lifecycle proofs, Move 33
+  auth help/status redaction, Move 34 Codex `/codex/responses` consumer proof,
+  and the Move 37 TUI cost consumer proof pass; the final installed process
+  census is zero.
 - The source ticket lifecycle mesh at
   `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`
   proves assignment without launch, one claim, noninteractive TUI detach, exact

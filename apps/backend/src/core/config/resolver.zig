@@ -152,6 +152,9 @@ fn loadDefaultFromAuthOnly(allocator: std.mem.Allocator, workspace_root: []const
         .openai_api_key = try allocator.dupe(u8, resolved_auth.api_key),
         .openai_model = try allocator.dupe(u8, resolved_auth.model),
         .auth_provider = try allocator.dupe(u8, resolved_auth.provider_id),
+        .auth_type = resolved_auth.auth_type,
+        .auth_account_id = if (resolved_auth.account_id) |value| try allocator.dupe(u8, value) else null,
+        .auth_expires_at_ms = resolved_auth.expires_at_ms,
         .subscription_plan_label = if (resolved_auth.subscription_plan_label) |value| try allocator.dupe(u8, value) else null,
         .subscription_status = if (resolved_auth.subscription_status) |value| try allocator.dupe(u8, value) else null,
         .max_steps = default_max_steps,
@@ -250,6 +253,8 @@ fn applyResolvedAuth(allocator: std.mem.Allocator, config: *types.Config, resolv
     errdefer allocator.free(next_model);
     const next_auth_provider = try allocator.dupe(u8, resolved_auth.provider_id);
     errdefer allocator.free(next_auth_provider);
+    const next_auth_account_id = if (resolved_auth.account_id) |value| try allocator.dupe(u8, value) else null;
+    errdefer if (next_auth_account_id) |value| allocator.free(value);
     const next_subscription_plan_label = if (resolved_auth.subscription_plan_label) |value| try allocator.dupe(u8, value) else null;
     errdefer if (next_subscription_plan_label) |value| allocator.free(value);
     const next_subscription_status = if (resolved_auth.subscription_status) |value| try allocator.dupe(u8, value) else null;
@@ -259,6 +264,7 @@ fn applyResolvedAuth(allocator: std.mem.Allocator, config: *types.Config, resolv
     allocator.free(config.openai_api_key);
     allocator.free(config.openai_model);
     if (config.auth_provider) |value| allocator.free(value);
+    if (config.auth_account_id) |value| allocator.free(value);
     if (config.subscription_plan_label) |value| allocator.free(value);
     if (config.subscription_status) |value| allocator.free(value);
 
@@ -266,6 +272,9 @@ fn applyResolvedAuth(allocator: std.mem.Allocator, config: *types.Config, resolv
     config.openai_api_key = next_api_key;
     config.openai_model = next_model;
     config.auth_provider = next_auth_provider;
+    config.auth_type = resolved_auth.auth_type;
+    config.auth_account_id = next_auth_account_id;
+    config.auth_expires_at_ms = resolved_auth.expires_at_ms;
     config.subscription_plan_label = next_subscription_plan_label;
     config.subscription_status = next_subscription_status;
 }

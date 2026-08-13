@@ -652,7 +652,17 @@ Installed state has two sibling owners under `$VANTARI_HOME` (normally `~/.vanta
 
 Use `vantari config path|show|init|validate` to locate and validate the configuration. Because JSON has no comment syntax, the canonical template carries non-operative `_about` notes and a typed `_help` map beside every configurable value; validation rejects malformed or undocumented metadata while older configs may omit help for newer known values. The runtime never prints or merges `auth.json` into config output.
 
-Use `vantari auth status --json` for a secret-free provider projection, `vantari auth login openai-codex` for local ChatGPT/Codex PKCE login, and `vantari auth logout <provider-id>` to remove one provider record. Login stores OAuth credentials and subscription metadata through the same auth ledger; the Codex completion transport remains the next frontier. Status and health output never includes API keys, access tokens, refresh tokens, or ID tokens.
+Use `vantari auth status --json` for a secret-free provider projection, `vantari auth login openai-codex` for local ChatGPT/Codex PKCE login, and `vantari auth logout <provider-id>` to remove one provider record. Login stores OAuth credentials and subscription metadata through the same auth ledger. OAuth `openai-codex` turns now use the dedicated `/codex/responses` transport with account/originator headers; API-key providers remain on their existing OpenAI-compatible route and never fall through to it. Status and health output never includes API keys, access tokens, refresh tokens, or ID tokens.
+
+After login, `.env` is only a bootstrap input. The durable provider record lives in
+`$VANTARI_HOME/auth.json` for an installed run or `.var/auth.json` for a workspace
+run. A safe status projection looks like:
+
+```json
+{"provider_id":"openai-codex","auth_type":"oauth","model":"gpt-5.4-mini","account_id":"acct-...fixture","subscription_plan_label":"ChatGPT Pro","subscription_status":"active","expires_at_ms":2000000000000}
+```
+
+Token fields are intentionally absent. The OAuth record routes to `/codex/responses`; it is not an API-key record with a different label.
 
 ### Provider
 
@@ -796,7 +806,7 @@ Every tool call, context window, and model interaction is recorded in structured
 | Model-selected route eligibility and team snapshot | **Source proven; dedicated installed snapshot proof not run** |
 | Plugin runtime with typed socket execution | **In progress** |
 | Provider fallback chains | Planned |
-| Local Codex subscription auth — CLI PKCE login, durable ledger, logout, and secret-free status | Source shipped; transport pending |
+| Local Codex subscription auth — CLI PKCE login, durable ledger, logout, secret-free status, and explicit `/codex/responses` transport | Source + installed local fixture proven; real entitlement proof pending |
 | Identity auth against `auth.vantari.one` — PKCE OAuth mirroring the openai-codex pattern | Planned |
 | Remote relay — authenticated WebSocket fan-out with no session ownership | Planned |
 | Multi-client session binding — connected clients as capability peers, not parallel authority. Client-offered tools must route through the existing module-owned catalog, not a parallel tool system | Planned |

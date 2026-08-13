@@ -44,6 +44,9 @@ pub const Config = struct {
     openai_api_key: []u8,
     openai_model: []u8,
     auth_provider: ?[]u8 = null,
+    auth_type: AuthType = .api_key,
+    auth_account_id: ?[]u8 = null,
+    auth_expires_at_ms: ?i64 = null,
     subscription_plan_label: ?[]u8 = null,
     subscription_status: ?[]u8 = null,
     max_steps: usize,
@@ -81,6 +84,7 @@ pub const Config = struct {
         allocator.free(self.openai_api_key);
         allocator.free(self.openai_model);
         if (self.auth_provider) |value| allocator.free(value);
+        if (self.auth_account_id) |value| allocator.free(value);
         if (self.subscription_plan_label) |value| allocator.free(value);
         if (self.subscription_status) |value| allocator.free(value);
         allocator.free(self.workspace_root);

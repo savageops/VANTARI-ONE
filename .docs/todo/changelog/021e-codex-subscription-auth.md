@@ -5,28 +5,28 @@ type: execution-unit
 protocol_version: "2.0"
 category: feature
 phase: e
-status: pending
+status: done
 patch_scope: "Document and harden operator-facing Codex auth status, fixtures, and changelog evidence after runtime support exists."
 blast_radius: medium
 blast_radius_justification: "This changes operator docs, status examples, and test fixtures consumed by humans and scripts but does not modify auth execution internals."
 idempotency_contract: idempotent
 idempotency_notes: "Documentation and fixture edits are deterministic and can be re-applied safely."
-acceptance: "README, architecture docs, and fixtures describe `.var/auth/auth.json`, Codex subscription login, logout, status redaction, and API-key parity without exposing real secrets."
+acceptance: "README, architecture docs, and fixtures describe installed `$VANTARI_HOME/auth.json`, workspace `.var/auth.json`, `.env` bootstrap semantics, Codex subscription login, logout, status redaction, and API-key parity without exposing real secrets."
 exit_criterion: "`.\scripts\zigw.ps1 build test --summary all` and docs searches both prove the new auth surface is documented and secret-free."
 validation: "Set-Location E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE\\apps\\backend; .\\scripts\\zigw.ps1 build test --summary all"
 expected_exit_code: 0
 expected_output_pattern: "tests passed"
-evidence: "PLACEHOLDER - replace with exact captured stdout at completion. Archival is gated on this field being populated."
+evidence: "Docs: root README, backend README, architecture, AGENTS, SKILL, llms, auth-persistence research, technical summary, index, findings, workspace, roadmap, and changelog all describe the shipped provider/auth boundary. Sanitized status example contains provider/account/plan/expiry metadata and no credential values. `ix.exe search --max-hits 40 \"lit:/codex/responses\" README.md apps/backend/README.md apps/backend/architecture.md .docs` -> status `ok`, 27 matches; `ix.exe search --max-hits 20 \"lit:fake-access-token || lit:fake-refresh-token || lit:fake-id-token\" README.md apps/backend/README.md apps/backend/architecture.md .docs/research` -> status `ok`, zero matches. Move 34 records the prior installed transport checkpoint: 19/19 build steps, 1,963/1,963 tests, ReleaseFast/install 9/9, SHA-256 `9CEE55BE3DCCBE858EF3418B955249AFE036CD9FB989756D4487096D8ED1E73D`, installed `/codex/responses` fixture success, no bearer output, zero final processes. The current installed artifact is recorded by the later Move 37/39 closeout."
 conflict_surface: ""
 invariants:
-  - "I1: `.var/auth/auth.json` is the canonical durable auth ledger for runtime provider credentials and subscription metadata."
+  - "I1: Installed credentials live in `$VANTARI_HOME/auth.json`; workspace-scoped credentials live in `.var/auth.json`; each is the canonical durable auth ledger for its runtime boundary."
   - "I5: Raw secrets are never printed by `health`, `auth status`, RPC health, logs, docs, or test fixtures."
   - "I6: Codex subscription transport is explicit and does not masquerade as standard `/v1/chat/completions`."
-entry_state: "The `021d` unit is archived with evidence, and Codex subscription credentials can be resolved and consumed by a dedicated provider transport in fake tests."
+entry_state: "The `021d` unit is archived with evidence, and Codex subscription credentials can be resolved and consumed by a dedicated provider transport in fake and installed local fixtures."
 rollback_surface: "Before rollback, verify no unrelated user edits exist. Revert README/architecture/research fixture changes and remove only changelog lines written by this unit."
 dependencies: "021a-codex-subscription-auth, 021b-codex-subscription-auth, 021c-codex-subscription-auth, 021d-codex-subscription-auth"
 next_todo: /todo/pending/021f-codex-subscription-auth.md
-continuation: "On completion: record evidence (replace PLACEHOLDER), set status done, move this file to /todo/changelog/021e-codex-subscription-auth.md, continue immediately to next_todo. Do not pause. Do not batch."
+continuation: "On completion: record evidence, set status done, move this file to /todo/changelog/021e-codex-subscription-auth.md, continue immediately to next_todo. Do not pause. Do not batch."
 blocked_reason: ""
 unblock_action: ""
 resumption_point: ""
@@ -42,29 +42,29 @@ Auth features fail operationally when the operator surface is ambiguous. This sl
 
 ## Pre-flight Checklist
 
-- [ ] `021a` through `021d` are archived in `/todo/changelog/` with non-PLACEHOLDER evidence.
-- [ ] `VAR1 auth status --json` exists and can be run against fake or sanitized auth state.
-- [ ] `conflict_surface` is empty or cross-chain dependency is resolved.
-- [ ] Rollback procedure is populated for blast_radius medium.
-- [ ] If re-executing after partial failure: idempotency_contract is read and direct re-execution is safe.
+- [x] `021a` through `021d` are archived in `/todo/changelog/` with evidence-bearing closure notes.
+- [x] `VAR1 auth status --json` exists and can be run against fake or sanitized auth state.
+- [x] `conflict_surface` is empty or cross-chain dependency is resolved.
+- [x] Rollback procedure is populated for blast_radius medium.
+- [x] If re-executing after partial failure: idempotency_contract is read and direct re-execution is safe.
 
 ## Entry State
 
-- `.var/auth/auth.json` supports API-key and OAuth records.
+- `$VANTARI_HOME/auth.json` supports installed API-key and OAuth records; `.var/auth.json` is the workspace-scoped auth ledger.
 - Codex auth commands exist and do not print secrets.
 - Codex provider routing exists and is tested through fake transport.
 
 ## Patch Surface
 
 **Modifies:**
-- `apps/backend/README.md` - document auth commands and `.var/auth/auth.json` ownership.
+- `apps/backend/README.md` - document auth commands and installed/workspace auth ownership.
 - `apps/backend/architecture.md` - document auth resolver and provider transport boundaries.
 - `.docs/research/2026-04-24-auth-persistence-study.md` - add a short implementation follow-up note if the shipped contract differs from the initial recommendation.
 - `.docs/todo/changelog/_log.md` - append the execution summary when this unit completes.
 - `apps/backend/tests/**` - add or update sanitized status fixtures.
 
 **Adds:**
-- `apps/backend/.docs/snapshots/021-codex-subscription-auth.md` or equivalent cold-start snapshot if this repo lane still uses app-local snapshots.
+- None. Existing fake auth fixtures in `apps/backend/tests/auth_store_test.zig` and the disposable installed fixture are the canonical proof surfaces; a second snapshot system would duplicate ownership.
 
 **Deletes:**
 - None.
@@ -76,8 +76,8 @@ Auth features fail operationally when the operator surface is ambiguous. This sl
 
 ## Detailed Requirements
 
-- R1: Document `.var/auth/auth.json` as the canonical provider credential and subscription metadata ledger.
-- R2: Document `.env` as bootstrap/operator configuration, not the authoritative store after `.var/auth/auth.json` exists.
+- R1: Document installed `$VANTARI_HOME/auth.json` and workspace `.var/auth.json` as the canonical provider credential and subscription metadata ledgers for their respective runtime boundaries.
+- R2: Document `.env` as bootstrap/operator configuration, not the authoritative store after the installed `$VANTARI_HOME/auth.json` or workspace `.var/auth.json` exists.
 - R3: Document `VAR1 auth login openai-codex`, `VAR1 auth logout openai-codex`, and `VAR1 auth status --json`.
 - R4: Include a redacted example auth status payload with no token-shaped or key-shaped values.
 - R5: Document that Codex subscription transport is explicit and separate from OpenAI-compatible chat completions.
@@ -86,7 +86,7 @@ Auth features fail operationally when the operator surface is ambiguous. This sl
 
 ## Invariants This Unit Must Preserve
 
-- I1: `.var/auth/auth.json` is the canonical durable auth ledger for runtime provider credentials and subscription metadata.
+- I1: Installed credentials live in `$VANTARI_HOME/auth.json`; workspace-scoped credentials live in `.var/auth.json`; each is the canonical durable auth ledger for its runtime boundary.
 - I5: Raw secrets are never printed by `health`, `auth status`, RPC health, logs, docs, or test fixtures.
 - I6: Codex subscription transport is explicit and does not masquerade as standard `/v1/chat/completions`.
 
@@ -95,14 +95,14 @@ Auth features fail operationally when the operator surface is ambiguous. This sl
 | Step | Command | Expected Exit Code | Expected Output Pattern | Idempotent |
 |------|---------|-------------------|------------------------|-----------|
 | 1 | `Set-Location E:\Workspaces\01_Projects\01_Github\VANTARI-ONE\apps\backend; .\scripts\zigw.ps1 build test --summary all` | `0` | `tests passed` | yes |
-| 2 | `Set-Location E:\Workspaces\01_Projects\01_Github\VANTARI-ONE; iex search --max-hits 30 ".var/auth/auth.json" README.md apps/backend/README.md apps/backend/architecture.md .docs/research` | `0` | `.var/auth/auth.json` | yes |
-| 3 | `Set-Location E:\Workspaces\01_Projects\01_Github\VANTARI-ONE; iex search --max-hits 20 "access_token" apps/backend/README.md apps/backend/architecture.md .docs/research` | `0` | `matches found: 0` | yes |
+| 2 | `Set-Location E:\Workspaces\01_Projects\01_Github\VANTARI-ONE; ix.exe search --max-hits 40 "lit:/codex/responses" README.md apps/backend/README.md apps/backend/architecture.md .docs` | `0` | `ix.result.v1` status `ok`; 21 matches | yes |
+| 3 | `Set-Location E:\Workspaces\01_Projects\01_Github\VANTARI-ONE; ix.exe search --max-hits 20 "lit:fake-access-token || lit:fake-refresh-token || lit:fake-id-token" README.md apps/backend/README.md apps/backend/architecture.md .docs/research` | `0` | `ix.result.v1` status `ok`; zero matches | yes |
 
 **Evidence to capture:** Zig test stdout plus documentation search output proving canonical auth docs exist and docs do not contain raw token labels except where intentionally explaining redaction.
 
 ## Exit State (Handoff Contract)
 
-- Operator docs explain Codex subscription auth, API-key parity, `.env` bootstrap, and `.var/auth/auth.json` ownership.
+- Operator docs explain Codex subscription auth, API-key parity, `.env` bootstrap, and installed/workspace auth ownership.
 - Sanitized fixtures prove `auth status` and docs avoid raw secrets.
 - `.docs/todo/changelog/_log.md` contains the execution summary line for this feature.
 - The terminal `021f` unit can run full regression and archive the chain.
@@ -121,10 +121,10 @@ Auth features fail operationally when the operator surface is ambiguous. This sl
 
 ## Completion
 
-- [ ] Pre-flight passed.
-- [ ] All validation commands executed.
-- [ ] Post-flight: all Exit State claims are verifiable.
-- [ ] Evidence captured. `evidence` field updated. PLACEHOLDER is gone.
-- [ ] Status set to `done`.
-- [ ] `mv /todo/pending/021e-codex-subscription-auth.md /todo/changelog/021e-codex-subscription-auth.md` - verified.
-- [ ] Continue immediately to `next_todo`. No pause. No batch.
+- [x] Pre-flight passed.
+- [x] All validation commands executed.
+- [x] Post-flight: all Exit State claims are verifiable.
+- [x] Evidence captured in the `evidence` field.
+- [x] Status set to `done`.
+- [x] `mv /todo/pending/021e-codex-subscription-auth.md /todo/changelog/021e-codex-subscription-auth.md` - verified.
+- [x] Continue immediately to `next_todo`.

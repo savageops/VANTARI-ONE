@@ -2,7 +2,7 @@
 id: 035g
 title: "TUI pipeline proof — telemetry parse v2 + session cost in /status"
 parent: 035
-status: pending
+status: done
 priority: medium
 blast_radius: low
 category: feature
@@ -12,9 +12,9 @@ source_message_anchor: pipeline-qc
 source_message_excerpt: "goal is not done until QC of both, and QC of entire pipeline."
 source_message_proof_obligation: Proves the cost model end-to-end by making the operator-visible TUI surface render measured tokens and accumulated session cost from the typed event stream — the pipeline's final consumer.
 idempotency_contract: idempotent — TUI state additions; re-application overwrites the same struct/function regions.
-blocked_reason: "The source implementation, pinned Debug/ReleaseFast graph, focused TUI graph, and hash-matched installed artifact are present. The remaining gate is one real installed provider consumer run: priced and unpriced turns, event-ledger readback, and /status totals."
-unblock_action: "Using the current installed ReleaseFast binary, run one priced and one unpriced live provider turn, read the unified turn_terminal.v1 payload from events.jsonl, confirm the measured fields and accumulated /status projection, then execute 035h QC."
-resumption_point: "Post-flight validation of the existing recordTurnTelemetry and renderStatus implementation; do not reimplement the source slice."
+blocked_reason: ""
+unblock_action: "Completed: installed priced/unknown turns, event-ledger readback, multiline `/status` rendering, process cleanup, and ReleaseFast hash equality are proven."
+resumption_point: "035g is closed; continue to `/todo/pending/035h-provider-cost-compat-model.md` for terminal QC."
 ---
 
 ## Execute Now
@@ -95,17 +95,43 @@ Test access: follow the existing pattern used for TUI unit tests — check how `
 
 **Manual proof (pipeline QC):** run the installed owner/TUI flow against the z.ai provider, complete a turn, verify `var1.turn_terminal.v1` carries the cost fields in `events.jsonl`, and `/status` shows the cost line.
 
-## Source evidence (installed provider proof pending, refreshed 2026-08-13)
+## Source evidence and installed proof (closed 2026-08-13)
 
-- Source gate cleared on committed HEAD `5323166`: the broad graph passes 19/19
-  steps and 1959/1959 tests. This does not clear the installed-provider proof
-  required by this unit.
+- Source gate cleared after the row-owner fix: the broad graph passes 19/19
+  steps and 1,963/1,963 tests with zero leaks. ReleaseFast promotion and the
+  installed hash gate also pass.
 - The cost telemetry is wired through the move-19 unified terminal event: `loop.zig:771/835` call `turn_payload.completedTerminalInput(step, messages, model, completion.usage, output_bytes)`, so measured `usage` reaches `var1.turn_terminal.v1`.
 - TUI parses the unified terminal payload: `recordTurnTelemetry` captures `prompt_tokens/completion_tokens/cached_tokens/cost_total_usd` (tui_chat.zig); `/status` renders the session cost line (commands.zig `renderStatus`).
 - New TUI telemetry tests pass: priced-cost accumulation across two turns (0.0001 + 0.0002 = 0.0003), null-cost leaves `has_session_cost` false, `turn_started` refreshes window estimate without accumulating cost.
 
-**Remaining gate:** run one priced and one unpriced provider turn through the
-current installed ReleaseFast binary, read the unified terminal payload from
-`events.jsonl`, and confirm the accumulated `/status` projection. The binary
-hash and process-cleanup gate are already closed; do not archive on source-test
-evidence alone.
+## Installed consumer closure — 2026-08-13
+
+- Source regression after the row-owner fix: `scripts/zigw.ps1 build test
+  --summary all` -> `19/19` build steps, `1,963/1,963` tests passed, zero
+  leaks. The focused regression now proves multiline system output preserves
+  every `/status` line while progress rows remain dense.
+- ReleaseFast/install: `9/9` succeeded; built and installed SHA-256 is
+  `09758F2AFE34AC5DCD94F786B5A307F8BB0DF9A11E5DA65B743A6EBB62354834`.
+- Installed unknown-price live provider turn: `vantari.exe run --model
+  glm-5.1 --json --no-agent-tools` returned `OK`; session
+  `session-1786614826530-eebfe9407e3d1a53/events.jsonl` persisted
+  `prompt_tokens:10299`, `completion_tokens:3`, `cached_tokens:0`, and
+  `cost_total_usd:null`.
+- Installed known zero-price live provider turn: `vantari.exe run --model
+  glm-5.2 --json --no-agent-tools` returned `OK`; session
+  `session-1786614897957-c2f4f0a40edff86d/events.jsonl` persisted
+  `prompt_tokens:10299`, `completion_tokens:3`, `cached_tokens:10240`, and
+  `cost_total_usd:0`.
+- Installed TUI session `session-1786615380647-5e52bfed9df55648` completed a
+  Z.AI turn and `/status` visibly rendered the full multiline block, including
+  workspace, model, effort, session, `Tokens: 6.8k in / 3 out / 6.7k cached`,
+  and `Cost: $0.000000`. Its terminal ledger row matched
+  `prompt_tokens:6763`, `completion_tokens:3`, `cached_tokens:6720`, and
+  `cost_total_usd:0`.
+- The TUI trace included one `provider_turn_recovered/MalformedHttpResponse`
+  event before the successful retry; the final terminal event was complete and
+  the owner/kernel pair was explicitly torn down. Final installed VANTARI
+  process census: zero.
+- A nonzero-price `deepseek-v4-flash` override was intentionally rejected by
+  Z.AI with typed HTTP 400 `modelCode: does not exist`; no unsupported live
+  model was misreported as priced.

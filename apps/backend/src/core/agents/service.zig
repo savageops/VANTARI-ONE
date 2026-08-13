@@ -39,6 +39,8 @@ pub const Service = struct {
             .context = null,
             .sendFn = provider.httpSend,
             .streamFn = provider.httpSendStreaming,
+            .sendWithHeadersFn = provider.httpSendWithHeaders,
+            .streamWithHeadersFn = provider.httpSendStreamingWithHeaders,
         });
     }
 

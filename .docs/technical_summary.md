@@ -16,25 +16,66 @@ child-agent execution, and recovery evidence. TUI and CLI render kernel
 projections. `apps/frontend` is an ignored local prototype, not a shipped
 tracked client.
 
-## Current frontier — Move 33
+## Current frontier — Move 40
 
-Move 33 closes the operator-facing Codex OAuth slice. `core/auth/store.zig`
+Move 34 closes the Codex subscription transport slice. `core/auth/store.zig`
 remains the single credential owner for workspace `.var/auth.json` and installed
 `$VANTARI_HOME/auth.json`; `core/auth/openai_codex.zig` owns the named provider
 descriptor, PKCE, localhost callback, redirect parsing, token exchange/refresh
 hooks, and JWT claim extraction. `VAR1 auth status --json` exposes only provider,
-model, account, plan, expiry, and verification metadata. `auth login
-openai-codex` persists OAuth tokens and subscription metadata through the store;
-`auth logout <provider-id>` removes one provider and retains unrelated records.
-The completion transport is intentionally still Move 34: login state exists and
-resolves, but it does not masquerade as the OpenAI-compatible chat-completions
-wire.
+model, account, plan, expiry, and verification metadata. `core/providers/dispatch.zig`
+routes typed OAuth `openai-codex` records to `core/providers/openai_codex.zig`,
+which builds `/codex/responses`, carries account/originator metadata, parses
+Responses/SSE into the canonical completion result, and rejects missing/expired
+auth, entitlement, rate-limit, and transport capability failures explicitly.
+API-key records remain on the existing OpenAI-compatible `wire_api` path; there is
+no runtime fallback from Codex OAuth to `/v1/chat/completions`.
 
-Move 33 proof: Debug `19/19` build steps and `1,957/1,957` tests pass with zero
-leaks; ReleaseFast install is `9/9`; installed help lists all auth commands; a
-disposable installed OAuth fixture returns redacted JSON and the redaction probe
-passes. Source and installed SHA-256 are
-`2A1DF56B967A01F2E8934B80FC006FA5D502E07F12CC30B1959D3F64A75FF2D2`.
+Move 34 proof: Debug `19/19` build steps and `1,963/1,963` tests pass with zero
+leaks; ReleaseFast install is `9/9`; the installed binary, pointed at a
+disposable local OAuth fixture, posts to `/codex/responses`, sends the account,
+originator, OpenAI-beta, and SSE headers, includes `stream:true` and `store:false`,
+returns `ok`, never requests `/v1/chat/completions`, emits no bearer token, and
+exits after the fixture response. The persistent owner/kernel pair was explicitly
+torn down and the final installed process census was zero. The Move 34
+checkpoint SHA-256 was
+`9CEE55BE3DCCBE858EF3418B955249AFE036CD9FB989756D4487096D8ED1E73D`.
+
+Move 35 closes the operator documentation slice. Root/backend README,
+architecture, AGENTS, SKILL, llms, auth-persistence research, findings,
+workspace, roadmap, index, and changelog now describe installed
+`$VANTARI_HOME/auth.json` versus workspace `.var/auth.json`, `.env` bootstrap
+semantics, the explicit Codex route, and redacted status metadata. IX returned
+27 route references and zero fake fixture-token matches in the scoped operator
+docs/research search. Move 36 closes the auth-chain verification; no real
+provider entitlement was claimed.
+
+Move 36 closes the full 021 auth chain. Units 021a through 021f and the parent
+are archived with evidence. The final built-binary fixture checks returned
+health `ok:true` and secret-free OAuth status metadata; the auth ownership,
+explicit route, OAuth endpoint, and scoped redaction IX probes all returned
+status `ok`. The persistent owner/kernel pair was explicitly torn down after
+the checks. The auth chain has no pending continuation.
+
+Move 37 closes the cost-model consumer gate. A real installed Z.AI turn with
+the known zero-price `glm-5.2` model persisted measured prompt, completion, and
+cached tokens plus `cost_total_usd:0`; a provider-accepted `glm-5.1` model not
+present in the compiled table persisted the same measured fields with
+`cost_total_usd:null`. After the TUI row-owner fix, installed `/status` visibly
+rendered workspace, model, effort, session, token totals, and cost on separate
+lines. Source tests pass `19/19` and `1,964/1,964`; ReleaseFast/install is
+`9/9`; current source/installed SHA-256 is
+`09758F2AFE34AC5DCD94F786B5A307F8BB0DF9A11E5DA65B743A6EBB62354834`; final
+installed VANTARI process census is zero.
+
+Move 39 closes 035h terminal QC. The provider lane has one Usage value type,
+one compiled pricing owner, one compat detector, one terminal payload builder,
+and one TUI read model. Anthropic, Responses, and OpenAI-compatible usage
+pressure covers priced, cached, missing-cache, stream, and tool-call shapes;
+the added Responses-stream cache-default probe closes the promised 035c test
+floor. The full provider-to-event-to-TUI chain passes 19/19 build steps and
+1,964/1,964 tests. No cost database, price service, event type, or parallel
+executor was added. The next queued boundary is Move 40.
 
 ## Behavior plane
 
@@ -333,9 +374,14 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   exactly. No CRC fields, sidecar quarantine ledger, auto-truncation path, or
   repair daemon was added.
 - The current source ReleaseFast and installed artifact share SHA-256
-  `2A1DF56B967A01F2E8934B80FC006FA5D502E07F12CC30B1959D3F64A75FF2D2`.
-  Move 38 installation, owner lifecycle, and ticket lifecycle promotion all
+  `09758F2AFE34AC5DCD94F786B5A307F8BB0DF9A11E5DA65B743A6EBB62354834`.
+  Move 37 TUI cost consumer, Move 38 installation, Move 39 provider/cost QC,
+  Move 34 Codex transport, owner lifecycle, and ticket lifecycle promotion all
   pass; the final installed process census is zero.
+- Installed Codex OAuth consumer proof used a valid disposable `$VANTARI_HOME`
+  fixture with a pinned context window to avoid unrelated local-model discovery.
+  The captured request path was `/codex/responses`; the response was `ok`; no
+  live OpenAI or ChatGPT entitlement was used.
 - Installed `session/send` against a disposable local provider imported all
   1,176 legacy summary rows, appended one terminal v2 row, retained 1,177
   unique sequences, wrote contiguous unique `user,assistant,tool,assistant`

@@ -2404,3 +2404,148 @@ logout, and sanitized CLI status through the canonical auth ledger.
 
 **Next todo:** Move 34 — execute the Codex subscription transport through the
 canonical provider dispatch.
+
+## 2026-08-13 - Move 34 Codex subscription provider transport
+
+**State:** closed.
+
+**Changed:**
+
+- Added `core/providers/openai_codex.zig` as the sole Codex OAuth completion
+  owner. It builds `/codex/responses`, adds account/originator/OpenAI-beta/SSE
+  headers, sets `store:false`, and maps Responses/SSE into the existing
+  `CompletionResponse` contract.
+- Carried typed OAuth auth metadata through config resolution, provider routes,
+  child config clones, and the canonical transport boundary. API-key providers
+  retain the existing OpenAI-compatible path; no runtime fallback crosses the
+  auth boundary.
+- Added raw Responses event forwarding for assistant/reasoning deltas and
+  explicit missing-account, expired-auth, entitlement, rate-limit, malformed,
+  and unsupported-transport errors.
+- Updated the provider, auth, operator, machine-facing, roadmap, findings,
+  workspace, and ticket records. Archived `021d`; `021e` is the next frontier.
+
+**Proof:**
+
+- `scripts/zigw.ps1 build test --summary all`: `19/19` build steps succeeded;
+  `1,963/1,963` tests passed; zero leaks.
+- `ix.exe search --max-hits 20 -n 6 "lit:/v1/chat/completions" .`: `ix.result.v1`
+  status `ok`; the Codex file contains only the explanatory boundary comment,
+  while request construction uses `/codex/responses`.
+- ReleaseFast build/install: `9/9`; source and installed SHA-256:
+  `9CEE55BE3DCCBE858EF3418B955249AFE036CD9FB989756D4487096D8ED1E73D`.
+- Installed disposable OAuth fixture: exit `0`; `POST /codex/responses` with
+  account/originator/OpenAI-beta/SSE headers, `stream:true`, and `store:false`;
+  response `ok`; no `/v1/chat/completions`; no bearer output; owner/kernel pair
+  explicitly torn down; final installed process census zero. No live provider
+  credential or entitlement was used.
+
+**Next todo:** Move 35 — execute 021e documentation and sanitized fixture
+hardening.
+
+## Move 35 — 021e operator documentation and status hardening (2026-08-13)
+
+**State:** closed
+
+- Archived `.docs/todo/pending/021e-codex-subscription-auth.md` after aligning
+  root/backend README, architecture, AGENTS, SKILL, llms, research, findings,
+  workspace, roadmap, index, and this changelog with the shipped auth boundary.
+- Documented installed `$VANTARI_HOME/auth.json` and workspace `.var/auth.json`
+  as separate runtime-scoped durable ledgers; `.env` is bootstrap configuration
+  and does not replace an active ledger record.
+- Added a sanitized OAuth status example containing provider/account/plan/expiry
+  metadata only; no credential values or disposable fixture tokens appear in
+  operator docs or auth research.
+- Canonical regression: `scripts/zigw.ps1 build test --summary all` -> `19/19`
+  build steps, `1,963/1,963` tests passed, zero leaks.
+- IX route search:
+  `ix.exe search --max-hits 40 "lit:/codex/responses" README.md apps/backend/README.md apps/backend/architecture.md .docs`
+  -> `ix.result.v1`, status `ok`, 21 matches.
+- Scoped redaction search:
+  `ix.exe search --max-hits 20 "lit:fake-access-token || lit:fake-refresh-token || lit:fake-id-token" README.md apps/backend/README.md apps/backend/architecture.md .docs/research`
+  -> `ix.result.v1`, status `ok`, zero matches.
+- Move 34 remains the installed proof boundary: SHA-256
+  `9CEE55BE3DCCBE858EF3418B955249AFE036CD9FB989756D4487096D8ED1E73D`, local
+  `/codex/responses` fixture success, no bearer output, and zero final
+  processes. No live entitlement was used.
+
+**Next todo:** Move 36 — execute 021f full verification, auth-chain archival,
+and parent closeout.
+
+## Move 36 — 021f auth-chain verification and parent closeout (2026-08-13)
+
+**State:** closed
+
+- Archived `021f-codex-subscription-auth.md` and the `021-codex-subscription-auth.md`
+  parent. Units `021a` through `021f` now have evidence in
+  `.docs/todo/changelog/`; no pending auth continuation remains.
+- Canonical regression: `scripts/zigw.ps1 build test --summary all` -> exit `0`,
+  `19/19` build steps, `1,963/1,963` tests passed, zero leaks.
+- Disposable built-binary fixture using
+  `VANTARI_HOME=apps/backend/.zig-cache/codex-installed-proof`:
+  `vantari.exe health --json` -> `ok:true`, `openai-codex`, 131072-token
+  context, healthy six-worker pool, zero queued/running tickets;
+  `vantari.exe auth status --json` -> provider/model/account/plan/expiry
+  metadata only, no credential values.
+- IX checks returned `status: ok`: auth ownership `69` matches, explicit
+  `/codex/responses` `27` matches, OAuth endpoint ownership `3` matches, and
+  scoped fake access/refresh/ID token search `0` matches.
+- The built owner/kernel pair was explicitly torn down after health/status;
+  final built-binary process census was zero. Move 34 remains the installed
+  consumer proof at SHA-256
+  `9CEE55BE3DCCBE858EF3418B955249AFE036CD9FB989756D4487096D8ED1E73D`.
+  No live provider entitlement or credential was used.
+
+**Next todo:** Move 37 — execute 035g sequence-backed usage, cost accumulation,
+and `/status` proof.
+
+## Move 37 — 035g installed TUI cost consumer proof (2026-08-13)
+
+**State:** closed
+
+- Fixed the TUI row owner so multiline system output (`/status`, `/help`, and
+  `/history`) uses the wrapped-row path while progress rows remain dense. The
+  focused regression proves both behaviors.
+- Installed unknown-price `glm-5.1` and known zero-price `glm-5.2` Z.AI turns
+  returned `OK` and persisted measured prompt/completion/cached tokens. The
+  unknown model recorded `cost_total_usd:null`; the known free-tier model
+  recorded `cost_total_usd:0`.
+- Installed TUI `/status` visibly rendered workspace, model, effort, session,
+  `Tokens: 6.8k in / 3 out / 6.7k cached`, and `Cost: $0.000000`. The matching
+  `var1.turn_terminal.v1` row carried prompt `6763`, completion `3`, cached
+  `6720`, and cost `0`.
+- A provider recovery event before the successful TUI retry remains in the
+  event ledger as truthful residual evidence; the terminal row completed.
+- Source regression: `19/19` build steps and `1,963/1,963` tests passed with
+  zero leaks. ReleaseFast/install succeeded `9/9`; the built and installed
+  SHA-256 is
+  `09758F2AFE34AC5DCD94F786B5A307F8BB0DF9A11E5DA65B743A6EBB62354834`.
+  The installed owner/kernel pair was explicitly torn down and the final
+  VANTARI process census was zero. An unsupported `deepseek-v4-flash` override
+  returned typed HTTP 400 rather than fabricating a nonzero price.
+
+**Next todo:** Move 39 — execute 035h terminal QC and archive the provider/cost
+chain only after the full pipeline review.
+
+## Move 39 — 035h provider/cost pipeline terminal QC (2026-08-13)
+
+**State:** closed
+
+- QC passed the canonical structure: pure compiled pricing, one compat detector,
+  one turn-terminal payload owner, value-type usage, and no cost database,
+  price service, event type, or parallel executor.
+- QC passed provider contract truth: all adapters expose measured usage, the
+  unified terminal event carries token/cost fields, z.ai thinking shape is
+  preserved, DeepSeek reasoning shape is scoped, and `wire_api:auto` resolves
+  through dispatch.
+- The review found one evidence gap: 035c listed eight adapter-usage pressure
+  blocks but contained seven distinct tests. Added the narrow Responses-stream
+  cache-default test; the current graph now passes `19/19` steps and
+  `1,964/1,964` tests with zero leaks.
+- Current ReleaseFast/install hash equality remains
+  `09758F2AFE34AC5DCD94F786B5A307F8BB0DF9A11E5DA65B743A6EBB62354834`; no
+  installed VANTARI processes remain after owner reconciliation.
+- Archived `035h` and parent `035`. The next queued boundary is Move 40.
+
+**Next todo:** Move 40 — hold PLUG behind the current owner decision and
+re-decompose it against the proven built-in capability boundary.

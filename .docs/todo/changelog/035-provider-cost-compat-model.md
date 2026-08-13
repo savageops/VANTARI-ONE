@@ -2,13 +2,13 @@
 id: 035
 title: "Provider cost model (per-turn usage + pricing) and wire compat auto-detection"
 category: feature
-status: pending
+status: done
 priority: high
 spec_status: approved
 created: 2026-08-09
 subtodo_start: 035a
 subtodo_final: 035h
-next_todo: /todo/pending/035g-provider-cost-compat-model.md
+next_todo: NONE
 ---
 
 # Parent: Provider Cost Model + Compat Auto-Detection
@@ -98,12 +98,21 @@ Risk: 035e changes request payloads for non-zai endpoints — but the active z.a
 
 ## Global Queue Alignment
 
-Pending queue: 021 (codex subscription auth — touches auth/provider-adjacent but already in progress, distinct surface), PLUG (plugin socket — distinct). No live chain touches `providers/`, `shared/types.zig`, `executor/loop.zig`, or `agents/supervisor.zig`. Changelog 034 (TUI) is archived and touches `tui_chat.zig` — 035g touches the same file but is a disjoint region (`recordTurnTelemetry`/`renderStatus`) and the chain is sequential within itself. No overlap requiring cross-chain dependency. Enters cleanly at 035.
+Pending queue: PLUG (plugin socket — distinct). No live chain touches
+`providers/`, `shared/types.zig`, `executor/loop.zig`, or
+`agents/supervisor.zig`. Changelog 034 (TUI) is archived and touches
+`tui_chat.zig`; 035g touched a disjoint region
+(`recordTurnTelemetry`/`renderStatus`) and the chain is now closed. No overlap
+requiring cross-chain dependency remains.
 
-## Closure audit (2026-08-12)
+## Closure audit (2026-08-13)
 
-The source implementation and broad graph are green, but the previous archive
-attempt exceeded its evidence. Unit 035g still requires the installed consumer
-proof already named in its contract: one priced and one unpriced provider turn,
-event-ledger readback, and `/status` confirmation through the installed TUI.
-Keep 035, 035g, and 035h pending until that proof exists.
+035a through 035g are archived after source and installed proof. 035h terminal
+QC then passed the structure, provider-contract, test-pressure, code-quality,
+and provider-to-event-to-TUI criteria. The missing eighth 035c adapter-usage
+pressure test was added; the current graph is `19/19` steps and `1,964/1,964`
+tests with zero leaks. ReleaseFast/install is `9/9`; built and installed
+SHA-256 match at
+`09758F2AFE34AC5DCD94F786B5A307F8BB0DF9A11E5DA65B743A6EBB62354834`; the
+final installed VANTARI process census is zero. Parent and all units are
+ready for archival; next queued boundary is Move 40.

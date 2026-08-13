@@ -103,9 +103,10 @@ pub const StreamHooks = struct {
     context: ?*anyopaque = null,
     onAssistantDeltaFn: ?*const fn (ctx: ?*anyopaque, delta: []const u8) anyerror!void = null,
     onReasoningDeltaFn: ?*const fn (ctx: ?*anyopaque, delta: []const u8) anyerror!void = null,
+    onRawEventFn: ?*const fn (ctx: ?*anyopaque, event_json: []const u8) anyerror!void = null,
 
     pub fn hasHandlers(self: StreamHooks) bool {
-        return self.onAssistantDeltaFn != null or self.onReasoningDeltaFn != null;
+        return self.onAssistantDeltaFn != null or self.onReasoningDeltaFn != null or self.onRawEventFn != null;
     }
 
     pub fn onAssistantDelta(self: StreamHooks, delta: []const u8) !void {
@@ -119,6 +120,13 @@ pub const StreamHooks = struct {
         if (delta.len == 0) return;
         if (self.onReasoningDeltaFn) |callback| {
             try callback(self.context, delta);
+        }
+    }
+
+    pub fn onRawEvent(self: StreamHooks, event_json: []const u8) !void {
+        if (event_json.len == 0) return;
+        if (self.onRawEventFn) |callback| {
+            try callback(self.context, event_json);
         }
     }
 };
@@ -142,8 +150,21 @@ pub fn complete(
     return completeWithTransport(allocator, config, request, .{
         .context = null,
         .sendFn = httpSend,
+        .sendWithHeadersFn = httpSendWithHeaders,
+        .streamWithHeadersFn = httpSendStreamingWithHeaders,
     });
 }
+
+/// Optional provider-owned request headers. API-key transports keep the
+/// existing `sendFn` path; subscription providers opt into this explicit
+/// extension so account and originator metadata cannot leak into API-key
+/// requests.
+pub const RequestHeaders = struct {
+    account_id: ?[]const u8 = null,
+    originator: ?[]const u8 = null,
+    openai_beta: ?[]const u8 = null,
+    accept: ?[]const u8 = null,
+};
 
 pub const Transport = struct {
     context: ?*anyopaque,
@@ -162,6 +183,23 @@ pub const Transport = struct {
         payload: []const u8,
         hooks: StreamHooks,
     ) anyerror![]u8 = null,
+    sendWithHeadersFn: ?*const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        url: []const u8,
+        api_key: []const u8,
+        headers: RequestHeaders,
+        payload: []const u8,
+    ) anyerror![]u8 = null,
+    streamWithHeadersFn: ?*const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        url: []const u8,
+        api_key: []const u8,
+        headers: RequestHeaders,
+        payload: []const u8,
+        hooks: StreamHooks,
+    ) anyerror![]u8 = null,
 
     pub fn send(
         self: Transport,
@@ -177,6 +215,27 @@ pub const Transport = struct {
             }
         }
         return self.sendFn(self.context, allocator, url, api_key, payload);
+    }
+
+    pub fn sendWithHeaders(
+        self: Transport,
+        allocator: std.mem.Allocator,
+        url: []const u8,
+        api_key: []const u8,
+        headers: RequestHeaders,
+        payload: []const u8,
+        hooks: StreamHooks,
+    ) anyerror![]u8 {
+        if (hooks.hasHandlers()) {
+            if (self.streamWithHeadersFn) |stream_fn| {
+                return stream_fn(self.context, allocator, url, api_key, headers, payload, hooks);
+            }
+            return error.StreamingHeadersUnsupported;
+        }
+        if (self.sendWithHeadersFn) |send_fn| {
+            return send_fn(self.context, allocator, url, api_key, headers, payload);
+        }
+        return error.HeadersUnsupported;
     }
 };
 
@@ -593,10 +652,21 @@ fn hasExplicitVersionSegment(base_url: []const u8) bool {
 }
 
 pub fn httpSend(
+    ctx: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    api_key: []const u8,
+    payload: []const u8,
+) anyerror![]u8 {
+    return httpSendWithHeaders(ctx, allocator, url, api_key, .{}, payload);
+}
+
+pub fn httpSendWithHeaders(
     _: ?*anyopaque,
     allocator: std.mem.Allocator,
     url: []const u8,
     api_key: []const u8,
+    headers: RequestHeaders,
     payload: []const u8,
 ) anyerror![]u8 {
     const uri = try std.Uri.parse(url);
@@ -610,16 +680,28 @@ pub fn httpSend(
     defer stream.close();
 
     return switch (scheme) {
-        .http => plainHttpSend(allocator, stream, &uri, api_key, payload),
-        .https => tlsHttpSend(allocator, stream, host, &uri, api_key, payload),
+        .http => plainHttpSend(allocator, stream, &uri, api_key, payload, headers),
+        .https => tlsHttpSend(allocator, stream, host, &uri, api_key, payload, headers),
     };
 }
 
 pub fn httpSendStreaming(
+    ctx: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    api_key: []const u8,
+    payload: []const u8,
+    hooks: StreamHooks,
+) anyerror![]u8 {
+    return httpSendStreamingWithHeaders(ctx, allocator, url, api_key, .{}, payload, hooks);
+}
+
+pub fn httpSendStreamingWithHeaders(
     _: ?*anyopaque,
     allocator: std.mem.Allocator,
     url: []const u8,
     api_key: []const u8,
+    headers: RequestHeaders,
     payload: []const u8,
     hooks: StreamHooks,
 ) anyerror![]u8 {
@@ -634,8 +716,8 @@ pub fn httpSendStreaming(
     defer stream.close();
 
     return switch (scheme) {
-        .http => plainHttpSendStreaming(allocator, stream, &uri, api_key, payload, hooks),
-        .https => tlsHttpSendStreaming(allocator, stream, host, &uri, api_key, payload, hooks),
+        .http => plainHttpSendStreaming(allocator, stream, &uri, api_key, payload, headers, hooks),
+        .https => tlsHttpSendStreaming(allocator, stream, host, &uri, api_key, payload, headers, hooks),
     };
 }
 
@@ -645,6 +727,7 @@ fn plainHttpSend(
     uri: *const std.Uri,
     api_key: []const u8,
     payload: []const u8,
+    headers: RequestHeaders,
 ) ![]u8 {
     var read_buffer: [plain_read_buffer_size]u8 = undefined;
     var write_buffer: [plain_write_buffer_size]u8 = undefined;
@@ -652,7 +735,7 @@ fn plainHttpSend(
     var stream_reader = stream.reader(&read_buffer);
     var stream_writer = stream.writer(&write_buffer);
 
-    try writeRequestHead(&stream_writer.interface, uri, api_key, payload.len);
+    try writeRequestHead(&stream_writer.interface, uri, api_key, payload.len, headers);
     try stream_writer.interface.writeAll(payload);
     try stream_writer.interface.flush();
 
@@ -681,6 +764,7 @@ fn plainHttpSendStreaming(
     uri: *const std.Uri,
     api_key: []const u8,
     payload: []const u8,
+    headers: RequestHeaders,
     hooks: StreamHooks,
 ) ![]u8 {
     var read_buffer: [plain_read_buffer_size]u8 = undefined;
@@ -689,7 +773,7 @@ fn plainHttpSendStreaming(
     var stream_reader = stream.reader(&read_buffer);
     var stream_writer = stream.writer(&write_buffer);
 
-    try writeRequestHead(&stream_writer.interface, uri, api_key, payload.len);
+    try writeRequestHead(&stream_writer.interface, uri, api_key, payload.len, headers);
     try stream_writer.interface.writeAll(payload);
     try stream_writer.interface.flush();
 
@@ -703,6 +787,7 @@ fn tlsHttpSend(
     uri: *const std.Uri,
     api_key: []const u8,
     payload: []const u8,
+    headers: RequestHeaders,
 ) ![]u8 {
     var encrypted_write_buffer: [tls_record_buffer_size]u8 = undefined;
     var encrypted_read_buffer: [tls_record_buffer_size]u8 = undefined;
@@ -728,7 +813,7 @@ fn tlsHttpSend(
         },
     );
 
-    try writeRequestHead(&tls_client.writer, uri, api_key, payload.len);
+    try writeRequestHead(&tls_client.writer, uri, api_key, payload.len, headers);
     try tls_client.writer.writeAll(payload);
     try tls_client.writer.flush();
     try stream_writer.interface.flush();
@@ -777,6 +862,7 @@ fn tlsHttpSendStreaming(
     uri: *const std.Uri,
     api_key: []const u8,
     payload: []const u8,
+    headers: RequestHeaders,
     hooks: StreamHooks,
 ) ![]u8 {
     var encrypted_write_buffer: [tls_record_buffer_size]u8 = undefined;
@@ -803,7 +889,7 @@ fn tlsHttpSendStreaming(
         },
     );
 
-    try writeRequestHead(&tls_client.writer, uri, api_key, payload.len);
+    try writeRequestHead(&tls_client.writer, uri, api_key, payload.len, headers);
     try tls_client.writer.writeAll(payload);
     try tls_client.writer.flush();
     try stream_writer.interface.flush();
@@ -816,6 +902,7 @@ fn writeRequestHead(
     uri: *const std.Uri,
     api_key: []const u8,
     payload_len: usize,
+    headers: RequestHeaders,
 ) !void {
     try writer.writeAll("POST ");
     try uri.writeToStream(writer, .{ .path = true, .query = true });
@@ -828,9 +915,26 @@ fn writeRequestHead(
     try writer.writeAll("authorization: Bearer ");
     try writer.writeAll(api_key);
     try writer.writeAll("\r\n");
+    if (headers.account_id) |account_id| {
+        try writer.writeAll("chatgpt-account-id: ");
+        try writer.writeAll(account_id);
+        try writer.writeAll("\r\n");
+    }
+    if (headers.originator) |originator| {
+        try writer.writeAll("originator: ");
+        try writer.writeAll(originator);
+        try writer.writeAll("\r\n");
+    }
+    if (headers.openai_beta) |openai_beta| {
+        try writer.writeAll("openai-beta: ");
+        try writer.writeAll(openai_beta);
+        try writer.writeAll("\r\n");
+    }
 
     try writer.writeAll("content-type: application/json\r\n");
-    try writer.writeAll("accept: text/event-stream, application/json\r\n");
+    try writer.writeAll("accept: ");
+    try writer.writeAll(headers.accept orelse "text/event-stream, application/json");
+    try writer.writeAll("\r\n");
     try writer.writeAll("accept-encoding: identity\r\n");
     try writer.writeAll("connection: close\r\n");
     try writer.print("content-length: {d}\r\n\r\n", .{payload_len});
@@ -1058,6 +1162,8 @@ const SseDeltaEmitter = struct {
             const line = std.mem.trimRight(u8, raw_line, "\r");
             const data = stripSseDataPrefix(line) orelse continue;
             if (std.mem.eql(u8, data, "[DONE]")) continue;
+
+            try self.hooks.onRawEvent(data);
 
             var parsed = std.json.parseFromSlice(ParsedStreamChunk, self.allocator, data, .{
                 .ignore_unknown_fields = true,

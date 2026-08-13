@@ -2747,7 +2747,10 @@ fn sliceBorrowedFromMessages(slice: []const u8, messages: []const Message) bool 
 }
 
 fn isCompactRole(role: Role) bool {
-    return role == .progress or role == .system;
+    // Progress rows are deliberately dense. System output can be multiline
+    // (`/help`, `/history`, `/status`) and must flow through the wrapped-row
+    // path or the renderer would show only its first physical line.
+    return role == .progress;
 }
 
 fn bodyStyle(role: Role) Style {
@@ -4632,19 +4635,29 @@ test "tui footer projects canonical pool and buffered ticket pressure" {
     try std.testing.expect(std.mem.indexOf(u8, unhealthy, "ctx —") != null);
 }
 
-test "tui transcript gives dense single-line treatment to runtime rows" {
+test "tui transcript keeps progress dense and preserves multiline system output" {
     try std.testing.expect(isCompactRole(.progress));
-    try std.testing.expect(isCompactRole(.system));
+    try std.testing.expect(!isCompactRole(.system));
     try std.testing.expect(!isCompactRole(.assistant));
     try std.testing.expect(!isCompactRole(.user));
 
     var progress_message = Message{ .role = .progress, .text = try std.testing.allocator.dupe(u8, "stdout: one | two") };
     defer progress_message.deinit(std.testing.allocator);
+    var system_message = Message{ .role = .system, .text = try std.testing.allocator.dupe(u8, "VAR1 Status\n  Cost:      $0.000000") };
+    defer system_message.deinit(std.testing.allocator);
     var assistant_message = Message{ .role = .assistant, .text = try std.testing.allocator.dupe(u8, "Readable answer.") };
     defer assistant_message.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(@as(usize, 1), messageRowCount(progress_message.role, progress_message.text, false, 80));
+    try std.testing.expectEqual(@as(usize, 3), messageRowCount(system_message.role, system_message.text, false, 80));
     try std.testing.expectEqual(@as(usize, 2), messageRowCount(assistant_message.role, assistant_message.text, false, 80));
+
+    var rows: std.ArrayList(TranscriptRow) = .{};
+    defer rows.deinit(std.testing.allocator);
+    try appendMessageRows(std.testing.allocator, &rows, system_message, 80);
+    try std.testing.expectEqual(@as(usize, 3), rows.items.len);
+    try std.testing.expectEqualStrings("VAR1 Status", rows.items[0].text);
+    try std.testing.expectEqualStrings("  Cost:      $0.000000", rows.items[1].text);
 }
 
 test "tui reasoning dock keeps the newest four rows" {

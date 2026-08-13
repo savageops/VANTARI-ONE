@@ -26,6 +26,7 @@ pub const protocol_types = @import("../shared/protocol/types.zig");
 pub const provider_runtime = @import("providers/openai_compatible.zig");
 pub const provider_anthropic = @import("providers/anthropic.zig");
 pub const provider_responses = @import("providers/responses.zig");
+pub const provider_codex = @import("providers/openai_codex.zig");
 pub const provider_capability = @import("providers/capability.zig");
 pub const provider_compat = @import("providers/compat.zig");
 pub const provider_dispatch = @import("providers/dispatch.zig");

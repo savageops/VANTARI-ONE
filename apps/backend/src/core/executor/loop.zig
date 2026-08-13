@@ -107,6 +107,8 @@ pub fn runPrompt(allocator: std.mem.Allocator, config: types.Config, prompt: []c
             .context = null,
             .sendFn = provider.httpSend,
             .streamFn = provider.httpSendStreaming,
+            .sendWithHeadersFn = provider.httpSendWithHeaders,
+            .streamWithHeadersFn = provider.httpSendStreamingWithHeaders,
         },
         .execution_context = .{
             .workspace_root = config.workspace_root,

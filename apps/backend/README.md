@@ -156,7 +156,20 @@ The `manage_plugin` tool discovers, inspects, and toggles plugins from `.var/plu
 
 All config lives in `~/.vantari/config.json` (non-secret) and `~/.vantari/auth.json` (credentials). Workspace-local auth uses `.var/auth.json`; nested and AppData auth paths are migration inputs only. The config is hot-loaded per-turn.
 
-Use `vantari auth status --json` for a secret-free active-provider projection, `vantari auth login openai-codex` for the browser PKCE flow with a pasted redirect fallback, and `vantari auth logout <provider-id>` to remove one provider record. The login helper persists OAuth tokens and subscription metadata through the canonical auth store; the current Move 34 frontier owns Codex completion transport. Status, health, logs, and docs never print API keys or OAuth tokens.
+Use `vantari auth status --json` for a secret-free active-provider projection, `vantari auth login openai-codex` for the browser PKCE flow with a pasted redirect fallback, and `vantari auth logout <provider-id>` to remove one provider record. The login helper persists OAuth tokens and subscription metadata through the canonical auth store. OAuth `openai-codex` turns use `core/providers/openai_codex.zig` and `POST /codex/responses`; API-key providers keep the existing OpenAI-compatible dispatch. The dedicated route carries `chatgpt-account-id`, `originator`, `OpenAI-Beta`, and SSE headers, sets `store:false`, and fails explicitly when its transport or entitlement is unavailable. Status, health, logs, and docs never print API keys or OAuth tokens.
+
+`.env` is bootstrap configuration, not the durable credential owner. Installed runs
+read `$VANTARI_HOME/auth.json`; workspace runs read `.var/auth.json`. Use the
+secret-free projection to inspect provider state:
+
+```json
+{"provider_id":"openai-codex","auth_type":"oauth","model":"gpt-5.4-mini","account_id":"acct-...fixture","subscription_plan_label":"ChatGPT Pro","subscription_status":"active","expires_at_ms":2000000000000}
+```
+
+The projection omits `access_token`, `refresh_token`, API keys, and ID tokens. A
+successful OAuth provider turn is the dedicated `/codex/responses` route; a
+missing entitlement, expired record, or unavailable header-capable transport is a
+typed failure, not a downgrade to `/v1/chat/completions`.
 
 ### Agent filesystem and process access
 

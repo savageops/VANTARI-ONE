@@ -20,6 +20,7 @@ test {
     _ = @import("workspace_resolution_test.zig");
     std.testing.refAllDeclsRecursive(VAR1.clients.cli);
     std.testing.refAllDeclsRecursive(VAR1.core.auth_openai_codex);
+    std.testing.refAllDeclsRecursive(VAR1.core.provider_codex);
     std.testing.refAllDeclsRecursive(VAR1.core.auth_store);
     std.testing.refAllDeclsRecursive(VAR1.core.scheduler);
     std.testing.refAllDeclsRecursive(VAR1.host.stdio_rpc);

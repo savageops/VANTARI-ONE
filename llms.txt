@@ -51,7 +51,9 @@ Rules:
 - Auth uses one provider ledger: installed `$VANTARI_HOME/auth.json` or
   workspace `.var/auth.json`; `auth status --json` is secret-free, `auth login
   openai-codex` owns PKCE persistence, and `auth logout <provider-id>` removes
-  one record. Codex completion transport is a separate next frontier.
+  one record. OAuth `openai-codex` routes through `core/providers/openai_codex.zig`
+  to `/codex/responses` with account/originator metadata; API-key providers keep
+  the OpenAI-compatible route and never fall back across the auth boundary.
 - Scheduler leadership is process-exclusive and generation-fenced in source.
 - Ticket claim, worker generation, lease, capability, and deterministic child
   identity commit in one process-serialized ticket row before child creation.

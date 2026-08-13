@@ -116,6 +116,9 @@ pub const ResolvedRoute = struct {
             .openai_api_key = try allocator.dupe(u8, self.config.openai_api_key),
             .openai_model = try allocator.dupe(u8, self.config.openai_model),
             .auth_provider = if (self.config.auth_provider) |value| try allocator.dupe(u8, value) else null,
+            .auth_type = self.config.auth_type,
+            .auth_account_id = if (self.config.auth_account_id) |value| try allocator.dupe(u8, value) else null,
+            .auth_expires_at_ms = self.config.auth_expires_at_ms,
             .subscription_plan_label = if (self.config.subscription_plan_label) |value| try allocator.dupe(u8, value) else null,
             .subscription_status = if (self.config.subscription_status) |value| try allocator.dupe(u8, value) else null,
             .max_steps = self.config.max_steps,
@@ -175,6 +178,9 @@ pub fn resolve(
     const api_key = if (selected_auth) |value| value.api_key else parent.openai_api_key;
     const provider_id = if (selected_auth) |value| value.provider_id else parent.auth_provider orelse "active";
     const provider_model = if (selected_auth) |value| value.model else parent.openai_model;
+    const auth_type = if (selected_auth) |value| value.auth_type else parent.auth_type;
+    const auth_account_id = if (selected_auth) |value| value.account_id else parent.auth_account_id;
+    const auth_expires_at_ms = if (selected_auth) |value| value.expires_at_ms else parent.auth_expires_at_ms;
     const model = override.model orelse provider_model;
     const thinking_mode = override.thinking_mode orelse parent.thinking_mode;
     const effort = if (override.effort) |e| e else parent.effort;
@@ -206,6 +212,9 @@ pub fn resolve(
         .openai_api_key = try allocator.dupe(u8, api_key),
         .openai_model = try allocator.dupe(u8, model),
         .auth_provider = try allocator.dupe(u8, provider_id),
+        .auth_type = auth_type,
+        .auth_account_id = if (auth_account_id) |value| try allocator.dupe(u8, value) else null,
+        .auth_expires_at_ms = auth_expires_at_ms,
         .subscription_plan_label = if (selected_auth) |value|
             if (value.subscription_plan_label) |label| try allocator.dupe(u8, label) else null
         else if (parent.subscription_plan_label) |label|

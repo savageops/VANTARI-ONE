@@ -13,10 +13,10 @@ source: ../../research/2026-08-12-full-harness-sitrep.md
 
 Public docs and planning records previously mixed shipped, source-present,
 installed-proven, frontier, local-only, and unavailable states. The current
-records preserve historical receipts while naming the live boundary: 021c is
-archived and 021d is the next auth unit, 035g/035h still require installed provider consumer proof,
-036 is archived after installed lifecycle proof, browser routes remain
-non-shipped, and frontier scaffolds remain explicitly labeled.
+records preserve historical receipts while naming the live boundary: the 021
+auth chain, 035 provider/cost chain, and 036 lifecycle chain are archived after
+installed proof, browser routes remain non-shipped, and frontier scaffolds
+remain explicitly labeled.
 
 ## Required mechanism
 
@@ -24,10 +24,11 @@ Keep one current technical summary and one findings index. Mark every capability
 
 ## WIP ledger
 
-- 021: a-c archived; d-f pending; current frontier 021d.
-- 035: a-f archived; g-h pending; source implementation present; installed proof missing.
+- 021: a-f and parent archived; chain closed; no active frontier.
+- 035: a-h and parent archived; installed priced/unknown provider turns,
+  multiline `/status`, current hash equality, and terminal QC are closed.
 - 036: a-h and parent archived; findings 10, 11, and 13 are closed; roadmap
-  moves 21–33 and 38 are closed.
+  moves 21–39 are closed.
 - PLUG: parent and a-h pending; unstarted; lower priority than P0 integrity work.
 
 ## Acceptance
@@ -49,18 +50,77 @@ Do not erase historical closeout records or fabricate proof to make a chain gree
 
 ## Closure receipt — Move 32 (2026-08-13)
 
-- Filesystem reconciliation confirms `021a`, `021b`, and `021c` are in
-  `.docs/todo/changelog/`; `021d` is the sole active 021 frontier.
+- Filesystem reconciliation confirms `021a` through `021d` are in
+  `.docs/todo/changelog/`; `021e` is the sole active 021 frontier.
 - The 036 parent and 036h terminal review are in `.docs/todo/changelog/`;
   finding 11 and the installed owner/ticket lifecycle gates are closed.
 - At Move 32 close, `.docs/workspace.json` parsed with source/installed
   SHA-256 `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`,
   `installed_hash_matches: true`, and an empty installed process census.
-- Move 33 supersedes that historical artifact. The current source/installed
-  SHA-256 is `2A1DF56B967A01F2E8934B80FC006FA5D502E07F12CC30B1959D3F64A75FF2D2`;
-  the current workspace record still parses and the installed process census is
-  zero.
+- Move 34 supersedes that historical artifact. The current source/installed
+  SHA-256 is `9CEE55BE3DCCBE858EF3418B955249AFE036CD9FB989756D4487096D8ED1E73D`;
+  Debug is 19/19 with 1,963/1,963 tests and zero leaks; the installed Codex
+  fixture reached `/codex/responses` and the final process census is zero.
 - Public README, backend README, architecture, technical summary, docs index,
   roadmap, research, findings, and changelog now state the same boundaries.
 - Dedicated installed eligibility/capacity snapshot probes are not inferred
   from the composed ticket lifecycle proof; the docs name them as unrun.
+
+## Closure receipt — Move 34 (2026-08-13)
+
+- `021d` is archived after source and installed consumer proof. OAuth
+  `openai-codex` dispatch is explicit; API-key transport remains unchanged.
+- The installed disposable fixture captured `/codex/responses` with the account,
+  originator, OpenAI-beta, and SSE headers, `stream:true`, and `store:false`.
+  It returned `ok`, never requested `/v1/chat/completions`, emitted no bearer
+  token, and left zero processes after explicit owner-tree teardown.
+- Move 34 source/installed SHA-256 was
+  `9CEE55BE3DCCBE858EF3418B955249AFE036CD9FB989756D4487096D8ED1E73D`.
+
+## Closure receipt — Move 35 (2026-08-13)
+
+- `021e` is archived after the canonical regression: `19/19` build steps and
+  `1,963/1,963` tests passed.
+- Operator records now distinguish installed `$VANTARI_HOME/auth.json` from
+  workspace `.var/auth.json`; `.env` is documented as bootstrap configuration,
+  not the durable auth owner.
+- IX route search returned `status: ok` with 21 `/codex/responses` matches;
+  the scoped operator-docs/research fake-token search returned `status: ok`
+  with zero matches.
+- Move 34 is the prior installed consumer checkpoint: SHA-256
+  `9CEE55BE3DCCBE858EF3418B955249AFE036CD9FB989756D4487096D8ED1E73D`, local
+  `/codex/responses` fixture success, no bearer output, and zero final
+  processes. The current artifact is recorded by Move 37/38/39.
+- The active auth frontier was `021f` at this historical receipt; no real
+  entitlement proof is implied.
+
+## Closure receipt — Move 36 (2026-08-13)
+
+- `021f` and the `021` parent are archived; the auth chain has no pending
+  continuation.
+- Final regression passed: `19/19` build steps and `1,963/1,963` tests with
+  zero leaks.
+- Disposable built-binary health returned `ok:true` with the expected model,
+  context, pool, and ticket projections. Disposable auth status returned only
+  provider/model/account/plan/expiry metadata and no credential values.
+- IX ownership, explicit route, OAuth endpoint, and scoped fake-token checks
+  returned `status: ok`; the scoped fake-token result was zero matches.
+- The owner/kernel pair was explicitly torn down and the final built-binary
+  process census was zero. The next active boundary was Move 37 / 035g.
+
+## Closure receipt — Moves 37–39 (2026-08-13)
+
+- 035g installed consumer proof is closed. A real Z.AI `glm-5.1` turn persisted
+  measured prompt/completion/cached tokens with `cost_total_usd:null`; a known
+  zero-price `glm-5.2` turn persisted the same fields with `cost_total_usd:0`.
+  The installed TUI `/status` block rendered workspace, model, effort, session,
+  token totals, and cost after the multiline system-row fix.
+- Move 38 verified ReleaseFast installation and built/installed SHA-256 equality
+  at `09758F2AFE34AC5DCD94F786B5A307F8BB0DF9A11E5DA65B743A6EBB62354834`.
+  The installed owner was reconciled and the final VANTARI process census was
+  zero.
+- Move 39 terminal QC passed the structure, provider-contract, test-pressure,
+  code-quality, and provider-to-event-to-TUI criteria. One missing 035c
+  Responses-stream cache-default pressure test was added; the current graph is
+  `19/19` steps and `1,964/1,964` tests with zero leaks. 035a through 035h and
+  the parent are archived. The next active boundary is Move 40.
