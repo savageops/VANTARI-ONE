@@ -26,22 +26,83 @@ pub fn completeWithTransportAndHooks(
     config: types.Config,
     request: types.CompletionRequest,
     transport: provider.Transport,
-    _: provider.StreamHooks,
+    downstream_hooks: provider.StreamHooks,
 ) !types.CompletionResponse {
     const url = try responsesUrl(allocator, config.openai_base_url);
     defer allocator.free(url);
 
-    const payload = try buildRequestJson(allocator, config.openai_model, request, false);
+    const streaming = downstream_hooks.hasHandlers();
+    const payload = try buildRequestJson(allocator, config.openai_model, request, streaming);
     defer allocator.free(payload);
 
+    var stream_context = ResponsesStreamContext{
+        .allocator = allocator,
+        .downstream = downstream_hooks,
+    };
+    const transport_hooks = if (streaming) provider.StreamHooks{
+        .context = &stream_context,
+        .onRawEventFn = onRawResponsesEvent,
+    } else provider.StreamHooks{};
+    const headers = provider.RequestHeaders{
+        .auth_scheme = config.auth_scheme,
+        .accept = if (streaming) "text/event-stream" else "application/json",
+    };
+
     provider.clearFailureDiagnostic();
-    // Use non-streaming send for the Responses API — the SSE event format
-    // differs from chat completions and streaming support varies across
-    // implementations. The transport reuses the POST path.
-    const response_body = try transport.sendFn(transport.context, allocator, url, config.openai_api_key, payload);
+    const response_body = transport.sendWithHeaders(
+        allocator,
+        url,
+        config.openai_api_key,
+        headers,
+        payload,
+        transport_hooks,
+    ) catch |err| switch (err) {
+        // Body-only fixture transports remain valid for parser/dispatch tests;
+        // the native transport still enforces the selected header contract.
+        error.HeadersUnsupported, error.StreamingHeadersUnsupported => try transport.send(
+            allocator,
+            url,
+            config.openai_api_key,
+            payload,
+            transport_hooks,
+        ),
+        else => return err,
+    };
     defer allocator.free(response_body);
 
     return parseCompletionResponse(allocator, config.openai_model, response_body);
+}
+
+/// Provider-specific Responses SSE bridge. The shared transport owns framing;
+/// this adapter translates `response.output_text.delta` into kernel deltas.
+const ResponsesStreamContext = struct {
+    allocator: std.mem.Allocator,
+    downstream: provider.StreamHooks,
+};
+
+/// Forward raw Responses events and project text/reasoning deltas without
+/// adding a second streaming transport or event owner.
+fn onRawResponsesEvent(ctx: ?*anyopaque, event_json: []const u8) anyerror!void {
+    const state: *ResponsesStreamContext = @ptrCast(@alignCast(ctx.?));
+    try state.downstream.onRawEvent(event_json);
+
+    var parsed = std.json.parseFromSlice(std.json.Value, state.allocator, event_json, .{
+        .ignore_unknown_fields = true,
+    }) catch return;
+    defer parsed.deinit();
+    if (parsed.value != .object) return;
+    const root = parsed.value.object;
+    const event_type = root.get("type") orelse return;
+    if (event_type != .string) return;
+    const delta = root.get("delta") orelse return;
+    if (delta != .string) return;
+    if (std.mem.eql(u8, event_type.string, "response.output_text.delta") or
+        std.mem.eql(u8, event_type.string, "response.output_text.added"))
+    {
+        try state.downstream.onAssistantDelta(delta.string);
+    } else if (std.mem.indexOf(u8, event_type.string, "reasoning") != null) {
+        try state.downstream.onReasoningDelta(delta.string);
+    }
 }
 
 /// Resolve the /responses URL for a provider base_url.

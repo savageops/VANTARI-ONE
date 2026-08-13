@@ -19,6 +19,7 @@ pub const methods = struct {
     pub const tools_list = "tools/list";
     pub const events_subscribe = "events/subscribe";
     pub const health_get = "health/get";
+    pub const providers_list = "providers/list";
     pub const models_list = "models/list";
     pub const config_set = "config/set";
 };
@@ -36,6 +37,7 @@ pub const Capabilities = struct {
     tools_list: bool = true,
     events_subscribe: bool = true,
     health_get: bool = true,
+    providers_list: bool = true,
     models_list: bool = true,
     /// Advertises that events.jsonl carries a monotonic `seq` field and the
     /// event spine supports replay cursors. Clients can use seq for
@@ -199,6 +201,26 @@ pub const ModelsListResult = struct {
     error_message: ?[]const u8 = null,
 };
 
+pub const ProviderSummary = struct {
+    provider_id: []const u8,
+    auth_type: types.AuthType,
+    wire_api: types.WireApi,
+    auth_scheme: types.AuthScheme,
+    model: []const u8,
+    base_url: []const u8,
+    active: bool,
+    expires_at_ms: ?i64 = null,
+    subscription_status: ?[]const u8 = null,
+};
+
+pub const ProvidersListResult = struct {
+    schema: []const u8 = "var1.providers.v1",
+    active_provider: []const u8,
+    providers: []const ProviderSummary,
+    status: []const u8 = "ok",
+    error_message: ?[]const u8 = null,
+};
+
 pub fn sessionStateLabel(state: types.SessionStatus) []const u8 {
     return types.statusLabel(state);
 }
@@ -218,6 +240,7 @@ test "protocol capabilities advertise the full session surface" {
     try std.testing.expect(capabilities.tools_list);
     try std.testing.expect(capabilities.events_subscribe);
     try std.testing.expect(capabilities.health_get);
+    try std.testing.expect(capabilities.providers_list);
     try std.testing.expect(capabilities.models_list);
     try std.testing.expect(capabilities.event_seq_supported);
 }

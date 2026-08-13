@@ -3,7 +3,7 @@ const provider = @import("openai_compatible.zig");
 const openai_codex = @import("openai_codex.zig");
 const responses = @import("responses.zig");
 const anthropic = @import("anthropic.zig");
-const compat = @import("compat.zig");
+const provider_profile = @import("profile.zig");
 const types = @import("../../shared/types.zig");
 
 /// Wire-protocol dispatch layer. Switches on config.wire_api to route the
@@ -39,10 +39,13 @@ pub fn completeWithTransportAndHooks(
 
     // Config default `wire_api: "auto"` resolves here against the base URL.
     // Explicit config values (chat_completions/responses/anthropic_messages)
-    // always beat detection — prime's provider-over-URL precedence rule,
-    // adapted to VANTARI's config-first doctrine (compat.zig).
-    const wire_api: types.WireApi =
-        if (config.wire_api == .auto) compat.detectWireApi(config.openai_base_url) else config.wire_api;
+    // always beat provider-profile defaults — provider-over-URL precedence
+    // keeps an explicit operator choice authoritative.
+    const provider_id = config.auth_provider orelse "openai-compatible";
+    const wire_api: types.WireApi = if (config.wire_api == .auto)
+        provider_profile.effectiveWireApi(provider_id, config.openai_base_url, config.wire_api)
+    else
+        config.wire_api;
     return switch (wire_api) {
         .chat_completions => provider.completeWithTransportAndHooks(allocator, config, request, transport, stream_hooks),
         .responses => responses.completeWithTransportAndHooks(allocator, config, request, transport, stream_hooks),

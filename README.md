@@ -659,6 +659,25 @@ Use `vantari config path|show|init|validate` to locate and validate the configur
 
 Use `vantari auth status --json` for a secret-free provider projection, `vantari auth login openai-codex` for local ChatGPT/Codex PKCE login, and `vantari auth logout <provider-id>` to remove one provider record. Login stores OAuth credentials and subscription metadata through the same auth ledger. OAuth `openai-codex` turns now use the dedicated `/codex/responses` transport with account/originator headers; API-key providers remain on their existing OpenAI-compatible route and never fall through to it. Status and health output never includes API keys, access tokens, refresh tokens, or ID tokens.
 
+Provider-scoped API-key login and selection use the same ledger:
+
+```powershell
+vantari auth login anthropic --api-key-stdin --model claude-sonnet-4-20250514
+vantari auth login openrouter --api-key-env OPENROUTER_API_KEY --model openai/gpt-4o-mini
+vantari auth login private-gateway --api-key-stdin --base-url http://127.0.0.1:43199/v1 --model custom-model --wire-api chat_completions --auth-scheme none
+vantari auth use anthropic
+vantari providers --json
+vantari models --provider anthropic --json
+vantari run --provider anthropic --model claude-sonnet-4-20250514 --prompt "..."
+```
+
+Anthropic selects Messages (`/v1/messages`) with `x-api-key` and
+`anthropic-version`; OpenRouter and custom OpenAI-compatible endpoints select
+Chat Completions by default. Custom records may explicitly choose bearer,
+API-key, or no-auth headers. Per-turn `run --provider` and
+`session/send.provider_id` do not mutate the active provider; `auth use` does.
+The provider inventory is metadata-only and never returns credentials.
+
 After login, `.env` is only a bootstrap input. The durable provider record lives in
 `$VANTARI_HOME/auth.json` for an installed run or `.var/auth.json` for a workspace
 run. A safe status projection looks like:
@@ -913,6 +932,7 @@ vantari tools  --json                           tool catalog with availability
 vantari schedule list [--json] [--include-deleted]   list scheduler jobs
 vantari schedule get <job-id> [--json]               inspect a scheduler job
 
+vantari providers [--json]                          list configured providers/models
 vantari models [--json] [--provider <id>]            discover available models
 
 vantari config path|show|init|validate                manage non-secret runtime policy
@@ -921,7 +941,7 @@ vantari                                        launch streaming TUI
 vantari -c                                     continue latest session
 vantari workspace show|set <path>|clear        workspace management
 vantari sessions --limit <n> --json            list sessions
-vantari auth status|login|logout <provider>    identity and provider auth
+vantari auth status|login|use|logout <provider> identity and provider auth
 ```
 
 <br/>

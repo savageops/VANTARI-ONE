@@ -1,5 +1,7 @@
 const std = @import("std");
 const provider = @import("openai_compatible.zig");
+const provider_profile = @import("profile.zig");
+const types = @import("../../shared/types.zig");
 
 /// Model discovery for OpenAI-compatible providers (LM Studio, llama.cpp,
 /// vLLM, Ollama, OpenRouter, z.ai, ...). One GET to {base_url}/v1/models
@@ -54,10 +56,30 @@ pub fn listModels(
     account_id: ?[]const u8,
     provider_id: []const u8,
 ) Error!ModelsList {
+    return listModelsWithAuth(allocator, base_url, api_key, account_id, provider_id, null);
+}
+
+/// Discover models with the provider's explicit header scheme. The legacy
+/// entry point above remains compatible for local OpenAI-compatible callers;
+/// canonical RPC callers pass the auth-ledger scheme here.
+pub fn listModelsWithAuth(
+    allocator: std.mem.Allocator,
+    base_url: []const u8,
+    api_key: []const u8,
+    account_id: ?[]const u8,
+    provider_id: []const u8,
+    configured_auth_scheme: ?types.AuthScheme,
+) Error!ModelsList {
     const url = try provider.modelsUrl(allocator, base_url);
     defer allocator.free(url);
 
-    const body = provider.httpGet(allocator, url, api_key, account_id) catch |err| switch (err) {
+    const profile_defaults = provider_profile.defaults(provider_id, base_url);
+    const headers = provider.RequestHeaders{
+        .auth_scheme = configured_auth_scheme orelse profile_defaults.auth_scheme,
+        .account_id = account_id,
+        .anthropic_version = profile_defaults.anthropic_version,
+    };
+    const body = provider.httpGetWithHeaders(allocator, url, api_key, headers) catch |err| switch (err) {
         error.ConnectionRefused, error.NetworkUnreachable, error.ConnectionTimedOut => return Error.Unreachable,
         provider.Error.BadStatus => return Error.BadStatus,
         else => return Error.Unreachable,

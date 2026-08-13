@@ -76,6 +76,12 @@ second runtime owner.
   Run `vantari auth login openai-codex` for the browser PKCE path or its manual
   redirect fallback; use `vantari auth logout <provider-id>` for one-record
   removal. Never inspect or print token-bearing auth fields.
+- Provider-scoped API-key login accepts `--api-key-stdin` or `--api-key-env`;
+  Anthropic uses the native Messages adapter, OpenRouter uses the shared
+  OpenAI-compatible adapter, and custom records require explicit base URL,
+  model, wire API, and bearer/API-key/no-auth scheme. Use `auth use <id>`,
+  `providers --json`, `models --provider <id>`, and `run --provider <id>` for
+  selection. The per-turn RPC field is `session/send.provider_id`.
 - OAuth `openai-codex` records route through `core/providers/openai_codex.zig` to
   `/codex/responses` with the stored account id and Codex headers. API-key records
   stay on the existing OpenAI-compatible dispatch; a missing Codex capability is

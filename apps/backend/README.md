@@ -164,6 +164,24 @@ All config lives in `~/.vantari/config.json` (non-secret) and `~/.vantari/auth.j
 
 Use `vantari auth status --json` for a secret-free active-provider projection, `vantari auth login openai-codex` for the browser PKCE flow with a pasted redirect fallback, and `vantari auth logout <provider-id>` to remove one provider record. The login helper persists OAuth tokens and subscription metadata through the canonical auth store. OAuth `openai-codex` turns use `core/providers/openai_codex.zig` and `POST /codex/responses`; API-key providers keep the existing OpenAI-compatible dispatch. The dedicated route carries `chatgpt-account-id`, `originator`, `OpenAI-Beta`, and SSE headers, sets `store:false`, and fails explicitly when its transport or entitlement is unavailable. Status, health, logs, and docs never print API keys or OAuth tokens.
 
+Provider-scoped API-key login and selection are also available:
+
+```powershell
+vantari auth login anthropic --api-key-stdin --model claude-sonnet-4-20250514
+vantari auth login openrouter --api-key-env OPENROUTER_API_KEY --model openai/gpt-4o-mini
+vantari auth login private-gateway --api-key-stdin --base-url http://127.0.0.1:43199/v1 --model custom-model --wire-api chat_completions --auth-scheme none
+vantari auth use anthropic
+vantari providers --json
+vantari models --provider anthropic --json
+vantari run --provider anthropic --model claude-sonnet-4-20250514 --prompt "..."
+```
+
+`session/send.provider_id` provides the equivalent per-turn provider override;
+`auth use` changes the active ledger selection. Inventory and status are
+secret-free. Anthropic uses the native Messages adapter and headers; OpenRouter
+and custom OpenAI-compatible records use the shared adapter with explicit
+base URL, wire API, and bearer/API-key/no-auth selection.
+
 `.env` is bootstrap configuration, not the durable credential owner. Installed runs
 read `$VANTARI_HOME/auth.json`; workspace runs read `.var/auth.json`. Use the
 secret-free projection to inspect provider state:

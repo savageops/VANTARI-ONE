@@ -39,12 +39,36 @@ pub const WireApi = enum {
     }
 };
 
+/// Header authentication scheme for API-key provider records. OAuth records
+/// keep `AuthType.oauth`; the scheme only selects the request header used by
+/// the shared HTTP transport.
+pub const AuthScheme = enum {
+    bearer,
+    api_key,
+    none,
+
+    /// Parse the persisted provider header scheme without accepting aliases
+    /// that could silently change which secret header is emitted.
+    pub fn fromString(value: []const u8) ?AuthScheme {
+        if (std.mem.eql(u8, value, "bearer")) return .bearer;
+        if (std.mem.eql(u8, value, "api_key")) return .api_key;
+        if (std.mem.eql(u8, value, "none")) return .none;
+        return null;
+    }
+
+    /// Return the stable auth-scheme label used in receipts and diagnostics.
+    pub fn label(self: AuthScheme) []const u8 {
+        return @tagName(self);
+    }
+};
+
 pub const Config = struct {
     openai_base_url: []u8,
     openai_api_key: []u8,
     openai_model: []u8,
     auth_provider: ?[]u8 = null,
     auth_type: AuthType = .api_key,
+    auth_scheme: AuthScheme = .bearer,
     auth_account_id: ?[]u8 = null,
     auth_expires_at_ms: ?i64 = null,
     subscription_plan_label: ?[]u8 = null,

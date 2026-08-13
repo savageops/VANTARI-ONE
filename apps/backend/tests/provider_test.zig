@@ -492,9 +492,33 @@ test "dispatch resolves auto wire api to anthropic adapter for anthropic base ur
     try std.testing.expect(std.mem.indexOf(u8, capture.payload, "enable_thinking") == null);
 }
 
+test "Anthropic dispatch carries the provider header contract" {
+    var capture = CaptureTransport{};
+    var config = try makeMinimalConfig(std.testing.allocator, "https://api.anthropic.com/v1", types.WireApi.auto);
+    defer config.deinit(std.testing.allocator);
+    config.auth_scheme = .api_key;
+
+    const completion = try VAR1.core.provider_dispatch.completeWithTransportAndHooks(std.testing.allocator, config, .{
+        .messages = &.{},
+    }, .{
+        .context = &capture,
+        .sendFn = captureSend,
+        .sendWithHeadersFn = captureSendWithHeaders,
+    }, .{});
+    defer completion.deinit(std.testing.allocator);
+    defer std.testing.allocator.free(capture.url);
+    defer std.testing.allocator.free(capture.payload);
+    defer if (capture.anthropic_version) |value| std.testing.allocator.free(value);
+
+    try std.testing.expectEqual(types.AuthScheme.api_key, capture.auth_scheme);
+    try std.testing.expectEqualStrings("2023-06-01", capture.anthropic_version.?);
+}
+
 const CaptureTransport = struct {
     url: []u8 = "",
     payload: []u8 = "",
+    auth_scheme: types.AuthScheme = .bearer,
+    anthropic_version: ?[]u8 = null,
 };
 
 fn captureSend(
@@ -510,6 +534,20 @@ fn captureSend(
     return allocator.dupe(u8,
         \\{"model":"m","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
     );
+}
+
+fn captureSendWithHeaders(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    _: []const u8,
+    headers: provider.RequestHeaders,
+    payload: []const u8,
+) anyerror![]u8 {
+    var capture: *CaptureTransport = @ptrCast(@alignCast(ctx_ptr.?));
+    capture.auth_scheme = headers.auth_scheme;
+    if (headers.anthropic_version) |value| capture.anthropic_version = try allocator.dupe(u8, value);
+    return captureSend(ctx_ptr, allocator, url, "", payload);
 }
 
 fn makeMinimalConfig(

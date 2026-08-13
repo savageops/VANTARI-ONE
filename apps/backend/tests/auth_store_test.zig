@@ -139,6 +139,66 @@ test "oauth ledger persists refreshed credentials, redacts status, and preserves
     );
 }
 
+test "provider-scoped API-key login preserves records and cycles through secret-free inventory" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/workspace", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var seeded = try auth_store.resolveOrSeed(std.testing.allocator, workspace_root, .{
+        .provider_id = "openai",
+        .base_url = "https://api.openai.com/v1",
+        .api_key = "openai-key",
+        .model = "gpt-5",
+    });
+    defer seeded.deinit(std.testing.allocator);
+
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "anthropic",
+        .base_url = "https://api.anthropic.com",
+        .api_key = "anthropic-secret",
+        .model = "claude-sonnet-4-5",
+    });
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "openrouter",
+        .base_url = "https://openrouter.ai/api/v1",
+        .api_key = "router-secret",
+        .model = "anthropic/claude-sonnet-4.5",
+    });
+
+    var inventory = try auth_store.listProviderSummaries(std.testing.allocator, workspace_root);
+    defer inventory.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("openrouter", inventory.active_provider);
+    try std.testing.expectEqual(@as(usize, 3), inventory.providers.len);
+
+    var found_anthropic = false;
+    var found_openrouter = false;
+    for (inventory.providers) |summary| {
+        if (std.mem.eql(u8, summary.provider_id, "anthropic")) {
+            found_anthropic = true;
+            try std.testing.expectEqual(types.AuthType.api_key, summary.auth_type);
+            try std.testing.expectEqual(types.WireApi.anthropic_messages, summary.wire_api);
+            try std.testing.expectEqual(types.AuthScheme.api_key, summary.auth_scheme);
+        }
+        if (std.mem.eql(u8, summary.provider_id, "openrouter")) {
+            found_openrouter = true;
+            try std.testing.expect(summary.active);
+            try std.testing.expectEqual(types.WireApi.chat_completions, summary.wire_api);
+            try std.testing.expectEqual(types.AuthScheme.bearer, summary.auth_scheme);
+        }
+    }
+    try std.testing.expect(found_anthropic);
+    try std.testing.expect(found_openrouter);
+
+    try auth_store.selectProvider(std.testing.allocator, workspace_root, "anthropic");
+    var active = try auth_store.readAuthStatus(std.testing.allocator, workspace_root);
+    defer active.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("anthropic", active.provider_id);
+    try std.testing.expectEqual(types.WireApi.anthropic_messages, active.wire_api);
+    try std.testing.expectEqual(types.AuthScheme.api_key, active.auth_scheme);
+}
+
 const types = VAR1.shared.types;
 
 fn writeAuthFile(

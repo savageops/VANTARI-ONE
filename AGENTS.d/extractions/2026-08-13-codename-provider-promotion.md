@@ -35,10 +35,10 @@ owner, not a permanent shadow adapter.
 
 ## Current receipt — 2026-08-13
 
-The temporary `Prism` provider-profile experiment was compiled and its pure
-profile tests passed inside the full graph (`19/19`, `2,004/2,004`), but it was
-not promotion-complete: the auth-to-config-to-route-to-dispatch-to-header path
-and installed provider fixture were not closed. The partial live wiring remains
-staged under the codename; the next promotion must carry an installed
-request/header receipt before it enters the live path. See
-`.docs/research/2026-08-13-provider-prism-staging.md`.
+The temporary `Prism` provider-profile experiment was compiled, falsified, and
+promoted into `apps/backend/src/core/providers/profile.zig`. The full graph
+passes (`19/19`, `2,007/2,007`), and the auth-to-config-to-route-to-dispatch-
+to-header path has an installed provider fixture receipt. The codename is
+retained here as provenance only; no shadow adapter remains in the live path.
+See `.docs/research/2026-08-13-provider-prism-staging.md` and
+`.docs/todo/changelog/037-provider-selection-prism.md`.

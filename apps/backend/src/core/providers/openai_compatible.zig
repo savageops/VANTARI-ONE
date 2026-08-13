@@ -160,9 +160,11 @@ pub fn complete(
 /// extension so account and originator metadata cannot leak into API-key
 /// requests.
 pub const RequestHeaders = struct {
+    auth_scheme: types.AuthScheme = .bearer,
     account_id: ?[]const u8 = null,
     originator: ?[]const u8 = null,
     openai_beta: ?[]const u8 = null,
+    anthropic_version: ?[]const u8 = null,
     accept: ?[]const u8 = null,
 };
 
@@ -286,7 +288,28 @@ pub fn completeWithTransportAndHooks(
     defer allocator.free(payload);
 
     clearFailureDiagnostic();
-    const response_body = try transport.send(allocator, url, config.openai_api_key, payload, stream_hooks);
+    const response_body = if (config.auth_scheme == .bearer)
+        try transport.send(allocator, url, config.openai_api_key, payload, stream_hooks)
+    else
+        transport.sendWithHeaders(
+            allocator,
+            url,
+            config.openai_api_key,
+            .{ .auth_scheme = config.auth_scheme },
+            payload,
+            stream_hooks,
+        ) catch |err| switch (err) {
+            // Keep body-only fixture transports usable for custom-provider
+            // parser tests; the native transport uses the header-aware path.
+            error.HeadersUnsupported, error.StreamingHeadersUnsupported => try transport.send(
+                allocator,
+                url,
+                config.openai_api_key,
+                payload,
+                stream_hooks,
+            ),
+            else => return err,
+        };
     defer allocator.free(response_body);
 
     return parseCompletionResponse(allocator, config.openai_model, response_body);
@@ -626,6 +649,20 @@ pub fn httpGet(
     api_key: []const u8,
     account_id: ?[]const u8,
 ) anyerror![]u8 {
+    return httpGetWithHeaders(allocator, url, api_key, .{
+        .account_id = account_id,
+    });
+}
+
+/// GET the provider model surface with the same typed auth headers as a turn.
+/// Anthropic's `/v1/models` requires `x-api-key` and `anthropic-version`, while
+/// OpenAI-compatible providers retain the default bearer path.
+pub fn httpGetWithHeaders(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    api_key: []const u8,
+    headers: RequestHeaders,
+) anyerror![]u8 {
     const uri = try std.Uri.parse(url);
     const scheme = try schemeFromUri(uri.scheme);
     var host_buffer: [std.Uri.host_name_max]u8 = undefined;
@@ -634,8 +671,8 @@ pub fn httpGet(
     const stream = try std.net.tcpConnectToHost(allocator, host, port);
     defer stream.close();
     return switch (scheme) {
-        .http => plainHttpGet(allocator, stream, &uri, api_key, account_id),
-        .https => tlsHttpGet(allocator, stream, host, &uri, api_key, account_id),
+        .http => plainHttpGet(allocator, stream, &uri, api_key, headers),
+        .https => tlsHttpGet(allocator, stream, host, &uri, api_key, headers),
     };
 }
 
@@ -747,13 +784,13 @@ fn plainHttpGet(
     stream: std.net.Stream,
     uri: *const std.Uri,
     api_key: []const u8,
-    account_id: ?[]const u8,
+    headers: RequestHeaders,
 ) ![]u8 {
     var read_buffer: [plain_read_buffer_size]u8 = undefined;
     var write_buffer: [plain_write_buffer_size]u8 = undefined;
     var stream_reader = stream.reader(&read_buffer);
     var stream_writer = stream.writer(&write_buffer);
-    try writeGetHead(&stream_writer.interface, uri, api_key, account_id);
+    try writeGetHead(&stream_writer.interface, uri, api_key, headers);
     try stream_writer.interface.flush();
     return readResponse(allocator, stream_reader.interface());
 }
@@ -827,7 +864,7 @@ fn tlsHttpGet(
     host: []const u8,
     uri: *const std.Uri,
     api_key: []const u8,
-    account_id: ?[]const u8,
+    headers: RequestHeaders,
 ) ![]u8 {
     var encrypted_write_buffer: [tls_record_buffer_size]u8 = undefined;
     var encrypted_read_buffer: [tls_record_buffer_size]u8 = undefined;
@@ -849,7 +886,7 @@ fn tlsHttpGet(
             .allow_truncation_attacks = true,
         },
     );
-    try writeGetHead(&tls_client.writer, uri, api_key, account_id);
+    try writeGetHead(&tls_client.writer, uri, api_key, headers);
     try tls_client.writer.flush();
     try stream_writer.interface.flush();
     return readResponse(allocator, &tls_client.reader);
@@ -912,9 +949,19 @@ fn writeRequestHead(
     try uri.writeToStream(writer, .{ .authority = true });
     try writer.writeAll("\r\n");
 
-    try writer.writeAll("authorization: Bearer ");
-    try writer.writeAll(api_key);
-    try writer.writeAll("\r\n");
+    switch (headers.auth_scheme) {
+        .bearer => {
+            try writer.writeAll("authorization: Bearer ");
+            try writer.writeAll(api_key);
+            try writer.writeAll("\r\n");
+        },
+        .api_key => {
+            try writer.writeAll("x-api-key: ");
+            try writer.writeAll(api_key);
+            try writer.writeAll("\r\n");
+        },
+        .none => {},
+    }
     if (headers.account_id) |account_id| {
         try writer.writeAll("chatgpt-account-id: ");
         try writer.writeAll(account_id);
@@ -928,6 +975,11 @@ fn writeRequestHead(
     if (headers.openai_beta) |openai_beta| {
         try writer.writeAll("openai-beta: ");
         try writer.writeAll(openai_beta);
+        try writer.writeAll("\r\n");
+    }
+    if (headers.anthropic_version) |anthropic_version| {
+        try writer.writeAll("anthropic-version: ");
+        try writer.writeAll(anthropic_version);
         try writer.writeAll("\r\n");
     }
 
@@ -944,7 +996,7 @@ fn writeGetHead(
     writer: *std.Io.Writer,
     uri: *const std.Uri,
     api_key: []const u8,
-    account_id: ?[]const u8,
+    headers: RequestHeaders,
 ) !void {
     try writer.writeAll("GET ");
     try uri.writeToStream(writer, .{ .path = true, .query = true });
@@ -952,11 +1004,26 @@ fn writeGetHead(
     try writer.writeAll("host: ");
     try uri.writeToStream(writer, .{ .authority = true });
     try writer.writeAll("\r\n");
-    try writer.writeAll("authorization: Bearer ");
-    try writer.writeAll(api_key);
-    try writer.writeAll("\r\n");
-    if (account_id) |value| {
+    switch (headers.auth_scheme) {
+        .bearer => {
+            try writer.writeAll("authorization: Bearer ");
+            try writer.writeAll(api_key);
+            try writer.writeAll("\r\n");
+        },
+        .api_key => {
+            try writer.writeAll("x-api-key: ");
+            try writer.writeAll(api_key);
+            try writer.writeAll("\r\n");
+        },
+        .none => {},
+    }
+    if (headers.account_id) |value| {
         try writer.writeAll("chatgpt-account-id: ");
+        try writer.writeAll(value);
+        try writer.writeAll("\r\n");
+    }
+    if (headers.anthropic_version) |value| {
+        try writer.writeAll("anthropic-version: ");
         try writer.writeAll(value);
         try writer.writeAll("\r\n");
     }

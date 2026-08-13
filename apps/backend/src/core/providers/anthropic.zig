@@ -29,21 +29,88 @@ pub fn completeWithTransportAndHooks(
     config: types.Config,
     request: types.CompletionRequest,
     transport: provider.Transport,
-    _: provider.StreamHooks,
+    downstream_hooks: provider.StreamHooks,
 ) !types.CompletionResponse {
     const url = try messagesUrl(allocator, config.openai_base_url);
     defer allocator.free(url);
 
-    const payload = try buildRequestJson(allocator, config.openai_model, request, false);
+    const streaming = downstream_hooks.hasHandlers();
+    const payload = try buildRequestJson(allocator, config.openai_model, request, streaming);
     defer allocator.free(payload);
 
+    var stream_context = AnthropicStreamContext{
+        .allocator = allocator,
+        .downstream = downstream_hooks,
+    };
+    const transport_hooks = if (streaming) provider.StreamHooks{
+        .context = &stream_context,
+        .onRawEventFn = onRawAnthropicEvent,
+    } else provider.StreamHooks{};
+    const headers = provider.RequestHeaders{
+        .auth_scheme = config.auth_scheme,
+        .anthropic_version = "2023-06-01",
+        .accept = if (streaming) "text/event-stream" else "application/json",
+    };
+
     provider.clearFailureDiagnostic();
-    // Use non-streaming send for the Anthropic Messages API — the SSE event
-    // format differs from chat completions. The transport reuses the POST path.
-    const response_body = try transport.sendFn(transport.context, allocator, url, config.openai_api_key, payload);
+    // The shared transport owns HTTP/SSE framing. Prism translates the
+    // provider's named event payloads into the kernel's downstream hooks.
+    const response_body = transport.sendWithHeaders(
+        allocator,
+        url,
+        config.openai_api_key,
+        headers,
+        payload,
+        transport_hooks,
+    ) catch |err| switch (err) {
+        // Body-only fixture transports remain valid for parser/dispatch tests.
+        // The native HTTP transport takes the header-aware branch above, which
+        // preserves Anthropic's x-api-key and version headers in production.
+        error.HeadersUnsupported, error.StreamingHeadersUnsupported => try transport.send(
+            allocator,
+            url,
+            config.openai_api_key,
+            payload,
+            transport_hooks,
+        ),
+        else => return err,
+    };
     defer allocator.free(response_body);
 
     return parseCompletionResponse(allocator, config.openai_model, response_body);
+}
+
+/// Provider-specific SSE event bridge. Anthropic emits named content-block
+/// events rather than the OpenAI `choices[].delta` shape.
+const AnthropicStreamContext = struct {
+    allocator: std.mem.Allocator,
+    downstream: provider.StreamHooks,
+};
+
+/// Forward raw Anthropic events and project text/reasoning deltas into the
+/// canonical event spine without teaching the shared HTTP transport Anthropic
+/// payload semantics.
+fn onRawAnthropicEvent(ctx: ?*anyopaque, event_json: []const u8) anyerror!void {
+    const state: *AnthropicStreamContext = @ptrCast(@alignCast(ctx.?));
+    try state.downstream.onRawEvent(event_json);
+
+    var parsed = std.json.parseFromSlice(std.json.Value, state.allocator, event_json, .{
+        .ignore_unknown_fields = true,
+    }) catch return;
+    defer parsed.deinit();
+    if (parsed.value != .object) return;
+    const root = parsed.value.object;
+    const event_type = root.get("type") orelse return;
+    if (event_type != .string or !std.mem.eql(u8, event_type.string, "content_block_delta")) return;
+    const delta = root.get("delta") orelse return;
+    if (delta != .object) return;
+    const delta_type = delta.object.get("type") orelse return;
+    if (delta_type != .string) return;
+    if (std.mem.eql(u8, delta_type.string, "text_delta")) {
+        if (delta.object.get("text")) |text| if (text == .string) try state.downstream.onAssistantDelta(text.string);
+    } else if (std.mem.eql(u8, delta_type.string, "thinking_delta")) {
+        if (delta.object.get("thinking")) |thinking| if (thinking == .string) try state.downstream.onReasoningDelta(thinking.string);
+    }
 }
 
 /// Resolve the /messages URL for a provider base_url (Anthropic surface).

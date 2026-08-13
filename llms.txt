@@ -78,6 +78,13 @@ Rules:
   one record. OAuth `openai-codex` routes through `core/providers/openai_codex.zig`
   to `/codex/responses` with account/originator metadata; API-key providers keep
   the OpenAI-compatible route and never fall back across the auth boundary.
+- Provider-scoped API-key login supports Anthropic Messages, OpenRouter and
+  explicit custom OpenAI-compatible endpoints. Use `auth login <id>` with
+  `--api-key-stdin` or `--api-key-env`, `auth use <id>` for active selection,
+  `providers --json` for secret-free inventory, `models --provider <id>` for
+  discovery, and `run --provider <id> --model <id>` or
+  `session/send.provider_id` for per-turn routing. Custom records explicitly
+  choose base URL, wire API, and bearer/API-key/no-auth header scheme.
 - Scheduler leadership is process-exclusive and generation-fenced in source.
 - Ticket claim, worker generation, lease, capability, and deterministic child
   identity commit in one process-serialized ticket row before child creation.

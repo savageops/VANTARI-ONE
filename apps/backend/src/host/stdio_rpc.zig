@@ -36,6 +36,7 @@ pub const Error = error{
     SessionNotFound,
     ScheduleNotFound,
     SessionRunning,
+    ProviderNotFound,
     ExecutionFailed,
     InvalidFrame,
     MissingChildPipes,
@@ -633,6 +634,7 @@ fn processRequest(server: *Server, request_payload: []const u8) !?[]u8 {
         Error.SessionNotFound => return errorResponseOrNull(server.allocator, id, -32001, "Session not found"),
         Error.ScheduleNotFound => return errorResponseOrNull(server.allocator, id, -32004, "Schedule not found"),
         Error.SessionRunning => return errorResponseOrNull(server.allocator, id, -32002, "Session already running"),
+        Error.ProviderNotFound => return errorResponseOrNull(server.allocator, id, -32006, "Provider not found"),
         Error.ServerShuttingDown => return errorResponseOrNull(server.allocator, id, rpc_server_busy_code, "Server shutting down"),
         Error.ExecutionFailed => return errorResponseOrNull(server.allocator, id, -32000, "Execution failed"),
         else => return errorResponseOrNull(server.allocator, id, -32603, "Internal error"),
@@ -687,6 +689,9 @@ fn dispatch(
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.health_get)) {
         return handleHealthGet(server);
+    }
+    if (std.mem.eql(u8, method_name, protocol_types.methods.providers_list)) {
+        return handleProvidersList(server);
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.models_list)) {
         return handleModelsList(server, params);
@@ -769,6 +774,7 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         prompt: ?[]const u8 = null,
         enable_agent_tools: ?bool = null,
         model_override: ?[]const u8 = null,
+        provider_id: ?[]const u8 = null,
         prompt_mode: ?[]const u8 = null,
     };
 
@@ -835,6 +841,23 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
     }
     defer server.runtime.finishSession(session.id);
 
+    var selected_auth: ?auth_store.ResolvedAuth = null;
+    defer if (selected_auth) |value| value.deinit(server.allocator);
+    if (parsed.value.provider_id) |provider_id| {
+        const active_provider = server.config.auth_provider orelse "openai-compatible";
+        if (provider_id.len == 0) return Error.InvalidParams;
+        if (!std.mem.eql(u8, provider_id, active_provider)) {
+            selected_auth = auth_store.readProviderById(
+                server.allocator,
+                server.config.workspace_root,
+                provider_id,
+            ) catch |err| switch (err) {
+                auth_store.Error.MissingProvider, auth_store.Error.MissingAuth => return Error.ProviderNotFound,
+                else => return err,
+            };
+        }
+    }
+
     if (next_prompt) |prompt| {
         const timestamp_ms = std.time.milliTimestamp();
         try store.appendSessionMessage(server.allocator, server.config.workspace_root, session.id, .user, prompt, timestamp_ms);
@@ -846,8 +869,44 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
     // run. This lets the operator test a lesser model or a smaller context
     // window without editing auth.json or config.json.
     var effective_config = server.config.*;
+    var provider_base_owned: ?[]u8 = null;
+    var provider_api_key_owned: ?[]u8 = null;
+    var provider_model_owned: ?[]u8 = null;
+    var provider_id_owned: ?[]u8 = null;
+    var provider_account_owned: ?[]u8 = null;
+    var provider_plan_owned: ?[]u8 = null;
+    var provider_status_owned: ?[]u8 = null;
+    defer {
+        if (provider_base_owned) |value| server.allocator.free(value);
+        if (provider_api_key_owned) |value| server.allocator.free(value);
+        if (provider_model_owned) |value| server.allocator.free(value);
+        if (provider_id_owned) |value| server.allocator.free(value);
+        if (provider_account_owned) |value| server.allocator.free(value);
+        if (provider_plan_owned) |value| server.allocator.free(value);
+        if (provider_status_owned) |value| server.allocator.free(value);
+    }
     var model_override_owned: ?[]u8 = null;
     defer if (model_override_owned) |m| server.allocator.free(m);
+    if (selected_auth) |resolved| {
+        provider_base_owned = try server.allocator.dupe(u8, resolved.base_url);
+        provider_api_key_owned = try server.allocator.dupe(u8, resolved.api_key);
+        provider_model_owned = try server.allocator.dupe(u8, resolved.model);
+        provider_id_owned = try server.allocator.dupe(u8, resolved.provider_id);
+        provider_account_owned = if (resolved.account_id) |value| try server.allocator.dupe(u8, value) else null;
+        provider_plan_owned = if (resolved.subscription_plan_label) |value| try server.allocator.dupe(u8, value) else null;
+        provider_status_owned = if (resolved.subscription_status) |value| try server.allocator.dupe(u8, value) else null;
+        effective_config.openai_base_url = provider_base_owned.?;
+        effective_config.openai_api_key = provider_api_key_owned.?;
+        effective_config.openai_model = provider_model_owned.?;
+        effective_config.auth_provider = provider_id_owned.?;
+        effective_config.auth_type = resolved.auth_type;
+        effective_config.auth_scheme = resolved.auth_scheme;
+        effective_config.auth_account_id = provider_account_owned;
+        effective_config.auth_expires_at_ms = resolved.expires_at_ms;
+        effective_config.subscription_plan_label = provider_plan_owned;
+        effective_config.subscription_status = provider_status_owned;
+        effective_config.wire_api = resolved.wire_api;
+    }
     if (parsed.value.model_override) |model| {
         model_override_owned = try server.allocator.dupe(u8, model);
         effective_config.openai_model = model_override_owned.?;
@@ -1343,6 +1402,55 @@ fn handleHealthGet(server: *Server) ![]u8 {
     });
 }
 
+/// Expose configured provider identities and availability metadata without
+/// exposing API keys or OAuth tokens. Selection remains a separate
+/// `session/send.provider_id` override or `auth use` mutation.
+fn handleProvidersList(server: *Server) ![]u8 {
+    var inventory = auth_store.listProviderSummaries(
+        server.allocator,
+        server.config.workspace_root,
+    ) catch |err| switch (err) {
+        auth_store.Error.MissingAuth, auth_store.Error.MissingProvider => {
+            return renderJsonAlloc(server.allocator, protocol_types.ProvidersListResult{
+                .active_provider = server.config.auth_provider orelse "openai-compatible",
+                .providers = &.{},
+                .status = "missing_auth",
+                .error_message = "no provider records are available in the auth ledger",
+            });
+        },
+        else => {
+            return renderJsonAlloc(server.allocator, protocol_types.ProvidersListResult{
+                .active_provider = server.config.auth_provider orelse "openai-compatible",
+                .providers = &.{},
+                .status = "invalid_auth",
+                .error_message = "the auth ledger provider projection is invalid",
+            });
+        },
+    };
+    defer inventory.deinit(server.allocator);
+
+    var summaries = try server.allocator.alloc(protocol_types.ProviderSummary, inventory.providers.len);
+    defer server.allocator.free(summaries);
+    for (inventory.providers, 0..) |provider_summary, index| {
+        summaries[index] = .{
+            .provider_id = provider_summary.provider_id,
+            .auth_type = provider_summary.auth_type,
+            .wire_api = provider_summary.wire_api,
+            .auth_scheme = provider_summary.auth_scheme,
+            .model = provider_summary.model,
+            .base_url = provider_summary.base_url,
+            .active = provider_summary.active,
+            .expires_at_ms = provider_summary.expires_at_ms,
+            .subscription_status = provider_summary.subscription_status,
+        };
+    }
+
+    return renderJsonAlloc(server.allocator, protocol_types.ProvidersListResult{
+        .active_provider = inventory.active_provider,
+        .providers = summaries,
+    });
+}
+
 fn handleModelsList(server: *Server, params: ?std.json.Value) ![]u8 {
     // Optional provider switch: when provider_id is present and differs from
     // the active provider, resolve that provider's credentials from the auth
@@ -1363,6 +1471,8 @@ fn handleModelsList(server: *Server, params: ?std.json.Value) ![]u8 {
     var resolved_provider_id: []const u8 = active_provider;
     var resolved_base_url: []const u8 = server.config.openai_base_url;
     var resolved_api_key: []const u8 = server.config.openai_api_key;
+    var resolved_account_id: ?[]const u8 = server.config.auth_account_id;
+    var resolved_auth_scheme: types.AuthScheme = server.config.auth_scheme;
     var resolved_auth: ?auth_store.ResolvedAuth = null;
     defer if (resolved_auth) |ra| ra.deinit(server.allocator);
 
@@ -1395,9 +1505,18 @@ fn handleModelsList(server: *Server, params: ?std.json.Value) ![]u8 {
         resolved_provider_id = resolved_auth.?.provider_id;
         resolved_base_url = resolved_auth.?.base_url;
         resolved_api_key = resolved_auth.?.api_key;
+        resolved_account_id = resolved_auth.?.account_id;
+        resolved_auth_scheme = resolved_auth.?.auth_scheme;
     }
 
-    var discovered = models.listModels(server.allocator, resolved_base_url, resolved_api_key, null, resolved_provider_id) catch |err| switch (err) {
+    var discovered = models.listModelsWithAuth(
+        server.allocator,
+        resolved_base_url,
+        resolved_api_key,
+        resolved_account_id,
+        resolved_provider_id,
+        resolved_auth_scheme,
+    ) catch |err| switch (err) {
         models.Error.Unreachable => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
             .provider = resolved_provider_id,
             .base_url = resolved_base_url,

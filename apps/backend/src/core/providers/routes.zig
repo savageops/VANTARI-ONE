@@ -117,6 +117,7 @@ pub const ResolvedRoute = struct {
             .openai_model = try allocator.dupe(u8, self.config.openai_model),
             .auth_provider = if (self.config.auth_provider) |value| try allocator.dupe(u8, value) else null,
             .auth_type = self.config.auth_type,
+            .auth_scheme = self.config.auth_scheme,
             .auth_account_id = if (self.config.auth_account_id) |value| try allocator.dupe(u8, value) else null,
             .auth_expires_at_ms = self.config.auth_expires_at_ms,
             .subscription_plan_label = if (self.config.subscription_plan_label) |value| try allocator.dupe(u8, value) else null,
@@ -179,8 +180,10 @@ pub fn resolve(
     const provider_id = if (selected_auth) |value| value.provider_id else parent.auth_provider orelse "active";
     const provider_model = if (selected_auth) |value| value.model else parent.openai_model;
     const auth_type = if (selected_auth) |value| value.auth_type else parent.auth_type;
+    const auth_scheme = if (selected_auth) |value| value.auth_scheme else parent.auth_scheme;
     const auth_account_id = if (selected_auth) |value| value.account_id else parent.auth_account_id;
     const auth_expires_at_ms = if (selected_auth) |value| value.expires_at_ms else parent.auth_expires_at_ms;
+    const wire_api = if (selected_auth) |value| value.wire_api else parent.wire_api;
     const model = override.model orelse provider_model;
     const thinking_mode = override.thinking_mode orelse parent.thinking_mode;
     const effort = if (override.effort) |e| e else parent.effort;
@@ -213,6 +216,7 @@ pub fn resolve(
         .openai_model = try allocator.dupe(u8, model),
         .auth_provider = try allocator.dupe(u8, provider_id),
         .auth_type = auth_type,
+        .auth_scheme = auth_scheme,
         .auth_account_id = if (auth_account_id) |value| try allocator.dupe(u8, value) else null,
         .auth_expires_at_ms = auth_expires_at_ms,
         .subscription_plan_label = if (selected_auth) |value|
@@ -235,7 +239,7 @@ pub fn resolve(
         .context_policy = context_policy,
         .prompt_policy = prompt_policy,
         .memory_policy = parent.memory_policy,
-        .wire_api = override.wire_api orelse parent.wire_api,
+        .wire_api = override.wire_api orelse wire_api,
         .thinking_mode = thinking_owned,
         .effort = effort_owned,
         .temperature = temperature,

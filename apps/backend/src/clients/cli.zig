@@ -12,6 +12,7 @@ const provider = @import("../core/providers/openai_compatible.zig");
 const stdio_rpc = @import("../host/stdio_rpc.zig");
 const fsutil = @import("../shared/fsutil.zig");
 const shared_types = @import("../shared/types.zig");
+const provider_profile = @import("../core/providers/profile.zig");
 const owner_state = @import("../host/owner_state.zig");
 const web = @import("../host/http_bridge.zig");
 
@@ -27,6 +28,9 @@ const RunCliOptions = struct {
     /// Per-invocation model override (not persisted). Swaps the active
     /// provider model for this run only.
     model_override: ?[]const u8 = null,
+    /// Per-invocation provider override (not persisted). Resolves one named
+    /// auth-ledger record for this run only.
+    provider_override: ?[]const u8 = null,
     /// Per-invocation context window override (token count). Adjusts the
     /// compaction threshold for models with smaller windows.
     context_window_override: ?u64 = null,
@@ -45,6 +49,10 @@ const ToolsCliOptions = struct {
 const ModelsCliOptions = struct {
     json_output: bool = false,
     provider: ?[]const u8 = null,
+};
+
+const ProvidersCliOptions = struct {
+    json_output: bool = false,
 };
 
 const ScheduleCliOptions = struct {
@@ -77,6 +85,7 @@ const TurnStatusMode = enum {
 /// protocol. All optional; when null the server config value is used.
 const TurnOverrides = struct {
     model_override: ?[]const u8 = null,
+    provider_override: ?[]const u8 = null,
     context_window_override: ?u64 = null,
     max_output_tokens: ?u64 = null,
 };
@@ -98,6 +107,11 @@ const ParsedToolsArguments = struct {
 
 const ParsedModelsArguments = struct {
     options: ModelsCliOptions = .{},
+    help_requested: bool = false,
+};
+
+const ParsedProvidersArguments = struct {
+    options: ProvidersCliOptions = .{},
     help_requested: bool = false,
 };
 
@@ -208,6 +222,26 @@ const ParsedModelsListResult = struct {
     error_message: ?[]const u8 = null,
 };
 
+const ParsedProviderEntry = struct {
+    provider_id: []const u8,
+    auth_type: shared_types.AuthType,
+    wire_api: shared_types.WireApi,
+    auth_scheme: shared_types.AuthScheme,
+    model: []const u8,
+    base_url: []const u8,
+    active: bool,
+    expires_at_ms: ?i64 = null,
+    subscription_status: ?[]const u8 = null,
+};
+
+const ParsedProvidersListResult = struct {
+    schema: []const u8 = "var1.providers.v1",
+    active_provider: []const u8,
+    providers: []ParsedProviderEntry = &.{},
+    status: []const u8 = "ok",
+    error_message: ?[]const u8 = null,
+};
+
 const ParsedScheduleListResult = struct {
     schedules: []protocol_types.ScheduleSummary = &.{},
 };
@@ -234,10 +268,11 @@ pub const root_help_text =
     \\  schedule List or inspect durable scheduler jobs through the kernel protocol.
     \\  config   Locate, materialize, inspect, or validate ~/.vantari/config.json.
     \\  auth     Login, logout, or inspect the active provider without printing secrets.
+    \\  providers List configured provider identities and selected models.
     \\  workspace Show or set an explicit installed-client workspace override.
     \\  serve    Start the HTTP bridge for /rpc, /events, and /api/health.
     \\  tools    Print the built-in tool catalog and schemas through the kernel protocol.
-    \\  models   Discover available models from the active OpenAI-compatible provider.
+    \\  models   Discover available models from the selected provider.
     \\  help     Print help for a command.
     \\
     \\Examples:
@@ -254,6 +289,7 @@ pub const root_help_text =
     \\  VAR1 run --session-id session-1776778021956-42e781c4c8b4efb8
     \\  VAR1 health
     \\  VAR1 auth status --json
+    \\  VAR1 providers --json
     \\  VAR1 schedule list
     \\  VAR1 serve --port 4310
     \\  VAR1 tools --json
@@ -344,7 +380,8 @@ pub const run_help_text =
     \\  --prompt <text>           Execute an inline prompt as a new session.
     \\  --prompt-file <path>      Read the prompt from a file and trim trailing newlines.
     \\  --session-id <session-id> Resume an existing canonical session and reuse its stored prompt.
-    \\  --model <id>              Override the active provider model for this run only (not persisted).
+    \\  --provider <id>           Select an auth-ledger provider for this run only (not persisted).
+    \\  --model <id>              Override the selected provider model for this run only (not persisted).
     \\  --context-window <tokens> Override the context-window size for compaction thresholds this run only.
     \\  --max-output-tokens <n>   Override the reserved output token budget this run only.
     \\  --json                    Emit {"session_id","output"} instead of plain text.
@@ -449,6 +486,21 @@ pub const models_help_text =
     \\Examples:
     \\  VAR1 models
     \\  VAR1 models --json
+    \\
+;
+
+pub const providers_help_text =
+    \\Usage:
+    \\  VAR1 providers [--json]
+    \\
+    \\Description:
+    \\  List configured provider identities, selected models, wire APIs, and
+    \\  secret-free availability metadata. Use `auth use` to persist selection
+    \\  or `run --provider` for one turn.
+    \\
+    \\Flags:
+    \\  --json              Emit the var1.providers.v1 schema payload.
+    \\  -h, --help          Print help for the providers command.
     \\
 ;
 
@@ -578,6 +630,22 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
         const workspace_root = try resolveWorkspaceRoot(allocator);
         defer allocator.free(workspace_root);
         try executeAuthCommand(allocator, workspace_root, parsed.options);
+        return;
+    }
+
+    if (std.mem.eql(u8, command, "providers")) {
+        const parsed = parseProvidersArguments(iter) catch |err| {
+            try printInvalidArguments("providers", providers_help_text);
+            return err;
+        };
+        if (parsed.help_requested) {
+            try writeStdout(providers_help_text);
+            return;
+        }
+        const workspace_root = try resolveWorkspaceRoot(allocator);
+        defer allocator.free(workspace_root);
+        try ensureKernelConfigAvailable(allocator, workspace_root);
+        try executeProvidersViaKernel(allocator, workspace_root, parsed.options);
         return;
     }
 
@@ -861,6 +929,7 @@ fn executeRunViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8,
         run_options.enable_agent_tools,
         if (run_options.json_output) .silent else .stderr,
         .{
+            .provider_override = run_options.provider_override,
             .model_override = run_options.model_override,
             .context_window_override = run_options.context_window_override,
             .max_output_tokens = run_options.max_output_tokens,
@@ -935,6 +1004,7 @@ fn executePromptTurn(
             .session_id = session_id,
             .prompt = prompt,
             .enable_agent_tools = enable_agent_tools,
+            .provider_id = overrides.provider_override,
             .model_override = overrides.model_override,
             .context_window_override = overrides.context_window_override,
             .max_output_tokens = overrides.max_output_tokens,
@@ -943,6 +1013,7 @@ fn executePromptTurn(
         try renderJsonAlloc(allocator, .{
             .session_id = session_id,
             .enable_agent_tools = enable_agent_tools,
+            .provider_id = overrides.provider_override,
             .model_override = overrides.model_override,
             .context_window_override = overrides.context_window_override,
             .max_output_tokens = overrides.max_output_tokens,
@@ -1127,6 +1198,75 @@ fn executeModelsViaKernel(allocator: std.mem.Allocator, workspace_root: []const 
         try writeStdout(line);
     }
     try writeStdout("\n");
+}
+
+fn executeProvidersViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8, options: ProvidersCliOptions) !void {
+    var client = try stdio_rpc.LocalClient.initInWorkspace(allocator, workspace_root);
+    defer client.deinit();
+
+    const call = try callKernelOrExit(allocator, &client, protocol_types.methods.providers_list, "{}");
+    defer call.deinit(allocator);
+    const result_json = try expectKernelResult(allocator, call);
+    defer allocator.free(result_json);
+
+    var parsed = try std.json.parseFromSlice(ParsedProvidersListResult, allocator, result_json, .{
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+
+    if (options.json_output) {
+        const json_payload = try std.fmt.allocPrint(allocator, "{f}\n", .{
+            std.json.fmt(parsed.value, .{ .whitespace = .indent_2 }),
+        });
+        defer allocator.free(json_payload);
+        try writeStdout(json_payload);
+        return;
+    }
+
+    if (!std.mem.eql(u8, parsed.value.status, "ok")) {
+        const failure = try std.fmt.allocPrint(
+            allocator,
+            "provider discovery failed\nactive_provider: {s}\nstatus: {s}\nerror: {s}\n",
+            .{
+                parsed.value.active_provider,
+                parsed.value.status,
+                parsed.value.error_message orelse "no detail available",
+            },
+        );
+        defer allocator.free(failure);
+        try writeStdout(failure);
+        return;
+    }
+
+    try writeStdout("Configured providers\nactive: ");
+    try writeStdout(parsed.value.active_provider);
+    try writeStdout("\n\n");
+    for (parsed.value.providers) |provider_entry| {
+        const marker = if (provider_entry.active) "*" else " ";
+        const expiry = if (provider_entry.expires_at_ms) |value|
+            try std.fmt.allocPrint(allocator, " expires_at_ms={d}", .{value})
+        else
+            try allocator.dupe(u8, "");
+        defer allocator.free(expiry);
+        const status = provider_entry.subscription_status orelse "";
+        const line = try std.fmt.allocPrint(
+            allocator,
+            "{s} {s}  model={s}  wire={s}  auth={s}  base={s}{s}{s}{s}\n",
+            .{
+                marker,
+                provider_entry.provider_id,
+                provider_entry.model,
+                provider_entry.wire_api.label(),
+                provider_entry.auth_scheme.label(),
+                provider_entry.base_url,
+                if (status.len > 0) " status=" else "",
+                status,
+                expiry,
+            },
+        );
+        defer allocator.free(line);
+        try writeStdout(line);
+    }
 }
 
 fn executeScheduleViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8, options: ScheduleCliOptions) !void {
@@ -1408,14 +1548,93 @@ fn executeAuthCommand(
                 try writeStdout("\n");
             }
         },
-        .login => |provider_id| {
-            if (!std.mem.eql(u8, provider_id, openai_codex.descriptor.provider_id)) {
-                try printInvalidArguments("auth", cli_auth.help_text);
-                return error.InvalidArgs;
+        .use => |provider_id| {
+            try auth_store.selectProvider(allocator, workspace_root, provider_id);
+            if (options.json_output) {
+                const rendered = try renderJsonAlloc(allocator, .{
+                    .status = "active_provider_changed",
+                    .provider_id = provider_id,
+                });
+                defer allocator.free(rendered);
+                try writeStdout(rendered);
+                try writeStdout("\n");
+            } else {
+                try writeStdout("active provider: ");
+                try writeStdout(provider_id);
+                try writeStdout("\n");
             }
-            try executeCodexLogin(allocator, workspace_root, options.json_output);
+        },
+        .login => |login| {
+            if (std.mem.eql(u8, login.provider_id, openai_codex.descriptor.provider_id) and
+                !login.api_key_stdin and login.api_key_env == null)
+            {
+                try executeCodexLogin(allocator, workspace_root, options.json_output);
+            } else {
+                try executeApiKeyLogin(allocator, workspace_root, login, options.json_output);
+            }
         },
     }
+}
+
+fn executeApiKeyLogin(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    login: cli_auth.LoginOptions,
+    json_output: bool,
+) !void {
+    const base_url = login.base_url orelse provider_profile.defaultBaseUrl(login.provider_id) orelse return error.InvalidArgs;
+    const model = login.model orelse return error.InvalidArgs;
+    const profile_defaults = provider_profile.defaults(login.provider_id, base_url);
+    const api_key = if (login.api_key_env) |name|
+        std.process.getEnvVarOwned(allocator, name) catch return error.InvalidArgs
+    else
+        try readApiKeyFromStdin(allocator);
+    defer allocator.free(api_key);
+
+    try auth_store.upsertApiKeyProvider(allocator, workspace_root, .{
+        .provider_id = login.provider_id,
+        .base_url = base_url,
+        .model = model,
+        .api_key = api_key,
+        .wire_api = login.wire_api orelse profile_defaults.wire_api,
+        .auth_scheme = login.auth_scheme orelse profile_defaults.auth_scheme,
+    });
+
+    const auth_path = try auth_store.authFilePath(allocator, workspace_root);
+    defer allocator.free(auth_path);
+    if (json_output) {
+        const rendered = try renderJsonAlloc(allocator, .{
+            .status = "logged_in",
+            .provider_id = login.provider_id,
+            .auth_type = "api_key",
+            .wire_api = (login.wire_api orelse profile_defaults.wire_api).label(),
+            .auth_scheme = (login.auth_scheme orelse profile_defaults.auth_scheme).label(),
+            .model = model,
+            .auth_file = auth_path,
+        });
+        defer allocator.free(rendered);
+        try writeStdout(rendered);
+        try writeStdout("\n");
+    } else {
+        try writeStdout("saved auth provider ");
+        try writeStdout(login.provider_id);
+        try writeStdout(" model ");
+        try writeStdout(model);
+        try writeStdout(" to ");
+        try writeStdout(auth_path);
+        try writeStdout("\n");
+    }
+}
+
+/// Read exactly one API key line without ever echoing or storing it in a
+/// command argument. The caller owns the returned trimmed bytes.
+fn readApiKeyFromStdin(allocator: std.mem.Allocator) ![]u8 {
+    var stdin_buffer: [8192]u8 = undefined;
+    var stdin_reader = std.fs.File.stdin().readerStreaming(&stdin_buffer);
+    const raw_line = stdin_reader.interface.takeDelimiterExclusive('\n') catch return error.InvalidArgs;
+    const line = std.mem.trim(u8, raw_line, " \t\r\n");
+    if (line.len == 0) return error.InvalidArgs;
+    return allocator.dupe(u8, line);
 }
 
 fn executeCodexLogin(
@@ -1584,6 +1803,7 @@ pub fn helpText(command: ?[]const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "workspace")) return workspace_help_text;
     if (std.mem.eql(u8, name, "config")) return config_help_text;
     if (std.mem.eql(u8, name, "auth")) return cli_auth.help_text;
+    if (std.mem.eql(u8, name, "providers")) return providers_help_text;
     if (std.mem.eql(u8, name, "health")) return health_help_text;
     if (std.mem.eql(u8, name, "schedule")) return schedule_help_text;
     if (std.mem.eql(u8, name, "serve")) return serve_help_text;
@@ -1629,6 +1849,10 @@ fn parseRunArguments(iter: *std.process.ArgIterator) !ParsedRunArguments {
         }
         if (std.mem.eql(u8, arg, "--model")) {
             parsed.options.model_override = iter.next() orelse return error.InvalidArgs;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--provider")) {
+            parsed.options.provider_override = iter.next() orelse return error.InvalidArgs;
             continue;
         }
         if (std.mem.eql(u8, arg, "--context-window")) {
@@ -1809,6 +2033,25 @@ fn parseModelsArguments(iter: *std.process.ArgIterator) !ParsedModelsArguments {
         }
         if (std.mem.eql(u8, arg, "--provider")) {
             parsed.options.provider = iter.next() orelse return error.InvalidArgs;
+            continue;
+        }
+        return error.InvalidArgs;
+    }
+
+    return parsed;
+}
+
+fn parseProvidersArguments(iter: *std.process.ArgIterator) !ParsedProvidersArguments {
+    var parsed = ParsedProvidersArguments{};
+
+    while (iter.next()) |arg| {
+        if (parsed.help_requested) continue;
+        if (isHelpFlag(arg)) {
+            parsed.help_requested = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--json")) {
+            parsed.options.json_output = true;
             continue;
         }
         return error.InvalidArgs;
