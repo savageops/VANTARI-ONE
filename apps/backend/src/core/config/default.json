@@ -30,6 +30,14 @@
     "effort": null,
     "temperature": null
   },
+  "tui": {
+    "_help": {
+      "theme": "Named renderer palette: vantari (default), midnight, high_contrast, or amber. The palette changes the existing TUI surfaces without adding per-cell color configuration.",
+      "status_bar_position": "Place the compact status/context row at the bottom (default) or top of the chat viewport. The composer remains at the bottom."
+    },
+    "theme": "vantari",
+    "status_bar_position": "bottom"
+  },
   "provider": {
     "_help": {
       "wire_api": "Provider HTTP protocol shape. auto (default) detects from the base URL: api.anthropic.com resolves to anthropic_messages; every other OpenAI-compatible endpoint (z.ai, deepseek, openai, LM Studio, Ollama) resolves to chat_completions. Explicit values (chat_completions, responses, anthropic_messages) always override detection. This does not select credentials or a model."

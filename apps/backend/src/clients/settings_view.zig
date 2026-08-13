@@ -10,7 +10,7 @@
 ///   Enter in edit     — save via config/set
 ///   Esc               — cancel edit, or close panel
 ///
-/// Config sections (10): runtime, provider, agent_routes, agents, context,
+/// Config sections (11): runtime, tui, provider, agent_routes, agents, context,
 /// prompts, draft, buffer, memory, environment.
 const std = @import("std");
 const VAR1 = @import("VAR1");
@@ -19,6 +19,7 @@ const protocol = VAR1.core.protocol_types;
 
 pub const section_names = [_][]const u8{
     "runtime",
+    "tui",
     "provider",
     "agent_routes",
     "agents",
@@ -41,6 +42,7 @@ pub const SettingsState = struct {
     /// Loaded config entries for the current section: [key, value_string, help_text]
     entries: std.ArrayList(ConfigEntry) = .{},
     status_message: ?[]u8 = null,
+    config_changed: bool = false,
 
     pub const ConfigEntry = struct {
         key: []u8,
@@ -49,6 +51,8 @@ pub const SettingsState = struct {
         is_bool: bool = false,
         is_string: bool = false,
         is_log_level: bool = false,
+        is_theme: bool = false,
+        is_status_bar_position: bool = false,
     };
 
     pub fn init(allocator: std.mem.Allocator, workspace_root: []const u8) SettingsState {
@@ -76,6 +80,12 @@ pub const SettingsState = struct {
     pub fn setStatusMessage(self: *SettingsState, message: []const u8) !void {
         if (self.status_message) |old| self.allocator.free(old);
         self.status_message = try self.allocator.dupe(u8, message);
+    }
+
+    pub fn takeConfigChanged(self: *SettingsState) bool {
+        const changed = self.config_changed;
+        self.config_changed = false;
+        return changed;
     }
 
     /// Load the config entries for the current section from disk.
@@ -178,6 +188,8 @@ pub const SettingsState = struct {
             .is_bool = value == .bool,
             .is_string = value == .string,
             .is_log_level = std.mem.eql(u8, key_text, "log_level"),
+            .is_theme = std.mem.eql(u8, key_text, "theme"),
+            .is_status_bar_position = std.mem.eql(u8, key_text, "status_bar_position"),
         });
     }
 
@@ -222,6 +234,7 @@ pub const SettingsState = struct {
             entry.key,
             self.edit_buffer.items,
         });
+        self.config_changed = true;
     }
 
     /// Handle a key press. Returns true if the key was consumed.
@@ -288,6 +301,18 @@ pub const SettingsState = struct {
                 } else if (entry.is_log_level) {
                     self.edit_buffer.clearRetainingCapacity();
                     try self.edit_buffer.appendSlice(self.allocator, nextLogLevel(entry.value_text));
+                    try self.saveCurrentEntry(rpc_client);
+                    self.edit_buffer.clearRetainingCapacity();
+                    try self.loadSection();
+                } else if (entry.is_theme) {
+                    self.edit_buffer.clearRetainingCapacity();
+                    try self.edit_buffer.appendSlice(self.allocator, nextTheme(entry.value_text));
+                    try self.saveCurrentEntry(rpc_client);
+                    self.edit_buffer.clearRetainingCapacity();
+                    try self.loadSection();
+                } else if (entry.is_status_bar_position) {
+                    self.edit_buffer.clearRetainingCapacity();
+                    try self.edit_buffer.appendSlice(self.allocator, nextStatusBarPosition(entry.value_text));
                     try self.saveCurrentEntry(rpc_client);
                     self.edit_buffer.clearRetainingCapacity();
                     try self.loadSection();
@@ -415,6 +440,17 @@ fn nextLogLevel(value: []const u8) []const u8 {
     return "silent";
 }
 
+fn nextTheme(value: []const u8) []const u8 {
+    if (std.mem.eql(u8, value, "vantari")) return "midnight";
+    if (std.mem.eql(u8, value, "midnight")) return "high_contrast";
+    if (std.mem.eql(u8, value, "high_contrast")) return "amber";
+    return "vantari";
+}
+
+fn nextStatusBarPosition(value: []const u8) []const u8 {
+    return if (std.mem.eql(u8, value, "bottom")) "top" else "bottom";
+}
+
 const Color = struct {
     const bg = tui.Cell.Color.rgbFromUint(0x08110f);
     const fg = tui.Cell.Color.rgbFromUint(0x8ce6c8);
@@ -468,10 +504,11 @@ test "settings falls back to defaults when workspace config is unavailable" {
     try std.testing.expectEqualStrings("Using defaults: workspace config is unavailable", state.status_message.?);
 }
 
-test "section_names has 10 entries" {
-    try std.testing.expectEqual(@as(usize, 10), section_names.len);
+test "section_names has 11 entries" {
+    try std.testing.expectEqual(@as(usize, 11), section_names.len);
     try std.testing.expectEqualStrings("runtime", section_names[0]);
-    try std.testing.expectEqualStrings("environment", section_names[9]);
+    try std.testing.expectEqualStrings("tui", section_names[1]);
+    try std.testing.expectEqualStrings("environment", section_names[10]);
 }
 
 test "valueToString converts types" {
@@ -554,6 +591,29 @@ test "settings serializes log level as a JSON string" {
     try std.testing.expect(client.saw_json_string_value);
 }
 
+test "settings cycles persisted TUI controls through the config owner" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var state = SettingsState.init(allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    state.section_cursor = 1;
+    try state.loadSection();
+    try selectRuntimeEntry(&state, "theme");
+
+    var client = SettingsSuccessClient{};
+    try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = tui.Key.enter }, &client));
+    try std.testing.expect(client.saw_tui_theme);
+    try std.testing.expect(state.takeConfigChanged());
+    try std.testing.expect(!state.takeConfigChanged());
+    try std.testing.expectEqualStrings("midnight", nextTheme("vantari"));
+    try std.testing.expectEqualStrings("top", nextStatusBarPosition("bottom"));
+}
+
 test "settings accepts newer values with older help metadata" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -590,11 +650,16 @@ const SettingsTestResult = struct {
 const SettingsSuccessClient = struct {
     calls: usize = 0,
     saw_json_string_value: bool = false,
+    saw_tui_theme: bool = false,
 
     fn call(self: *SettingsSuccessClient, method: []const u8, params: []const u8) anyerror!SettingsTestResult {
         try std.testing.expectEqualStrings(protocol.methods.config_set, method);
-        try std.testing.expect(std.mem.indexOf(u8, params, "\"section\":\"runtime\"") != null);
+        const is_runtime = std.mem.indexOf(u8, params, "\"section\":\"runtime\"") != null;
+        const is_tui = std.mem.indexOf(u8, params, "\"section\":\"tui\"") != null;
+        try std.testing.expect(is_runtime or is_tui);
         self.saw_json_string_value = std.mem.indexOf(u8, params, "\"value\":\"normal\"") != null;
+        self.saw_tui_theme = std.mem.indexOf(u8, params, "\"key\":\"theme\"") != null and
+            std.mem.indexOf(u8, params, "\"value\":\"midnight\"") != null;
         self.calls += 1;
         return .{};
     }

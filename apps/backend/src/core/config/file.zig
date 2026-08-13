@@ -25,6 +25,69 @@ pub const RuntimePolicy = struct {
     }
 };
 
+pub const TuiTheme = enum {
+    vantari,
+    midnight,
+    high_contrast,
+    amber,
+
+    pub fn label(self: TuiTheme) []const u8 {
+        return switch (self) {
+            .vantari => "vantari",
+            .midnight => "midnight",
+            .high_contrast => "high_contrast",
+            .amber => "amber",
+        };
+    }
+
+    pub fn fromString(value: []const u8) ?TuiTheme {
+        if (std.mem.eql(u8, value, "vantari")) return .vantari;
+        if (std.mem.eql(u8, value, "midnight")) return .midnight;
+        if (std.mem.eql(u8, value, "high_contrast")) return .high_contrast;
+        if (std.mem.eql(u8, value, "amber")) return .amber;
+        return null;
+    }
+
+    pub fn next(self: TuiTheme) TuiTheme {
+        return switch (self) {
+            .vantari => .midnight,
+            .midnight => .high_contrast,
+            .high_contrast => .amber,
+            .amber => .vantari,
+        };
+    }
+};
+
+pub const StatusBarPosition = enum {
+    bottom,
+    top,
+
+    pub fn label(self: StatusBarPosition) []const u8 {
+        return switch (self) {
+            .bottom => "bottom",
+            .top => "top",
+        };
+    }
+
+    pub fn fromString(value: []const u8) ?StatusBarPosition {
+        if (std.mem.eql(u8, value, "bottom")) return .bottom;
+        if (std.mem.eql(u8, value, "top")) return .top;
+        return null;
+    }
+
+    pub fn next(self: StatusBarPosition) StatusBarPosition {
+        return switch (self) {
+            .bottom => .top,
+            .top => .bottom,
+        };
+    }
+};
+
+pub const TuiPolicy = struct {
+    theme: TuiTheme = .vantari,
+    status_bar_position: StatusBarPosition = .bottom,
+};
+
 pub const AgentRouteOverride = struct {
     provider_id: ?[]u8 = null,
     model: ?[]u8 = null,
@@ -167,6 +230,22 @@ pub fn loadRuntimePolicy(allocator: std.mem.Allocator, workspace_root: []const u
     if (result.max_steps == 0 or
         result.max_tool_calls_per_turn == 0 or
         result.max_tool_calls_per_session < result.max_tool_calls_per_turn) return Error.InvalidConfig;
+    return result;
+}
+
+pub fn loadTuiPolicy(allocator: std.mem.Allocator, workspace_root: []const u8) !TuiPolicy {
+    var parsed = try parseDocument(allocator, workspace_root);
+    defer parsed.deinit();
+    const owner = objectField(parsed.value.object, "tui") orelse return .{};
+    var result = TuiPolicy{};
+    if (owner.get("theme")) |value| {
+        if (value != .string) return Error.InvalidConfig;
+        result.theme = TuiTheme.fromString(value.string) orelse return Error.InvalidConfig;
+    }
+    if (owner.get("status_bar_position")) |value| {
+        if (value != .string) return Error.InvalidConfig;
+        result.status_bar_position = StatusBarPosition.fromString(value.string) orelse return Error.InvalidConfig;
+    }
     return result;
 }
 
@@ -367,7 +446,7 @@ fn parseDocument(allocator: std.mem.Allocator, workspace_root: []const u8) !std.
 }
 
 fn validateDocumentShape(root: std.json.ObjectMap) !void {
-    try rejectUnknownKeys(root, &.{ "_about", "_help", "version", "runtime", "provider", "agent_routes", "agents", "context", "prompts", "draft", "buffer", "memory", "environment" });
+    try rejectUnknownKeys(root, &.{ "_about", "_help", "version", "runtime", "tui", "provider", "agent_routes", "agents", "context", "prompts", "draft", "buffer", "memory", "environment" });
     try validateAbout(root);
     try validateHelp(root, &.{"version"});
     if (try validatedObjectField(root, "runtime")) |value| {
@@ -377,6 +456,17 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
         _ = try optionalBool(value, "full_access_mode", false);
         if (value.get("log_level")) |log_level| {
             if (log_level != .string or types.LogLevel.fromString(log_level.string) == null) return Error.InvalidConfig;
+        }
+    }
+    if (try validatedObjectField(root, "tui")) |value| {
+        const keys = &.{ "theme", "status_bar_position" };
+        try rejectUnknownKeys(value, &.{ "_help", "theme", "status_bar_position" });
+        try validateHelp(value, keys);
+        if (value.get("theme")) |theme| {
+            if (theme != .string or TuiTheme.fromString(theme.string) == null) return Error.InvalidConfig;
+        }
+        if (value.get("status_bar_position")) |position| {
+            if (position != .string or StatusBarPosition.fromString(position.string) == null) return Error.InvalidConfig;
         }
     }
     if (try validatedObjectField(root, "provider")) |value| {
@@ -764,7 +854,7 @@ test "default config documents every persistent value" {
     defer parsed.deinit();
     try validateDocumentShape(parsed.value.object);
 
-    const sections = [_][]const u8{ "runtime", "provider", "agent_routes", "agents", "context", "prompts", "memory", "environment" };
+    const sections = [_][]const u8{ "runtime", "tui", "provider", "agent_routes", "agents", "context", "prompts", "memory", "environment" };
     for (&sections) |section_name| {
         const section = objectField(parsed.value.object, section_name).?;
         const help = objectField(section, "_help").?;
@@ -858,6 +948,34 @@ test "runtime log level accepts the three canonical postures and rejects noise" 
 
     const invalid =
         \\{"version":1,"runtime":{"log_level":"verbose"}}
+    ;
+    var parsed_invalid = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, invalid, .{});
+    defer parsed_invalid.deinit();
+    try std.testing.expectError(Error.InvalidConfig, validateDocumentShape(parsed_invalid.value.object));
+}
+
+test "tui policy validates, loads, and rejects invented values" {
+    const document =
+        \\{"version":1,"tui":{"theme":"midnight","status_bar_position":"top"}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
+    defer parsed.deinit();
+    try validateDocumentShape(parsed.value.object);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+    const config_path = try ensure(std.testing.allocator, workspace);
+    defer std.testing.allocator.free(config_path);
+    try fsutil.writeText(config_path, document);
+
+    const policy = try loadTuiPolicy(std.testing.allocator, workspace);
+    try std.testing.expectEqual(TuiTheme.midnight, policy.theme);
+    try std.testing.expectEqual(StatusBarPosition.top, policy.status_bar_position);
+
+    const invalid =
+        \\{"version":1,"tui":{"theme":"neon"}}
     ;
     var parsed_invalid = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, invalid, .{});
     defer parsed_invalid.deinit();

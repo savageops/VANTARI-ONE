@@ -1,5 +1,113 @@
 # Execution Log
 
+## 2026-08-14 - Root question panel resilience
+
+**Outcome:** Repaired the model-issued multiple-choice path and kept it inside
+the existing `ask_user`/event/broker/RPC owners.
+
+- `ask_user` and response serialization now free only initialized slices, so a
+  late-invalid question cannot dereference unassigned pointers.
+- The TUI renders a settings-style horizontal row per visible question with
+  clamped question/option focus, Enter/Space selection, inline `f / Other`, and
+  an explicit review/submit state. `orchestrate` and `align` share the path.
+- Malformed `input_requested` data produces one bounded system message and
+  direct run cancellation instead of unwinding the event loop.
+- Focused TUI `9/9` and `129/129`, full Debug `19/19` and `2,136/2,136`, and
+  source ReleaseFast `9/9` pass. Live installed promotion remains deferred.
+- Research and receipt: `.docs/research/2026-08-14-root-question-review-panel.md`
+  and `.docs/todo/changelog/046-root-question-panel-resilience.md`.
+
+## 2026-08-14 - Saved TUI theme and status placement
+
+**Outcome:** Added the smallest renderer-backed TUI configuration slice without
+creating a theme editor, layout registry, or per-frame configuration read.
+
+- `core/config/file.zig::TuiPolicy` validates the finite `tui.theme` palette
+  names and `tui.status_bar_position` values. Defaults are `vantari` and
+  `bottom`.
+- Settings cycles both values through the existing `config/set` owner. The TUI
+  reloads the policy after a successful save and applies it to the next frame;
+  the composer remains at the bottom when the status row moves to the top.
+- Four named palettes preserve the existing transcript < metadata < composer
+  surface hierarchy. No arbitrary color map, menu registry, or second renderer
+  owner was added.
+- Debug `19/19` and `2,129/2,129` pass; focused `test-tui` is `9/9` and
+  `126/126`; source ReleaseFast is `9/9`. Live installed promotion remains
+  intentionally deferred.
+- Research and receipt: `.docs/research/2026-08-14-tui-theme-status-settings.md`
+  and `.docs/todo/changelog/045-tui-theme-status-settings.md`.
+
+## 2026-08-13 - Persistent Python and Bun eval kernels
+
+**Outcome:** Moves 56–57 are source-complete without adding a second execution
+owner.
+
+- `builtin/eval.zig` keeps one bounded persistent Python or Bun kernel per
+  workspace and session. State survives calls and cannot cross sessions.
+- The same newline protocol, bounded reader, output cap, timeout termination,
+  and host teardown path serves both languages. Windows launches `bun.exe`, not
+  the package-manager wrapper.
+- `ToolDefinition.availability` owns Python plus its Bun alternative, and the
+  registry exposes every declared alternative in the catalog.
+- Debug `19/19` and `2,121/2,121` pass; source ReleaseFast passes. Installed
+  promotion remains intentionally deferred.
+- Research and receipt: `.docs/research/2026-08-13-persistent-eval-kernels.md`
+  and `.docs/todo/changelog/044-persistent-eval-kernels.md`.
+
+## 2026-08-13 - TUI input and command discovery repair
+
+**Outcome:** The current TUI input surface now has one coherent path for
+settings, Shift+Tab, and command discovery.
+
+- Settings renders through `drawSettings -> vx.render -> flush`; the overlay no
+  longer leaves the previous frame visible after a command opens it.
+- `packages/tui/src/Parser.zig` decodes standard `CSI Z` as Shift+Tab, so the
+  existing `PromptMode` cycle works across ANSI and Windows/Kitty input paths.
+- The composer reuses `commands.builtin_command_info` for a transient,
+  five-row prefix popup. Bare first-token names are accepted, slash input stays
+  compatible, Up/Down scroll, Escape dismisses, Tab accepts spelling, and Enter
+  dispatches the selected exact command.
+- Child rows remain `agent - state "bounded summary"`; phase/elapsed data stays
+  typed event evidence and does not consume the visible one-line budget.
+- The requested orchestrate-only footer campaign is isolated in
+  `clients/footer_effects.zig`; it runs a bounded sweep every three seconds and
+  does not add a permanent ticker or plugin runtime.
+- Research: `.docs/research/2026-08-13-tui-input-command-palette.md`.
+
+Debug `19/19` and `2,089/2,089`, focused `test-tui` `9/9` and `114/114`,
+ReleaseFast/install `9/9`, source/installed SHA-256
+`F167C7B54F34433DFBF03A4E75B5FBE773F502B2EFEE4D272C323F24EA9FF501`, and the
+real installed terminal smoke all pass. The `.docs` and research changes
+remain local and unstaged under the active goal boundary.
+
+## 2026-08-13 - Move 53 sandbox capability boundary
+
+**Outcome:** Closed Move 53 by consolidate/delete. The existing
+`CapabilityProfile` and `ExecutionContext.capability_profile_id` already own
+branch/tool-class least privilege and are enforced at catalog construction and
+dispatch. `recon` is read-only scope, not OS/process isolation.
+
+- No duplicate `sandbox` alias, second path resolver, backend-less Boolean, or
+  tool-local policy branch was added.
+- A real sandbox remains gated on a verified Windows-native/container backend,
+  explicit mounts, bounded lifecycle and process-tree teardown, cold-start
+  reconciliation, and installed consumer proof.
+- Debug `19/19` build steps and `2,023/2,023` tests remain green; the binary
+  was not changed by the capability decision. Fresh ReleaseFast/install
+  `9/9` produced matching source/installed SHA-256
+  `B6804F1D865315DEE49D4E5B8620599A089C1D640B63C931483BBA01B3E094E4`.
+- Installed `health --json` and `tools --json` exited `0`; the catalog exposes
+  `ask_user` and reports `search_files` unavailable because `iex` is absent.
+  The exact two proof-owned processes were stopped; final VANTARI/VAR1 census
+  is `0`.
+- Research and source comparison:
+  `.docs/research/2026-08-13-sandbox-capability-move53.md`.
+- Root `AGENTS.md`, `.docs/index.md`, `.docs/technical_summary.md`,
+  `.docs/workspace.json`, and roadmap 24 carry the same boundary.
+
+The `.docs` and research changes remain local and unstaged per the current
+goal instruction not to commit project research or the `.docs` folder.
+
 ## 2026-08-12 - Generation-bound cancellation
 
 **Outcome:** Closed move 18 by binding interactive cancellation to the exact
@@ -2807,3 +2915,46 @@ ReleaseFast/install `9/9`; source/installed SHA-256
 health/catalog proof passed and exact proof-owned processes are zero. Research:
 `.docs/research/2026-08-13-root-interactive-input.md`. The provider-driven
 installed TUI response remains the explicit next consumer probe.
+
+**Move 54/TUI input repair closure receipt (2026-08-13):** The installed TUI
+now renders the registry-backed bare-prefix command palette above the composer,
+keeps slash compatibility, and routes Enter through the executable command
+registry. Settings uses the normal Vaxis render/flush boundary, projects
+compiled defaults when persisted config is missing or invalid, and maps
+Tab/Right forward with Shift+Tab/Left backward. Startup exposes
+`help · settings · model` without adding transcript noise. Focused TUI passed
+`9/9` steps and `120/120` tests; Debug passed `19/19` steps and `2,101/2,101`;
+ReleaseFast/install passed `9/9`; source and installed SHA-256 match
+`2851E4EBA24ED13A6A5DBBBB3F3A97392DEA0249B9D9C221F8936917734F8D2C`; the
+exact proof-owned owner/kernel tree was torn down and the final process census
+was zero. Full receipt: `.docs/todo/changelog/041-tui-input-settings-repair.md`.
+
+**Move 55 capability-manifest closure receipt (2026-08-13):** Availability is
+now carried by the selected `ToolDefinition`; `core/tools/registry.zig` probes
+that declaration and no longer owns the duplicated 15-entry
+`availability_entries` table. Catalog rendering, provider schema selection,
+review, and dispatch retain one definition slice. The legacy
+`availabilitySpec(name)` helper remains only as a compatibility scan. The
+negative probe marks `search_files` unavailable when `ix` is absent while
+native `list_files` remains available. Focused TUI passed `120/120`; Debug
+passed `19/19` steps and `2,102/2,102`; ReleaseFast/install passed `9/9`;
+source and installed SHA-256 match
+`F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`; installed
+`tools --json` reports 25 tools with `search_files -> ix -> available`; exact
+owner/kernel processes were stopped and the final installed process census was
+zero. Research and full receipt:
+`.docs/research/2026-08-13-capability-manifest-move55.md` and
+`.docs/todo/changelog/042-capability-manifest-move55.md`.
+
+**Move 55a source closure receipt (2026-08-13):** `runtime.log_level` now
+defaults to `silent`, accepts `normal` and `full`, and carries one operator
+posture through config validation, health, prompt guidance, child execution
+context, settings, and TUI projection. Durable events and transcript ledgers
+remain complete. `agent_routes.prompt_modes` reuses the existing provider/model
+route shape for `orchestrate`, `build`, `align`, and `plan`; explicit
+`session/send` provider/model fields win. Debug passed `19/19` steps and
+`2,119/2,119` tests; focused TUI passed `9/9` and `123/123`; `git diff --check`
+reported no whitespace errors. Installed promotion is intentionally deferred;
+no installed hash or live-binary claim is made. Research and receipt:
+`.docs/research/2026-08-13-mode-routing-ui-oauth.md` and
+`.docs/todo/changelog/043-chat-log-level-and-mode-routing.md`.

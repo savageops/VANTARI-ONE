@@ -2,7 +2,7 @@
 type: technical-summary
 id: docs/technical-summary
 status: current
-updated: 2026-08-13
+updated: 2026-08-14
 owner: apps/backend/src
 ---
 
@@ -16,7 +16,36 @@ child-agent execution, and recovery evidence. TUI and CLI render kernel
 projections. `apps/frontend` is an ignored local prototype, not a shipped
 tracked client.
 
-## Current frontier — Move 52 + root interactive input
+## Current operator input correction — 2026-08-13
+
+The tracked TUI now has one focused input path for the three reported
+regressions. Settings draws into the normal Vaxis frame and calls `vx.render`
+before flushing, so opening the overlay cannot leave the previous frame on
+screen. The parser accepts the terminal-standard `CSI Z` encoding for Shift+Tab
+and maps it to the existing session-local `PromptMode` cycle.
+
+The composer projects a transient command palette from the executable
+`command_registry`. It matches only the first single token by
+prefix, accepts bare names such as `set` while retaining slash compatibility,
+uses a bounded five-row window with keyboard scrolling, and routes Enter through
+the existing command registry. It disappears for prose or no matches. Typed
+child phase and elapsed evidence remains in the event spine; the visible child
+row is only `agent - state "latest summary"` at the available one-line width.
+No second command registry, poller, chat-bubble event, or TUI-owned status bus
+was added. Debug `19/19` and `2,102/2,102` pass; focused `test-tui` is `9/9`
+and `120/120`; ReleaseFast/install is `9/9`; source and installed SHA-256
+match `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+Installed smoke typed bare `s` then `e`, rendered the popup, opened settings
+with Enter, moved `runtime → provider → runtime` with Right and `CSI Z`,
+returned with Escape, exited with Ctrl+C, and the final exact VANTARI process
+census was zero. Settings now uses Tab/Right forward and Shift+Tab/Left
+reverse navigation and displays compiled defaults when persisted config is
+missing or invalid.
+The explicit footer campaign is separate and small: `clients/footer_effects.zig`
+animates only the `orchestrate` token every three seconds, requests timed wakes
+only during its bounded sweep, and leaves the other prompt modes static.
+
+## Current frontier — Move 55a source closure, Moves 56-57, and Move 57a
 
 Move 34 closes the Codex subscription transport slice. `core/auth/store.zig`
 remains the single credential owner for workspace `.var/auth.json` and installed
@@ -267,6 +296,96 @@ cross-session request ids, empty answers, and Other serialization are covered by
 the same Debug graph. The installed catalog exposes `ask_user`; a real
 installed provider-driven question response remains the next consumer probe,
 not an unclaimed proof.
+
+The follow-on question-panel repair is source-complete. `ask_user` and response
+serialization free only initialized slices, removing the late-invalid batch
+crash. `question_view.State` renders one bounded horizontal row per visible
+question with clamped question/option focus and a review/submit state; malformed
+`input_requested` data produces one bounded system message and direct run
+cancellation instead of unwinding TUI replay. `orchestrate` and `align` share
+the controller. Focused TUI is `129/129`, full Debug is `2,136/2,136`, and
+source ReleaseFast is `9/9`; installed promotion remains intentionally
+deferred. Research: `.docs/research/2026-08-14-root-question-review-panel.md`.
+
+## Sandbox capability boundary
+
+Move 53 is closed by consolidation. `agents/profile.zig:CapabilityProfile`
+already owns branch/tool-class permissions, `ExecutionContext` carries the
+profile beside `full_access_mode`, `tools/runtime.zig` derives the model
+catalog from it and rechecks it before dispatch, and `supervisor.zig` copies it
+at the child handoff. `recon` is read-only least privilege; it is not an
+OS/process sandbox. `workspace-contained` is path containment and
+`full_access_mode` is explicit path scope.
+
+No `sandbox` alias, second resolver, or backend-less Boolean was added. A real
+sandbox is deferred until a supported Windows-native/container provider can
+prove workspace mounts, command/file parity, timeout and cancellation, process
+tree teardown, cold-start reconciliation, and installed consumer behavior.
+Research and source comparison live in
+`.docs/research/2026-08-13-sandbox-capability-move53.md`.
+Move 53 proof is Debug `19/19` and `2,023/2,023`, fresh ReleaseFast/install
+`9/9`, source/installed SHA-256
+`B6804F1D865315DEE49D4E5B8620599A089C1D640B63C931483BBA01B3E094E4`,
+installed `health --json` and `tools --json` exit `0`, and the exact two
+health/catalog owner processes were stopped before a final VANTARI/VAR1
+process census of `0`. The installed catalog truthfully reported `search_files`
+unavailable because the required dependency was absent in that earlier proof;
+Move 54 then closed the executable identity and TUI input repair boundaries,
+and Move 55 closed the definition-owned manifest. Moves 56-57 now close the
+source eval-kernel parity seam; Move 58 remains the process-supervisor handoff.
+
+Move 55 closes the capability-manifest drift seam. `ToolDefinition.availability`
+now carries each module-owned dependency declaration. `core/tools/registry.zig`
+probes the selected definition and renders live availability; it no longer owns
+the 15-entry name-keyed `availability_entries` table. The same selected
+definition slice supplies the model-visible catalog, provider schema, review
+risk, and dispatch path. The legacy `availabilitySpec(name)` helper remains a
+thin compatibility scan, but runtime catalog and execution paths pass the
+definition directly. An unavailable `ix` probe marks `search_files` unavailable
+while native `list_files` remains available. The installed `tools --json` proof
+reports 25 tools and `search_files -> ix -> available`.
+
+Move 55 proof is Debug `19/19` and `2,102/2,102`, focused TUI `120/120`,
+ReleaseFast/install `9/9`, source/installed SHA-256
+`F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`, and
+exact installed process census `0`. Research and the local execution receipt
+are `.docs/research/2026-08-13-capability-manifest-move55.md` and
+`.docs/todo/changelog/042-capability-manifest-move55.md`. The next frontier is
+Move 55a is source-complete and intentionally not installed-promoted. It adds
+the default-silent `runtime.log_level` posture (`silent`, `normal`, `full`) to
+the config, prompt envelope, health projection, child execution context,
+settings cycle, and TUI event filter while retaining complete durable ledgers.
+It also adds `agent_routes.prompt_modes` as a reuse of the existing provider
+route shape for `orchestrate`, `build`, `align`, and `plan`; explicit
+`session/send` provider/model fields win. Source proof is Debug `19/19` and
+`2,119/2,119`, focused TUI `9/9` and `123/123`; no installed hash is claimed.
+The harvest and decision record is `.docs/research/2026-08-13-mode-routing-ui-oauth.md`.
+
+Moves 56-57 are source-complete. `builtin/eval.zig` now keeps one persistent
+kernel per workspace+session for Python or Bun, preserves variables across
+calls, isolates sessions, bounds output, and terminates timed-out workers.
+`ToolDefinition.availability` reports one Python-or-Bun capability, and Windows
+uses the real `bun.exe` executable rather than a PowerShell wrapper. Debug proof
+is `19/19` and `2,121/2,121`; installed promotion remains deferred. Move 58
+will route this worker through the canonical process supervisor. Remaining
+provider parity gaps are Anthropic/OpenCode login semantics; the current
+Anthropic Messages transport and Codex OAuth path remain separate, proven
+owners.
+
+Move 57a closes the renderer-backed TUI settings seam. `core/config/file.zig`
+owns `TuiPolicy` with four named palettes and `bottom`/`top` status placement;
+`settings_view.zig` writes both values through `config/set`, and `tui_chat.zig`
+reloads the policy after a successful save. Named palettes preserve the strict
+transcript surface < metadata surface < focused composer surface hierarchy.
+Top placement reserves one status row while the composer remains at the bottom.
+The policy is read at startup and after mutation, not in the stream frame loop,
+so existing coalescing and adaptive rendering remain the responsiveness path.
+Focused TUI proof is `9/9` and `126/126`; current Debug is `19/19` and
+`2,129/2,129`; source ReleaseFast is `9/9`; installed promotion is deferred.
+Arbitrary color maps and menu/layout registries remain YAGNI until a real
+consumer or measured friction justifies them. Research and receipt are
+`.docs/research/2026-08-14-tui-theme-status-settings.md` and
+`.docs/todo/changelog/045-tui-theme-status-settings.md`.
 
 ## Behavior plane
 

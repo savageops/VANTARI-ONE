@@ -92,15 +92,17 @@ pub fn execute(
     }
 
     var question_ids = try allocator.alloc([]u8, parsed.value.questions.len);
+    var question_ids_initialized: usize = 0;
     defer {
-        for (question_ids) |id| allocator.free(id);
+        for (question_ids[0..question_ids_initialized]) |id| allocator.free(id);
         allocator.free(question_ids);
     }
     var normalized_questions = try allocator.alloc(input_protocol.Question, parsed.value.questions.len);
     defer allocator.free(normalized_questions);
     var normalized_options = try allocator.alloc([]input_protocol.Option, parsed.value.questions.len);
+    var normalized_options_initialized: usize = 0;
     defer {
-        for (normalized_options) |options| allocator.free(options);
+        for (normalized_options[0..normalized_options_initialized]) |options| allocator.free(options);
         allocator.free(normalized_options);
     }
 
@@ -115,9 +117,11 @@ pub fn execute(
             if (id.len == 0 or id.len > 64) return module.Error.InvalidArguments;
             break :blk try allocator.dupe(u8, id);
         } else try std.fmt.allocPrint(allocator, "q{d}", .{question_index + 1});
+        question_ids_initialized += 1;
 
         const options = try allocator.alloc(input_protocol.Option, question.options.len + 1);
         normalized_options[question_index] = options;
+        normalized_options_initialized += 1;
         for (question.options, 0..) |option, option_index| {
             if (option.label.len == 0 or option.label.len > input_protocol.max_label_bytes) {
                 return module.Error.InvalidArguments;
@@ -170,6 +174,24 @@ test "ask_user normalizes choices to a-f with Other and rejects oversized batche
     const result = try execute(std.testing.allocator, context, args, "call-ask-user");
     defer std.testing.allocator.free(result);
     try std.testing.expect(std.mem.indexOf(u8, result, "var1.input_response.v1") != null);
+}
+
+test "ask_user rejects a late-invalid question without freeing uninitialized batch entries" {
+    const context = module.ExecutionContext{
+        .workspace_root = "workspace",
+        .session_id = "session-ask-user-invalid",
+        .input_service = .{
+            .context = null,
+            .requestFn = captureRequest,
+        },
+    };
+    const args = "{\"questions\":[{\"prompt\":\"First\",\"options\":[{\"label\":\"One\"},{\"label\":\"Two\"}]},{\"prompt\":\"Second\",\"options\":[{\"label\":\"Only one\"}]}]}";
+    try std.testing.expectError(module.Error.InvalidArguments, execute(
+        std.testing.allocator,
+        context,
+        args,
+        "call-ask-user-invalid",
+    ));
 }
 
 fn captureRequest(

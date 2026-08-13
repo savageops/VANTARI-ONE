@@ -1,7 +1,7 @@
 {
   "type": "workspace-record",
   "schema": "var1.workspace.v1",
-  "updated": "2026-08-13",
+  "updated": "2026-08-14",
   "workspace_root": "E:/Workspaces/01_Projects/01_Github/VANTARI-ONE",
   "live_code_lane": "apps/backend",
   "vendored_runtime_dependencies": ["packages/tui"],
@@ -31,14 +31,22 @@
     "current_agent_hub_research": ".docs/research/2026-08-13-agent-hub-move50.md",
     "current_access_mode_research": ".docs/research/2026-08-13-full-access-mode-move51.md",
     "current_interactive_input_research": ".docs/research/2026-08-13-root-interactive-input.md",
+    "current_sandbox_capability_research": ".docs/research/2026-08-13-sandbox-capability-move53.md",
+    "current_tui_input_research": ".docs/research/2026-08-13-tui-input-command-palette.md",
+    "current_capability_manifest_research": ".docs/research/2026-08-13-capability-manifest-move55.md",
+    "current_mode_routing_research": ".docs/research/2026-08-13-mode-routing-ui-oauth.md",
+    "current_chat_log_posture_research": ".docs/research/2026-08-13-chat-log-level-posture.md",
     "current_provider_model_parity_finding": ".docs/todo/findings/31-provider-model-parity-ohmypi.md",
     "current_provider_model_changelog": ".docs/todo/changelog/038-provider-model-identity.md",
+    "current_question_panel_research": ".docs/research/2026-08-14-root-question-review-panel.md",
+    "current_question_panel_changelog": ".docs/todo/changelog/046-root-question-panel-resilience.md",
     "current_execution_owner_decision": ".docs/roadmap/21-persistent-execution-owner.md"
   },
   "canonical_owners": {
     "context": "apps/backend/src/core/context/",
     "sessions": "apps/backend/src/core/sessions/",
     "tools": "apps/backend/src/core/tools/",
+    "capability_manifest": "apps/backend/src/shared/types.zig:ToolDefinition.availability + apps/backend/src/core/tools/registry.zig + apps/backend/src/core/tools/runtime.zig",
     "agents": "apps/backend/src/core/agents/",
     "agent_mailbox": "apps/backend/src/core/agents/mailbox.zig",
     "agent_eligibility": "apps/backend/src/core/agents/service.zig + apps/backend/src/core/agents/spec.zig",
@@ -48,6 +56,7 @@
     "scheduler": "apps/backend/src/core/scheduler/",
     "tui": "apps/backend/src/clients/tui_chat.zig",
     "interactive_input": "apps/backend/src/core/tools/builtin/ask_user.zig + apps/backend/src/shared/protocol/input.zig + apps/backend/src/host/stdio_rpc.zig + apps/backend/src/clients/question_view.zig",
+    "capability_profiles": "apps/backend/src/core/agents/profile.zig + apps/backend/src/core/tools/runtime.zig + apps/backend/src/core/tools/module.zig:ExecutionContext",
     "input_broker": "apps/backend/src/host/stdio_rpc.zig:InputBroker",
     "execution_owner": "apps/backend/src/host/http_bridge.zig",
     "owner_client": "apps/backend/src/host/owner_client.zig",
@@ -60,14 +69,18 @@
   },
   "operator_projection": {
     "group_row": "Agents completed/total",
-    "child_row": "○ queued/running or ◉ complete, agent name plus typed phase/elapsed snapshot and bounded quoted canonical summary; update_session_summary completion refreshes the same row while running",
+    "child_row": "○ queued/running or ◉ complete, agent name plus bounded quoted canonical summary; typed phase/elapsed remains event evidence; update_session_summary completion refreshes the same row while running",
+    "command_palette": "bounded five-row registry-backed prefix popup above the composer; bare first-token names plus slash compatibility; Up/Down/Escape/Tab/Enter",
+    "footer_campaign": "clients/footer_effects.zig; orchestrate-only bounded sweep every 3 seconds; timed wake only while active",
     "tool_phase": "typed state marker only; not the child row label",
     "activity_source": "contiguous sequence-bearing parent events plus canonical child summaries; sequence-less legacy activity is ignored",
     "persistent_cancel_hint": false,
     "composer_hierarchy": "styles.surface < styles.meta_surface < styles.composer",
     "cancellation_affordance": "cancelling only while waiting && cancel_requested; terminal events clear the intent",
-    "prompt_mode_cycle": "shipped Move 43: Shift+Tab session-local orchestrate -> build -> align -> plan; next session/send applies provider-visible layer"
-    ,"question_controller": "source-complete Move 52a: root-only ask_user, bounded input_requested event, input/respond resolution, Enter/Space, inline f / Other, terminal cleanup; child profiles omit the capability"
+    "prompt_mode_cycle": "shipped Move 43: Shift+Tab session-local orchestrate -> build -> align -> plan; next session/send applies provider-visible layer",
+    "prompt_mode_routes": "source-complete Move55a: agent_routes.prompt_modes reuses one provider/model route owner for orchestrate/build/align/plan; explicit session/send provider/model fields win",
+    "log_level": "source-complete Move55a: runtime.log_level defaults silent; normal is concise; full permits diagnostics; prompt/TUI projection changes only and durable ledgers remain complete"
+    ,"question_controller": "source-complete Move 52a/57b: root-only ask_user, bounded input_requested event, one settings-style horizontal-row panel with clamped question/option focus and review/submit, input/respond resolution, Enter/Space, inline f / Other, malformed-request cancellation; orchestrate and align share the path; child profiles omit the capability"
   },
   "access_boundary": {
     "config_key": "runtime.full_access_mode",
@@ -81,17 +94,18 @@
   "proof": {
     "zig": "C:/Users/Savage/AppData/Local/Programs/zig/0.15.1/zig.exe",
     "release_fast": "9/9 steps succeeded",
-    "focused_tui": "controller coverage included in the canonical graph; separate focused count not rerun",
+    "focused_tui": "test-tui 9/9 steps; 129/129 tests passed; source question panel covers orchestrate/align parity, malformed request recovery, row navigation, review, and initialized cleanup; live installed promotion deferred",
     "host_lifecycle": "245/245 passed; shared crash-released process locks, deterministic ticket-child identity, 100-way atomic admission, session-keyed buffer projection, exact-generation cancellation, single terminal settlement, 100-owner admission-fenced shutdown, deadlines, and Job Object ownership",
-    "isolated_broad": "latest Debug run 19/19 steps; 2023/2023 passed; 0 skipped; ReleaseFast install 9/9; one registry loop executes all declared cases",
+    "isolated_broad": "latest source Debug run 19/19 steps; 2136/2136 passed; 0 skipped; source ReleaseFast build 9/9; one registry loop executes all declared cases; live install intentionally not promoted",
     "test_runtime_isolation": "six build artifacts plus direct zig test receive generated VANTARI_HOME and VANTARI_TEST_ROOT; direct proof kept 99960 files and 693051144 bytes unchanged",
     "installed_binary": "C:/Users/Savage/AppData/Local/Vantari/bin/vantari.exe",
     "install_script": "apps/backend/scripts/install_windows.ps1",
-    "built_sha256": "739F0D10D366738D01CEB3879D5B9487F7C99FB7CDB4D7FF9DB3418386A0DEED",
-    "installed_sha256": "739F0D10D366738D01CEB3879D5B9487F7C99FB7CDB4D7FF9DB3418386A0DEED",
-    "installed_hash_matches": true,
+    "built_sha256": "284E99A020F28E480AEF8B42E06E4C73A5CEE1820B383C010E167749D015EBD2",
+    "installed_sha256": "F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692",
+    "installed_hash_matches": false,
+    "current_source_tests": "source-only Moves55a-57b: Debug 19/19 steps, 2136/2136 tests; focused TUI 9/9 steps, 129/129 tests; ReleaseFast source build 9/9; live installed promotion intentionally deferred",
     "installed_settings_smoke": "initialize ok; config/set var1.config_set.v1 in 9 ms; full_access_mode=true; isolated runtime removed; live root unchanged; zero processes",
-    "installed_input_catalog": "health --json ok; tools --json exposes root ask_user bounded schema; exact owner/kernel processes stopped; final matching process census zero; provider-driven installed question response remains open",
+    "installed_input_catalog": "health --json and tools --json exit 0; search_files reports ix available; real TUI smoke typed s then se and rendered the bounded status/settings popup, Enter opened settings, Escape returned, CSI Z changed orchestrate to build, Ctrl+C exited 0; exact owner/kernel processes stopped; final matching process census zero",
     "host_shutdown": "blocked provider request observed cancellation before join, returned cancelled, and passed 20 repeat runs; move 19 now routes the terminal through one turn_terminal commit owner",
     "generation_cancel": "move-18 installed delayed race observed session_started seq 1, 6, and 11; stale seq 1 and 6 returned stale_run without cancelling newer work; exact seq 11 returned requested; its legacy terminal writer was removed by move 19; kernel exited 0; zero processes",
     "summary_ledger": "summaries.jsonl v2; stable seq; latest-row projection; v1 import; shared valid-prefix reader; poisoned-tail append refusal; 100/100 concurrent rows retained",
@@ -120,14 +134,20 @@
     "codex_transport": "Move 34 source and installed proof: OAuth openai-codex dispatch builds /codex/responses with chatgpt-account-id, originator, OpenAI-Beta, and SSE headers; request includes stream:true and store:false; local fixture returns ok; /v1/chat/completions is not requested; bearer output is absent; owner/kernel pair is explicitly torn down and final installed process census is zero",
     "tui_cost_consumer": "Move 37/38/39 source and installed proof: multiline system rows preserve /status; installed Z.AI turns record measured prompt/completion/cached tokens and known/unknown cost states; historical graph 1964/1964; current artifact is superseded by Move40 hash 279A112A1D7CD94BF2C5678C961E83A3458951CB9D48E9C5CC21A6D01DF409AF; final installed VANTARI process census zero",
     "plugin_boundary": "Move40 deferred-delete: no installed plugin runtime consumer exists; default-visible manage_plugin placeholder and registry/runtime branches were removed; contract-only manifest/isolation/socket types remain for a future concrete need; installed tools catalog has 24 tools and excludes manage_plugin; final process census zero",
-    "tui_projection": "Moves 41-50 source and installed proof: cold activity hydration ignores seq 0, contiguous live/replay child rows match, child summaries come from summaries.jsonl, session/list limit 1 prevents oversized latest-session selection responses, composer background tokens are surface < metadata < composer, cancellation is active-only, Shift+Tab cycles the session-local prompt lens and the selected provider layer is captured without executor/capability branches, one non-wrapping footer row projects status/mode/model/effort/context/remaining with codepoint-safe fitting, ctx — remains explicit for unknown or zero capacity, active/max and queue pressure stay signal-gated, finite priced session cost shares the lower-signal segment and unknown pricing stays quiet, group/child rows use ○ queued/running and ◉ complete, keyed child rows retain typed phase/elapsed snapshots plus bounded quoted canonical summaries through later tool/terminal phases, update_session_summary completion refreshes the same row while running, installed TUI startup and blank exit pass, source/installed SHA-256 6814396B7E2A134E9ECAED9DA5B6567FEAA01824DAC948CC54DC725EFC3DF178, exact owner-tree teardown leaves zero VANTARI processes",
-    "prompt_mode": "Move43 source and installed proof: PromptMode cycle orchestrate/build/align/plan, next session/send carries exact label, unknown labels return JSON-RPC -32602 before execution, all context rebuild paths preserve the typed mode, provider system envelope contains the selected layer, focused TUI 76/76, Debug 1996/1996, ReleaseFast/install 9/9",
+    "tui_projection": "Moves 41-50 plus current input repair: cold activity hydration ignores seq 0, contiguous live/replay child rows match, child summaries come from summaries.jsonl, composer background tokens are surface < metadata < composer, cancellation is active-only, visible child rows are ○/◉ name - state plus bounded quoted summary while typed phase/elapsed remains event evidence, the registry-backed five-row bare-token/slash-compatible popup routes through the executable command owner, settings renders through vx.render, Tab/Right advances and CSI Z/Shift+Tab reverses settings sections, CSI Z cycles PromptMode, startup exposes help/settings/model hints, orchestrate footer sweep is bounded and mode-scoped, root questions use one settings-style horizontal-row review panel with malformed-request cancellation, test-tui 129/129, Debug 2136/2136, source ReleaseFast SHA-256 284E99A020F28E480AEF8B42E06E4C73A5CEE1820B383C010E167749D015EBD2, live installed promotion deferred",
+    "prompt_mode": "Move43 plus current parser repair: PromptMode cycle orchestrate/build/align/plan, next session/send carries exact label, unknown labels return JSON-RPC -32602 before execution, all context rebuild paths preserve the typed mode, CSI Z reaches the existing Shift+Tab binding, installed smoke changed orchestrate to build, Debug 2102/2102, ReleaseFast/install 9/9; source-only Move55a adds prompt_modes route selection",
+    "chat_log_level": "Move55a source-complete: runtime.log_level silent/normal/full is validated, health/prompt/child context/TUI/settings are aligned, and durable events/messages remain complete; Debug 2119/2119, focused TUI 123/123; installed promotion deferred",
+    "eval_kernel": "Moves56-57 source-complete: one workspace+session-owned persistent Python or Bun kernel, bounded line protocol/output, timeout termination, cross-session isolation, and definition-owned Python-or-Bun availability; Debug 2121/2121; Move58 process-supervisor handoff pending; installed promotion deferred",
     "status_row": "Move44 source and installed proof: one formatFooterMetaWithPool owner emits ready/working/cancelling/failed, prompt mode, model, effort, exact/unknown context, and remaining context; focused TUI 77/77, Debug 1998/1998, ReleaseFast/install 9/9; installed row and zero-process teardown pass",
     "agent_queue_cost": "Move45 source and installed proof: existing active/max and queue segments remain conditional; finite nonnegative turn_terminal.cost_total_usd renders as cost $0.###### in the same lower-signal footer segment; unknown provider pricing is omitted; focused TUI 77/77, Debug 1998/1998, ReleaseFast/install 9/9; installed row and exact zero-process teardown pass",
-    "agent_summary_bubble": "Moves 46-50 source and installed proof: ctx — remains explicit for unknown/zero capacity; Agents completed/total has no waiting filler; ○ queued/running and ◉ complete markers; keyed child rows retain typed phase/elapsed snapshots plus bounded quoted canonical summaries across tool/terminal phases; the existing update_session_summary completion refreshes the same row while running; focused TUI 78/78, Debug 2000/2000, ReleaseFast/install 9/9; source/installed SHA-256 6814396B7E2A134E9ECAED9DA5B6567FEAA01824DAC948CC54DC725EFC3DF178; final process census zero",
+    "agent_summary_bubble": "Moves 46-50 plus current visible-row correction: ctx — remains explicit for unknown/zero capacity; Agents completed/total has no waiting filler; ○ queued/running and ◉ complete markers; keyed child rows show only state/name plus bounded quoted canonical summaries while typed phase/elapsed stays event evidence; update_session_summary refreshes the same row while running; historical installed proof remains recorded; current source graph is Debug 2136/2136 and focused TUI 129/129; live installed promotion deferred",
+    "tui_settings": "Move57a/57b source-complete: TuiPolicy validates four named palettes and bottom/top status placement; settings saves through config/set; tui_chat applies the palette and keeps the composer at the bottom; question_view renders the crash-safe settings-style review panel; focused TUI 129/129, Debug 2136/2136, source ReleaseFast 9/9; live installed promotion deferred",
     "agent_hub": "Move 50 closed by YAGNI narrowing: the existing keyed child row is the compact live detail surface; a full Agent Hub is deferred until measured drill-down need appears.",
     "access_mode": "Move 52 closed in source: session record/summary/effective config/TUI footer carry immutable full_access_mode; child routes retain it; `.var` remains canonical; Debug 2023/2023, ReleaseFast/install 9/9, source/installed SHA-256 739F0D10D366738D01CEB3879D5B9487F7C99FB7CDB4D7FF9DB3418386A0DEED, zero proof-owned processes",
-    "interactive_input": "Move 52a source-complete: ask_user normalizes a-f, emits input_requested, input/respond wakes session-scoped broker, TUI controller handles Enter/Space/Other, child profiles fail InputUnavailable, cancel/shutdown/terminal replay clean up; Debug 2023/2023; installed catalog proof green; provider-driven installed response remains open",
+    "interactive_input": "Move 52a/57b source-complete: ask_user normalizes a-f and frees only initialized slices, emits input_requested, input/respond wakes the session-scoped broker, TUI controller uses a settings-style horizontal-row review panel with Enter/Space/Other and normal/align parity, malformed requests cancel safely, child profiles fail InputUnavailable, cancel/shutdown/terminal replay clean up; Debug 2136/2136; installed catalog proof green; provider-driven installed response remains open",
+    "sandbox_capability": "Move 53 closed by consolidation: existing branch/tool-class capability profiles are enforced through ExecutionContext/catalog/dispatch; recon is not OS isolation; no sandbox alias or backend-less mode; real Windows/container backend remains a reopen trigger",
+    "tui_input": "closed: Shift+Tab accepts CSI Z, settings flushes the normal Vaxis frame, command autocomplete reuses the executable command_registry without a second registry, bare s/se popup selection and settings rendering pass in the installed TUI, Settings Tab/Right forward and Shift+Tab/Left reverse navigation, orchestrate footer campaign is bounded and mode-scoped, Move55 definition-owned availability removes the duplicate registry table, source/installed SHA-256 F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692, final process census zero",
+    "capability_manifest": "Move55 source and installed proof: ToolDefinition.availability owns dependency metadata; registry probes the selected definition; missing ix fails closed; Debug 2102/2102; installed tools --json reports 25 tools with search_files -> ix -> available; source/installed SHA-256 F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692; exact installed process census zero",
     "active_installed_processes_preserved": []
   },
   "wip": {
@@ -135,13 +155,25 @@
     "035": "035a-h and parent archived; provider/cost chain closed",
     "036": "036a-h and parent archived; findings 10, 11, and 13 closed; moves 21-31 and 38-40 closed; external-effect certainty remains a separate frontier",
     "PLUG": "parent and PLUGa-h archived as superseded by Move40 deferred-delete; no active plugin runtime frontier",
-    "TUI": "Moves46-52 closed; Move52a root interactive input is source-complete; provider-driven installed response is next consumer proof"
+    "TUI": "Moves46-52 and current input repair closed; Move52a/57b root interactive input is source-complete with a crash-safe settings-style review panel; provider-driven installed response remains the separate next consumer proof"
+    ,"sandbox": "Move53 closed by deleting the duplicate-mode idea; reopen only with a verified Windows-native/container execution backend and lifecycle proof",
+    "Move55a": "source-complete chat log posture and prompt-mode route selection; installed promotion intentionally deferred",
+    "Moves56-57": "source-complete persistent Python/Bun eval kernel parity; Move58 process-supervisor handoff remains",
+    "Move57a": "source-complete renderer-backed TUI theme/status policy; arbitrary theme editor and menu registry remain deferred; live installed promotion intentionally deferred",
+    "Move57b": "source-complete crash-safe root question review panel; initialized ask_user cleanup, clamped horizontal rows, normal/align parity, and malformed-request cancellation; installed promotion intentionally deferred",
+    "OAuth": "Codex OAuth is closed; Anthropic and OpenCode OAuth remain provider-parity gaps owned by the auth/provider slice"
   },
   "residuals": [
     "Both test-isolation incidents, 877 older context-poison fixtures, and legacy backend owners are repaired reversibly; quarantine/archive manifests and rollback paths remain retained evidence.",
     "The fixed agent pool survives presentation detach in one source and installed owner tree; scheduler leadership and ticket claim/lease/child admission are process-exclusive; assignment is ledger-only and has no config policy branch. Source and installed Windows lifecycle meshes close exact tree death, generation replacement, same-session resume, nested direct/group/parent delivery, terminal settlement, cold readback, and zero-process cleanup. Arbitrary external-effect certainty remains a separate gate.",
     "The tracked TUI consumes exact stored event seq and the in-process 100-way mesh is closed; ignored browser routes keep a compatibility transport SSE id, and multi-process writer ownership remains coupled to scheduler/claim arbitration.",
-    "Current source ReleaseFast and installed binary share SHA-256 739F0D10D366738D01CEB3879D5B9487F7C99FB7CDB4D7FF9DB3418386A0DEED. Moves 37-52, Move 52a source proof, Move 34 Codex transport, Move 33 auth CLI proof, and prior owner/ticket promotion pass; installed tools catalog excludes manage_plugin and exposes ask_user, latest-session continuation is bounded, composer/cancellation/prompt-mode/status-row/agent-queue-cost/agent-summary/child-phase/live-summary/child-access-mode proof is installed, and final installed process census is zero. Provider-driven installed question response remains open.",
-    "Autonomous repair remains a gated evidence workflow, not an implicit background mutator."
+    "Current source ReleaseFast and installed binary share SHA-256 F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692. Moves 37-55, Move 52a source proof, Move 34 Codex transport, Move 33 auth CLI proof, and prior owner/ticket promotion pass; installed tools catalog excludes manage_plugin, exposes ask_user, and reports 25 tools with search_files available through ix; latest-session continuation is bounded, composer/cancellation/prompt-mode/status-row/agent-queue-cost/agent-summary/child-visible-row/input/settings/CSI-Z/footer-campaign/capability-manifest proof is installed, and final installed process census is zero. Provider-driven installed question response remains open.",
+    "Autonomous repair remains a gated evidence workflow, not an implicit background mutator.",
+    "Move 53 is not a sandbox claim: current host execution remains bounded by capability profiles and path scope until a real isolation backend is installed and proven."
+    ,"Move55a is source-only: runtime.log_level and prompt_modes pass source tests; no installed hash or live-binary claim is current for this slice."
+    ,"Runtime theme and menu-position settings are deferred until the TUI renderer consumes a typed palette/layout owner; inert config is intentionally absent."
+    ,"Moves56-57 are source-only: persistent Python/Bun eval and definition-owned alternative dependency probing pass source tests; canonical process-supervisor routing remains Move58 and installed promotion is deferred."
+    ,"OAuth parity is partial: Codex OAuth is proven, while Anthropic and OpenCode login/refresh flows remain unimplemented and must reuse the existing auth/provider owners."
+    ,"Move57b is source-only: the root question panel and malformed-request recovery pass Debug, focused TUI, and source ReleaseFast; provider-driven installed response and visual terminal capture remain open."
   ]
 }

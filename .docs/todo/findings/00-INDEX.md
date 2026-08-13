@@ -2,7 +2,7 @@
 type: findings-index
 id: harness-readiness-findings
 status: live
-updated: 2026-08-13
+updated: 2026-08-14
 source: ../../research/2026-08-12-full-harness-sitrep.md
 ---
 
@@ -30,12 +30,39 @@ nested mailbox delivery, terminal settlement, cold readback, and zero-process
 cleanup pass. Finding 11 is closed by the hash-matched installed run and 036h
 terminal review.
 
+Move 53 closes the sandbox question by consolidation: existing capability
+profiles remain the sole branch/tool-class boundary, while a real OS/process
+sandbox is deferred until a verified Windows/container backend exists.
+
+The current TUI input repair is closed in source and installed proof. The
+settings overlay uses the normal Vaxis render boundary, falls back to compiled
+defaults for unavailable workspace config, and maps Tab/Right forward with
+Shift+Tab/Left backward. The composer palette is a transient first-token
+projection over the executable command registry; bare prefixes and slash
+compatibility share one dispatch path. Receipt:
+`.docs/todo/changelog/041-tui-input-settings-repair.md`.
+
 [`../../roadmap/24-harness-capability-next-90.md`](../../roadmap/24-harness-capability-next-90.md) expands this ledger into the current 90-move execution order. This findings index remains the immediate P0/P1/P2 authority; roadmap 24 sequences the downstream capability and friction-removal work behind it.
 
 Execute one item at a time in priority and numeric order. Do not open a new
 plugin runtime, TUI expansion, or autonomous-repair mechanism without a current
 owner decision and evidence. Historical evidence stays readable, but a prior
 closeout cannot override current source and runtime proof.
+
+The current source-only posture slice adds `runtime.log_level` with a
+default-silent projection, validated `normal`/`full` detail levels, and
+next-turn hot-loading. It also adds `agent_routes.prompt_modes` as a reuse of
+the provider/model route owner for `orchestrate`, `build`, `align`, and `plan`.
+Debug `19/19` and `2,119/2,119` pass; installed promotion is intentionally
+deferred. Move 57a now closes the renderer-backed TUI settings seam with
+finite named themes and top/bottom status placement; focused TUI is `126/126`
+and the current Debug graph is `2,129/2,129`. Moves 56–57 close the source eval
+parity seam: Python and Bun use one workspace-plus-session kernel owner,
+bounded protocol, timeout, and isolation; their historical source proof is
+`2,121/2,121`. Move 58 owns the canonical process-supervisor handoff. Move
+57b now closes the root question crash boundary and compact review panel in
+source: focused TUI `129/129`, full Debug `2,136/2,136`, and source ReleaseFast
+`9/9`; installed provider-driven response remains explicitly open.
 
 | Order | Priority | Finding | Owner surface | Status |
 |---|---|---|---|---|

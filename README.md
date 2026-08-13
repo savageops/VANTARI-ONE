@@ -91,7 +91,7 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
 | **Kernel surface** | 122 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 2,102 passing backend cases across source and adversarial pipeline suites |
+| **Proof surface** | 2,129 passing backend cases across source and adversarial pipeline suites |
 | **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
 | **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |
@@ -257,7 +257,7 @@ side-effect certainty still requires the write-intent ledger.
 
 The TUI keeps this mechanic legible without adding a status forest: one non-wrapping footer row shows `status · prompt mode · model · effort · context used/capacity/percent · remaining`; unknown accounting stays `ctx —`, and narrow fitting drops lower-signal detail before codepoint-safe truncation. The footer shows pool and queue pressure only when non-zero, and priced session cost only when terminal telemetry carries a finite value; the activity group shows `Agents completed/total`; `○` marks queued/running activity and `◉` marks complete activity, with explicit failure/cancel markers. Each keyed child row ends with known typed phase and elapsed snapshots when available, followed by a bounded quoted turn summary sourced from the child session summary ledger; an existing `update_session_summary` completion refreshes that quote while the child is still running, and later tool/terminal phases retain it on the same row. Tool lifecycle names remain typed event metadata, not the visible child summary. The composer is a focused surface above a quieter metadata row, and cancellation copy appears only while a run is actively cancelling; the persistent footer omits `Esc cancel`.
 
-When a decision materially changes the work, the root model can call `ask_user` with related multiple-choice questions. The kernel persists one bounded `input_requested` event, the TUI presents a compact horizontal controller with Enter select, Space check, and inline `f / Other`, and `input/respond` wakes the waiting tool call. The controller reuses the existing event and RPC owners: no question poller, second status bus, transcript copy, or child input loop exists. Headless child profiles do not receive the interactive tool and continue autonomously or report the unavailable capability.
+When a decision materially changes the work, the root model can call `ask_user` with related multiple-choice questions. The kernel persists one bounded `input_requested` event, and the TUI presents a settings-style panel with one horizontal row per visible question, Enter select, Space check, Up/Down question focus, Left/Right option focus, inline `f / Other`, and an explicit review/submit state. `orchestrate` and `align` share this controller. Malformed question payloads become one bounded system message plus run cancellation instead of a TUI crash. `input/respond` remains the only resolution path; no question poller, second status bus, transcript copy, or child input loop exists. Headless child profiles do not receive the interactive tool and continue autonomously or report the unavailable capability.
 
 <br/>
 
@@ -694,6 +694,25 @@ run. A safe status projection looks like:
 
 Token fields are intentionally absent. The OAuth record routes to `/codex/responses`; it is not an API-key record with a different label.
 
+### TUI controls
+
+The non-secret `tui` section persists the small set of renderer controls that
+have live consumers:
+
+```json
+{
+  "tui": {
+    "theme": "vantari",
+    "status_bar_position": "bottom"
+  }
+}
+```
+
+Use the `settings` panel to cycle the four named palettes (`vantari`, `midnight`,
+`high_contrast`, `amber`) and move the compact status/context row between
+`bottom` and `top`. The composer remains at the bottom. Arbitrary color maps and
+a menu registry are intentionally not persisted until the renderer needs them.
+
 ### Provider
 
 | Parameter | Required | Default | Description |
@@ -1003,7 +1022,7 @@ vantari auth status|login|use|logout <provider> identity and provider auth
 
 ## Validation
 
-The pinned Debug and ReleaseFast graphs currently pass 2,102 test cases across `apps/backend/src/`
+The pinned Debug and ReleaseFast graphs currently pass 2,129 test cases across `apps/backend/src/`
 and `apps/backend/tests/`. They target state transitions, protocol edges, and
 failure pressure rather than line coverage:
 

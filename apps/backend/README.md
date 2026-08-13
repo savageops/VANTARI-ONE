@@ -162,7 +162,7 @@ Synthesized from 8 competitor patterns (oh-my-pi, Eve, Scion, nullclaw, OpenClaw
 
 ### Root interactive questions
 
-The root model may call `ask_user` when an operator choice changes the result. It accepts a bounded batch of related questions, normalizes options to `a`–`e` plus `f / Other`, and persists the exact `var1.input_requested.v1` request in the session event spine. The TUI reuses the active input surface for selection, multi-select, inline Other text, and final confirmation; `input/respond` is the only resolution method. Cancellation and owner shutdown wake the same broker wait. Child profiles are headless and fail closed with `InputUnavailable`, so a background agent cannot hang waiting for a terminal that it does not own.
+The root model may call `ask_user` when an operator choice changes the result. It accepts a bounded batch of related questions, normalizes options to `a`–`e` plus `f / Other`, and persists the exact `var1.input_requested.v1` request in the session event spine. The TUI renders a settings-style panel with one horizontal row per visible question, Up/Down question focus, Left/Right option focus, Enter select, Space check, inline Other text, and an explicit review/submit state. `orchestrate` and `align` use the same controller. Malformed requests are reported and cancel the waiting run without unwinding the TUI. `input/respond` is the only resolution method. Cancellation and owner shutdown wake the same broker wait. Child profiles are headless and fail closed with `InputUnavailable`, so a background agent cannot hang waiting for a terminal that it does not own.
 
 ### Deferred plugin socket
 
@@ -372,8 +372,9 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - **Live streaming** — assistant deltas, reasoning deltas, and tool progress rendered in real-time
 - **Command discovery** — the composer shows a bounded registry-backed popover for bare first-token prefixes (`s`, `set`, `settings`) and slash-prefixed input; matches disappear for prose or no results, and Up/Down, Tab, Enter, and Escape remain transient input controls
 - **Settings overlay** — `settings` renders through the normal Vaxis frame boundary; Tab/Right advances sections, Shift+Tab/Left reverses them, and unavailable persisted config shows compiled defaults instead of freezing or falling through to the model
+- **Saved TUI controls** — the `tui` config section persists four named palettes (`vantari`, `midnight`, `high_contrast`, `amber`) and `status_bar_position` (`bottom` or `top`). The same renderer consumes them immediately after a successful settings save; arbitrary color maps and a layout registry are intentionally absent
 - **Operator metadata row** — one non-wrapping row for status, prompt mode, model, effort, context used/capacity/remaining, and signal-bearing agent/queue/cost pressure; active/max and queue appear only when useful, finite priced session cost is compact, unknown context stays `ctx —`, and persistent `Esc cancel` text is omitted
-- **Root question controller** — event-backed `ask_user` questions with Enter select, Space check, inline `f / Other`, and one `input/respond` RPC; no polling overlay or second status bus
+- **Root question controller** — event-backed `ask_user` questions in one settings-style horizontal-row panel with clamped focus, Enter select, Space check, inline `f / Other`, review/submit, and one `input/respond` RPC; malformed requests cancel safely; no polling overlay or second status bus
 - **Composer hierarchy** — transcript surface < metadata surface < focused input surface; `cancelling` appears only during an active cancellation request and disappears at the terminal boundary
 
 ### Runtime chat posture and mode routes
@@ -395,6 +396,23 @@ runtime `log_level` setting cycles the value and applies it on the next turn.
 `session/send` provider/model fields win over the configured mode; credentials
 remain owned by `auth.json`. No mode-specific executor, tool registry, or
 provider pipeline exists.
+
+### Renderer configuration
+
+```json
+{
+  "tui": {
+    "theme": "vantari",
+    "status_bar_position": "bottom"
+  }
+}
+```
+
+`theme` selects a complete named palette owned by `tui_chat.zig`; `status_bar_position`
+moves the existing status/context row to the top while the composer remains at the
+bottom. Settings cycles both values through `config/set`, and the next frame uses
+the saved selection. The TUI keeps one renderer owner: there is no arbitrary
+per-cell palette schema or menu-position registry.
 
 ## Quick Start
 

@@ -2,7 +2,7 @@
 type: documentation-index
 id: docs/index
 status: current
-updated: 2026-08-13
+updated: 2026-08-14
 ---
 
 # VANTARI documentation index
@@ -43,6 +43,14 @@ This directory contains project records, research, planning chains, and complete
 - [`research/2026-08-13-agent-hub-move50.md`](research/2026-08-13-agent-hub-move50.md) — Move 50 Agent Hub recon and live child-summary decision/proof.
 - [`research/2026-08-13-full-access-mode-move51.md`](research/2026-08-13-full-access-mode-move51.md) — Move 51 child execution-context handoff, shared resolver census, and clean installed proof.
 - [`research/2026-08-13-root-interactive-input.md`](research/2026-08-13-root-interactive-input.md) — root-only `ask_user` harvest, bounded `input/respond` protocol, TUI controller, headless-child boundary, and adversarial proof.
+- [`research/2026-08-13-sandbox-capability-move53.md`](research/2026-08-13-sandbox-capability-move53.md) — Move 53 consolidation: existing branch/tool-class profiles are not an OS sandbox; real isolation is deferred until a verified Windows/container backend exists.
+- [`research/2026-08-13-ix-identity-move54.md`](research/2026-08-13-ix-identity-move54.md) — Move 54 canonical `ix` dependency, additive-envelope parser repair, and installed search proof.
+- [`research/2026-08-13-tui-input-command-palette.md`](research/2026-08-13-tui-input-command-palette.md) — Shift+Tab CSI-Z repair, settings render boundary, registry-backed bare-token autocomplete, competitor harvest, and YAGNI decision boundary.
+- [`research/2026-08-13-capability-manifest-move55.md`](research/2026-08-13-capability-manifest-move55.md) — definition-owned availability metadata, live dependency probing, reference harvest, and rejected registry complexity.
+- [`research/2026-08-13-mode-routing-ui-oauth.md`](research/2026-08-13-mode-routing-ui-oauth.md) — prompt-mode route reuse, log posture, OAuth residuals, configurable UI boundary, and TUI responsiveness decision.
+- [`research/2026-08-13-persistent-eval-kernels.md`](research/2026-08-13-persistent-eval-kernels.md) — persistent Python/Bun kernel harvest, definition-owned availability, bounded worker protocol, and Move 58 boundary.
+- [`research/2026-08-14-tui-theme-status-settings.md`](research/2026-08-14-tui-theme-status-settings.md) — renderer-backed theme/status configuration, saved settings path, and the finite YAGNI boundary.
+- [`research/2026-08-14-root-question-review-panel.md`](research/2026-08-14-root-question-review-panel.md) — oh-my-pi normalization/review harvest, ask_user cleanup crash, settings-style question rows, and source-only proof boundary.
 - [`research/2026-08-13-provider-prism-staging.md`](research/2026-08-13-provider-prism-staging.md) — staged provider harvest receipt; promotion is deferred pending the complete installed auth/header path.
 - [`todo/findings/00-INDEX.md`](todo/findings/00-INDEX.md) — executable P0/P1/P2 closure order; current authority over older completion claims.
 - [`roadmap/24-harness-capability-next-90.md`](roadmap/24-harness-capability-next-90.md) — 90 dependency-ordered moves ranked by operator value, capability leverage, integrity risk, and friction removed.
@@ -56,6 +64,12 @@ This directory contains project records, research, planning chains, and complete
 - [`todo/changelog/035g-provider-cost-compat-model.md`](todo/changelog/035g-provider-cost-compat-model.md) — installed priced/unknown provider turns, event-ledger readback, multiline `/status`, and TUI row-owner regression proof.
 - [`todo/changelog/035h-provider-cost-compat-model.md`](todo/changelog/035h-provider-cost-compat-model.md) — terminal structure, contract, test-pressure, code-quality, and provider-to-event-to-TUI QC closeout.
 - [`todo/changelog/038-provider-model-identity.md`](todo/changelog/038-provider-model-identity.md) — provider-scoped model identity and selector parity proof.
+- [`todo/changelog/041-tui-input-settings-repair.md`](todo/changelog/041-tui-input-settings-repair.md) — installed TUI input repair, settings fallback/navigation, bare command palette, and process-cleanup proof.
+- [`todo/changelog/042-capability-manifest-move55.md`](todo/changelog/042-capability-manifest-move55.md) — definition-owned capability manifest, installed `tools --json` proof, and exact process cleanup.
+- [`todo/changelog/043-chat-log-level-and-mode-routing.md`](todo/changelog/043-chat-log-level-and-mode-routing.md) — source-only log posture and per-prompt-mode route selection; installed promotion intentionally deferred.
+- [`todo/changelog/044-persistent-eval-kernels.md`](todo/changelog/044-persistent-eval-kernels.md) — source-only Python/Bun persistent eval parity, alternative dependency truth, and Move 58 process-supervisor boundary.
+- [`todo/changelog/045-tui-theme-status-settings.md`](todo/changelog/045-tui-theme-status-settings.md) — source-only saved TUI palettes/status placement, renderer consumer, and responsiveness proof.
+- [`todo/changelog/046-root-question-panel-resilience.md`](todo/changelog/046-root-question-panel-resilience.md) — source-only crash-safe question normalization, settings-style multi-question review panel, and normal/align parity proof.
 - [`todo/findings/31-provider-model-parity-ohmypi.md`](todo/findings/31-provider-model-parity-ohmypi.md) — oh-my-pi provider/model parity audit and residual boundary.
 - [`todo/changelog/PLUG-plugin-socket.md`](todo/changelog/PLUG-plugin-socket.md) — Move40 deferred-delete receipt; the plugin manager was removed and the remaining manifest/isolation/socket types are contract-only.
 - [`roadmap/20-adversarial-concurrency-mesh.md`](roadmap/20-adversarial-concurrency-mesh.md) — closed six-seam 100-way contention mesh with exact ledger, replay, and shutdown evidence and no new harness.
@@ -65,6 +79,7 @@ This directory contains project records, research, planning chains, and complete
 - [`research/2026-08-09-tui-status-surface-and-repair-loop.md`](research/2026-08-09-tui-status-surface-and-repair-loop.md) — compact TUI telemetry, durable summary projection, and repair-loop boundary.
 - [`research/2026-08-10-ticket-agent-pool-and-repair-queue.md`](research/2026-08-10-ticket-agent-pool-and-repair-queue.md) — buffered ticket admission, fixed agent capacity, leases, and stale-owner repair.
 - Runtime access boundary — `runtime.full_access_mode` is default-off, validated, carried into child execution contexts, and projected through one shared path resolver; the technical owner is recorded in [`technical_summary.md`](technical_summary.md) and [`workspace.json`](workspace.json).
+- Runtime capability boundary — `ExecutionContext.capability_profile_id` is the sole branch/tool-class permission path; `recon` is read-only scope, not process isolation; Move 53 records the backend requirement before any future sandbox mode.
 - [`todo/changelog/036-ticket-agent-pool-and-repair.md`](todo/changelog/036-ticket-agent-pool-and-repair.md) — archived parent receipt for the ticket/pool chain; 036h closes the reopened installed lifecycle review.
 - [`todo/changelog/036h-ticket-agent-pool-and-repair-terminal-review.md`](todo/changelog/036h-ticket-agent-pool-and-repair-terminal-review.md) — installed owner/ticket lifecycle, source graph, hash equality, process census, and documentation terminal review.
 

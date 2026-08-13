@@ -100,9 +100,11 @@ Rules:
   queue/wake; durable recipient sequence, sender receipt, and provider-success
   unread cursor. Messages never assign tickets, launch work, or copy transcripts.
 - Root interaction uses one `ask_user` tool and one `input/respond` RPC. The tool
-  emits bounded `var1.input_requested.v1` event data, the TUI supports Enter
-  select, Space check, and `f / Other` inline text, and the session cancel/shutdown
-  path wakes the same broker wait. Child profiles omit the tool and fail closed
+  emits bounded `var1.input_requested.v1` event data, the TUI renders a
+  settings-style horizontal-row panel with clamped question/option focus,
+  Enter select, Space check, `f / Other` inline text, and an explicit review
+  state. Malformed requests become one bounded message plus run cancellation;
+  the session cancel/shutdown path wakes the same broker wait. Child profiles omit the tool and fail closed
   with `InputUnavailable`; do not add a question poller or second status bus.
 - The source and installed Windows lifecycle meshes prove queue-only assignment,
   one claim, client detach, exact owner-tree loss, generation replacement,

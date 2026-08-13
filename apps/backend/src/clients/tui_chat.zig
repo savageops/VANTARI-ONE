@@ -10,6 +10,7 @@ const footer_effects = @import("footer_effects.zig");
 const protocol = VAR1.core.protocol_types;
 const protocol_events = VAR1.shared.protocol.events;
 const shared_types = VAR1.shared.types;
+const config_file = VAR1.core.config_file;
 const stdio_rpc = VAR1.host.stdio_rpc;
 const prompt_modes = VAR1.core.prompts;
 
@@ -162,6 +163,8 @@ const ChatState = struct {
     // the constructor fallback at normal so existing read-model fixtures
     // retain their historical projection unless they opt into silent.
     log_level: shared_types.LogLevel = .normal,
+    theme: config_file.TuiTheme = .vantari,
+    status_bar_position: config_file.StatusBarPosition = .bottom,
     prompt_mode: prompt_modes.PromptMode = .orchestrate,
     footer_effect: footer_effects.Controller = .{},
     context_window_tokens: u64 = 0,
@@ -545,6 +548,15 @@ const ChatState = struct {
         self.ticket_ledger_healthy = health.ticket_ledger_healthy;
     }
 
+    fn refreshTuiPolicy(self: *ChatState) void {
+        const policy = config_file.loadTuiPolicy(self.allocator, self.workspace_root) catch return;
+        if (policy.theme != self.theme) {
+            self.theme = policy.theme;
+            applyTheme(policy.theme);
+        }
+        self.status_bar_position = policy.status_bar_position;
+    }
+
     /// Refresh operator telemetry only from the idle UI loop. Provider
     /// streaming already has its own event path; polling here avoids a second
     /// status bus and keeps health reads bounded to one per half-second.
@@ -860,7 +872,15 @@ const ChatState = struct {
 
     fn applyProgressEvent(self: *ChatState, event_type: []const u8, message: []const u8) !bool {
         if (std.mem.eql(u8, event_type, "input_requested")) {
-            try self.beginInputRequest(message);
+            // Model-generated question payloads are untrusted at this client
+            // boundary. A malformed request must not unwind the event loop and
+            // crash the TUI; cancel the waiting run so the broker cannot remain
+            // blocked behind an unrenderable question.
+            self.beginInputRequest(message) catch {
+                self.clearInputRequest();
+                self.add(.system, "The agent sent an invalid question; the waiting turn was cancelled.") catch {};
+                if (self.session_id) |session_id| self.cancelInvalidInputRun(session_id);
+            };
             return true;
         }
         if (std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type) or
@@ -1573,6 +1593,20 @@ const ChatState = struct {
         try self.add(.progress, "cancelling");
     }
 
+    /// Cancel a run while applying an input_requested event without re-entering
+    /// the progress replay path. The normal cancel routine performs a replay
+    /// repair when its run cursor is cold; doing that from event application
+    /// creates a recursive error-set dependency and can deadlock the broker.
+    fn cancelInvalidInputRun(self: *ChatState, session_id: []const u8) void {
+        if (self.active_run_seq == 0) return;
+        const params = renderCancelParams(self.allocator, session_id, self.active_run_seq) catch return;
+        defer self.allocator.free(params);
+        var call = self.client.call(protocol.methods.session_cancel, params) catch return;
+        call.deinit(self.allocator);
+        self.cancel_requested = true;
+        self.status = "CANCELLING";
+    }
+
     /// Fire-and-forget session/send to queue a message during an active turn
     /// (interjection protocol). Mirrors requestCancel's non-blocking pattern.
     fn queueMessage(self: *ChatState, session_id: []const u8, text: []const u8) !void {
@@ -2042,6 +2076,7 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
         .ticket_ledger_healthy = parsed_health.value.ticket_ledger_healthy,
     };
     defer state.deinit();
+    state.refreshTuiPolicy();
 
     // Load global persistent message history into the in-memory ring buffer
     // so Up/Down navigation recalls prompts from previous sessions.
@@ -2106,6 +2141,7 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                     if (ss.open) {
                         if (key.matches('c', .{ .ctrl = true })) break;
                         const consumed = ss.handleKey(key, state.client) catch false;
+                        if (ss.takeConfigChanged()) state.refreshTuiPolicy();
                         if (!consumed and ss.editing) {
                             // Route printable chars to the edit buffer.
                             const ch = keyToPrintable(key);
@@ -2402,20 +2438,25 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
     // Keep the frame-owned footer backing bytes alive through that call.
     var footer_meta_owned: ?[]u8 = null;
     defer if (footer_meta_owned) |value| state.allocator.free(value);
-    const base_footer_height = @min(@as(u16, 3), root.height);
-    const available_autocomplete_height = root.height -| base_footer_height;
+    const top_status_height: u16 = if (state.status_bar_position == .top) @min(@as(u16, 1), root.height) else 0;
+    const base_footer_height: u16 = if (state.status_bar_position == .top)
+        @min(@as(u16, 1), root.height -| top_status_height)
+    else
+        @min(@as(u16, 3), root.height -| top_status_height);
+    const available_autocomplete_height = root.height -| top_status_height -| base_footer_height;
     const autocomplete_height: u16 = if (state.input_state == null)
         @intCast(@min(state.autocompleteHeight(), @as(usize, available_autocomplete_height)))
     else
         0;
     const question_footer_height = if (state.input_state) |*active|
-        active.panelHeight(root.height)
+        active.panelHeight(root.height -| top_status_height)
     else
         base_footer_height +| autocomplete_height;
-    var layout = computeLayoutWithReasoningDockAndFooter(
+    var layout = computeLayoutForPosition(
         root.height,
         @intCast(reasoning_rows.items.len),
         question_footer_height,
+        state.status_bar_position,
     );
     if (state.input_state == null) {
         layout.editor_y = @min(autocomplete_height, layout.footer_height -| 1);
@@ -2424,7 +2465,7 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
 
     const transcript = root.child(.{
         .x_off = 0,
-        .y_off = 0,
+        .y_off = @intCast(layout.transcript_y),
         .width = root.width,
         .height = layout.transcript_height,
     });
@@ -2474,62 +2515,20 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
             .height = 1,
         });
         input.drawWithStyle(editor, styles.composer);
-        const agent_counts = state.agentCounts();
-        const meta_width = @as(usize, input_win.width) -| 4;
-        footer_meta_owned = try formatFooterMetaWithScope(
-            state.allocator,
-            state.model,
-            state.effort,
-            state.thinking_mode,
-            state.prompt_mode,
-            state.status,
-            state.full_access_mode,
-            state.context_used_tokens,
-            state.context_window_tokens,
-            agent_counts.running,
-            agent_counts.total,
-            state.waiting,
-            state.cancel_requested,
-            state.scroll_offset,
-            .{
-                .known = state.agent_pool_known,
-                .healthy = state.agent_pool_healthy,
-                .max = state.agent_pool_max,
-                .running = state.agent_pool_running,
-                .tickets_assigned = state.tickets_assigned,
-                .tickets_in_progress = state.tickets_in_progress,
-                .ticket_ledger_healthy = state.ticket_ledger_healthy,
-            },
-            if (state.has_session_cost) state.session_cost_usd else null,
-            meta_width,
-        );
+        if (state.status_bar_position == .bottom) {
+            footer_meta_owned = try drawStatusBar(input_win, state, footer_frame, layout.meta_y);
+        }
+    }
 
-        if (input_win.width > 1) {
-            _ = input_win.print(&.{.{ .text = "●", .style = footerStatusStyle(state) }}, .{
-                .row_offset = layout.meta_y,
-                .col_offset = 1,
-                .wrap = .none,
-            });
-        }
-        if (footer_meta_owned.?.len > 0 and input_win.width > 3) {
-            var footer_segments: [32]tui.Cell.Segment = undefined;
-            const footer_segment_count = footer_effects.writeSegments(
-                &footer_segments,
-                footer_meta_owned.?,
-                footer_frame,
-                .{
-                    .base = styles.meta_value,
-                    .edge = styles.footer_sweep_edge,
-                    .core = styles.footer_sweep_core,
-                    .fade = styles.footer_sweep_fade,
-                },
-            );
-            _ = input_win.print(footer_segments[0..footer_segment_count], .{
-                .row_offset = layout.meta_y,
-                .col_offset = 3,
-                .wrap = .none,
-            });
-        }
+    if (state.status_bar_position == .top) {
+        const status_win = root.child(.{
+            .x_off = 0,
+            .y_off = 0,
+            .width = root.width,
+            .height = top_status_height,
+        });
+        status_win.fill(.{ .style = styles.meta_surface });
+        footer_meta_owned = try drawStatusBar(status_win, state, footer_frame, 0);
     }
 
     // Reverse search overlay — show search bar at the bottom when active.
@@ -2563,8 +2562,74 @@ fn footerStatusStyle(state: *const ChatState) Style {
     return styles.status_ready;
 }
 
+fn drawStatusBar(
+    win: Window,
+    state: *const ChatState,
+    frame: footer_effects.Frame,
+    row: u16,
+) ![]u8 {
+    const agent_counts = state.agentCounts();
+    const meta = try formatFooterMetaWithScope(
+        state.allocator,
+        state.model,
+        state.effort,
+        state.thinking_mode,
+        state.prompt_mode,
+        state.status,
+        state.full_access_mode,
+        state.context_used_tokens,
+        state.context_window_tokens,
+        agent_counts.running,
+        agent_counts.total,
+        state.waiting,
+        state.cancel_requested,
+        state.scroll_offset,
+        .{
+            .known = state.agent_pool_known,
+            .healthy = state.agent_pool_healthy,
+            .max = state.agent_pool_max,
+            .running = state.agent_pool_running,
+            .tickets_assigned = state.tickets_assigned,
+            .tickets_in_progress = state.tickets_in_progress,
+            .ticket_ledger_healthy = state.ticket_ledger_healthy,
+        },
+        if (state.has_session_cost) state.session_cost_usd else null,
+        @as(usize, win.width) -| 4,
+    );
+    errdefer state.allocator.free(meta);
+
+    if (win.width > 1) {
+        _ = win.print(&.{.{ .text = "●", .style = footerStatusStyle(state) }}, .{
+            .row_offset = row,
+            .col_offset = 1,
+            .wrap = .none,
+        });
+    }
+    if (meta.len > 0 and win.width > 3) {
+        var segments: [32]tui.Cell.Segment = undefined;
+        const segment_count = footer_effects.writeSegments(
+            &segments,
+            meta,
+            frame,
+            .{
+                .base = styles.meta_value,
+                .edge = styles.footer_sweep_edge,
+                .core = styles.footer_sweep_core,
+                .fade = styles.footer_sweep_fade,
+            },
+        );
+        _ = win.print(segments[0..segment_count], .{
+            .row_offset = row,
+            .col_offset = 3,
+            .wrap = .none,
+        });
+    }
+    return meta;
+}
+
 const ChatLayout = struct {
     transcript_height: u16,
+    transcript_y: u16 = 0,
     reasoning_y: u16 = 0,
     reasoning_height: u16 = 0,
     reasoning_gap_height: u16 = 0,
@@ -2590,14 +2655,7 @@ fn computeLayout(root_height: u16) ChatLayout {
 }
 
 fn computeLayoutForFooter(root_height: u16, requested_footer_height: u16) ChatLayout {
-    const footer_height = @min(requested_footer_height, root_height);
-    return .{
-        .transcript_height = root_height -| footer_height,
-        .footer_y = root_height -| footer_height,
-        .footer_height = footer_height,
-        .editor_y = 0,
-        .meta_y = if (footer_height > 1) footer_height - 1 else 0,
-    };
+    return computeLayoutForPosition(root_height, 0, requested_footer_height, .bottom);
 }
 
 fn computeLayoutWithReasoningDock(root_height: u16, requested_reasoning_height: u16) ChatLayout {
@@ -2609,12 +2667,31 @@ fn computeLayoutWithReasoningDockAndFooter(
     requested_reasoning_height: u16,
     requested_footer_height: u16,
 ) ChatLayout {
-    var layout = computeLayoutForFooter(root_height, requested_footer_height);
+    return computeLayoutForPosition(root_height, requested_reasoning_height, requested_footer_height, .bottom);
+}
+
+fn computeLayoutForPosition(
+    root_height: u16,
+    requested_reasoning_height: u16,
+    requested_footer_height: u16,
+    status_bar_position: config_file.StatusBarPosition,
+) ChatLayout {
+    const status_height: u16 = if (status_bar_position == .top) @min(@as(u16, 1), root_height) else 0;
+    const footer_height = @min(requested_footer_height, root_height -| status_height);
+    const content_height = root_height -| status_height -| footer_height;
+    var layout = ChatLayout{
+        .transcript_height = content_height,
+        .transcript_y = status_height,
+        .footer_y = status_height +| content_height,
+        .footer_height = footer_height,
+        .editor_y = 0,
+        .meta_y = if (status_bar_position == .bottom and footer_height > 1) footer_height - 1 else 0,
+    };
     layout.reasoning_height = @min(requested_reasoning_height, layout.transcript_height);
     const remaining_height = layout.transcript_height - layout.reasoning_height;
     layout.reasoning_gap_height = @intFromBool(layout.reasoning_height > 0 and remaining_height > 0);
     layout.transcript_height = remaining_height - layout.reasoning_gap_height;
-    layout.reasoning_y = layout.transcript_height + layout.reasoning_gap_height;
+    layout.reasoning_y = layout.transcript_y +| layout.transcript_height +| layout.reasoning_gap_height;
     return layout;
 }
 
@@ -2765,37 +2842,149 @@ fn activityTextStyle(state: ActivityState) Style {
     };
 }
 
-const styles = struct {
-    const surface: Style = .{ .fg = Color.rgbFromUint(0xd9f7ef), .bg = Color.rgbFromUint(0x08110f) };
-    /// Footer metadata is a quiet intermediate tint. The background lightness
-    /// hierarchy is surface < meta_surface < composer; no border or extra
-    /// chrome is needed to separate focused input from runtime telemetry.
-    const meta_surface: Style = .{ .fg = Color.rgbFromUint(0x78958d), .bg = Color.rgbFromUint(0x0a1614) };
-    const composer: Style = .{ .fg = Color.rgbFromUint(0xe8fff8), .bg = Color.rgbFromUint(0x10221f) };
-    const user: Style = .{ .fg = Color.rgbFromUint(0xcff8ec), .bg = Color.rgbFromUint(0x08110f), .bold = true };
-    const assistant: Style = .{ .fg = Color.rgbFromUint(0x8ff5d2), .bg = Color.rgbFromUint(0x08110f), .bold = true };
-    const user_text: Style = .{ .fg = Color.rgbFromUint(0xe8fff8), .bg = Color.rgbFromUint(0x08110f) };
-    const assistant_text: Style = .{ .fg = Color.rgbFromUint(0xb7f7df), .bg = Color.rgbFromUint(0x08110f) };
-    const thinking: Style = .{ .fg = Color.rgbFromUint(0x8ff5d2), .bg = Color.rgbFromUint(0x08110f), .dim = true, .blink = true };
-    const progress: Style = .{ .fg = Color.rgbFromUint(0x9fbeb5), .bg = Color.rgbFromUint(0x08110f), .dim = true };
-    const system: Style = .{ .fg = Color.rgbFromUint(0x78958d), .bg = Color.rgbFromUint(0x08110f), .dim = true };
-    const intro: Style = .{ .fg = Color.rgbFromUint(0x8ff5d2), .bg = Color.rgbFromUint(0x08110f), .bold = true };
-    const intro_version: Style = .{ .fg = Color.rgbFromUint(0x78958d), .bg = Color.rgbFromUint(0x08110f), .dim = true };
-    const intro_hint: Style = .{ .fg = Color.rgbFromUint(0x9bbab1), .bg = Color.rgbFromUint(0x08110f), .dim = true };
-    const text: Style = .{ .fg = Color.rgbFromUint(0xd9f7ef), .bg = Color.rgbFromUint(0x08110f) };
-    const meta_label: Style = .{ .fg = Color.rgbFromUint(0x5d746e), .bg = Color.rgbFromUint(0x0a1614), .dim = true };
-    const meta_value: Style = .{ .fg = Color.rgbFromUint(0x9bbab1), .bg = Color.rgbFromUint(0x0a1614), .dim = true };
-    const footer_sweep_fade: Style = .{ .fg = Color.rgbFromUint(0x78958d), .bg = Color.rgbFromUint(0x0a1614) };
-    const footer_sweep_edge: Style = .{ .fg = Color.rgbFromUint(0x43c58b), .bg = Color.rgbFromUint(0x0a1614) };
-    const footer_sweep_core: Style = .{ .fg = Color.rgbFromUint(0x8ff5d2), .bg = Color.rgbFromUint(0x0a1614), .bold = true };
-    const autocomplete: Style = .{ .fg = Color.rgbFromUint(0x9bbab1), .bg = Color.rgbFromUint(0x0a1614) };
-    const autocomplete_name: Style = .{ .fg = Color.rgbFromUint(0xb7f7df), .bg = Color.rgbFromUint(0x0a1614), .bold = true };
-    const autocomplete_selected: Style = .{ .fg = Color.rgbFromUint(0xe8fff8), .bg = Color.rgbFromUint(0x18302b) };
-    const autocomplete_selected_name: Style = .{ .fg = Color.rgbFromUint(0xe8fff8), .bg = Color.rgbFromUint(0x18302b), .bold = true };
-    const status_ready: Style = .{ .fg = Color.rgbFromUint(0x43c58b), .bg = Color.rgbFromUint(0x0a1614) };
-    const status_working: Style = .{ .fg = Color.rgbFromUint(0xd7ad5a), .bg = Color.rgbFromUint(0x0a1614) };
-    const status_failed: Style = .{ .fg = Color.rgbFromUint(0xe06c75), .bg = Color.rgbFromUint(0x0a1614) };
+const ThemeColors = struct {
+    surface_bg: Color,
+    meta_bg: Color,
+    composer_bg: Color,
+    selected_bg: Color,
+    text_fg: Color,
+    accent_fg: Color,
+    assistant_fg: Color,
+    muted_fg: Color,
+    progress_fg: Color,
+    warning_fg: Color,
+    error_fg: Color,
 };
+
+const ThemePalette = struct {
+    surface: Style,
+    meta_surface: Style,
+    composer: Style,
+    user: Style,
+    assistant: Style,
+    user_text: Style,
+    assistant_text: Style,
+    thinking: Style,
+    progress: Style,
+    system: Style,
+    intro: Style,
+    intro_version: Style,
+    intro_hint: Style,
+    text: Style,
+    meta_label: Style,
+    meta_value: Style,
+    footer_sweep_fade: Style,
+    footer_sweep_edge: Style,
+    footer_sweep_core: Style,
+    autocomplete: Style,
+    autocomplete_name: Style,
+    autocomplete_selected: Style,
+    autocomplete_selected_name: Style,
+    status_ready: Style,
+    status_working: Style,
+    status_failed: Style,
+};
+
+fn makeTheme(colors: ThemeColors) ThemePalette {
+    return .{
+        .surface = .{ .fg = colors.text_fg, .bg = colors.surface_bg },
+        // Footer metadata is a quiet intermediate tint. The background
+        // hierarchy remains surface < meta_surface < composer in every named
+        // palette; no border or extra chrome is needed.
+        .meta_surface = .{ .fg = colors.muted_fg, .bg = colors.meta_bg },
+        .composer = .{ .fg = colors.text_fg, .bg = colors.composer_bg },
+        .user = .{ .fg = colors.accent_fg, .bg = colors.surface_bg, .bold = true },
+        .assistant = .{ .fg = colors.assistant_fg, .bg = colors.surface_bg, .bold = true },
+        .user_text = .{ .fg = colors.text_fg, .bg = colors.surface_bg },
+        .assistant_text = .{ .fg = colors.assistant_fg, .bg = colors.surface_bg },
+        .thinking = .{ .fg = colors.accent_fg, .bg = colors.surface_bg, .dim = true, .blink = true },
+        .progress = .{ .fg = colors.progress_fg, .bg = colors.surface_bg, .dim = true },
+        .system = .{ .fg = colors.muted_fg, .bg = colors.surface_bg, .dim = true },
+        .intro = .{ .fg = colors.accent_fg, .bg = colors.surface_bg, .bold = true },
+        .intro_version = .{ .fg = colors.muted_fg, .bg = colors.surface_bg, .dim = true },
+        .intro_hint = .{ .fg = colors.assistant_fg, .bg = colors.surface_bg, .dim = true },
+        .text = .{ .fg = colors.text_fg, .bg = colors.surface_bg },
+        .meta_label = .{ .fg = colors.progress_fg, .bg = colors.meta_bg, .dim = true },
+        .meta_value = .{ .fg = colors.assistant_fg, .bg = colors.meta_bg, .dim = true },
+        .footer_sweep_fade = .{ .fg = colors.muted_fg, .bg = colors.meta_bg },
+        .footer_sweep_edge = .{ .fg = colors.accent_fg, .bg = colors.meta_bg },
+        .footer_sweep_core = .{ .fg = colors.assistant_fg, .bg = colors.meta_bg, .bold = true },
+        .autocomplete = .{ .fg = colors.assistant_fg, .bg = colors.meta_bg },
+        .autocomplete_name = .{ .fg = colors.assistant_fg, .bg = colors.meta_bg, .bold = true },
+        .autocomplete_selected = .{ .fg = colors.text_fg, .bg = colors.selected_bg },
+        .autocomplete_selected_name = .{ .fg = colors.text_fg, .bg = colors.selected_bg, .bold = true },
+        .status_ready = .{ .fg = colors.accent_fg, .bg = colors.meta_bg },
+        .status_working = .{ .fg = colors.warning_fg, .bg = colors.meta_bg },
+        .status_failed = .{ .fg = colors.error_fg, .bg = colors.meta_bg },
+    };
+}
+
+const vantari_theme = makeTheme(.{
+    .surface_bg = Color.rgbFromUint(0x08110f),
+    .meta_bg = Color.rgbFromUint(0x0a1614),
+    .composer_bg = Color.rgbFromUint(0x10221f),
+    .selected_bg = Color.rgbFromUint(0x18302b),
+    .text_fg = Color.rgbFromUint(0xd9f7ef),
+    .accent_fg = Color.rgbFromUint(0x43c58b),
+    .assistant_fg = Color.rgbFromUint(0x8ff5d2),
+    .muted_fg = Color.rgbFromUint(0x78958d),
+    .progress_fg = Color.rgbFromUint(0x9fbeb5),
+    .warning_fg = Color.rgbFromUint(0xd7ad5a),
+    .error_fg = Color.rgbFromUint(0xe06c75),
+});
+
+const midnight_theme = makeTheme(.{
+    .surface_bg = Color.rgbFromUint(0x070d18),
+    .meta_bg = Color.rgbFromUint(0x0c1728),
+    .composer_bg = Color.rgbFromUint(0x16263d),
+    .selected_bg = Color.rgbFromUint(0x203b5e),
+    .text_fg = Color.rgbFromUint(0xe6f0ff),
+    .accent_fg = Color.rgbFromUint(0x70b7ff),
+    .assistant_fg = Color.rgbFromUint(0x9ed1ff),
+    .muted_fg = Color.rgbFromUint(0x7e94ae),
+    .progress_fg = Color.rgbFromUint(0xa9bbd2),
+    .warning_fg = Color.rgbFromUint(0xf0c674),
+    .error_fg = Color.rgbFromUint(0xff7b86),
+});
+
+const high_contrast_theme = makeTheme(.{
+    .surface_bg = Color.rgbFromUint(0x000000),
+    .meta_bg = Color.rgbFromUint(0x101010),
+    .composer_bg = Color.rgbFromUint(0x262626),
+    .selected_bg = Color.rgbFromUint(0x4a4a4a),
+    .text_fg = Color.rgbFromUint(0xffffff),
+    .accent_fg = Color.rgbFromUint(0x00ff9d),
+    .assistant_fg = Color.rgbFromUint(0x7dffcf),
+    .muted_fg = Color.rgbFromUint(0xc8c8c8),
+    .progress_fg = Color.rgbFromUint(0xe0e0e0),
+    .warning_fg = Color.rgbFromUint(0xffff00),
+    .error_fg = Color.rgbFromUint(0xff5555),
+});
+
+const amber_theme = makeTheme(.{
+    .surface_bg = Color.rgbFromUint(0x120d05),
+    .meta_bg = Color.rgbFromUint(0x20170a),
+    .composer_bg = Color.rgbFromUint(0x33230d),
+    .selected_bg = Color.rgbFromUint(0x503913),
+    .text_fg = Color.rgbFromUint(0xfff1cf),
+    .accent_fg = Color.rgbFromUint(0xffb84d),
+    .assistant_fg = Color.rgbFromUint(0xffd27a),
+    .muted_fg = Color.rgbFromUint(0xb99a70),
+    .progress_fg = Color.rgbFromUint(0xd8bd91),
+    .warning_fg = Color.rgbFromUint(0xffd166),
+    .error_fg = Color.rgbFromUint(0xff6b5e),
+});
+
+var styles: ThemePalette = vantari_theme;
+
+fn applyTheme(theme: config_file.TuiTheme) void {
+    styles = switch (theme) {
+        .vantari => vantari_theme,
+        .midnight => midnight_theme,
+        .high_contrast => high_contrast_theme,
+        .amber => amber_theme,
+    };
+}
 
 fn drawAutocomplete(win: Window, state: *const ChatState, rows: u16) void {
     if (rows == 0 or state.autocomplete_matches.items.len == 0) return;
@@ -5140,6 +5329,25 @@ test "tui composer surfaces preserve a strict lightness hierarchy" {
     try std.testing.expect(metadata_level < composer_level);
 }
 
+test "tui named themes preserve the surface hierarchy" {
+    const themes = [_]config_file.TuiTheme{ .vantari, .midnight, .high_contrast, .amber };
+    for (themes) |theme| {
+        applyTheme(theme);
+        try std.testing.expect(colorLevel(styles.surface.bg) < colorLevel(styles.meta_surface.bg));
+        try std.testing.expect(colorLevel(styles.meta_surface.bg) < colorLevel(styles.composer.bg));
+    }
+    applyTheme(.vantari);
+}
+
+test "tui top status layout reserves one row without moving the composer contract" {
+    const layout = computeLayoutForPosition(30, 0, 1, .top);
+    try std.testing.expectEqual(@as(u16, 1), layout.transcript_y);
+    try std.testing.expectEqual(@as(u16, 28), layout.transcript_height);
+    try std.testing.expectEqual(@as(u16, 29), layout.footer_y);
+    try std.testing.expectEqual(@as(u16, 1), layout.footer_height);
+    try std.testing.expectEqual(@as(u16, 0), layout.meta_y);
+}
+
 test "tui layout removes top chrome and keeps metadata below the lifted composer" {
     const tall = computeLayout(30);
     try std.testing.expectEqual(@as(u16, 27), tall.transcript_height);
@@ -5740,6 +5948,39 @@ test "tui log posture filters internal chat detail without dropping durable sequ
     try std.testing.expect(try full.recordProgressEvent(1, "tool_requested", "tool requested: search_files"));
     try std.testing.expectEqual(@as(usize, 1), full.messages.items.len);
     try std.testing.expect(std.mem.indexOf(u8, full.messages.items[0].text, "search_files") != null);
+}
+
+test "tui question requests share one crash-safe panel in orchestrate and align" {
+    var state = ChatState{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .workspace_root = "workspace",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    const request = "{\"request_id\":\"call-panel\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Direction\",\"options\":[{\"id\":\"a\",\"label\":\"Fast\"},{\"id\":\"b\",\"label\":\"Careful\"}]},{\"id\":\"q2\",\"prompt\":\"Scope\",\"options\":[{\"id\":\"a\",\"label\":\"Local\"},{\"id\":\"b\",\"label\":\"Full\"}]}]}";
+    const modes = [_]prompt_modes.PromptMode{ .orchestrate, .@"align" };
+    for (modes) |mode| {
+        state.prompt_mode = mode;
+        state.last_event_seq = 0;
+        try std.testing.expect(try state.recordProgressEvent(1, "input_requested", request));
+        try std.testing.expect(state.input_state != null);
+        try std.testing.expectEqual(@as(usize, 2), state.input_state.?.questions.items.len);
+        try std.testing.expectEqual(@as(u16, 6), state.input_state.?.panelHeight(20));
+        state.clearInputRequest();
+    }
+
+    state.prompt_mode = .@"align";
+    state.last_event_seq = 0;
+    try std.testing.expect(try state.recordProgressEvent(1, "input_requested", "{\"request_id\":\"call-bad\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Broken\",\"options\":[]}]}"));
+    try std.testing.expect(state.input_state == null);
+    try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "invalid question") != null);
 }
 
 test "tui agent child rows show a bounded turn summary instead of tool phases" {

@@ -14,7 +14,7 @@ version: 1.1.0
 | Runtime and proof | `../AGENTS.md` | Any code, runtime, process, or release change |
 | Session and context | `apps/backend/architecture.md` and `apps/backend/src/core/sessions/` | Transcript, summary, checkpoint, replay, or recovery work |
 | Agents and tickets | `apps/backend/src/core/agents/`, `apps/backend/src/core/tickets/`, `apps/backend/src/core/scheduler/` | Delegation, queue admission, pool capacity, leases, repair, or child projection work |
-| TUI | `apps/backend/src/clients/tui_chat.zig` and `apps/backend/README.md` | Terminal layout, activity rows, footer metadata, streaming, or input work |
+| TUI | `apps/backend/src/clients/tui_chat.zig`, `apps/backend/src/clients/question_view.zig`, `apps/backend/README.md`, and `AGENTS.d/extractions/2026-08-14-question-review-panel.md` | Terminal layout, activity rows, footer metadata, streaming, or input work |
 | Docs and records | `.docs/index.md`, `.docs/technical_summary.md`, `.docs/todo/AGENTS.md`, `.docs/changelog/AGENTS.md` | Documentation, planning, changelog, or handoff work |
 | References | `.refs/index.md` | Research, competitor harvest, or reference implementation work |
 | Active roadmap doctrine | `AGENTS.d/extractions/2026-08-12-prompt-led-autonomy.md`, `AGENTS.d/extractions/2026-08-12-subtractive-capability.md`, `AGENTS.d/extractions/2026-08-12-sequence-addressed-agent-mailbox.md`, and `AGENTS.d/extractions/2026-08-12-prompt-mode-profiles.md` | Every roadmap 24 decision until each extraction is graduated or retired |
