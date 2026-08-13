@@ -2,6 +2,7 @@ const std = @import("std");
 const auth_store = @import("../auth/store.zig");
 const config_file = @import("../config/file.zig");
 const profile_contract = @import("../agents/profile.zig");
+const provider_profile = @import("profile.zig");
 const types = @import("../../shared/types.zig");
 
 pub const Error = error{
@@ -170,8 +171,17 @@ pub fn resolve(
 
     var selected_auth: ?auth_store.ResolvedAuth = null;
     defer if (selected_auth) |value| value.deinit(allocator);
-    if (override.provider_id) |provider_id| {
+    var selected_provider_id: ?[]const u8 = if (override.provider_id) |provider_id| blk: {
         if (!hasText(provider_id)) return Error.InvalidRoute;
+        break :blk provider_profile.canonicalProviderId(provider_id);
+    } else null;
+    var model_override: ?[]const u8 = override.model;
+    if (model_override) |model_ref| {
+        const selection = provider_profile.resolveModelSelection(model_ref, selected_provider_id);
+        selected_provider_id = selection.provider_id orelse selected_provider_id;
+        model_override = selection.model_id;
+    }
+    if (selected_provider_id) |provider_id| {
         selected_auth = try auth_store.readProviderById(allocator, parent.workspace_root, provider_id);
     }
 
@@ -184,7 +194,7 @@ pub fn resolve(
     const auth_account_id = if (selected_auth) |value| value.account_id else parent.auth_account_id;
     const auth_expires_at_ms = if (selected_auth) |value| value.expires_at_ms else parent.auth_expires_at_ms;
     const wire_api = if (selected_auth) |value| value.wire_api else parent.wire_api;
-    const model = override.model orelse provider_model;
+    const model = model_override orelse provider_model;
     const thinking_mode = override.thinking_mode orelse parent.thinking_mode;
     const effort = if (override.effort) |e| e else parent.effort;
     const temperature = if (override.temperature) |t| t else parent.temperature;

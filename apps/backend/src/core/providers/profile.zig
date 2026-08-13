@@ -21,6 +21,106 @@ pub const Defaults = struct {
     anthropic_version: ?[]const u8 = null,
 };
 
+/// A provider-prefixed model selector. The slices borrow the caller's input;
+/// the provider id points at the canonical built-in id when the prefix is
+/// recognized. Model ids may still contain `/`, which is why selection only
+/// splits a known provider prefix.
+pub const ModelReference = struct {
+    provider_id: []const u8,
+    model_id: []const u8,
+};
+
+/// The result of resolving one user-facing model selector. The provider id is
+/// optional when the input is an unqualified model and no provider was
+/// explicit; the caller can then retain its existing active-provider path.
+pub const ModelSelection = struct {
+    provider_id: ?[]const u8 = null,
+    model_id: []const u8,
+};
+
+const known_provider_ids = [_][]const u8{
+    "openai-codex",
+    "openai-compatible",
+    "openai",
+    "anthropic",
+    "openrouter",
+    "zai",
+    "deepseek",
+    "groq",
+    "mistral",
+    "xai",
+    "google",
+    "gemini",
+    "ollama",
+    "lm-studio",
+    "vllm",
+};
+
+/// Normalize only the finite built-in provider namespace. Custom provider ids
+/// remain caller-owned and case-sensitive so a custom endpoint is never
+/// silently aliased to another credential record.
+pub fn canonicalProviderId(provider_id: []const u8) []const u8 {
+    for (known_provider_ids) |known| {
+        if (std.ascii.eqlIgnoreCase(provider_id, known)) return known;
+    }
+    return provider_id;
+}
+
+/// Split `provider/model-id` using the longest known provider prefix. A model
+/// such as `openrouter/anthropic/claude-sonnet` therefore resolves to provider
+/// `openrouter` and model `anthropic/claude-sonnet`, preserving gateway model
+/// namespaces. Unknown prefixes stay unqualified and are handled by the
+/// explicit `--provider`/route provider path.
+pub fn splitKnownProviderModel(model_ref: []const u8) ?ModelReference {
+    var best: ?ModelReference = null;
+    var best_provider_len: usize = 0;
+
+    for (known_provider_ids) |provider_id| {
+        if (model_ref.len <= provider_id.len + 1) continue;
+        if (model_ref[provider_id.len] != '/') continue;
+        if (!std.ascii.eqlIgnoreCase(model_ref[0..provider_id.len], provider_id)) continue;
+        if (provider_id.len <= best_provider_len) continue;
+        const model_id = model_ref[provider_id.len + 1 ..];
+        if (model_id.len == 0) continue;
+        best_provider_len = provider_id.len;
+        best = .{ .provider_id = provider_id, .model_id = model_id };
+    }
+
+    return best;
+}
+
+/// Strip a provider prefix only when it matches an explicitly selected
+/// provider. This preserves slash-bearing model ids such as
+/// `anthropic/claude-sonnet` when they are being sent through OpenRouter.
+pub fn modelForProvider(model_ref: []const u8, provider_id: []const u8) []const u8 {
+    if (model_ref.len <= provider_id.len + 1) return model_ref;
+    if (model_ref[provider_id.len] != '/') return model_ref;
+    if (!std.ascii.eqlIgnoreCase(model_ref[0..provider_id.len], provider_id)) return model_ref;
+    const model_id = model_ref[provider_id.len + 1 ..];
+    return if (model_id.len > 0) model_id else model_ref;
+}
+
+/// Resolve the canonical provider/model identity once for every caller. An
+/// explicit provider always wins; without one, only a known provider prefix
+/// selects credentials. Unknown prefixes remain part of the model id so a
+/// custom provider can define its own slash-bearing namespace.
+pub fn resolveModelSelection(model_ref: []const u8, explicit_provider_id: ?[]const u8) ModelSelection {
+    if (explicit_provider_id) |provider_id| {
+        const canonical_provider_id = canonicalProviderId(provider_id);
+        return .{
+            .provider_id = canonical_provider_id,
+            .model_id = modelForProvider(model_ref, canonical_provider_id),
+        };
+    }
+    if (splitKnownProviderModel(model_ref)) |reference| {
+        return .{
+            .provider_id = reference.provider_id,
+            .model_id = reference.model_id,
+        };
+    }
+    return .{ .model_id = model_ref };
+}
+
 /// Resolve the finite provider profile from stable id and endpoint evidence.
 /// Explicit persisted wire/auth values are applied by the caller; this helper
 /// only supplies safe defaults for legacy records and new provider login.
@@ -111,4 +211,43 @@ test "provider profile supplies built-in endpoint defaults without inventing cus
     try std.testing.expectEqualStrings("https://api.openai.com/v1", defaultBaseUrl("openai").?);
     try std.testing.expectEqualStrings("https://api.anthropic.com", defaultBaseUrl("anthropic").?);
     try std.testing.expect(defaultBaseUrl("private-gateway") == null);
+}
+
+test "provider model reference preserves nested gateway model namespaces" {
+    const reference = splitKnownProviderModel("openrouter/anthropic/claude-sonnet") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("openrouter", reference.provider_id);
+    try std.testing.expectEqualStrings("anthropic/claude-sonnet", reference.model_id);
+}
+
+test "provider model reference canonicalizes built-in provider casing" {
+    const reference = splitKnownProviderModel("AnThRoPiC/claude-sonnet") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("anthropic", reference.provider_id);
+    try std.testing.expectEqualStrings("claude-sonnet", reference.model_id);
+    try std.testing.expectEqualStrings("openai", canonicalProviderId("OPENAI"));
+}
+
+test "explicit provider keeps slash-bearing model ids unless its own prefix matches" {
+    try std.testing.expectEqualStrings(
+        "anthropic/claude-sonnet",
+        modelForProvider("anthropic/claude-sonnet", "openrouter"),
+    );
+    try std.testing.expectEqualStrings(
+        "claude-sonnet",
+        modelForProvider("anthropic/claude-sonnet", "anthropic"),
+    );
+    try std.testing.expectEqualStrings("custom-model", modelForProvider("custom-model", "anthropic"));
+}
+
+test "model selection resolves explicit and inferred providers through one owner" {
+    const explicit = resolveModelSelection("anthropic/claude-sonnet", "ANTHROPIC");
+    try std.testing.expectEqualStrings("anthropic", explicit.provider_id.?);
+    try std.testing.expectEqualStrings("claude-sonnet", explicit.model_id);
+
+    const inferred = resolveModelSelection("openrouter/anthropic/claude-sonnet", null);
+    try std.testing.expectEqualStrings("openrouter", inferred.provider_id.?);
+    try std.testing.expectEqualStrings("anthropic/claude-sonnet", inferred.model_id);
+
+    const custom = resolveModelSelection("tenant/model/v2", null);
+    try std.testing.expect(custom.provider_id == null);
+    try std.testing.expectEqualStrings("tenant/model/v2", custom.model_id);
 }

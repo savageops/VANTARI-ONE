@@ -381,7 +381,7 @@ pub const run_help_text =
     \\  --prompt-file <path>      Read the prompt from a file and trim trailing newlines.
     \\  --session-id <session-id> Resume an existing canonical session and reuse its stored prompt.
     \\  --provider <id>           Select an auth-ledger provider for this run only (not persisted).
-    \\  --model <id>              Override the selected provider model for this run only (not persisted).
+    \\  --model <id|provider/id>  Override the selected model; a known provider/id selects that provider for this run.
     \\  --context-window <tokens> Override the context-window size for compaction thresholds this run only.
     \\  --max-output-tokens <n>   Override the reserved output token budget this run only.
     \\  --json                    Emit {"session_id","output"} instead of plain text.
@@ -910,6 +910,8 @@ fn executeRunViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8,
     var client = try stdio_rpc.LocalClient.initInWorkspace(allocator, workspace_root);
     defer client.deinit();
 
+    const turn_overrides = resolveTurnOverrides(run_options);
+
     const initialize = try callKernelOrExit(allocator, &client, protocol_types.methods.initialize, "{}");
     defer initialize.deinit(allocator);
     const initialize_result = try expectKernelResult(allocator, initialize);
@@ -929,8 +931,8 @@ fn executeRunViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8,
         run_options.enable_agent_tools,
         if (run_options.json_output) .silent else .stderr,
         .{
-            .provider_override = run_options.provider_override,
-            .model_override = run_options.model_override,
+            .provider_override = turn_overrides.provider_override,
+            .model_override = turn_overrides.model_override,
             .context_window_override = run_options.context_window_override,
             .max_output_tokens = run_options.max_output_tokens,
         },
@@ -955,6 +957,30 @@ fn executeRunViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8,
 
     try writeStdout(output);
     try writeStdout("\n");
+}
+
+/// Resolve the user-facing provider/model identity before it crosses the
+/// protocol boundary. The kernel still receives separate fields, which keeps
+/// its wire contract stable, while CLI selection gains the unambiguous
+/// `provider/model-id` form used by the strongest reference harnesses.
+fn resolveTurnOverrides(options: RunCliOptions) TurnOverrides {
+    var resolved = TurnOverrides{
+        .provider_override = options.provider_override,
+        .model_override = options.model_override,
+        .context_window_override = options.context_window_override,
+        .max_output_tokens = options.max_output_tokens,
+    };
+
+    if (resolved.provider_override) |provider_id| {
+        resolved.provider_override = provider_profile.canonicalProviderId(provider_id);
+    }
+    if (resolved.model_override) |model_ref| {
+        const selection = provider_profile.resolveModelSelection(model_ref, resolved.provider_override);
+        resolved.provider_override = selection.provider_id orelse resolved.provider_override;
+        resolved.model_override = selection.model_id;
+    }
+
+    return resolved;
 }
 
 const PromptTurn = struct {
@@ -2290,6 +2316,30 @@ test "cli health projection preserves pool and ticket pressure for installed con
     try std.testing.expect(std.mem.indexOf(u8, text, "agent_pool: 3/6 running, 3 idle, 1 available, 2 queued, status=healthy") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "tickets: 2 assigned, 3 in_progress, 1 blocked") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "ticket_ledger: healthy") != null);
+}
+
+test "cli model selector resolves a known provider and nested gateway model" {
+    const resolved = resolveTurnOverrides(.{ .model_override = "openrouter/anthropic/claude-sonnet" });
+    try std.testing.expectEqualStrings("openrouter", resolved.provider_override.?);
+    try std.testing.expectEqualStrings("anthropic/claude-sonnet", resolved.model_override.?);
+}
+
+test "cli explicit provider preserves a namespaced model id" {
+    const resolved = resolveTurnOverrides(.{
+        .provider_override = "openrouter",
+        .model_override = "anthropic/claude-sonnet",
+    });
+    try std.testing.expectEqualStrings("openrouter", resolved.provider_override.?);
+    try std.testing.expectEqualStrings("anthropic/claude-sonnet", resolved.model_override.?);
+}
+
+test "cli explicit provider strips only its own model prefix" {
+    const resolved = resolveTurnOverrides(.{
+        .provider_override = "ANTHROPIC",
+        .model_override = "anthropic/claude-sonnet",
+    });
+    try std.testing.expectEqualStrings("anthropic", resolved.provider_override.?);
+    try std.testing.expectEqualStrings("claude-sonnet", resolved.model_override.?);
 }
 
 fn writeStdout(text: []const u8) !void {
