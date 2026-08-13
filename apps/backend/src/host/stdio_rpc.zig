@@ -670,7 +670,7 @@ fn dispatch(
         return handleSessionGet(server, params);
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.session_list)) {
-        return handleSessionList(server);
+        return handleSessionList(server, params);
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.schedule_get)) {
         return handleScheduleGet(server, params);
@@ -1156,11 +1156,21 @@ fn isStaleUnownedRunningSession(server: *Server, session: *const types.SessionRe
     return now - last_observed_ms >= stale_running_session_ms;
 }
 
-fn handleSessionList(server: *Server) ![]u8 {
+fn handleSessionList(server: *Server, params: ?std.json.Value) ![]u8 {
+    const limit: ?u64 = if (params) |value| blk: {
+        if (value != .object) return Error.InvalidParams;
+        break :blk optionalU64FromObject(&value.object, "limit") catch return Error.InvalidParams;
+    } else null;
+
     const sessions = try store.listSessionRecords(server.allocator, server.config.workspace_root);
     defer types.deinitSessionRecords(server.allocator, sessions);
 
-    var outputs = try server.allocator.alloc(?[]u8, sessions.len);
+    const visible_count = if (limit) |value| blk: {
+        const bounded = @min(value, @as(u64, std.math.maxInt(usize)));
+        break :blk @min(sessions.len, @as(usize, @intCast(bounded)));
+    } else sessions.len;
+
+    var outputs = try server.allocator.alloc(?[]u8, visible_count);
     defer {
         for (outputs) |maybe_output| {
             if (maybe_output) |output| server.allocator.free(output);
@@ -1169,10 +1179,10 @@ fn handleSessionList(server: *Server) ![]u8 {
     }
     @memset(outputs, null);
 
-    var summaries = try server.allocator.alloc(protocol_types.SessionSummary, sessions.len);
+    var summaries = try server.allocator.alloc(protocol_types.SessionSummary, visible_count);
     defer server.allocator.free(summaries);
 
-    for (sessions, 0..) |*session, index| {
+    for (sessions[0..visible_count], 0..) |*session, index| {
         try reconcileStaleRunningSession(server, session);
 
         outputs[index] = try store.readOutput(server.allocator, server.config.workspace_root, session.id);
@@ -2349,6 +2359,39 @@ test "session/list keeps hydrated outputs alive through response render" {
     try std.testing.expect(std.mem.indexOf(u8, response, "\"id\":\"req-list-output\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "assistant output must survive stdio render") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, session.id) != null);
+}
+
+test "session/list bounds the response for lightweight selectors" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    var stdout_capture = try attachTestStdout(&tmp, &server, "bounded-list-stdout.bin");
+    defer stdout_capture.close();
+
+    var first = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "first session", .{
+        .status = .completed,
+    });
+    defer first.deinit(std.testing.allocator);
+    var second = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "second session", .{
+        .status = .completed,
+    });
+    defer second.deinit(std.testing.allocator);
+
+    const response = (try processRequest(&server, "{\"jsonrpc\":\"2.0\",\"id\":\"req-list-limit\",\"method\":\"session/list\",\"params\":{\"limit\":1}}")).?;
+    defer std.testing.allocator.free(response);
+
+    const first_present = std.mem.indexOf(u8, response, first.id) != null;
+    const second_present = std.mem.indexOf(u8, response, second.id) != null;
+    try std.testing.expect(first_present != second_present);
 }
 
 test "session/resume reconciles stale running sessions before returning state" {

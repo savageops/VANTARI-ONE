@@ -315,7 +315,9 @@ const ChatState = struct {
     }
 
     fn loadLatestSession(self: *ChatState) !bool {
-        const list_call = try self.client.call(protocol.methods.session_list, "{}");
+        const list_params = try renderJsonAlloc(self.allocator, .{ .limit = 1 });
+        defer self.allocator.free(list_params);
+        const list_call = try self.client.call(protocol.methods.session_list, list_params);
         defer list_call.deinit(self.allocator);
         const list_result_json = try expectKernelResult(self.allocator, list_call);
         defer self.allocator.free(list_result_json);
@@ -362,12 +364,10 @@ const ChatState = struct {
 
         try self.hydrateTranscript(parsed_get.value.messages);
         for (parsed_get.value.events) |event| {
-            // Legacy rows have no replay identity and cannot arrive again over
-            // the current versioned transport. Preserve their cold projection.
-            if (event.seq == 0) {
-                if (replayProgressEvent(event.event_type)) try self.addProgress(event.event_type, event.message);
-                continue;
-            }
+            // Legacy rows have no replay identity. The current TUI must not
+            // render them: sequence-bearing parent events are the sole activity
+            // projection source after the versioned event spine landed.
+            if (event.seq == 0) continue;
             if (event.seq <= self.last_event_seq) continue;
             if (event.seq != try nextProgressSeq(self.last_event_seq)) return error.EventSequenceGap;
             self.trackRunEvent(event.seq, event.event_type);
@@ -3982,6 +3982,81 @@ test "tui durable catch-up applies an exact missing suffix in ledger order" {
     try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
     try std.testing.expectEqualStrings("onetwothree", state.messages.items[0].text);
     try std.testing.expectEqual(@as(u64, 3), state.last_event_seq);
+}
+
+test "tui ignores sequence-less legacy activity events" {
+    var state = ChatState{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "glm-5.1",
+        .base_url = "https://api.z.ai/api/coding/paas/v4",
+        .auth_provider = "zai",
+        .plan = "coding",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    const legacy = [_]VAR1.shared.types.SessionEvent{
+        .{
+            .seq = 0,
+            .event_type = "child_progress",
+            .message = "{\"group_id\":\"legacy\",\"task_id\":\"task\",\"name\":\"Legacy\",\"status\":\"running\"}",
+            .timestamp_ms = 42,
+        },
+    };
+    try std.testing.expect(!try state.recordProgressEvents(&legacy));
+    try std.testing.expectEqual(@as(usize, 0), state.messages.items.len);
+    try std.testing.expectEqual(@as(u64, 0), state.last_event_seq);
+}
+
+test "tui child activity replay equals contiguous live event projection" {
+    const allocator = std.testing.allocator;
+    var live = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "glm-5.2",
+        .base_url = "https://api.z.ai/api/coding/paas/v4",
+        .auth_provider = "zai",
+        .plan = "coding",
+        .subscription_status = "active",
+    };
+    defer live.deinit();
+    var replay = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "E:\\Workspaces\\01_Projects\\01_Github\\VANTARI-ONE",
+        .model = "glm-5.2",
+        .base_url = "https://api.z.ai/api/coding/paas/v4",
+        .auth_provider = "zai",
+        .plan = "coding",
+        .subscription_status = "active",
+    };
+    defer replay.deinit();
+
+    const events = [_]VAR1.shared.types.SessionEvent{
+        .{ .seq = 1, .event_type = "child_group_started", .message = "{\"group_id\":\"group\",\"queued\":1,\"terminal\":false}", .timestamp_ms = 1 },
+        .{ .seq = 2, .event_type = "child_admitted", .message = "{\"group_id\":\"group\",\"task_id\":\"task\",\"name\":\"Scout\",\"status\":\"queued\"}", .timestamp_ms = 2 },
+        .{ .seq = 3, .event_type = "child_progress", .message = "{\"group_id\":\"group\",\"task_id\":\"task\",\"name\":\"Scout\",\"status\":\"running\",\"phase\":\"assistant_response\",\"detail\":\"Mapped the workspace.\"}", .timestamp_ms = 3 },
+        .{ .seq = 4, .event_type = "child_finished", .message = "{\"group_id\":\"group\",\"task_id\":\"task\",\"name\":\"Scout\",\"status\":\"completed\"}", .timestamp_ms = 4 },
+        .{ .seq = 5, .event_type = "child_group_finished", .message = "{\"group_id\":\"group\",\"completed\":1,\"terminal\":true}", .timestamp_ms = 5 },
+    };
+
+    for (events) |event| {
+        _ = try live.recordProgressEvent(event.seq, event.event_type, event.message);
+    }
+    _ = try replay.recordProgressEvents(&events);
+
+    try std.testing.expectEqual(live.last_event_seq, replay.last_event_seq);
+    try std.testing.expectEqual(live.messages.items.len, replay.messages.items.len);
+    for (live.messages.items, replay.messages.items) |live_message, replay_message| {
+        try std.testing.expectEqual(live_message.role, replay_message.role);
+        try std.testing.expectEqualStrings(live_message.text, replay_message.text);
+        try std.testing.expectEqual(live_message.activity_kind, replay_message.activity_kind);
+        try std.testing.expectEqual(live_message.activity_state, replay_message.activity_state);
+        try std.testing.expectEqual(live_message.activity_last, replay_message.activity_last);
+    }
 }
 
 test "tui scrollback keeps transcript navigable without mutating input state" {

@@ -322,6 +322,7 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - **Agent activity tree** — nested group/item rows with tree connectors
 - **Agent turn summaries** — each keyed child row shows a bounded summary from the canonical child session summary ledger; tool phases update the state marker and never replace the row with `tool_completed`
 - **Minimal agent group rows** — `Agents completed/total`; no persistent `waiting on N` filler
+- **Replay-safe activity** — live and cold TUI projections consume contiguous sequence-bearing parent events; legacy sequence-less activity rows are not rendered
 - **Live streaming** — assistant deltas, reasoning deltas, and tool progress rendered in real-time
 - **Operator metadata row** — model, effort, context used/capacity/remaining, active agents, pool pressure, and queue pressure; persistent `Esc cancel` text is omitted
 

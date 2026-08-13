@@ -16,7 +16,7 @@ child-agent execution, and recovery evidence. TUI and CLI render kernel
 projections. `apps/frontend` is an ignored local prototype, not a shipped
 tracked client.
 
-## Current frontier — Move 40
+## Current frontier — Move 41
 
 Move 34 closes the Codex subscription transport slice. `core/auth/store.zig`
 remains the single credential owner for workspace `.var/auth.json` and installed
@@ -90,7 +90,28 @@ and 1,962/1,962 tests; ReleaseFast/install passes 9/9; current source and
 installed SHA-256 is
 `279A112A1D7CD94BF2C5678C961E83A3458951CB9D48E9C5CC21A6D01DF409AF`; the final
 installed VANTARI process census is zero. No plugin runtime capability is
-claimed. Move 41 is the next frontier.
+claimed.
+
+Move 41 closes the TUI projection boundary. `ChatState` now renders activity
+only from contiguous sequence-bearing parent events; sequence-less legacy
+activity rows are ignored during cold hydration, while transcript messages
+remain the transcript source. The supervisor's `assistant_response` projection
+continues to read the bounded canonical child row from `summaries.jsonl`, so
+tool phases remain typed state markers rather than visible child conclusions.
+Live application and contiguous cold replay now prove identical keyed group/item
+rows, state, text, and cursor.
+
+Move 41 also bounds the existing `session/list` owner response when a caller
+supplies `limit`; `vantari -c` requests one latest summary instead of
+serializing every workspace session. This repaired the installed continuation
+failure reproduced with 19,213 sessions and an 8 MiB owner response cap without
+adding a second session selector or registry. The persistent owner still
+survives presentation detach by design; the installed proof explicitly tore
+down the exact owner tree after exercising `vantari -c` and the blank TUI.
+Debug passes `19/19` build steps and `1,967/1,967` tests; ReleaseFast/install
+passes `9/9`; current source and installed SHA-256 is
+`C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54`; final
+installed VANTARI process census is zero. Move 42 is the next frontier.
 
 ## Behavior plane
 
@@ -283,14 +304,14 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,957/1,957 tests with zero skips.
+- The complete graph passes 19/19 steps and 1,967/1,967 tests with zero skips.
   The reduced total is intentional: one registry loop executes all 53 declared
   cases and replaces 45 one-case wrappers that left ten cases undiscovered.
   Its host lane executes the stdio child, owner state/client, shared process
   lock, bridge, and process-tree contracts; the integration lane includes
   exact owner route, lease, stalled-loopback deadline, and explicit-workspace
   precedence probes. The backend
-  TUI lane passes 61/61.
+  TUI lane passes 63/63.
 - A barrier-synchronized leadership race returns one guard and one
   `LeaseUnavailable`. Native proof root
   `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1` starts two
@@ -389,10 +410,10 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   exactly. No CRC fields, sidecar quarantine ledger, auto-truncation path, or
   repair daemon was added.
 - The current source ReleaseFast and installed artifact share SHA-256
-  `279A112A1D7CD94BF2C5678C961E83A3458951CB9D48E9C5CC21A6D01DF409AF`.
-  Moves 37–40, Move 34 Codex transport, owner lifecycle, and ticket lifecycle
-  promotion all pass; the installed catalog excludes `manage_plugin` and the
-  final installed process census is zero.
+  `C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54`.
+  Moves 37–41, Move 34 Codex transport, owner lifecycle, and ticket lifecycle
+  promotion all pass; the installed catalog excludes `manage_plugin`, latest
+  session selection is bounded, and the final installed process census is zero.
 - Installed Codex OAuth consumer proof used a valid disposable `$VANTARI_HOME`
   fixture with a pinned context window to avoid unrelated local-model discovery.
   The captured request path was `/codex/responses`; the response was `ok`; no

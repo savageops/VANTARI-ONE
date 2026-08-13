@@ -95,7 +95,7 @@ advance the queue until the real installed consumer path proves it.
 > Move 37/38 supersedes the installed artifact hash recorded by the historical
 > Move 34, Move 33, and earlier Move 38 receipts; the current
 > source/installed hash is
-> `279A112A1D7CD94BF2C5678C961E83A3458951CB9D48E9C5CC21A6D01DF409AF`.
+> `C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54`.
 
 ## Competitive basis
 
@@ -184,7 +184,7 @@ advance the queue until the real installed consumer path proves it.
 
 | # | Next move | Owner and terminal proof |
 |---:|---|---|
-| 41 | Render the footer and agent rows only from sequence-bearing events and canonical summaries. | `clients/tui_chat.zig`; replay equals live view. |
+| 41 | Render the footer and agent rows only from sequence-bearing events and canonical summaries. | closed: deleted the sequence-less cold replay fallback; added legacy-event rejection and live/replay keyed-row parity tests; bounded `session/list { limit: 1 }` for TUI latest-session selection after a 19,213-session installed response exceeded the owner transport cap; Debug `19/19`, `1,967/1,967`, ReleaseFast/install `9/9`, installed `vantari -c` continuation and blank TUI start/exit passed, source/installed SHA-256 `C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54`, exact proof-owned owner tree teardown and final zero process census. |
 | 42 | Make the composer slightly lighter than transcript background and lighter than its metadata row using design tokens; remove persistent `Esc cancel` copy and expose cancellation only when relevant. | TUI theme/composer; narrow and wide snapshots with no wasted steady-state width. |
 | 43 | Let Shift+Tab cycle session-scoped `orchestrate`, `build`, `align`, and `plan` prompt profiles; default to `orchestrate` and apply the selected hot-loaded layer on the next turn. | TUI plus prompt builder; provider-visible prompt capture proves method changes without executor or capability branches. |
 | 44 | Keep one compact row for status, active prompt mode, model, effort, context used/capacity/percent, and remaining context. | footer; graceful truncation without wrap. |

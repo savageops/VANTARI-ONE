@@ -221,7 +221,16 @@ The current footer direction is correct:
 - Use the bounded child turn summary as the child row label; tool phases are state markers only.
 - Put per-agent model, effort, elapsed time, token/cost detail, tools, and receipts in an on-demand Agent Hub, not the footer.
 
-The producer/transport replay contract now carries exact identity: `SessionEventNotification` is versioned and includes the stored event sequence ([types.zig](../../apps/backend/src/shared/protocol/types.zig#L68)), and every producer persists before emission. The TUI still ignores that field and deduplicates by timestamp, event type, and message ([tui_chat.zig](../../apps/backend/src/clients/tui_chat.zig)). Identical same-millisecond events can therefore still disappear at the client boundary.
+At the time of this sitrep, the producer/transport replay contract carried exact
+identity but the TUI still ignored it and deduplicated by timestamp, event type,
+and message. Move 41 supersedes that pre-change diagnosis: `ChatState` now
+uses the stored sequence as its sole activity identity, rejects sequence-less
+legacy activity on cold load, and proves live/cold keyed-row parity.
+
+Move 41 also repaired the installed latest-session selector. The TUI requests
+`session/list { limit: 1 }` so a large workspace cannot overflow the owner
+response cap before continuation begins; the existing unbounded list behavior
+remains available to callers that do not supply `limit`.
 
 ## What is already strong
 
@@ -427,3 +436,16 @@ binary, a clean clone, another host, a multi-process session writer,
 exactly-once mid-turn owner recovery, or a live external-provider turn on this
 ReleaseFast binary. Those remain
 explicit promotion gates, not implied success.
+
+## Superseding current evidence — Move 41 (2026-08-13)
+
+The earlier residual boundary is a historical snapshot from before the later
+closure chain. Move 41 now has its own current owner and proof record at
+`[2026-08-13-tui-projection-move41.md](2026-08-13-tui-projection-move41.md)`.
+The installed source/consumer path passes 19/19 build steps and 1,967/1,967
+tests, the focused TUI lane passes 63/63, and the ReleaseFast/install artifact
+hash matches `C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54`.
+The latest-session TUI selector is bounded, sequence-less legacy activity is
+not rendered, and live/cold keyed-row projection is equal. The persistent owner
+survives presentation detach by design; the exact proof-owned tree was torn
+down after installed continuation and blank-TUI checks, leaving zero processes.

@@ -2577,3 +2577,39 @@ re-decompose it against the proven built-in capability boundary.
 
 **Next todo:** Move 41 — render the footer and agent rows only from
 sequence-bearing events and canonical summaries.
+
+## Move 41 — sequence-addressed TUI projection and bounded continuation (2026-08-13)
+
+**State:** closed
+
+- The method gate harvested Codex, pi, oh-my-pi, Eve, Flue, NullClaw, and
+  OpenClaw lifecycle invariants. The compression decision was to keep
+  `ChatState` as the sole TUI read model, parent `events.jsonl` sequence as
+  render identity, and `summaries.jsonl` as the canonical child-turn summary.
+  No activity registry, child transcript reader, status bus, or parallel cursor
+  was added.
+- Deleted the sequence-less cold replay fallback in
+  `apps/backend/src/clients/tui_chat.zig`. Added adversarial coverage proving
+  legacy `seq == 0` activity is ignored and a contiguous live application
+  equals cold replay for keyed group/item rows, text, state, and cursor.
+- Repaired the installed `vantari -c` continuation boundary with the existing
+  `session/list` owner: an optional `limit` bounds lightweight selectors,
+  and the TUI requests `limit: 1`. This removed the 8 MiB response failure
+  reproduced against 19,213 sessions without adding a second selector owner.
+- Canonical source proof: `.\\scripts\\zigw.ps1 build test --summary all` returned
+  19/19 build steps and 1,967/1,967 tests. Focused TUI proof returned 9/9 steps
+  and 63/63 tests. `git diff --check` returned no whitespace errors.
+- Installed proof: ReleaseFast build/install returned 9/9; `vantari -c`
+  hydrated the latest session and rendered persisted child rows; blank TUI
+  startup/exit passed. Source and installed SHA-256 match
+  `C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54`.
+  The persistent owner survived presentation detach by design; the exact
+  proof-owned owner tree was explicitly torn down after both checks and the
+  final VANTARI process census was zero.
+- Updated the roadmap, technical summary, workspace record, findings receipt,
+  current sitrep supersession, research index, root README, backend README,
+  backend architecture, and CLI/TUI rendering contract. Move 42 is next:
+  composer tint hierarchy and conditional cancellation affordance.
+
+**Next todo:** Move 42 — make the composer lighter than transcript and metadata
+surfaces, remove persistent `Esc cancel` copy, and prove narrow/wide layout.

@@ -352,7 +352,7 @@ The installed `vantari` client renders a full terminal interface with:
 - **Bounded command output** — `shell_exec` stdout/stderr streams into the TUI with configurable caps
 - **Scrollback** — Page Up/Down, Ctrl+Home/End for full transcript navigation
 - **Session continuation** — `vantari -c` resumes the latest session with full transcript hydration
-- **Exact event replay** — the TUI renders by the persisted per-session event sequence; a gap fetches only the missing suffix and a completed turn performs one final suffix check
+- **Exact event replay** — the TUI renders activity only from contiguous persisted event sequences and canonical child summaries; sequence-less legacy activity is ignored, a gap fetches only the missing suffix, and a completed turn performs one final suffix check
 - **Concurrent execution model** — RPC runs on a background thread while the main thread handles UI events and drains live notifications without owning transcript or event truth
 
 ### Scoped Delegation
@@ -491,7 +491,7 @@ shipped runtime.
 | `session/compact` | Write a manual context checkpoint from stable message sequence ranges |
 | `session/cancel` | Cancel only the run identified by the observed `session_started` sequence; stale generations are no-ops |
 | `session/get` | Return session summary, messages, and events |
-| `session/list` | Return known session summaries |
+| `session/list` | Return known session summaries; `limit` bounds lightweight selectors |
 | `schedule/get` | Read a durable scheduler job by ID |
 | `schedule/list` | List scheduler jobs, optionally including deleted |
 | `models/list` | Discover available models from the active or a specified provider |

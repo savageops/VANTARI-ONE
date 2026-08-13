@@ -519,7 +519,7 @@ hash-matched binary.
 - `src/clients/cli.zig`
   thin protocol-backed CLI
 - `src/clients/tui_chat.zig`
-  terminal projection over exact `events.jsonl` sequence with live burst draining, demand-driven suffix repair, and adaptive frame backpressure
+  terminal projection over exact `events.jsonl` sequence with live burst draining, demand-driven suffix repair, adaptive frame backpressure, and canonical child summaries; sequence-less legacy activity is not rendered
 - `apps/frontend/var1-client`
   external static browser client over `/api/health`, `/rpc`, and `/events`
 
@@ -558,7 +558,7 @@ The current validation lane should always prove these slices together:
 - role-routed agent batches prove bounded 1/5/20/100 admission, zero provider-spin waiting, O(1) healthy lookup, exact convergence, cancellation, and receipt recovery
 - parked parents wake on the first terminal child, compile each ready result once, and remain non-terminal while siblings are active
 - parent child-control events remain bounded while assistant/reasoning deltas stay in child ledgers
-- TUI activity families share one nested checkbox/rail projection driven by typed events; child rows show bounded turn summaries, not tool phase labels
+- TUI activity families share one nested checkbox/rail projection driven by contiguous sequence-bearing typed events; child rows show bounded canonical turn summaries, not tool phase labels
 - ticket assignment queues work without direct launch; scheduler claims through the fixed pool and reconciles stale owners
 - derivative memory rejects transcript replay while citing source sequence ranges
 - heartbeat/evaluator evidence appends redacted non-mutating events
@@ -579,11 +579,11 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-13:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Debug and ReleaseFast test graphs -> 19/19 steps and 1964/1964 tests passed. The lower
+- Debug and ReleaseFast test graphs -> 19/19 steps and 1967/1967 tests passed. The lower
   total is intentional: 45 one-case registry wrappers were replaced by one loop
   that executes every one of the 53 declared cases, including ten that had no
   test declaration.
-- Focused backend TUI -> 61/61 passed.
+- Focused backend TUI -> 63/63 passed.
 - Host lifecycle lane passes, including atomic same-session admission,
   session-keyed buffer state, exact-generation cancellation,
   cancellation-before-join shutdown, RPC deadlines, late-response retirement,
@@ -617,11 +617,15 @@ Latest local Windows validation on 2026-08-13:
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Current source and installed SHA-256 match at
-  `09758F2AFE34AC5DCD94F786B5A307F8BB0DF9A11E5DA65B743A6EBB62354834`.
+  `C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54`.
   Move 37/38 installation, the installed owner/ticket lifecycle proofs, Move 33
   auth help/status redaction, Move 34 Codex `/codex/responses` consumer proof,
-  and the Move 37 TUI cost consumer proof pass; the final installed process
-  census is zero.
+  the Move 37 TUI cost consumer proof, and Move 41 sequence-addressed
+  replay/continuation proof pass; the final installed process census is zero.
+- Move 41 installed `vantari -c` against a workspace with 19,213 sessions.
+  The TUI now requests `session/list { limit: 1 }`, hydrates the latest
+  transcript, renders the persisted child rows, and exits cleanly after the
+  exact persistent-owner tree is torn down. Blank TUI startup/exit also passed.
 - The source ticket lifecycle mesh at
   `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`
   proves assignment without launch, one claim, noninteractive TUI detach, exact

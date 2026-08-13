@@ -143,3 +143,22 @@ Do not erase historical closeout records or fabricate proof to make a chain gree
   final installed process census was zero.
 - The next active boundary is Move 41. PLUG move 86 is conditional on a new
   concrete need and owner-mapped recon.
+
+## Closure receipt — Move 41 (2026-08-13)
+
+- Move 41 closes the TUI projection owner. Cold hydration ignores sequence-less
+  legacy activity; contiguous sequence-bearing parent events are the only
+  activity source; canonical child summaries remain sourced from
+  `summaries.jsonl`; live and cold keyed-row projections match.
+- The existing `session/list` endpoint now accepts optional `limit`;
+  the TUI requests `limit: 1` for latest-session selection. This repaired
+  installed `vantari -c` against a 19,213-session workspace without a new
+  registry or selector path.
+- Source proof is 19/19 build steps and 1,967/1,967 tests; the focused TUI lane
+  is 63/63; ReleaseFast/install is 9/9. Source and installed SHA-256 match
+  `C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54`.
+  Installed continuation and blank TUI startup/exit passed; the exact
+  persistent-owner tree was torn down for proof and final process census is
+  zero.
+- The current active boundary is Move 42. Move 50 Agent Hub and the visual
+  installed matrix remain later boundaries; no completion is inferred for them.

@@ -137,6 +137,7 @@ Typed events are the runtime's nervous system. String breadcrumbs may exist only
 - Event cursors use monotonic ledger position plus replay suppression. Timestamp-only cursors are insufficient under same-millisecond bursts.
 - `var1.session_event_notification.v1` carries the exact stored event `seq`. Persist before emission; clients must not replace ledger identity with a transport-local ordinal.
 - A client uses stored `seq` as its sole render identity. A transport ordinal drains only its process-local queue; a sequence gap requests the durable `session/get` suffix. Do not add timestamp/text caches or periodic full-event polling.
+- Cold TUI hydration renders activity only from sequence-bearing events. A `seq == 0` legacy activity row is ignored; transcript messages remain the cold transcript source.
 - `core/sessions/store.zig::commitTurnTerminal` is the only current run-settlement writer. Commit under the event-ledger lock; repeat of the same outcome is idempotent, a stale generation or conflicting outcome fails before append, and session status remains a projection. Treat `turn_finished`, `session_failed`, `session_cancelled`, and related turn-specific names as read-only legacy inputs.
 
 ## V. Tool Runtime Contract
