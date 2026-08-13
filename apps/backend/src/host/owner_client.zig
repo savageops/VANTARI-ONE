@@ -226,10 +226,27 @@ fn readHealthyOwner(allocator: std.mem.Allocator, workspace_root: []const u8) !o
 }
 
 fn spawnOwner(allocator: std.mem.Allocator, workspace_root: []const u8) !owner_state.Snapshot {
-    if (builtin.os.tag != .windows) return Error.PersistentOwnerUnsupported;
-
     const executable_path = try std.fs.selfExePathAlloc(allocator);
     defer allocator.free(executable_path);
+
+    if (builtin.os.tag != .windows) {
+        var child = try spawnDetachedPosixOwner(allocator, executable_path, workspace_root);
+        var child_reaped = false;
+        errdefer if (!child_reaped) stopSpawnedPosixOwner(&child);
+
+        var timer = try std.time.Timer.start();
+        while (timer.read() / std.time.ns_per_ms < owner_start_timeout_ms) {
+            if (readHealthyOwner(allocator, workspace_root)) |snapshot| return snapshot else |_| {}
+
+            if (posixOwnerExited(&child)) {
+                child_reaped = true;
+                return Error.OwnerStartFailed;
+            }
+            std.Thread.sleep(owner_start_poll_ms * std.time.ns_per_ms);
+        }
+        return Error.OwnerStartTimeout;
+    }
+
     var child = try spawnDetachedWindowsOwner(allocator, executable_path, workspace_root);
     var child_live = true;
     errdefer if (child_live) stopSpawnedOwner(child);
@@ -250,6 +267,47 @@ fn spawnOwner(allocator: std.mem.Allocator, workspace_root: []const u8) !owner_s
         std.Thread.sleep(owner_start_poll_ms * std.time.ns_per_ms);
     }
     return Error.OwnerStartTimeout;
+}
+
+// Rationale: Linux and macOS consumers need the same one-owner facade as
+// Windows; refusing every POSIX launch makes the installed binary unusable.
+// Decision: spawn the existing `execution-owner` entrypoint through Zig's
+// native child-process primitive, isolate its process group, discard inherited
+// terminal streams, and wait only for exec admission before health polling.
+// Source: Zig 0.15.1 `std/process/Child.zig` defines POSIX ids, `cwd`, `pgid`,
+// `StdIo.Ignore`, `spawn`, and `waitForSpawn` for this lifecycle.
+// Reference: https://ziglang.org/documentation/0.15.1/std/#std.process.Child
+// Proof: `readHealthyOwner` must observe the published owner projection, while
+// owner-start failure must reap the child and preserve the existing lease path.
+fn spawnDetachedPosixOwner(
+    allocator: std.mem.Allocator,
+    executable_path: []const u8,
+    workspace_root: []const u8,
+) !std.process.Child {
+    const argv = [_][]const u8{ executable_path, "execution-owner", "--workspace", "." };
+    var child = std.process.Child.init(&argv, allocator);
+    child.cwd = workspace_root;
+    child.pgid = 0;
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    try child.spawn();
+    child.waitForSpawn() catch |err| {
+        _ = child.kill() catch {};
+        return err;
+    };
+    return child;
+}
+
+fn posixOwnerExited(child: *std.process.Child) bool {
+    if (comptime builtin.os.tag == .windows) return false;
+    const result = std.posix.waitpid(child.id, std.posix.W.NOHANG);
+    return result.pid != 0;
+}
+
+fn stopSpawnedPosixOwner(child: *std.process.Child) void {
+    if (comptime builtin.os.tag == .windows) return;
+    _ = child.kill() catch {};
 }
 
 const SpawnedOwner = struct {

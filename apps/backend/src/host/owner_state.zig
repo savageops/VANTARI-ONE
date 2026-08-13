@@ -151,11 +151,20 @@ pub fn read(allocator: std.mem.Allocator, workspace_root: []const u8) !Snapshot 
     };
 }
 
+// Rationale: the owner projection needs the current process identity for
+// generation-bound lifecycle checks on every non-Windows host.
+// Decision: use Zig's POSIX system namespace, whose 0.15.x API exposes the
+// platform `getpid` primitive without a second process-identity abstraction.
+// Source: Zig 0.15.1 `std/posix.zig` maps `system` to the host POSIX layer;
+// `std/os/linux.zig` and `std/c.zig` both own `getpid` for their ABI paths.
+// Reference: https://ziglang.org/documentation/0.15.1/std/#std.posix.system
+// Proof: `zig build -Doptimize=ReleaseFast` must compile this owner path and
+// the existing owner lifecycle tests exercise the resulting projection.
 pub fn currentPid() u32 {
     return if (builtin.os.tag == .windows)
         std.os.windows.GetCurrentProcessId()
     else
-        @intCast(std.posix.getpid());
+        @intCast(std.posix.system.getpid());
 }
 
 test "owner projection stays project local and round trips" {
