@@ -52,6 +52,11 @@ second runtime owner.
   next safe boundary of a live run. A message never assigns or launches work.
 - Change behavior through prompt layers. Keep kernel logic for capability truth,
   durability, budgets, evidence, recovery, and irreversible-action gates.
+- Use the root-only `ask_user` tool when an operator choice materially changes
+  the result. Batch related multiple-choice questions; the TUI uses Enter to
+  select, Space to check, and `f / Other` for inline text, then resolves through
+  one `input/respond` call. Child profiles are headless and must continue or
+  report `InputUnavailable`; never create a polling question loop.
 - In the TUI, Shift+Tab cycles the session-local prompt lens
   `orchestrate -> build -> align -> plan`; the next `session/send` applies one
   provider-visible layer and defaults to `orchestrate`. It does not change

@@ -64,12 +64,35 @@ pub const Error = error{
     CommandTimedOut,
     FileNotInspected,
     InvalidArguments,
+    InputUnavailable,
     MissingParentSession,
     MemoryWritesDisabled,
     PatternNotFound,
     ToolPayloadExceeded,
     ToolUnavailable,
     UnknownTool,
+};
+
+pub const InputService = struct {
+    context: ?*anyopaque = null,
+    requestFn: ?*const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        session_id: []const u8,
+        request_id: []const u8,
+        request_json: []const u8,
+    ) anyerror![]u8 = null,
+
+    pub fn request(
+        self: InputService,
+        allocator: std.mem.Allocator,
+        session_id: []const u8,
+        request_id: []const u8,
+        request_json: []const u8,
+    ) ![]u8 {
+        const callback = self.requestFn orelse return Error.InputUnavailable;
+        return callback(self.context, allocator, session_id, request_id, request_json);
+    }
 };
 
 pub const CommandOutput = struct {
@@ -570,6 +593,7 @@ pub const ExecutionContext = struct {
     session_id: ?[]const u8 = null,
     parent_session_id: ?[]const u8 = null,
     agent_service: ?AgentService = null,
+    input_service: InputService = .{},
     command_probe: ?CommandProbe = null,
     tool_events: ?ToolEventSink = null,
     file_inspection_ledger: ?*FileInspectionLedger = null,

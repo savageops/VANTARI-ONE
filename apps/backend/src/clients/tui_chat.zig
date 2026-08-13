@@ -4,6 +4,7 @@ const tui = @import("tui");
 const history = VAR1.core.session_history;
 const commands = @import("commands.zig");
 const settings_view = @import("settings_view.zig");
+const question_view = @import("question_view.zig");
 
 const protocol = VAR1.core.protocol_types;
 const protocol_events = VAR1.shared.protocol.events;
@@ -155,6 +156,7 @@ const ChatState = struct {
     prompt_mode: prompt_modes.PromptMode = .orchestrate,
     context_window_tokens: u64 = 0,
     reserve_output_tokens: u64 = 0,
+    full_access_mode: bool = false,
     agent_pool_max: usize = 0,
     agent_pool_queued: usize = 0,
     agent_pool_running: usize = 0,
@@ -209,6 +211,9 @@ const ChatState = struct {
     /// /settings command. When non-null and .open, the draw function renders
     /// the settings overlay instead of the normal transcript+footer.
     settings_state: ?settings_view.SettingsState = null,
+    /// One event-backed interactive input controller. The kernel owns the
+    /// request lifecycle; this state owns only the active TUI projection.
+    input_state: ?question_view.State = null,
     /// Slash command autocomplete — when the composer input starts with '/',
     /// a filtered dropdown of matching commands renders above the composer.
     autocomplete_visible: bool = false,
@@ -229,11 +234,59 @@ const ChatState = struct {
         if (self.history_draft) |draft| self.allocator.free(draft);
         if (self.buffer_preview) |preview| self.allocator.free(preview);
         if (self.settings_state) |*ss| ss.deinit();
+        if (self.input_state) |*input_state| input_state.deinit();
         self.search_buffer.deinit(self.allocator);
     }
 
     fn cyclePromptMode(self: *ChatState) void {
         self.prompt_mode = self.prompt_mode.next();
+    }
+
+    fn beginInputRequest(self: *ChatState, message: []const u8) !void {
+        var next = try question_view.State.initFromJson(self.allocator, message);
+        errdefer next.deinit();
+        if (self.input_state) |*active| active.deinit();
+        self.input_state = next;
+    }
+
+    fn clearInputRequest(self: *ChatState) void {
+        if (self.input_state) |*active| active.deinit();
+        self.input_state = null;
+    }
+
+    fn respondInput(self: *ChatState, cancelled: bool) !void {
+        const session_id = self.session_id orelse return;
+        const active = self.input_state orelse return;
+        const request_id = active.request_id;
+        const response_json = try active.responseJson(self.allocator, cancelled);
+        defer self.allocator.free(response_json);
+        var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, response_json, .{}) catch {
+            try self.add(.system, "Input response was malformed.");
+            return;
+        };
+        defer parsed.deinit();
+        const answers = parsed.value.object.get("answers") orelse return;
+        const params = try std.fmt.allocPrint(
+            self.allocator,
+            "{{\"session_id\":{f},\"request_id\":{f},\"cancelled\":{s},\"answers\":{f}}}",
+            .{
+                std.json.fmt(session_id, .{}),
+                std.json.fmt(request_id, .{}),
+                if (cancelled) "true" else "false",
+                std.json.fmt(answers, .{}),
+            },
+        );
+        defer self.allocator.free(params);
+        const call = self.client.call(protocol.methods.input_respond, params) catch {
+            try self.add(.system, "Input response failed; the question remains active.");
+            return;
+        };
+        defer call.deinit(self.allocator);
+        if (call.error_json != null) {
+            try self.add(.system, "Input response was rejected; the question remains active.");
+            return;
+        }
+        self.clearInputRequest();
     }
 
     fn appendHistory(self: *ChatState, prompt: []const u8) !void {
@@ -359,6 +412,7 @@ const ChatState = struct {
 
         if (self.session_id) |value| self.allocator.free(value);
         self.session_id = try self.allocator.dupe(u8, parsed_get.value.session.session_id);
+        self.full_access_mode = parsed_get.value.session.full_access_mode;
         self.status = "READY";
 
         for (self.messages.items) |message| message.deinit(self.allocator);
@@ -371,6 +425,8 @@ const ChatState = struct {
         self.cancel_requested = false;
         self.received_assistant_delta = false;
         self.pending_assistant_placeholder = false;
+        if (self.input_state) |*input_state| input_state.deinit();
+        self.input_state = null;
         self.clearReasoningBuffer();
 
         try self.hydrateTranscript(parsed_get.value.messages);
@@ -530,6 +586,7 @@ const ChatState = struct {
 
             const owned = try self.allocator.dupe(u8, parsed_create.value.session.session_id);
             self.session_id = owned;
+            self.full_access_mode = parsed_create.value.session.full_access_mode;
             break :blk owned;
         };
 
@@ -609,6 +666,7 @@ const ChatState = struct {
             .ignore_unknown_fields = true,
         });
         defer parsed_send.deinit();
+        self.full_access_mode = parsed_send.value.session.full_access_mode;
 
         return .{
             .session_id = session_id,
@@ -677,6 +735,7 @@ const ChatState = struct {
         });
         defer parsed.deinit();
 
+        self.full_access_mode = parsed.value.session.full_access_mode;
         return self.recordProgressEvents(parsed.value.events);
     }
 
@@ -716,6 +775,20 @@ const ChatState = struct {
     }
 
     fn applyProgressEvent(self: *ChatState, event_type: []const u8, message: []const u8) !bool {
+        if (std.mem.eql(u8, event_type, "input_requested")) {
+            try self.beginInputRequest(message);
+            return true;
+        }
+        if (std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type) or
+            std.mem.eql(u8, event_type, "turn_finished") or
+            std.mem.eql(u8, event_type, "session_cancelled") or
+            std.mem.eql(u8, event_type, "session_failed"))
+        {
+            // A terminal replay event is the durable cleanup boundary for an
+            // unanswered or already-resolved request. This prevents a cold
+            // TUI resume from resurrecting a stale question panel.
+            self.clearInputRequest();
+        }
         const recorded_telemetry = try self.recordTurnTelemetry(event_type, message);
         if (recorded_telemetry and !std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type)) return true;
         if (std.mem.eql(u8, event_type, "assistant_delta")) {
@@ -1289,7 +1362,20 @@ const ChatState = struct {
             changed = true;
             switch (event) {
                 .key_press => |key| {
-                    if (key.matches('c', .{ .ctrl = true }) or key.matches(tui.Key.escape, .{})) {
+                    if (key.matches('c', .{ .ctrl = true })) {
+                        try self.requestCancel(session_id);
+                        continue;
+                    }
+                    if (self.input_state != null) {
+                        const action = try self.input_state.?.handleKey(key, input);
+                        switch (action) {
+                            .submit => try self.respondInput(false),
+                            .cancel => try self.respondInput(true),
+                            .consumed => {},
+                        }
+                        continue;
+                    }
+                    if (key.matches(tui.Key.escape, .{})) {
                         try self.requestCancel(session_id);
                         continue;
                     }
@@ -1894,6 +1980,24 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                     }
                 }
 
+                if (state.input_state != null) {
+                    if (key.matches('c', .{ .ctrl = true })) {
+                        if (state.session_id) |session_id| {
+                            try state.requestCancel(session_id);
+                        } else {
+                            break;
+                        }
+                        continue;
+                    }
+                    const action = try state.input_state.?.handleKey(key, &input);
+                    switch (action) {
+                        .submit => try state.respondInput(false),
+                        .cancel => try state.respondInput(true),
+                        .consumed => {},
+                    }
+                    continue;
+                }
+
                 if (key.matches('c', .{ .ctrl = true })) break;
 
                 // Shift+Tab cycles only the session's prompt lens. The next
@@ -2084,7 +2188,15 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         "";
     var reasoning_rows = try buildReasoningDockRows(state.allocator, dock_source, reasoning_body_width);
     defer reasoning_rows.deinit(state.allocator);
-    const layout = computeLayoutWithReasoningDock(root.height, @intCast(reasoning_rows.items.len));
+    const question_footer_height = if (state.input_state) |*active|
+        active.panelHeight(root.height)
+    else
+        @min(@as(u16, 3), root.height);
+    const layout = computeLayoutWithReasoningDockAndFooter(
+        root.height,
+        @intCast(reasoning_rows.items.len),
+        question_footer_height,
+    );
 
     const transcript = root.child(.{
         .x_off = 0,
@@ -2110,64 +2222,78 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         .width = root.width,
         .height = layout.footer_height,
     });
-    input_win.fill(.{ .style = styles.meta_surface });
-    const composer_row = input_win.child(.{
-        .x_off = 0,
-        .y_off = @intCast(layout.editor_y),
-        .width = input_win.width,
-        .height = 1,
-    });
-    composer_row.fill(.{ .style = styles.composer });
-    const editor = composer_row.child(.{
-        .x_off = 1,
-        .y_off = 0,
-        .width = composer_row.width -| 2,
-        .height = 1,
-    });
-    input.drawWithStyle(editor, styles.composer);
-    const agent_counts = state.agentCounts();
-    const meta_width = @as(usize, input_win.width) -| 4;
-    const footer_meta = try formatFooterMetaWithPool(
-        state.allocator,
-        state.model,
-        state.effort,
-        state.thinking_mode,
-        state.prompt_mode,
-        state.status,
-        state.context_used_tokens,
-        state.context_window_tokens,
-        agent_counts.running,
-        agent_counts.total,
-        state.waiting,
-        state.cancel_requested,
-        state.scroll_offset,
-        .{
-            .known = state.agent_pool_known,
-            .healthy = state.agent_pool_healthy,
-            .max = state.agent_pool_max,
-            .running = state.agent_pool_running,
-            .tickets_assigned = state.tickets_assigned,
-            .tickets_in_progress = state.tickets_in_progress,
-            .ticket_ledger_healthy = state.ticket_ledger_healthy,
-        },
-        if (state.has_session_cost) state.session_cost_usd else null,
-        meta_width,
-    );
-    defer state.allocator.free(footer_meta);
+    if (state.input_state) |*active| {
+        active.draw(input_win, input, .{
+            .panel = styles.composer,
+            .title = styles.assistant,
+            .prompt = styles.text,
+            .option = styles.user_text,
+            .selected = styles.assistant,
+            .hint = styles.meta_value,
+            .input = styles.composer,
+            .confirm = styles.text,
+        });
+    } else {
+        input_win.fill(.{ .style = styles.meta_surface });
+        const composer_row = input_win.child(.{
+            .x_off = 0,
+            .y_off = @intCast(layout.editor_y),
+            .width = input_win.width,
+            .height = 1,
+        });
+        composer_row.fill(.{ .style = styles.composer });
+        const editor = composer_row.child(.{
+            .x_off = 1,
+            .y_off = 0,
+            .width = composer_row.width -| 2,
+            .height = 1,
+        });
+        input.drawWithStyle(editor, styles.composer);
+        const agent_counts = state.agentCounts();
+        const meta_width = @as(usize, input_win.width) -| 4;
+        const footer_meta = try formatFooterMetaWithScope(
+            state.allocator,
+            state.model,
+            state.effort,
+            state.thinking_mode,
+            state.prompt_mode,
+            state.status,
+            state.full_access_mode,
+            state.context_used_tokens,
+            state.context_window_tokens,
+            agent_counts.running,
+            agent_counts.total,
+            state.waiting,
+            state.cancel_requested,
+            state.scroll_offset,
+            .{
+                .known = state.agent_pool_known,
+                .healthy = state.agent_pool_healthy,
+                .max = state.agent_pool_max,
+                .running = state.agent_pool_running,
+                .tickets_assigned = state.tickets_assigned,
+                .tickets_in_progress = state.tickets_in_progress,
+                .ticket_ledger_healthy = state.ticket_ledger_healthy,
+            },
+            if (state.has_session_cost) state.session_cost_usd else null,
+            meta_width,
+        );
+        defer state.allocator.free(footer_meta);
 
-    if (input_win.width > 1) {
-        _ = input_win.print(&.{.{ .text = "●", .style = footerStatusStyle(state) }}, .{
-            .row_offset = layout.meta_y,
-            .col_offset = 1,
-            .wrap = .none,
-        });
-    }
-    if (footer_meta.len > 0 and input_win.width > 3) {
-        _ = input_win.print(&.{.{ .text = footer_meta, .style = styles.meta_value }}, .{
-            .row_offset = layout.meta_y,
-            .col_offset = 3,
-            .wrap = .none,
-        });
+        if (input_win.width > 1) {
+            _ = input_win.print(&.{.{ .text = "●", .style = footerStatusStyle(state) }}, .{
+                .row_offset = layout.meta_y,
+                .col_offset = 1,
+                .wrap = .none,
+            });
+        }
+        if (footer_meta.len > 0 and input_win.width > 3) {
+            _ = input_win.print(&.{.{ .text = footer_meta, .style = styles.meta_value }}, .{
+                .row_offset = layout.meta_y,
+                .col_offset = 3,
+                .wrap = .none,
+            });
+        }
     }
 
     // Reverse search overlay — show search bar at the bottom when active.
@@ -2223,7 +2349,11 @@ const startup_intro_gap_rows: usize = 1;
 const startup_intro_projected_rows: usize = startup_intro_lines.len + 1 + startup_intro_gap_rows;
 
 fn computeLayout(root_height: u16) ChatLayout {
-    const footer_height: u16 = @min(@as(u16, 3), root_height);
+    return computeLayoutForFooter(root_height, @min(@as(u16, 3), root_height));
+}
+
+fn computeLayoutForFooter(root_height: u16, requested_footer_height: u16) ChatLayout {
+    const footer_height = @min(requested_footer_height, root_height);
     return .{
         .transcript_height = root_height -| footer_height,
         .footer_y = root_height -| footer_height,
@@ -2234,7 +2364,15 @@ fn computeLayout(root_height: u16) ChatLayout {
 }
 
 fn computeLayoutWithReasoningDock(root_height: u16, requested_reasoning_height: u16) ChatLayout {
-    var layout = computeLayout(root_height);
+    return computeLayoutWithReasoningDockAndFooter(root_height, requested_reasoning_height, @min(@as(u16, 3), root_height));
+}
+
+fn computeLayoutWithReasoningDockAndFooter(
+    root_height: u16,
+    requested_reasoning_height: u16,
+    requested_footer_height: u16,
+) ChatLayout {
+    var layout = computeLayoutForFooter(root_height, requested_footer_height);
     layout.reasoning_height = @min(requested_reasoning_height, layout.transcript_height);
     const remaining_height = layout.transcript_height - layout.reasoning_height;
     layout.reasoning_gap_height = @intFromBool(layout.reasoning_height > 0 and remaining_height > 0);
@@ -3006,6 +3144,46 @@ fn formatFooterMetaWithPool(
     session_cost_usd: ?f64,
     width: usize,
 ) ![]u8 {
+    return formatFooterMetaWithScope(
+        allocator,
+        model,
+        effort,
+        thinking_mode,
+        prompt_mode,
+        runtime_status,
+        null,
+        context_used_tokens,
+        context_window_tokens,
+        running_agents,
+        total_agents,
+        waiting,
+        cancel_requested,
+        scroll_offset,
+        pool,
+        session_cost_usd,
+        width,
+    );
+}
+
+fn formatFooterMetaWithScope(
+    allocator: std.mem.Allocator,
+    model: []const u8,
+    effort: []const u8,
+    thinking_mode: []const u8,
+    prompt_mode: prompt_modes.PromptMode,
+    runtime_status: []const u8,
+    full_access_mode: ?bool,
+    context_used_tokens: ?u64,
+    context_window_tokens: u64,
+    running_agents: usize,
+    total_agents: usize,
+    waiting: bool,
+    cancel_requested: bool,
+    scroll_offset: usize,
+    pool: FooterPool,
+    session_cost_usd: ?f64,
+    width: usize,
+) ![]u8 {
     if (width == 0) return allocator.dupe(u8, "");
 
     const effort_label = footerEffortLabel(effort, thinking_mode);
@@ -3044,22 +3222,26 @@ fn formatFooterMetaWithPool(
 
     const status = footerStatusLabel(runtime_status, waiting, cancel_requested);
     const mode = prompt_mode.label();
+    const scope = if (full_access_mode) |enabled|
+        if (enabled) "scope full" else "scope workspace"
+    else
+        "";
     const transient = try formatFooterTransient(allocator, scroll_offset);
     defer allocator.free(transient);
 
-    var candidate = try buildFooterMetaLine(allocator, status, mode, model, effort_label, context_full, agents.items, transient, true, true, true);
+    var candidate = try buildFooterMetaLine(allocator, status, mode, model, scope, effort_label, context_full, agents.items, transient, true, true, true, true);
     if (footerVisualWidth(candidate) <= width) return candidate;
     allocator.free(candidate);
 
-    candidate = try buildFooterMetaLine(allocator, status, mode, model, effort_label, context_full, "", "", true, false, false);
+    candidate = try buildFooterMetaLine(allocator, status, mode, model, scope, effort_label, context_full, "", "", true, false, false, true);
     if (footerVisualWidth(candidate) <= width) return candidate;
     allocator.free(candidate);
 
-    candidate = try buildFooterMetaLine(allocator, status, mode, model, "", context_compact, agents.items, "", false, true, false);
+    candidate = try buildFooterMetaLine(allocator, status, mode, model, scope, "", context_compact, agents.items, "", false, true, false, true);
     if (footerVisualWidth(candidate) <= width) return candidate;
     allocator.free(candidate);
 
-    candidate = try buildFooterMetaLine(allocator, status, mode, model, "", context_compact, "", "", false, false, false);
+    candidate = try buildFooterMetaLine(allocator, status, mode, model, scope, "", context_compact, "", "", false, false, false, true);
     defer allocator.free(candidate);
     return truncateFooterEnd(allocator, candidate, width);
 }
@@ -3122,6 +3304,7 @@ fn buildFooterMetaLine(
     status: []const u8,
     prompt_mode: []const u8,
     model: []const u8,
+    scope: []const u8,
     effort: []const u8,
     context: []const u8,
     agents: []const u8,
@@ -3129,6 +3312,7 @@ fn buildFooterMetaLine(
     include_effort: bool,
     include_agents: bool,
     include_transient: bool,
+    include_scope: bool,
 ) ![]u8 {
     var line = std.array_list.Managed(u8).init(allocator);
     errdefer line.deinit();
@@ -3136,6 +3320,7 @@ fn buildFooterMetaLine(
     try appendFooterPart(&line, &first, status);
     try appendFooterPart(&line, &first, prompt_mode);
     try appendFooterPart(&line, &first, model);
+    if (include_scope) try appendFooterPart(&line, &first, scope);
     if (include_effort) try appendFooterPart(&line, &first, effort);
     try appendFooterPart(&line, &first, context);
     if (include_agents) try appendFooterPart(&line, &first, agents);
@@ -3617,7 +3802,9 @@ fn skipProgressEvent(event_type: []const u8) bool {
 }
 
 fn replayProgressEvent(event_type: []const u8) bool {
-    return std.mem.startsWith(u8, event_type, "child_") or std.mem.eql(u8, event_type, "session_waiting");
+    return std.mem.startsWith(u8, event_type, "child_") or
+        std.mem.eql(u8, event_type, "session_waiting") or
+        std.mem.eql(u8, event_type, "input_requested");
 }
 
 fn progressLabel(event_type: []const u8) []const u8 {
@@ -4810,6 +4997,56 @@ test "tui footer maps runtime status and active prompt mode" {
     );
     defer allocator.free(failed);
     try std.testing.expect(std.mem.startsWith(u8, failed, "failed · align ·"));
+}
+
+test "tui footer exposes immutable session access scope" {
+    const allocator = std.testing.allocator;
+
+    const workspace = try formatFooterMetaWithScope(
+        allocator,
+        "glm-5.1",
+        "high",
+        "",
+        .orchestrate,
+        "READY",
+        false,
+        5_000,
+        200_000,
+        0,
+        0,
+        false,
+        false,
+        0,
+        .{},
+        null,
+        120,
+    );
+    defer allocator.free(workspace);
+    try std.testing.expect(std.mem.indexOf(u8, workspace, "scope workspace") != null);
+    try std.testing.expect(std.mem.indexOf(u8, workspace, "scope full") == null);
+
+    const full = try formatFooterMetaWithScope(
+        allocator,
+        "glm-5.1",
+        "high",
+        "",
+        .orchestrate,
+        "READY",
+        true,
+        5_000,
+        200_000,
+        0,
+        0,
+        false,
+        false,
+        0,
+        .{},
+        null,
+        120,
+    );
+    defer allocator.free(full);
+    try std.testing.expect(std.mem.indexOf(u8, full, "scope full") != null);
+    try std.testing.expect(std.mem.indexOf(u8, full, "scope workspace") == null);
 }
 
 test "tui footer metadata exposes only actionable transient state" {

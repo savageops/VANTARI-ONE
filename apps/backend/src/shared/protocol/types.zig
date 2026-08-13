@@ -12,6 +12,7 @@ pub const methods = struct {
     pub const session_send = "session/send";
     pub const session_compact = "session/compact";
     pub const session_cancel = "session/cancel";
+    pub const input_respond = "input/respond";
     pub const session_get = "session/get";
     pub const session_list = "session/list";
     pub const schedule_get = "schedule/get";
@@ -30,6 +31,7 @@ pub const Capabilities = struct {
     session_send: bool = true,
     session_compact: bool = true,
     session_cancel: bool = true,
+    input_respond: bool = true,
     session_get: bool = true,
     session_list: bool = true,
     schedule_get: bool = true,
@@ -61,6 +63,7 @@ pub const SessionSummary = struct {
     continued_from_session_id: ?[]const u8 = null,
     display_name: ?[]const u8 = null,
     agent_profile: ?[]const u8 = null,
+    full_access_mode: bool = false,
     execution_receipt: ?types.ExecutionReceiptView = null,
     failure_reason: ?[]const u8 = null,
     created_at_ms: i64,
@@ -113,6 +116,12 @@ pub const SessionCancelResult = struct {
     cancellation_requested: bool,
     outcome: []const u8,
     active_run_seq: ?u64 = null,
+};
+
+pub const InputRespondResult = struct {
+    session_id: []const u8,
+    request_id: []const u8,
+    accepted: bool,
 };
 
 pub const ScheduleSummary = struct {

@@ -74,6 +74,7 @@ pub const InitSessionOptions = struct {
     continued_from_session_id: ?[]const u8 = null,
     display_name: ?[]const u8 = null,
     agent_profile: ?[]const u8 = null,
+    full_access_mode: bool = false,
 };
 
 const ParsedSessionRecord = struct {
@@ -84,6 +85,7 @@ const ParsedSessionRecord = struct {
     continued_from_session_id: ?[]const u8 = null,
     display_name: ?[]const u8 = null,
     agent_profile: ?[]const u8 = null,
+    full_access_mode: bool = false,
     failure_reason: ?[]const u8 = null,
     created_at_ms: i64,
     updated_at_ms: i64,
@@ -97,6 +99,7 @@ const SessionRecordProjectionWithReceipt = struct {
     continued_from_session_id: ?[]const u8,
     display_name: ?[]const u8,
     agent_profile: ?[]const u8,
+    full_access_mode: bool,
     execution_receipt: types.ExecutionReceiptView,
     failure_reason: ?[]const u8,
     created_at_ms: i64,
@@ -111,6 +114,7 @@ const SessionRecordProjectionWithoutReceipt = struct {
     continued_from_session_id: ?[]const u8,
     display_name: ?[]const u8,
     agent_profile: ?[]const u8,
+    full_access_mode: bool,
     execution_receipt: ?types.ExecutionReceiptView = null,
     failure_reason: ?[]const u8,
     created_at_ms: i64,
@@ -296,6 +300,7 @@ fn initSessionRecord(
         .continued_from_session_id = continued_from_session_id,
         .display_name = display_name,
         .agent_profile = agent_profile,
+        .full_access_mode = options.full_access_mode,
         .execution_receipt = execution_receipt,
         .created_at_ms = now,
         .updated_at_ms = now,
@@ -362,6 +367,7 @@ pub fn readSessionRecord(
         .continued_from_session_id = if (parsed.value.continued_from_session_id) |value| try allocator.dupe(u8, value) else null,
         .display_name = if (parsed.value.display_name) |value| try allocator.dupe(u8, value) else null,
         .agent_profile = if (parsed.value.agent_profile) |value| try allocator.dupe(u8, value) else null,
+        .full_access_mode = parsed.value.full_access_mode,
         .execution_receipt = execution_receipt,
         .failure_reason = if (parsed.value.failure_reason) |value| try allocator.dupe(u8, value) else null,
         .created_at_ms = parsed.value.created_at_ms,
@@ -396,6 +402,7 @@ pub fn writeSessionRecord(
             .continued_from_session_id = session.continued_from_session_id,
             .display_name = session.display_name,
             .agent_profile = session.agent_profile,
+            .full_access_mode = session.full_access_mode,
             .execution_receipt = value.*.view(),
             .failure_reason = session.failure_reason,
             .created_at_ms = session.created_at_ms,
@@ -410,6 +417,7 @@ pub fn writeSessionRecord(
             .continued_from_session_id = session.continued_from_session_id,
             .display_name = session.display_name,
             .agent_profile = session.agent_profile,
+            .full_access_mode = session.full_access_mode,
             .failure_reason = session.failure_reason,
             .created_at_ms = session.created_at_ms,
             .updated_at_ms = session.updated_at_ms,
@@ -1832,4 +1840,36 @@ test "explicit session identity is single-use and path safe" {
     try std.testing.expectError(error.InvalidSessionId, initSessionWithOptions(allocator, workspace, "escape", .{
         .session_id = "session-../escape",
     }));
+}
+
+test "session access scope survives cold read and legacy records stay contained" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var full_session = try initSessionWithOptions(allocator, workspace, "full scope", .{
+        .session_id = "session-full-scope-0123456789abcdef",
+        .full_access_mode = true,
+    });
+    defer full_session.deinit(allocator);
+
+    var restored_full = try readSessionRecord(allocator, workspace, full_session.id);
+    defer restored_full.deinit(allocator);
+    try std.testing.expect(restored_full.full_access_mode);
+
+    var legacy_session = try initSessionWithOptions(allocator, workspace, "legacy scope", .{
+        .session_id = "session-legacy-scope-0123456789abcdef",
+    });
+    defer legacy_session.deinit(allocator);
+    const legacy_path = try sessionFilePath(allocator, workspace, legacy_session.id);
+    defer allocator.free(legacy_path);
+    try fsutil.writeText(legacy_path,
+        "{\"id\":\"session-legacy-scope-0123456789abcdef\",\"prompt\":\"legacy scope\",\"status\":\"initialized\",\"created_at_ms\":1,\"updated_at_ms\":1}\n",
+    );
+
+    var restored_legacy = try readSessionRecord(allocator, workspace, legacy_session.id);
+    defer restored_legacy.deinit(allocator);
+    try std.testing.expect(!restored_legacy.full_access_mode);
 }

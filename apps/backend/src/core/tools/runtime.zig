@@ -23,6 +23,7 @@ const memory = @import("builtin/memory.zig");
 pub const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
 const agent_message = @import("builtin/agent_message.zig");
+const ask_user = @import("builtin/ask_user.zig");
 
 pub const max_error_arguments_json_echo_bytes: usize = 4096;
 
@@ -48,12 +49,14 @@ pub const DelegationScope = module.DelegationScope;
 
 const agent_tool_definitions = agents.definitions;
 const collaboration_tool_definitions = agent_message.definitions;
+const interactive_tool_definitions = ask_user.definitions;
 const agent_and_collaboration_tool_definitions = agent_tool_definitions ++ collaboration_tool_definitions;
 
 const workspace_state_tool_definitions = workspace_state_tools.definitions;
 const file_plus_collaboration_tool_definitions = registry.file_tool_definitions ++ collaboration_tool_definitions;
-const file_plus_workspace_state_tool_definitions = file_plus_collaboration_tool_definitions ++ workspace_state_tool_definitions;
-const file_plus_agent_tool_definitions = file_plus_collaboration_tool_definitions ++ agent_tool_definitions;
+const file_plus_interactive_tool_definitions = file_plus_collaboration_tool_definitions ++ interactive_tool_definitions;
+const file_plus_workspace_state_tool_definitions = file_plus_interactive_tool_definitions ++ workspace_state_tool_definitions;
+const file_plus_agent_tool_definitions = file_plus_interactive_tool_definitions ++ agent_tool_definitions;
 const all_tool_definitions = file_plus_workspace_state_tool_definitions ++ agent_tool_definitions;
 const read_tool_definitions = [_]types.ToolDefinition{
     list_files.definition,
@@ -462,6 +465,9 @@ pub fn executeWithRunner(
     if (agent_message.handles(tool_call.name)) {
         return agent_message.execute(allocator, execution_context, tool_call.arguments_json, tool_call.id);
     }
+    if (ask_user.handles(tool_call.name)) {
+        return ask_user.execute(allocator, execution_context, tool_call.arguments_json, tool_call.id);
+    }
     if (workspace_state_tools.handles(tool_call.name)) {
         return workspace_state_tools.execute(allocator, execution_context.workspace_root, tool_call.name, tool_call.arguments_json, runner);
     }
@@ -506,6 +512,7 @@ pub fn toolClassForName(tool_name: []const u8) ?profile_contract.ToolClass {
         std.mem.eql(u8, tool_name, "update_session_summary")) return .file_write;
     if (std.mem.eql(u8, tool_name, "shell_exec")) return .command;
     if (std.mem.eql(u8, tool_name, "schedule_job")) return .scheduling;
+    if (ask_user.handles(tool_name)) return .interaction;
     if (agent_message.handles(tool_name)) return .collaboration;
     if (agents.handles(tool_name)) return .delegation;
     if (workspace_state_tools.handles(tool_name)) return .workspace_state;

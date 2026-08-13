@@ -122,6 +122,7 @@ Typed events are the runtime's nervous system. String breadcrumbs may exist only
 | Assistant text | `assistant_delta` chunks before final `assistant_response`. |
 | Tool lifecycle | `tool_requested -> tool_reviewed -> tool_started -> tool_output_delta* -> tool_finished -> tool_completed`. |
 | Command output | bounded stdout/stderr deltas with stream id, cap marker, and byte-safe payload. |
+| Interactive input | `input_requested` persists the bounded question request; `input/respond` resolves one broker wait and the normal tool/terminal span supplies completion evidence. |
 | Terminal | exactly one `turn_terminal` with schema `var1.turn_terminal.v1`, the exact `session_started.seq`, and outcome `completed`, `failed`, `timed_out`, or `cancelled`. |
 
 ### Directives
@@ -143,6 +144,7 @@ Typed events are the runtime's nervous system. String breadcrumbs may exist only
 - The same footer owner renders active/max agents, queue pressure, and session cost only when those values carry signal: active/max and queue are nonzero/known or unhealthy, and cost is finite/nonnegative `turn_terminal.cost_total_usd`; unpriced cost stays omitted. Do not add a poller, cost registry, event, or second telemetry surface.
 - `core/prompts/builder.zig::PromptMode` owns the session-local `orchestrate -> build -> align -> plan` prompt lens. Shift+Tab is a TUI control; the next `session/send` carries its exact lower-case label, omission defaults to `orchestrate`, and unknown labels fail before session/provider execution. The mode changes one provider-visible prompt layer only; it must not branch the executor, tool catalog, access policy, model, or agent capacity.
 - `core/sessions/store.zig::commitTurnTerminal` is the only current run-settlement writer. Commit under the event-ledger lock; repeat of the same outcome is idempotent, a stale generation or conflicting outcome fails before append, and session status remains a projection. Treat `turn_finished`, `session_failed`, `session_cancelled`, and related turn-specific names as read-only legacy inputs.
+- `ask_user` is a root-only interactive tool. It emits one bounded `input_requested` event, normalizes options to `a`–`f` with `f = Other`, and resolves through `input/respond`; child profiles remain headless and fail with `InputUnavailable` instead of hanging. The host `InputBroker` is process-local wake state only, keyed by session plus request id; session cancellation and shutdown broadcast to pending waits. Do not add a question overlay, polling loop, resolved-event bus, or child-specific input system.
 
 ## V. Tool Runtime Contract
 

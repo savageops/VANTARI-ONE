@@ -4,6 +4,7 @@ const config_file = @import("../core/config/file.zig");
 const loop = @import("../core/executor/loop.zig");
 const prompts = @import("../core/prompts/index.zig");
 const protocol_events = @import("../shared/protocol/events.zig");
+const input_protocol = @import("../shared/protocol/input.zig");
 const protocol_types = @import("../shared/protocol/types.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
 const models = @import("../core/providers/models.zig");
@@ -41,6 +42,11 @@ pub const Error = error{
     InvalidFrame,
     MissingChildPipes,
     InvalidRpcResponse,
+    InputAlreadyPending,
+    InputAlreadyResolved,
+    InputNotFound,
+    InputSessionMismatch,
+    InputUnavailable,
     RpcRemoteError,
     ServerShuttingDown,
 };
@@ -355,6 +361,150 @@ const BufferProjection = struct {
     }
 };
 
+const InputPending = struct {
+    session_id: []u8,
+    response_json: ?[]u8 = null,
+    cancelled: bool = false,
+    condition: std.Thread.Condition = .{},
+};
+
+/// One bounded wait point for the interactive root. The request itself is a
+/// durable input_requested event; this broker is only the process-local wake
+/// path that lets input/respond unblock the provider tool call without a
+/// second session owner or status bus.
+const InputBroker = struct {
+    mutex: std.Thread.Mutex = .{},
+    pending: std.StringHashMapUnmanaged(*InputPending) = .{},
+    stopping: bool = false,
+
+    fn pendingKey(allocator: std.mem.Allocator, session_id: []const u8, request_id: []const u8) ![]u8 {
+        // Tool-call ids are only unique inside a provider turn. Prefixing the
+        // session length keeps concurrent sessions from colliding without
+        // introducing a second map or registry.
+        return std.fmt.allocPrint(allocator, "{d}:{s}{s}", .{ session_id.len, session_id, request_id });
+    }
+
+    fn begin(
+        self: *InputBroker,
+        allocator: std.mem.Allocator,
+        session_id: []const u8,
+        request_id: []const u8,
+    ) !void {
+        const owned_key = try pendingKey(allocator, session_id, request_id);
+        errdefer allocator.free(owned_key);
+        const pending = try allocator.create(InputPending);
+        errdefer allocator.destroy(pending);
+        pending.* = .{ .session_id = try allocator.dupe(u8, session_id) };
+        errdefer allocator.free(pending.session_id);
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (self.stopping) return Error.InputUnavailable;
+        if (self.pending.contains(owned_key)) return Error.InputAlreadyPending;
+        try self.pending.put(allocator, owned_key, pending);
+    }
+
+    fn wait(
+        self: *InputBroker,
+        allocator: std.mem.Allocator,
+        session_id: []const u8,
+        request_id: []const u8,
+    ) ![]u8 {
+        const key = try pendingKey(allocator, session_id, request_id);
+        defer allocator.free(key);
+        self.mutex.lock();
+        const pending = self.pending.get(key) orelse {
+            self.mutex.unlock();
+            return Error.InputNotFound;
+        };
+        while (pending.response_json == null and !pending.cancelled) {
+            pending.condition.wait(&self.mutex);
+        }
+
+        const response = if (pending.response_json) |value| blk: {
+            const owned = allocator.dupe(u8, value) catch |err| {
+                self.mutex.unlock();
+                return err;
+            };
+            break :blk owned;
+        } else null;
+        const removed = self.pending.fetchRemove(key) orelse unreachable;
+        self.mutex.unlock();
+
+        allocator.free(removed.key);
+        if (pending.response_json) |value| allocator.free(value);
+        allocator.free(pending.session_id);
+        allocator.destroy(pending);
+        if (response) |value| return value;
+        return error.InputCancelled;
+    }
+
+    fn resolve(
+        self: *InputBroker,
+        allocator: std.mem.Allocator,
+        session_id: []const u8,
+        request_id: []const u8,
+        response_json: []const u8,
+    ) !void {
+        const key = try pendingKey(allocator, session_id, request_id);
+        defer allocator.free(key);
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (self.stopping) return Error.InputUnavailable;
+        const pending = self.pending.get(key) orelse return Error.InputNotFound;
+        if (!std.mem.eql(u8, pending.session_id, session_id)) return Error.InputSessionMismatch;
+        if (pending.cancelled or pending.response_json != null) return Error.InputAlreadyResolved;
+        pending.response_json = try allocator.dupe(u8, response_json);
+        pending.condition.broadcast();
+    }
+
+    fn cancel(self: *InputBroker, allocator: std.mem.Allocator, session_id: []const u8, request_id: []const u8) void {
+        const key = pendingKey(allocator, session_id, request_id) catch return;
+        defer allocator.free(key);
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (self.pending.get(key)) |pending| {
+            pending.cancelled = true;
+            pending.condition.broadcast();
+        }
+    }
+
+    fn cancelSession(self: *InputBroker, session_id: []const u8) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        var iterator = self.pending.iterator();
+        while (iterator.next()) |entry| {
+            if (!std.mem.eql(u8, entry.value_ptr.*.session_id, session_id)) continue;
+            entry.value_ptr.*.cancelled = true;
+            entry.value_ptr.*.condition.broadcast();
+        }
+    }
+
+    fn shutdown(self: *InputBroker) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.stopping = true;
+        var iterator = self.pending.iterator();
+        while (iterator.next()) |entry| {
+            entry.value_ptr.*.cancelled = true;
+            entry.value_ptr.*.condition.broadcast();
+        }
+    }
+
+    fn deinit(self: *InputBroker, allocator: std.mem.Allocator) void {
+        self.mutex.lock();
+        var iterator = self.pending.iterator();
+        while (iterator.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            if (entry.value_ptr.*.response_json) |value| allocator.free(value);
+            allocator.free(entry.value_ptr.*.session_id);
+            allocator.destroy(entry.value_ptr.*);
+        }
+        self.pending.deinit(allocator);
+        self.mutex.unlock();
+    }
+};
+
 const Server = struct {
     allocator: std.mem.Allocator,
     config: *const types.Config,
@@ -366,6 +516,7 @@ const Server = struct {
     request_pool_started: bool = false,
     request_admission: RequestAdmission = .{},
     runtime: Runtime = .{},
+    input_broker: InputBroker = .{},
     scheduler_service: ?scheduler.Service = null,
     scheduler_thread: ?std.Thread = null,
     buffer_srv: ?buffer_service.Service = null,
@@ -386,6 +537,7 @@ const Server = struct {
     fn stopRequestExecutor(self: *Server) void {
         self.request_admission.stop();
         _ = self.runtime.beginShutdown();
+        self.input_broker.shutdown();
         if (!self.request_pool_started) return;
         self.request_pool.deinit();
         self.request_pool_started = false;
@@ -421,6 +573,7 @@ const Server = struct {
         }
         self.buffer_projection.deinit(self.allocator);
         self.runtime.deinit(self.allocator);
+        self.input_broker.deinit(self.allocator);
     }
 
     fn emitSessionEvent(
@@ -634,6 +787,7 @@ fn processRequest(server: *Server, request_payload: []const u8) !?[]u8 {
         Error.SessionNotFound => return errorResponseOrNull(server.allocator, id, -32001, "Session not found"),
         Error.ScheduleNotFound => return errorResponseOrNull(server.allocator, id, -32004, "Schedule not found"),
         Error.SessionRunning => return errorResponseOrNull(server.allocator, id, -32002, "Session already running"),
+        Error.InputNotFound, Error.InputSessionMismatch, Error.InputAlreadyResolved, Error.InputAlreadyPending, Error.InputUnavailable => return errorResponseOrNull(server.allocator, id, -32602, "Input request is no longer available"),
         Error.ProviderNotFound => return errorResponseOrNull(server.allocator, id, -32006, "Provider not found"),
         Error.ServerShuttingDown => return errorResponseOrNull(server.allocator, id, rpc_server_busy_code, "Server shutting down"),
         Error.ExecutionFailed => return errorResponseOrNull(server.allocator, id, -32000, "Execution failed"),
@@ -668,6 +822,9 @@ fn dispatch(
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.session_cancel)) {
         return handleSessionCancel(server, params);
+    }
+    if (std.mem.eql(u8, method_name, protocol_types.methods.input_respond)) {
+        return handleInputRespond(server, params);
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.session_get)) {
         return handleSessionGet(server, params);
@@ -733,6 +890,7 @@ fn handleSessionCreate(server: *Server, params: ?std.json.Value) ![]u8 {
         .continued_from_session_id = parsed.value.continued_from_session_id,
         .display_name = parsed.value.display_name,
         .agent_profile = parsed.value.agent_profile,
+        .full_access_mode = server.config.full_access_mode,
     });
     defer session.deinit(server.allocator);
 
@@ -869,6 +1027,9 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
     // run. This lets the operator test a lesser model or a smaller context
     // window without editing auth.json or config.json.
     var effective_config = server.config.*;
+    // Access scope is immutable session state. A config reload must not widen
+    // or narrow a live transcript behind the operator's back.
+    effective_config.full_access_mode = session.full_access_mode;
     var provider_base_owned: ?[]u8 = null;
     var provider_api_key_owned: ?[]u8 = null;
     var provider_model_owned: ?[]u8 = null;
@@ -944,6 +1105,10 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
             .workspace_root = effective_config.workspace_root,
             .parent_session_id = session.parent_session_id,
             .agent_service = if (server.runtime.enableAgentTools(session.id)) server.agent_service else null,
+            .input_service = .{
+                .context = server,
+                .requestFn = onInputRequest,
+            },
         },
         .session_id = session.id,
         .hooks = hooks,
@@ -1050,6 +1215,10 @@ fn handleSessionCancel(server: *Server, params: ?std.json.Value) ![]u8 {
     defer session.deinit(server.allocator);
 
     try server.runtime.ensureSession(server.allocator, session.id, null);
+    // A session cancel must wake an ask_user tool as well as the provider
+    // transport. Otherwise the provider turn can remain blocked on the input
+    // broker after the runtime cancellation flag is set.
+    server.input_broker.cancelSession(session.id);
 
     var cancellation_requested = false;
     var outcome: []const u8 = "not_cancellable";
@@ -1089,6 +1258,71 @@ fn handleSessionCancel(server: *Server, params: ?std.json.Value) ![]u8 {
         .cancellation_requested = cancellation_requested,
         .outcome = outcome,
         .active_run_seq = active_run_seq,
+    });
+}
+
+fn handleInputRespond(server: *Server, params: ?std.json.Value) ![]u8 {
+    const params_value = params orelse return Error.InvalidParams;
+    if (params_value != .object) return Error.InvalidParams;
+    const object = &params_value.object;
+    const session_id = blk: {
+        const value = object.get("session_id") orelse return Error.InvalidParams;
+        if (value != .string or value.string.len == 0) return Error.InvalidParams;
+        break :blk value.string;
+    };
+    const request_id = blk: {
+        const value = object.get("request_id") orelse return Error.InvalidParams;
+        if (value != .string or value.string.len == 0) return Error.InvalidParams;
+        break :blk value.string;
+    };
+    const cancelled = if (object.get("cancelled")) |value| switch (value) {
+        .bool => |flag| flag,
+        else => return Error.InvalidParams,
+    } else false;
+
+    var answers_json: []u8 = try server.allocator.dupe(u8, "[]");
+    defer server.allocator.free(answers_json);
+    if (!cancelled) {
+        const answers = object.get("answers") orelse return Error.InvalidParams;
+        if (answers != .array or answers.array.items.len > input_protocol.max_questions) return Error.InvalidParams;
+        for (answers.array.items) |answer| {
+            if (answer != .object) return Error.InvalidParams;
+            const question_id = answer.object.get("question_id") orelse return Error.InvalidParams;
+            if (question_id != .string or question_id.string.len == 0) return Error.InvalidParams;
+            if (answer.object.get("selected")) |selected| {
+                if (selected != .array or selected.array.items.len > input_protocol.max_options) return Error.InvalidParams;
+                for (selected.array.items) |choice| {
+                    if (choice != .string or choice.string.len == 0) return Error.InvalidParams;
+                }
+            }
+            if (answer.object.get("other")) |other| switch (other) {
+                .null => {},
+                .string => |value| if (value.len > input_protocol.max_other_bytes) return Error.InvalidParams,
+                else => return Error.InvalidParams,
+            };
+        }
+        server.allocator.free(answers_json);
+        answers_json = try std.fmt.allocPrint(server.allocator, "{f}", .{std.json.fmt(answers, .{})});
+    }
+
+    const response_json = try std.fmt.allocPrint(
+        server.allocator,
+        "{{\"schema\":\"{s}\",\"request_id\":{f},\"cancelled\":{s},\"answers\":{s}}}",
+        .{
+            input_protocol.response_schema,
+            std.json.fmt(request_id, .{}),
+            if (cancelled) "true" else "false",
+            answers_json,
+        },
+    );
+    defer server.allocator.free(response_json);
+    if (response_json.len > 64 * 1024) return Error.InvalidParams;
+
+    try server.input_broker.resolve(server.allocator, session_id, request_id, response_json);
+    return renderJsonAlloc(server.allocator, protocol_types.InputRespondResult{
+        .session_id = session_id,
+        .request_id = request_id,
+        .accepted = true,
     });
 }
 
@@ -1649,6 +1883,29 @@ fn onLoopCopyBufferPreview(ctx: ?*anyopaque, allocator: std.mem.Allocator, sessi
     return server.buffer_projection.copy(allocator, session_id);
 }
 
+fn onInputRequest(
+    ctx: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    session_id: []const u8,
+    request_id: []const u8,
+    request_json: []const u8,
+) anyerror![]u8 {
+    const server: *Server = @ptrCast(@alignCast(ctx.?));
+    try server.input_broker.begin(allocator, session_id, request_id);
+    server.recordAndEmitSessionEvent(
+        session_id,
+        "input_requested",
+        request_json,
+        "waiting",
+        std.time.milliTimestamp(),
+    ) catch |err| {
+        server.input_broker.cancel(allocator, session_id, request_id);
+        _ = server.input_broker.wait(allocator, session_id, request_id) catch {};
+        return err;
+    };
+    return server.input_broker.wait(allocator, session_id, request_id);
+}
+
 fn makeSessionSummary(session: types.SessionRecord, output: ?[]const u8) protocol_types.SessionSummary {
     return .{
         .session_id = session.id,
@@ -1659,6 +1916,7 @@ fn makeSessionSummary(session: types.SessionRecord, output: ?[]const u8) protoco
         .continued_from_session_id = session.continued_from_session_id,
         .display_name = session.display_name,
         .agent_profile = session.agent_profile,
+        .full_access_mode = session.full_access_mode,
         .execution_receipt = if (session.execution_receipt) |receipt| receipt.*.view() else null,
         .failure_reason = session.failure_reason,
         .created_at_ms = session.created_at_ms,
@@ -1710,6 +1968,29 @@ test "request admission is bounded and closes before shutdown" {
     for (0..max_admitted_requests) |_| admission.release();
     admission.stop();
     try std.testing.expect(!admission.tryAcquire());
+}
+
+test "input broker scopes duplicate tool-call ids and wakes cancellation" {
+    var broker = InputBroker{};
+    defer broker.deinit(std.testing.allocator);
+
+    try broker.begin(std.testing.allocator, "session-a", "call-1");
+    try broker.begin(std.testing.allocator, "session-b", "call-1");
+    try broker.resolve(std.testing.allocator, "session-a", "call-1", "{\"cancelled\":false}");
+
+    const response = try broker.wait(std.testing.allocator, "session-a", "call-1");
+    defer std.testing.allocator.free(response);
+    try std.testing.expectEqualStrings("{\"cancelled\":false}", response);
+
+    broker.cancelSession("session-b");
+    try std.testing.expectError(
+        error.InputCancelled,
+        broker.wait(std.testing.allocator, "session-b", "call-1"),
+    );
+    try std.testing.expectError(
+        Error.InputNotFound,
+        broker.wait(std.testing.allocator, "session-a", "call-1"),
+    );
 }
 
 test "100 concurrent session sends admit one turn owner" {

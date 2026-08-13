@@ -526,3 +526,131 @@ blank startup/exit passed. Source and installed SHA-256 match
 `D83E9A843286E79861FD5FA25514DD18C17B3307DDEC7A2842216B9DA3AB38EA`; the
 proof-owned owner/kernel tree was explicitly torn down and the final VANTARI
 process census is zero. Move 46 is the active frontier.
+
+## Superseding current evidence — Moves 46–48 (2026-08-13)
+
+Moves 46–48 close the context-unknown and child-summary projection boundary.
+The footer keeps `ctx —` when compaction or provider accounting does not prove
+a usable capacity, including the zero-capacity test snapshot. The existing
+keyed group row remains `Agents completed/total`; the removed `waiting on N`
+filler does not return. Group and child rows use `○` for queued/running and
+`◉` for complete, with explicit failure/cancel markers.
+
+The child row reuses the existing `child_progress` projection and canonical
+`sessions/summaries.jsonl` boundary. It renders
+`agent-name - running "bounded summary"` or
+`agent-name - complete "bounded summary"`. Later tool and terminal events
+update the keyed lifecycle state without erasing the last summary, and
+`tool_completed` cannot become the visible child conclusion. Summary whitespace
+is compacted; the display is capped and truncated at a valid UTF-8 one-row
+boundary. The full harvest and rejected chat-bubble/poller/second-ledger
+alternatives are recorded in
+`[2026-08-13-agent-summary-bubble-move47-48.md](2026-08-13-agent-summary-bubble-move47-48.md)`.
+
+Focused TUI passes `9/9` steps and `78/78` tests; the Debug graph passes
+`19/19` steps and `2,000/2,000` tests; ReleaseFast/install passes `9/9`. The
+installed TUI rendered `ready · orchestrate · glm-5.2 · max · ctx — / 500k` and
+blank startup/exit passed. Source and installed SHA-256 match
+`C7B3EE8E4B41D12D486D7C73F3E209834EEE91619364FE0ABE5A676E8C7EA9B7`; the
+proof-owned owner/kernel tree was explicitly torn down and the final VANTARI
+process census is zero. Move 49 was the next frontier: typed child phase and
+elapsed-time projection, now closed by the superseding receipt below.
+
+## Superseding current evidence — Move 49 (2026-08-13)
+
+Move 49 closes the typed child phase and elapsed-time projection at
+`[2026-08-13-child-phase-elapsed-move49.md](2026-08-13-child-phase-elapsed-move49.md)`.
+The supervisor reuses existing task timestamps and adds optional `elapsed_ms` to
+the existing `var1.child_event.v1` envelope. The TUI maps known phases to compact
+labels (`starting`, `session`, `tool`, `model`, `waiting`, `response`, and
+`complete`) and rewrites the same keyed `group_id + task_id` row. Phase/time
+metadata is lower signal than the canonical quoted child summary and is dropped
+first when the row is narrow. No timer, poller, heartbeat bus, chat-bubble event,
+transcript copy, or second summary ledger was added.
+
+Focused TUI passes `9/9` steps and `78/78` tests; the Debug graph passes
+`19/19` steps and `2,000/2,000` tests; ReleaseFast/install passes `9/9`.
+Installed TUI output showed `○ Agents 0/1` and a child `· session` phase row;
+source and installed SHA-256 match
+`6D7F72DD3E1C03DF3A6FA71C07CD6DEA6A020391C8F85A0B1B395C9670DE93BF`. The
+ proof-owned owner/kernel tree was explicitly torn down and the final VANTARI
+ process census is zero. Move 50 is the active frontier.
+
+## Superseding current evidence — Move 50 (2026-08-13)
+
+Move 50 closes the Agent Hub decision at
+`[2026-08-13-agent-hub-move50.md](2026-08-13-agent-hub-move50.md)`. The useful
+part of the operator request is now live on the existing keyed child row: the
+parent supervisor recognizes the already-durable `tool_completed` completion for
+`update_session_summary`, reads the canonical `sessions/summaries.jsonl` row,
+and emits the existing `child_progress` envelope with `phase=summary`. The TUI
+refreshes the same row with a bounded quoted summary while the child runs. No
+Agent Hub registry, poller, chat-bubble event, unread state, transcript copy,
+websocket, or second ledger was added.
+
+The nine-source harvest compared oh-my-pi, Codex, Zed, Agent Deck, Gemini CLI,
+OpenCode, and existing VANTARI owners. The compression decision is to preserve
+stable identity, state, phase, elapsed time, and latest summary in one keyed
+read model; defer per-agent route/model/effort/token/cost/receipt drill-down
+until measured scale requires it. A child that has not emitted the summary-tool
+boundary truthfully remains at its current phase label; the renderer fabricates
+no quote.
+
+Focused TUI passes `9/9` steps and `78/78` tests; the Debug graph passes
+`19/19` steps and `2,000/2,000` tests; ReleaseFast/install passes `9/9`.
+Source and installed SHA-256 match
+`6814396B7E2A134E9ECAED9DA5B6567FEAA01824DAC948CC54DC725EFC3DF178`.
+Installed TUI smoke rendered `○ Agents 0/1` and persisted keyed child rows; the
+bounded session did not emit `update_session_summary`, so it correctly showed
+`· session` rather than an invented quote. The focused TUI test covers the
+quoted live-summary path. Exact owner-tree teardown left zero VANTARI binaries.
+## Superseding current evidence — Move 51 (2026-08-13)
+
+Move 51 closes the child access-mode propagation seam. Route resolution already
+copied the validated `runtime.full_access_mode` value into each child
+`ResolvedRoute.config`; `agents/supervisor.zig` had been dropping it when it
+constructed the child `ExecutionContext`. The new single helper carries the
+route flag into that shared context. The tool layer remains unchanged: IX found
+all ten file/search/LSP/shell entrypoints using
+`fsutil.resolveWithAccessMode`, so no tool-local bypass or second policy owner
+was introduced.
+
+The clean committed tree passes Debug `19/19` steps and `2,000/2,000` tests,
+ReleaseFast/install `9/9`, and the installed settings transport smoke. The
+installed binary wrote `runtime.full_access_mode=true` in an isolated runtime,
+removed that runtime, preserved the live config byte-for-byte, and left zero
+VANTARI processes. Source and installed SHA-256 match
+`39B26C5D898F9F6346A0DE4397002D05C810B2EB34153CA11171440129B3B453`.
+
+Move 52 is now the active frontier: make access mode session-scoped and visible
+without moving `.var` or session ledgers. The provider Prism changes remain a
+separate unpromoted workstream with their exact current state preserved in the
+working tree.
+
+## Superseding current evidence — Moves 52 and 52a (2026-08-13)
+
+Move 52 closes the access boundary as a session property. `full_access_mode`
+survives a cold session read, projects through `SessionSummary` and the
+effective turn config, appears as `scope workspace` or `scope full` in the TUI,
+and crosses the existing child-route handoff. `.var` and session ledgers keep
+their canonical workspace ownership. The default remains restricted.
+
+Move 52a adds the smallest root interaction path: one `ask_user` tool, one
+bounded `var1.input_requested.v1` event, one session-scoped process-local
+broker wait, one `input/respond` RPC, and the existing TUI input surface. Enter
+selects, Space toggles, and `f / Other` captures a bounded custom answer.
+Headless children fail with `InputUnavailable`; cancellation and owner
+shutdown wake the same wait. No question poller, overlay registry, second
+status bus, transcript copy, or resolved-event family was added. The harvest
+and contract are recorded in
+`[2026-08-13-root-interactive-input.md](2026-08-13-root-interactive-input.md)`.
+
+The canonical Debug graph passes `19/19` steps and `2,023/2,023` tests;
+ReleaseFast/install passes `9/9`. Installed `health --json` is healthy and
+`tools --json` exposes one bounded root `ask_user` entry. Source and installed
+SHA-256 match
+`739F0D10D366738D01CEB3879D5B9487F7C99FB7CDB4D7FF9DB3418386A0DEED`; exact
+proof-owned teardown leaves zero VANTARI processes. A provider-driven
+installed question response remains the next consumer probe. Provider/model
+parity is now committed separately as `5eceb00`, with its finding and changelog
+linked from the project index.

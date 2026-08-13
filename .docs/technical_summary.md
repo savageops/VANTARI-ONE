@@ -16,7 +16,7 @@ child-agent execution, and recovery evidence. TUI and CLI render kernel
 projections. `apps/frontend` is an ignored local prototype, not a shipped
 tracked client.
 
-## Current frontier — Move 45
+## Current frontier — Move 52 + root interactive input
 
 Move 34 closes the Codex subscription transport slice. `core/auth/store.zig`
 remains the single credential owner for workspace `.var/auth.json` and installed
@@ -189,6 +189,84 @@ and blank startup/exit passed. Source and installed SHA-256 match
 exact owner-tree teardown leaves zero VANTARI processes. The seven-source
 harvest and rejected status-registry/poller complexity are recorded in
 `.docs/research/2026-08-13-agent-queue-cost-move45.md`.
+
+Moves 46–48 close the next TUI projection slice without adding a read-model
+owner. The existing footer keeps context unknown as `ctx —` after compaction or
+zero/incomplete capacity accounting. The keyed activity group remains
+`Agents completed/total`; `○` means queued/running and `◉` means complete, with
+failure/cancel markers preserved. Each child row now renders its lifecycle
+label plus the latest canonical summary as a bounded quoted suffix. Later tool
+or terminal events update the same keyed row without replacing that summary;
+`tool_completed` is not a visible conclusion. Whitespace compaction, UTF-8
+boundary handling, and one-row display-width truncation are covered by focused
+tests. No chat-bubble event, poller, heartbeat, TUI ledger, or status registry
+was added.
+
+Moves 46–48 proof: focused TUI passes `9/9` steps and `78/78` tests; Debug
+passes `19/19` build steps and `2,000/2,000` tests; ReleaseFast/install passes
+`9/9`. Installed TUI rendered `ready · orchestrate · glm-5.2 · max · ctx — /
+500k`; source and installed SHA-256 match
+`C7B3EE8E4B41D12D486D7C73F3E209834EEE91619364FE0ABE5A676E8C7EA9B7`; the
+proof-owned owner/kernel tree was torn down and the final process census was
+zero. The source harvest and subtractive decision are recorded in
+`.docs/research/2026-08-13-agent-summary-bubble-move47-48.md`.
+
+Move 49 closes the keyed child phase/elapsed projection. The supervisor reuses
+its task timestamps to add optional `elapsed_ms` to the existing
+`var1.child_event.v1` envelope and emits typed phase labels at child start,
+waiting, tool, response, and completion boundaries. `ChatState` renders the
+phase and elapsed snapshot on the same child row, drops lower-signal metadata
+before the canonical quoted summary when narrow, and never adds a timer,
+poller, heartbeat, chat-bubble event, or second ledger.
+
+Move 49 proof: focused TUI passes `9/9` steps and `78/78` tests; Debug passes
+`19/19` build steps and `2,000/2,000` tests; ReleaseFast/install passes `9/9`.
+Installed TUI showed the keyed child activity projection with `○ Agents 0/1`
+and `· session`; source and installed SHA-256 match
+`6D7F72DD3E1C03DF3A6FA71C07CD6DEA6A020391C8F85A0B1B395C9670DE93BF`; exact
+proof-owned owner/kernel teardown leaves zero VANTARI processes. The harvest and
+subtractive decision are recorded in
+`.docs/research/2026-08-13-child-phase-elapsed-move49.md`.
+
+Move 50 closes the Agent Hub decision by narrowing it to the existing keyed
+child row. The parent supervisor recognizes the already-durable `tool completed:
+update_session_summary` boundary, reads the canonical child summary, and emits
+the existing `child_progress` envelope with phase `summary`; `ChatState`
+refreshes the same quoted row while the child is running. The change adds no
+Agent Hub registry, unread state, poller, websocket, chat-bubble event,
+transcript copy, or second ledger.
+
+Move 50 proof: focused TUI `9/9` and `78/78`; full Debug `19/19` and
+`2,000/2,000`; ReleaseFast/install `9/9`; source/installed SHA-256
+`6814396B7E2A134E9ECAED9DA5B6567FEAA01824DAC948CC54DC725EFC3DF178`;
+installed TUI rendered `○ Agents 0/1` and persisted child rows; exact
+owner-tree teardown left zero VANTARI binaries. The installed smoke session
+did not emit a summary-tool completion, so it correctly rendered `· session`;
+the focused TUI test proves the bounded quoted-summary path.
+
+A full Agent Hub is deferred until a measured operator need requires per-agent
+drill-down beyond the existing row and canonical `session/get`/summary owners.
+Move 51 is closed: `agents/supervisor.zig:childExecutionContext` now carries
+the resolved route access flag into the shared child context, and all ten
+file/search/LSP/shell entrypoints remain on `fsutil.resolveWithAccessMode`.
+Move 52 is closed in source: `full_access_mode` is persisted on the session,
+projected through `SessionSummary`, copied into the effective turn config, and
+shown as `scope workspace` or `scope full` in the footer. `.var` and session
+ledgers remain canonical. Debug is `19/19` steps and `2,023/2,023` tests;
+ReleaseFast/install is `9/9`; source and installed SHA-256 match
+`739F0D10D366738D01CEB3879D5B9487F7C99FB7CDB4D7FF9DB3418386A0DEED`;
+installed health and root tool catalog are green; the proof-owned process
+census is zero.
+
+The root interactive-input slice is source-complete. `ask_user` is the only
+root question tool; it emits bounded `var1.input_requested.v1` data, the TUI
+controller uses Enter/Space and inline `f / Other`, and `input/respond` wakes
+the session-scoped host broker. Child profiles omit the tool and fail with
+`InputUnavailable`. Session cancel, owner shutdown, terminal replay, duplicate
+cross-session request ids, empty answers, and Other serialization are covered by
+the same Debug graph. The installed catalog exposes `ask_user`; a real
+installed provider-driven question response remains the next consumer probe,
+not an unclaimed proof.
 
 ## Behavior plane
 
@@ -365,7 +443,7 @@ zero-process cleanup.
 
 ## Agent access boundary
 
-`runtime.full_access_mode` is `false` by default. The setting propagates from validated config through route/executor copies into `ExecutionContext`; file, search, LSP, and process tools resolve through `fsutil.resolveWithAccessMode`. Restricted mode enforces workspace containment. Explicit full access permits absolute paths and `..` traversal for intended external directories while keeping relative paths anchored at the active workspace. `.var` runtime state, session ledgers, and configured prompt files retain their canonical owners.
+`runtime.full_access_mode` is `false` by default. The setting propagates from validated config through route/executor copies into `ExecutionContext`; `agents/supervisor.zig` explicitly preserves the flag at the child handoff. File, search, LSP, and process tools resolve through `fsutil.resolveWithAccessMode`. Restricted mode enforces workspace containment. Explicit full access permits absolute paths and `..` traversal for intended external directories while keeping relative paths anchored at the active workspace. `.var` runtime state, session ledgers, and configured prompt files retain their canonical owners.
 
 ## Self-repair boundary
 
@@ -510,6 +588,19 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - The installed settings smoke flips `runtime.full_access_mode` to `true` in a
   disposable workspace, receives `var1.config_set.v1` in 5 ms, removes the
   isolated runtime, preserves the complete live root, and leaves zero process.
+- Move 51 clean-tree proof passes Debug `19/19` build steps and `2,000/2,000`
+  tests, ReleaseFast/install `9/9`, and the installed settings transport with
+  `full_access_mode=true`. Source and installed SHA-256 match
+  `39B26C5D898F9F6346A0DE4397002D05C810B2EB34153CA11171440129B3B453`;
+  isolated state is removed, live config is unchanged, and the final process
+  census is zero.
+- The current session-scoped access/input slice passes Debug `19/19` and
+  `2,023/2,023`, ReleaseFast/install `9/9`, and source/installed SHA-256
+  `739F0D10D366738D01CEB3879D5B9487F7C99FB7CDB4D7FF9DB3418386A0DEED`.
+  Installed `health --json` is healthy and installed `tools --json` exposes the
+  bounded `ask_user` schema. The exact proof-owned owner/kernel processes were
+  stopped and the final matching process census is zero. A provider-driven
+  installed TUI response remains explicitly open.
 - The move-18 installed cancellation race observed run sequences 1, 6, and 11. Delayed
   cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
   returned `requested` and exited with zero process. Its legacy terminal name is

@@ -229,3 +229,61 @@ Do not erase historical closeout records or fabricate proof to make a chain gree
 - The active boundary is Move 46: explicit unknown context after compaction or
   incomplete provider accounting. Agent Hub and the installed visual matrix
   remain later boundaries.
+
+## Closure receipt — Moves 46–48 (2026-08-13)
+
+- The footer preserves `ctx —` for unknown or zero-capacity context after
+  compaction/accounting gaps; no fabricated precision or second telemetry owner
+  was introduced.
+- The existing activity group remains `Agents completed/total` without the
+  removed `waiting on N` filler. Group and child rows use `○` for queued/running
+  and `◉` for complete, with failure/cancel markers explicit.
+- Each keyed child row renders the latest canonical summary as a bounded quoted
+  suffix. Tool and terminal phases update the same row without replacing it;
+  `tool_completed` is not promoted to the visible child summary. Valid UTF-8
+  and one-row width truncation are covered.
+- Focused TUI is `78/78`; Debug is `19/19` with `2,000/2,000`; ReleaseFast and
+  install are `9/9`. Installed TUI rendered the compact unknown-context row.
+  Source and installed SHA-256 match
+  `C7B3EE8E4B41D12D486D7C73F3E209834EEE91619364FE0ABE5A676E8C7EA9B7`; exact
+  owner-tree teardown leaves zero VANTARI processes.
+- Move 49 was the next boundary: typed child phase marker and elapsed-time
+  projection. Its closure and the current Move 50 boundary are recorded below.
+
+## Closure receipt — Move 49 (2026-08-13)
+
+- The existing `var1.child_event.v1` envelope now carries optional `elapsed_ms`,
+  derived from supervisor task timestamps. Child start, session, waiting, tool,
+  response, and completion phases use the same typed event path.
+- `ChatState` keeps one keyed `group_id + task_id` row. It renders compact
+  phase/time metadata before the canonical quoted summary, then drops the
+  lower-signal metadata when width is tight. No timer, poller, heartbeat bus,
+  chat-bubble event, transcript copy, or second summary ledger was added.
+- Focused TUI is `78/78`; Debug is `19/19` with `2,000/2,000`; ReleaseFast and
+  install are `9/9`. Installed TUI showed `○ Agents 0/1` and the child `· session`
+  phase. Source and installed SHA-256 match
+  `6D7F72DD3E1C03DF3A6FA71C07CD6DEA6A020391C8F85A0B1B395C9670DE93BF`; exact
+  proof-owned teardown leaves zero VANTARI processes.
+- Move 50 is closed: the Agent Hub proposal was narrowed to the existing keyed
+  child row and canonical summary ledger. The existing
+  `update_session_summary` completion now refreshes the row with a bounded
+  quoted summary; no registry, poller, chat-bubble event, unread state,
+  transcript copy, or second ledger was added. Proof and rationale live in
+  `.docs/research/2026-08-13-agent-hub-move50.md`.
+- Move 51 is closed: `agents/supervisor.zig:childExecutionContext` carries the
+  resolved route access flag into the shared child context; all ten
+  file/search/LSP/shell entrypoints use `fsutil.resolveWithAccessMode`; clean
+  Debug `19/19` and `2,000/2,000`, ReleaseFast/install `9/9`, installed true
+  config write, matching SHA-256
+  `39B26C5D898F9F6346A0DE4397002D05C810B2EB34153CA11171440129B3B453`, and
+  zero-process teardown pass. Move 52 is the active boundary.
+- Move 52 is now closed in source: session records persist the immutable access
+  scope, summaries/footer project it, and child turns inherit it without moving
+  `.var`. Move 52a is source-complete: root-only `ask_user`, one
+  `input/respond`, bounded `a`–`f` choices, headless-child `InputUnavailable`,
+  cancellation/shutdown wake-up, terminal replay cleanup, and adversarial
+  controller/broker tests. Debug is `19/19` with `2,023/2,023`; ReleaseFast/
+  install is `9/9`; source/installed SHA-256 is
+  `739F0D10D366738D01CEB3879D5B9487F7C99FB7CDB4D7FF9DB3418386A0DEED`.
+  Installed health/catalog proof is green and zero proof-owned processes remain.
+  A provider-driven installed TUI response is explicitly open.

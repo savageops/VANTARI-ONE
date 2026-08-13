@@ -7,6 +7,7 @@ pub const Error = error{
 
 pub const ToolClass = enum {
     file_read,
+    interaction,
     file_write,
     command,
     scheduling,
@@ -46,6 +47,7 @@ const subagent_tool_classes = [_]ToolClass{
 
 const root_tool_classes = [_]ToolClass{
     .file_read,
+    .interaction,
     .file_write,
     .command,
     .scheduling,
@@ -161,6 +163,7 @@ pub fn ensureToolClass(capability_profile: CapabilityProfile, tool_class: ToolCl
 pub fn toolClassLabel(tool_class: ToolClass) []const u8 {
     return switch (tool_class) {
         .file_read => "file_read",
+        .interaction => "interaction",
         .file_write => "file_write",
         .command => "command",
         .scheduling => "scheduling",

@@ -35,6 +35,12 @@ fn approveDefinition(definition: types.ToolDefinition) ToolReviewDecision {
             .event_type = "tool_reviewed",
             .reason = "declared read-only capability",
         },
+        .interactive => .{
+            .approved = true,
+            .risk = .interactive,
+            .event_type = "tool_reviewed",
+            .reason = "declared user-interaction capability",
+        },
         .write_capable => .{
             .approved = true,
             .risk = .write_capable,
@@ -66,6 +72,7 @@ fn approveDefinition(definition: types.ToolDefinition) ToolReviewDecision {
 pub fn riskLabel(risk: ToolReviewRisk) []const u8 {
     return switch (risk) {
         .read_only => "read_only",
+        .interactive => "interactive",
         .write_capable => "write_capable",
         .command_execution => "command_execution",
         .delegating => "delegating",

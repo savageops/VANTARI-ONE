@@ -148,6 +148,10 @@ This is non-interrupting (never cancels the current step), non-destructive (noth
 
 Synthesized from 8 competitor patterns (oh-my-pi, Eve, Scion, nullclaw, OpenClaw, Claude Code, Cursor, pi-mono). Simpler, more durable, more responsive than all of them.
 
+### Root interactive questions
+
+The root model may call `ask_user` when an operator choice changes the result. It accepts a bounded batch of related questions, normalizes options to `a`–`e` plus `f / Other`, and persists the exact `var1.input_requested.v1` request in the session event spine. The TUI reuses the active input surface for selection, multi-select, inline Other text, and final confirmation; `input/respond` is the only resolution method. Cancellation and owner shutdown wake the same broker wait. Child profiles are headless and fail closed with `InputUnavailable`, so a background agent cannot hang waiting for a terminal that it does not own.
+
 ### Deferred plugin socket
 
 The plugin socket is not a shipped runtime capability. Move40 removed the
@@ -355,6 +359,7 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - **Replay-safe activity** — live and cold TUI projections consume contiguous sequence-bearing parent events; legacy sequence-less activity rows are not rendered
 - **Live streaming** — assistant deltas, reasoning deltas, and tool progress rendered in real-time
 - **Operator metadata row** — one non-wrapping row for status, prompt mode, model, effort, context used/capacity/remaining, and signal-bearing agent/queue/cost pressure; active/max and queue appear only when useful, finite priced session cost is compact, unknown context stays `ctx —`, and persistent `Esc cancel` text is omitted
+- **Root question controller** — event-backed `ask_user` questions with Enter select, Space check, inline `f / Other`, and one `input/respond` RPC; no polling overlay or second status bus
 - **Composer hierarchy** — transcript surface < metadata surface < focused input surface; `cancelling` appears only during an active cancellation request and disappears at the terminal boundary
 
 ## Quick Start
@@ -419,6 +424,8 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - Per-turn config hot-loading
 - Session-local prompt-mode cycling with provider-visible guidance on the next turn
 - Default-restricted agent filesystem/process boundary with explicit `runtime.full_access_mode` opt-in
+- Session-scoped access projection: the selected boundary is visible in the TUI and inherited by child routes without moving `.var` ownership
+- Root-only interactive `ask_user` questions through the existing event spine, broker, and `input/respond`; child profiles remain headless
 - Per-agent effort/temperature/thinking controls
 - Knowledge scaffolding (research/plans/advice/roadmap/tickets/processes)
 - Full ticket lifecycle (create/transition/list — unassigned→assigned→in_progress→completed→closed)

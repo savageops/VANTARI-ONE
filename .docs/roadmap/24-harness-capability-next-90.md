@@ -93,9 +93,9 @@ advance the queue until the real installed consumer path proves it.
 > No dedicated eligibility or capacity snapshot rerun is being inferred from
 > the composed ticket lifecycle mesh.
 > Move 37/38 supersedes the installed artifact hash recorded by the historical
-> Move 34, Move 33, and earlier Move 38 receipts; the current
-> source/installed hash is
-> `C65C98363F8DDD9A31F39FAB36F4A280972DCE5E69475AE29DA01FB80A7ABF54`.
+> Move 34, Move 33, and earlier Move 38 receipts. Move 49 now supersedes that
+> later source-state hash; the current source/installed hash is
+> `6D7F72DD3E1C03DF3A6FA71C07CD6DEA6A020391C8F85A0B1B395C9670DE93BF`.
 
 ## Competitive basis
 
@@ -189,18 +189,19 @@ advance the queue until the real installed consumer path proves it.
 | 43 | Let Shift+Tab cycle session-scoped `orchestrate`, `build`, `align`, and `plan` prompt profiles; default to `orchestrate` and apply the selected hot-loaded layer on the next turn. | closed: `PromptMode` cycles in `tui_chat.zig`, exact labels cross `session/send`, unknown labels fail with JSON-RPC `-32602` before execution, and all executor context rebuild paths carry the typed mode into the provider system envelope. Debug `19/19`, `1,996/1,996`; ReleaseFast/install `9/9`; installed TUI accepted Shift+Tab and blank startup/exit; source/installed SHA-256 `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`; exact owner-tree teardown leaves zero VANTARI processes. Research: `.docs/research/2026-08-13-prompt-mode-move43.md`. |
 | 44 | Keep one compact row for status, active prompt mode, model, effort, context used/capacity/percent, and remaining context. | closed: `formatFooterMetaWithPool` now emits one non-wrapping status/mode/model/effort/context projection with codepoint-safe width fitting, mapped ready/working/cancelling/failed labels, full remaining-context math when space allows, and unknown-safe context. Focused TUI `9/9`, `77/77`; Debug `19/19`, `1,998/1,998`; ReleaseFast/install `9/9`; installed row observed as `ready · orchestrate · glm-5.2 · max · ctx — / 500k`; source/installed SHA-256 `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`; exact owner-tree teardown leaves zero VANTARI processes. Research: `.docs/research/2026-08-13-status-row-move44.md`. |
 | 45 | Add active/max agents, nonzero queue, and known session cost only when those values carry signal. | closed: the existing footer read model keeps active/max and queue segments conditional, and now appends finite nonnegative `cost $0.######` only when terminal telemetry carries a priced session total; unpriced sessions stay quiet. Focused TUI `9/9`, `77/77`; Debug `19/19`, `1,998/1,998`; ReleaseFast/install `9/9`; installed row rendered and blank startup/exit passed; source/installed SHA-256 `D83E9A843286E79861FD5FA25514DD18C17B3307DDEC7A2842216B9DA3AB38EA`; exact owner-tree teardown leaves zero VANTARI processes. Research: `.docs/research/2026-08-13-agent-queue-cost-move45.md`. |
-| 46 | Render context as unknown after compaction or incomplete provider accounting instead of fabricated precision. | context telemetry; explicit unknown state snapshot. |
-| 47 | Render the group row as `Agents completed/total`; remove `waiting on N` filler. | child-group projection; all lifecycle snapshots. |
-| 48 | Render each child as agent name plus bounded canonical turn summary, truncated by display width. | `sessions/summaries.jsonl`; never expose `tool_completed` as the summary. |
-| 49 | Update one keyed child/tool row with a typed phase marker and elapsed time instead of appending lifecycle noise. | TUI keyed rows; no duplicate tool spans. |
-| 50 | Add an on-demand Agent Hub for route, model, effort, state, elapsed, tools, tokens/context/cost, receipt, latest summary, and unread-message signal; prove no parent/child double-count or transcript replication. | Agent Hub plus installed visual matrix. |
+| 46 | Render context as unknown after compaction or incomplete provider accounting instead of fabricated precision. | closed: the existing footer owner preserves `ctx —` for unknown or zero capacity, including the compacted/zero-capacity snapshot; no fabricated percentage or gauge was added. Focused TUI `9/9`, `78/78`; Debug `19/19`, `2,000/2,000`; ReleaseFast/install `9/9`; installed row observed as `ready · orchestrate · glm-5.2 · max · ctx — / 500k`; source/installed SHA-256 `C7B3EE8E4B41D12D486D7C73F3E209834EEE91619364FE0ABE5A676E8C7EA9B7`; exact owner-tree teardown leaves zero VANTARI processes. Research: `.docs/research/2026-08-13-status-row-move44.md` (owner consolidated). |
+| 47 | Render the group row as `Agents completed/total`; remove `waiting on N` filler. | closed: the keyed group projection keeps `Agents completed/total`, removes the `waiting on N` filler, and uses `○` for queued/running versus `◉` for complete while retaining explicit failure/cancel markers. Focused TUI `9/9`, `78/78`; Debug `19/19`, `2,000/2,000`; ReleaseFast/install `9/9`; installed row and exact owner-tree teardown pass; source/installed SHA-256 `C7B3EE8E4B41D12D486D7C73F3E209834EEE91619364FE0ABE5A676E8C7EA9B7`; final process census zero. Research: `.docs/research/2026-08-13-agent-summary-bubble-move47-48.md`. |
+| 48 | Render each child as agent name plus bounded canonical turn summary, truncated by display width. | closed: each keyed child row renders `agent-name - running "bounded summary"` or `agent-name - complete "bounded summary"` from the existing `sessions/summaries.jsonl` boundary; later tool/terminal phases update state without replacing the summary, `tool_completed` is never the visible conclusion, and UTF-8/one-row width truncation is tested. Focused TUI `9/9`, `78/78`; Debug `19/19`, `2,000/2,000`; ReleaseFast/install `9/9`; source/installed SHA-256 `C7B3EE8E4B41D12D486D7C73F3E209834EEE91619364FE0ABE5A676E8C7EA9B7`; exact owner-tree teardown leaves zero VANTARI processes. Research: `.docs/research/2026-08-13-agent-summary-bubble-move47-48.md`. |
+| 49 | Update one keyed child/tool row with a typed phase marker and elapsed time instead of appending lifecycle noise. | closed: the existing `var1.child_event.v1` envelope now carries optional `elapsed_ms`; the supervisor derives it from existing task timestamps, and `tui_chat.zig` renders compact phase/time metadata on the keyed child row while preserving the canonical quoted summary. Focused TUI `9/9`, `78/78`; Debug `19/19`, `2,000/2,000`; ReleaseFast/install `9/9`; installed TUI showed `○ Agents 0/1` and `· session` phase output; source/installed SHA-256 `6D7F72DD3E1C03DF3A6FA71C07CD6DEA6A020391C8F85A0B1B395C9670DE93BF`; exact proof-owned teardown leaves zero VANTARI processes. Research: `.docs/research/2026-08-13-child-phase-elapsed-move49.md`. |
+| 50 | delete/narrow | closed: Reused the existing keyed child row and canonical `sessions/summaries.jsonl` through the existing `tool_completed` boundary for live quoted summary refresh. The row now shows `○/◉ name - state · phase · elapsed "bounded summary"`; no Agent Hub registry, poller, chat-bubble event, unread counter, transcript copy, or second state owner was added. Focused TUI `9/9`, `78/78`; Debug `19/19`, `2,000/2,000`; ReleaseFast/install `9/9`; source/installed SHA-256 `6814396B7E2A134E9ECAED9DA5B6567FEAA01824DAC948CC54DC725EFC3DF178`; installed TUI smoke and exact owner-tree teardown passed. Research: `.docs/research/2026-08-13-agent-hub-move50.md`. |
 
 ## 51-60 — Make every advertised tool executable and bounded
 
 | # | Next move | Owner and terminal proof |
 |---:|---|---|
-| 51 | Prove `runtime.full_access_mode=true` across child agents and every file/search/LSP/shell path outside the launch workspace. | shared resolver and installed binary; default remains false. |
-| 52 | Make access mode session-scoped and visible while keeping `.var` and session ledgers at canonical project ownership. | config/runtime projection; full access cannot relocate truth. |
+| 51 | Prove `runtime.full_access_mode=true` across child agents and every file/search/LSP/shell path outside the launch workspace. | closed: `routes.ResolvedRoute.config.full_access_mode` now crosses the single `agents/supervisor.zig:childExecutionContext` handoff into the shared `ExecutionContext`; IX path census finds all ten file/search/LSP/shell entrypoints on `fsutil.resolveWithAccessMode`; default remains `false`. Clean committed tree: Debug `19/19` steps and `2,000/2,000` tests, ReleaseFast `9/9`, installed `config/set` wrote `true` in an isolated runtime, live config stayed unchanged, isolated state was removed, source/installed SHA-256 `39B26C5D898F9F6346A0DE4397002D05C810B2EB34153CA11171440129B3B453`, final process census `0`. |
+| 52 | Make access mode session-scoped and visible while keeping `.var` and session ledgers at canonical project ownership. | closed in source: `SessionRecord.full_access_mode` survives cold read, `SessionSummary` and effective turn config carry the immutable scope, the TUI footer shows `scope workspace`/`scope full`, legacy records remain restricted, and child routes inherit the same scope. Debug `19/19`, `2,023/2,023`; ReleaseFast/install `9/9`; installed health/catalog proof and source/installed SHA-256 `739F0D10D366738D01CEB3879D5B9487F7C99FB7CDB4D7FF9DB3418386A0DEED`; zero proof-owned processes. |
+| 52a | Add one root-only interactive question path through the existing tool, event, RPC, and TUI owners. | source-complete: `ask_user` emits bounded `var1.input_requested.v1`, `input/respond` resolves the session-scoped broker, Enter/Space and inline `f / Other` are covered, headless children fail `InputUnavailable`, cancellation/shutdown wake waits, and terminal replay clears stale UI. Debug `19/19`, `2,023/2,023`; installed catalog exposes `ask_user`; provider-driven installed response remains the next consumer probe. Research: `.docs/research/2026-08-13-root-interactive-input.md`. |
 | 53 | Add a sandboxed capability profile beside workspace-contained and full-access modes through the same execution context. | `core/tools`; no tool-local policy bypass. |
 | 54 | Resolve the installed `ix.exe` versus required `iex` identity once; ship one executable/dependency name. | `search_files` and installer; installed search works or fails actionably. |
 | 55 | Generate the model-visible capability manifest from module definitions plus live dependency probes. | tool registry; catalog, schema, review, and dispatch cannot drift. |
@@ -258,11 +259,14 @@ advance the queue until the real installed consumer path proves it.
 ## Immediate frontier
 
 Move 30, finding 11, parent 036, the 021 auth chain, parent 035, and Moves
-33-44 are closed after the installed hash-matched proofs, 036h terminal review,
-035h provider/cost pipeline QC, the Move40 deferred-delete decision, and the
-Move44 status-row proof. Moves 1-44 are the closed execution band; Move 45 is
-the next queued frontier. The provider cost/compat chain has no pending
-continuation. PLUG has no active runtime frontier: reopen it only after a
-concrete need and a new owner-mapped recon. Keep context sharding and
-autonomous repair behind the next owner decision rather than opening parallel
-architecture.
+33-50 are closed after the installed hash-matched proofs, 036h terminal review,
+035h provider/cost pipeline QC, the Move40 deferred-delete decision, the
+status-row proof, the keyed child-summary proof, the typed child phase/elapsed
+proof, the Move50 live-summary narrowing, and the Move51 child access-mode
+handoff proof. Moves 1-51 are the closed execution band; Move 52 is the next
+queued frontier: make access mode session-scoped and visible without moving
+`.var` or session ledgers. The provider cost/compat chain has no pending
+continuation.
+PLUG has no active runtime frontier: reopen it only after a concrete need and a
+new owner-mapped recon. Keep context sharding and autonomous repair behind the
+next owner decision rather than opening parallel architecture.

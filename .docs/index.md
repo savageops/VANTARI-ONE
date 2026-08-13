@@ -38,6 +38,12 @@ This directory contains project records, research, planning chains, and complete
 - [`research/2026-08-13-prompt-mode-move43.md`](research/2026-08-13-prompt-mode-move43.md) — Move 43 seven-source prompt-mode harvest, Shift+Tab cycle, provider-visible layer, and rejected executor/registry complexity.
 - [`research/2026-08-13-status-row-move44.md`](research/2026-08-13-status-row-move44.md) — Move 44 eight-source status-row harvest, compact footer order, truthful context display, and rejected gauge/registry complexity.
 - [`research/2026-08-13-agent-queue-cost-move45.md`](research/2026-08-13-agent-queue-cost-move45.md) — Move 45 agent/queue/cost signal harvest, conditional footer policy, priced-session boundary, and rejected status-registry complexity.
+- [`research/2026-08-13-agent-summary-bubble-move47-48.md`](research/2026-08-13-agent-summary-bubble-move47-48.md) — Moves 47–48 agent-row harvest, keyed quoted summary projection, lifecycle markers, width-safe truncation, and rejected bubble/poller complexity.
+- [`research/2026-08-13-child-phase-elapsed-move49.md`](research/2026-08-13-child-phase-elapsed-move49.md) — Move 49 phase/elapsed harvest, same-row metadata projection, width priority, and rejected timer/poller complexity.
+- [`research/2026-08-13-agent-hub-move50.md`](research/2026-08-13-agent-hub-move50.md) — Move 50 Agent Hub recon and live child-summary decision/proof.
+- [`research/2026-08-13-full-access-mode-move51.md`](research/2026-08-13-full-access-mode-move51.md) — Move 51 child execution-context handoff, shared resolver census, and clean installed proof.
+- [`research/2026-08-13-root-interactive-input.md`](research/2026-08-13-root-interactive-input.md) — root-only `ask_user` harvest, bounded `input/respond` protocol, TUI controller, headless-child boundary, and adversarial proof.
+- [`research/2026-08-13-provider-prism-staging.md`](research/2026-08-13-provider-prism-staging.md) — staged provider harvest receipt; promotion is deferred pending the complete installed auth/header path.
 - [`todo/findings/00-INDEX.md`](todo/findings/00-INDEX.md) — executable P0/P1/P2 closure order; current authority over older completion claims.
 - [`roadmap/24-harness-capability-next-90.md`](roadmap/24-harness-capability-next-90.md) — 90 dependency-ordered moves ranked by operator value, capability leverage, integrity risk, and friction removed.
 - [`roadmap/21-persistent-execution-owner.md`](roadmap/21-persistent-execution-owner.md) — closed single-owner lifecycle: reconnect, duplicate exclusion, graceful/crash recovery, process cleanup, and installed proof.
@@ -49,6 +55,8 @@ This directory contains project records, research, planning chains, and complete
 - [`todo/changelog/035-provider-cost-compat-model.md`](todo/changelog/035-provider-cost-compat-model.md) — archived provider cost/compat parent; usage, pricing, auto-detection, TUI consumer, installed proof, and terminal QC are closed.
 - [`todo/changelog/035g-provider-cost-compat-model.md`](todo/changelog/035g-provider-cost-compat-model.md) — installed priced/unknown provider turns, event-ledger readback, multiline `/status`, and TUI row-owner regression proof.
 - [`todo/changelog/035h-provider-cost-compat-model.md`](todo/changelog/035h-provider-cost-compat-model.md) — terminal structure, contract, test-pressure, code-quality, and provider-to-event-to-TUI QC closeout.
+- [`todo/changelog/038-provider-model-identity.md`](todo/changelog/038-provider-model-identity.md) — provider-scoped model identity and selector parity proof.
+- [`todo/findings/31-provider-model-parity-ohmypi.md`](todo/findings/31-provider-model-parity-ohmypi.md) — oh-my-pi provider/model parity audit and residual boundary.
 - [`todo/changelog/PLUG-plugin-socket.md`](todo/changelog/PLUG-plugin-socket.md) — Move40 deferred-delete receipt; the plugin manager was removed and the remaining manifest/isolation/socket types are contract-only.
 - [`roadmap/20-adversarial-concurrency-mesh.md`](roadmap/20-adversarial-concurrency-mesh.md) — closed six-seam 100-way contention mesh with exact ledger, replay, and shutdown evidence and no new harness.
 - [`roadmap/19-single-terminal-event.md`](roadmap/19-single-terminal-event.md) — closed single-settlement contract, seven-source harvest, generation binding, cold-start validation, and installed Windows proof.
@@ -56,7 +64,7 @@ This directory contains project records, research, planning chains, and complete
 - [`roadmap/17-byte-level-session-integrity.md`](roadmap/17-byte-level-session-integrity.md) — closed valid-prefix and poisoned-tail append contract, six-source storage harvest, installed proof, and reversible production-state reconciliation.
 - [`research/2026-08-09-tui-status-surface-and-repair-loop.md`](research/2026-08-09-tui-status-surface-and-repair-loop.md) — compact TUI telemetry, durable summary projection, and repair-loop boundary.
 - [`research/2026-08-10-ticket-agent-pool-and-repair-queue.md`](research/2026-08-10-ticket-agent-pool-and-repair-queue.md) — buffered ticket admission, fixed agent capacity, leases, and stale-owner repair.
-- Runtime access boundary — `runtime.full_access_mode` is default-off, validated, and projected through one shared path resolver; the technical owner is recorded in [`technical_summary.md`](technical_summary.md) and [`workspace.json`](workspace.json).
+- Runtime access boundary — `runtime.full_access_mode` is default-off, validated, carried into child execution contexts, and projected through one shared path resolver; the technical owner is recorded in [`technical_summary.md`](technical_summary.md) and [`workspace.json`](workspace.json).
 - [`todo/changelog/036-ticket-agent-pool-and-repair.md`](todo/changelog/036-ticket-agent-pool-and-repair.md) — archived parent receipt for the ticket/pool chain; 036h closes the reopened installed lifecycle review.
 - [`todo/changelog/036h-ticket-agent-pool-and-repair-terminal-review.md`](todo/changelog/036h-ticket-agent-pool-and-repair-terminal-review.md) — installed owner/ticket lifecycle, source graph, hash equality, process census, and documentation terminal review.
 

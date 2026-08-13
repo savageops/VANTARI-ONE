@@ -188,6 +188,30 @@ sequenceDiagram
   O-->>C: response or UI refresh
 ```
 
+## Root interactive input flow
+
+`ask_user` is the only shipped operator-question capability. The root tool
+normalizes a bounded question batch to stable ids `a`–`f`, with `f` reserved for
+inline Other text, then serializes `var1.input_requested.v1` into the existing
+session event spine. `stdio_rpc.InputBroker` holds only the process-local wait;
+its key is the session id plus provider tool-call id, so concurrent sessions may
+reuse provider-local ids safely.
+
+```text
+root provider turn -> ask_user -> input_requested event -> TUI question controller
+                                                   <- input/respond <- operator
+                  <- response JSON <- broker wake <-
+                  -> normal tool_finished / turn_terminal evidence
+```
+
+The TUI controller reuses the existing input surface and one RPC method. Enter
+selects, Space toggles multi-select, and Other opens inline text followed by
+confirmation. Session cancel and owner shutdown broadcast to pending waits;
+terminal replay clears an unanswered controller. Child profiles do not receive
+`ask_user` and return `InputUnavailable` instead of blocking without an operator
+surface. There is no input poller, second status bus, transcript copy, or
+resolved-event family.
+
 ## Context compaction flow
 
 ```mermaid
@@ -588,10 +612,9 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-13:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Debug and ReleaseFast test graphs -> 19/19 steps and 1,998/1,998 tests passed. The lower
-  total is intentional: 45 one-case registry wrappers were replaced by one loop
-  that executes every one of the 53 declared cases, including ten that had no
-  test declaration.
+- Debug and ReleaseFast test graphs -> 19/19 steps and 2,023/2,023 tests passed;
+  the current graph includes the session-scoped access and root interactive-input
+  slices.
 - Focused backend TUI -> 77/77 passed.
 - Host lifecycle lane passes, including atomic same-session admission,
   session-keyed buffer state, exact-generation cancellation,
@@ -702,6 +725,12 @@ Latest local Windows validation on 2026-08-13:
   ended on one stored/notified `turn_terminal` at sequence 12 with schema
   `var1.turn_terminal.v1`, outcome `completed`, and `run_seq = 1`; zero process
   remained.
+- The current session-scoped access and root-interactive-input slice passes
+  Debug `19/19` steps and `2,023/2,023` tests, ReleaseFast/install `9/9`, and
+  installed health plus tool-catalog probes. Source and installed SHA-256 match
+  `739F0D10D366738D01CEB3879D5B9487F7C99FB7CDB4D7FF9DB3418386A0DEED`; the
+  exact proof-owned owner/kernel process census is zero. Provider-driven
+  installed question response remains the explicit next consumer probe.
 
 ## Cognitive architecture (frontier capabilities)
 

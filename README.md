@@ -12,7 +12,7 @@ One binary; one protocol; one owner for runtime truth.
 
 [![Release](https://img.shields.io/github/v/release/savageops/VANTARI-ONE?display_name=tag&sort=semver&label=Release&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/savageops/VANTARI-ONE/total?label=Downloads&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases)
-[![Tests](https://img.shields.io/badge/Tests-1%2C996%20cases-0f766e)](#validation)
+[![Tests](https://img.shields.io/badge/Tests-2%2C023%20cases-0f766e)](#validation)
 [![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-f7a41d?logo=zig)](https://ziglang.org/)
 
 [![Stars](https://img.shields.io/github/stars/savageops/VANTARI-ONE?label=Stars&color=111111)](https://github.com/savageops/VANTARI-ONE/stargazers)
@@ -90,8 +90,8 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 | Metric | Value |
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
-| **Kernel surface** | 115 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 2,000 passing backend cases across source and adversarial pipeline suites |
+| **Kernel surface** | 122 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
+| **Proof surface** | 2,023 passing backend cases across source and adversarial pipeline suites |
 | **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
 | **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |
@@ -256,6 +256,8 @@ do not move. This recovery is source and installed proven; arbitrary external
 side-effect certainty still requires the write-intent ledger.
 
 The TUI keeps this mechanic legible without adding a status forest: one non-wrapping footer row shows `status · prompt mode · model · effort · context used/capacity/percent · remaining`; unknown accounting stays `ctx —`, and narrow fitting drops lower-signal detail before codepoint-safe truncation. The footer shows pool and queue pressure only when non-zero, and priced session cost only when terminal telemetry carries a finite value; the activity group shows `Agents completed/total`; `○` marks queued/running activity and `◉` marks complete activity, with explicit failure/cancel markers. Each keyed child row ends with known typed phase and elapsed snapshots when available, followed by a bounded quoted turn summary sourced from the child session summary ledger; an existing `update_session_summary` completion refreshes that quote while the child is still running, and later tool/terminal phases retain it on the same row. Tool lifecycle names remain typed event metadata, not the visible child summary. The composer is a focused surface above a quieter metadata row, and cancellation copy appears only while a run is actively cancelling; the persistent footer omits `Esc cancel`.
+
+When a decision materially changes the work, the root model can call `ask_user` with related multiple-choice questions. The kernel persists one bounded `input_requested` event, the TUI presents a compact horizontal controller with Enter select, Space check, and inline `f / Other`, and `input/respond` wakes the waiting tool call. The controller reuses the existing event and RPC owners: no question poller, second status bus, transcript copy, or child input loop exists. Headless child profiles do not receive the interactive tool and continue autonomously or report the unavailable capability.
 
 <br/>
 
@@ -969,7 +971,7 @@ vantari auth status|login|use|logout <provider> identity and provider auth
 
 ## Validation
 
-The pinned Debug and ReleaseFast graphs currently pass 2,000 test cases across `apps/backend/src/`
+The pinned Debug and ReleaseFast graphs currently pass 2,023 test cases across `apps/backend/src/`
 and `apps/backend/tests/`. They target state transitions, protocol edges, and
 failure pressure rather than line coverage:
 

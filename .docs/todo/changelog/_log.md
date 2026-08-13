@@ -2713,3 +2713,97 @@ cost only when those values carry signal.
 
 **Next todo:** Move 46 — preserve explicit unknown context after compaction or
 incomplete provider accounting; add no precision the kernel did not prove.
+
+## Closure receipt — Moves 46–48 (2026-08-13)
+
+- Move 46 keeps unknown or zero-capacity context as `ctx —`; the existing footer
+  owner does not invent a percentage, remaining value, gauge, or telemetry
+  surface.
+- Move 47 keeps `Agents completed/total`, removes `waiting on N`, and aligns
+  group/child markers to `○` queued/running and `◉` complete while preserving
+  explicit failure/cancel markers.
+- Move 48 reuses the keyed child activity row and canonical
+  `sessions/summaries.jsonl` boundary for a bounded quoted agent summary. Later
+  tool/terminal events update lifecycle state without replacing the summary;
+  `tool_completed` remains typed event metadata, not the visible conclusion.
+  UTF-8 and one-row width truncation are tested.
+- The harvest and rejected chat-bubble/poller/second-ledger alternatives are
+  recorded in `.docs/research/2026-08-13-agent-summary-bubble-move47-48.md`.
+- Focused TUI returned `9/9` steps and `78/78` tests; Debug returned `19/19`
+  steps and `2,000/2,000` tests; ReleaseFast/install returned `9/9`.
+- Installed TUI rendered `ready · orchestrate · glm-5.2 · max · ctx — / 500k`.
+  Source and installed SHA-256 match
+  `C7B3EE8E4B41D12D486D7C73F3E209834EEE91619364FE0ABE5A676E8C7EA9B7`; the
+  exact owner/kernel tree was torn down and the final process census was zero.
+- Updated roadmap, research/index records, root/backend README, architecture,
+  technical summary, workspace record, findings receipt, `AGENTS.md`, `SKILL.md`,
+  and `llms.txt`.
+
+**Prior next todo (closed below):** Move 49 — add only the typed child phase
+marker and elapsed-time projection if the existing keyed row does not already
+carry both signals.
+
+## Closure receipt — Move 49 (2026-08-13)
+
+- Move 49 reuses the existing `var1.child_event.v1` envelope, supervisor task
+  timestamps, and keyed `group_id + task_id` TUI row. The envelope carries
+  optional `elapsed_ms`; known phases render as compact labels, and lower-signal
+  phase/time metadata yields to the canonical quoted child summary at narrow
+  widths.
+- The child summary still comes from `sessions/summaries.jsonl` at the existing
+  `assistant_response` boundary. Tool/terminal events update the same row and do
+  not promote `tool_completed`, append lifecycle noise, or create a chat bubble.
+- Focused TUI returned `9/9` steps and `78/78` tests; Debug returned `19/19`
+  steps and `2,000/2,000` tests; ReleaseFast/install returned `9/9`.
+- Installed TUI showed `○ Agents 0/1` and the keyed child `· session` phase.
+  Source and installed SHA-256 match
+  `6D7F72DD3E1C03DF3A6FA71C07CD6DEA6A020391C8F85A0B1B395C9670DE93BF`; exact
+  proof-owned owner/kernel teardown left zero VANTARI processes.
+- The seven-source harvest and rejected timer/poller/heartbeat/second-ledger
+  alternatives are recorded in
+  `.docs/research/2026-08-13-child-phase-elapsed-move49.md`.
+- Updated roadmap, research/index records, root/backend README, architecture,
+  technical summary, workspace record, findings receipt, `AGENTS.md`, `SKILL.md`,
+  and `llms.txt`.
+
+**Move 50 closure receipt (2026-08-13):** Reused the existing child
+`tool_completed` boundary for `update_session_summary`, read the canonical
+`sessions/summaries.jsonl` row, and emitted the existing `child_progress`
+envelope with `phase=summary`. The TUI now refreshes the keyed child row with a
+bounded quoted summary while the child is running. No Agent Hub registry,
+poller, chat-bubble event, unread state, transcript copy, or second ledger was
+added. Focused TUI `9/9`, `78/78`; Debug `19/19`, `2,000/2,000`;
+ReleaseFast/install `9/9`; source/installed SHA-256
+`6814396B7E2A134E9ECAED9DA5B6567FEAA01824DAC948CC54DC725EFC3DF178`;
+installed smoke passed; exact owner-tree teardown left zero VANTARI binaries.
+Research: `.docs/research/2026-08-13-agent-hub-move50.md`.
+
+**Move 51 closure receipt (2026-08-13):** `routes.ResolvedRoute.config` already
+carried the validated access flag, but `agents/supervisor.zig` dropped it at
+the child `ExecutionContext` handoff. `childExecutionContext` now preserves the
+flag for every child, while the ten file/search/LSP/shell entrypoints continue
+to use the sole `fsutil.resolveWithAccessMode` resolver. Clean Debug `19/19`
+steps and `2,000/2,000` tests, ReleaseFast/install `9/9`, installed
+`config/set` true-write in an isolated runtime, live config unchanged, source/
+installed SHA-256
+`39B26C5D898F9F6346A0DE4397002D05C810B2EB34153CA11171440129B3B453`, and zero
+final VANTARI processes prove the slice. Research:
+`.docs/research/2026-08-13-full-access-mode-move51.md`.
+
+**Next todo:** Move 52 — make access mode session-scoped and visible without
+moving `.var` or session ledgers.
+
+**Move 52/52a closure receipt (2026-08-13):** Session access scope is now
+persisted, projected in `SessionSummary` and the TUI footer, and carried into the
+effective turn config without relocating `.var` or session ledgers. The root
+interactive slice adds one `ask_user` tool, one `input/respond` RPC, one bounded
+`var1.input_requested.v1` request, and one session-scoped broker wait. The TUI
+uses Enter/Space and inline `f / Other`; child profiles fail with
+`InputUnavailable`; cancel/shutdown wake pending waits and terminal replay clears
+stale controllers. No poller, question registry, second status bus, transcript
+copy, or resolved-event family was added. Debug `19/19`, `2,023/2,023`;
+ReleaseFast/install `9/9`; source/installed SHA-256
+`739F0D10D366738D01CEB3879D5B9487F7C99FB7CDB4D7FF9DB3418386A0DEED`; installed
+health/catalog proof passed and exact proof-owned processes are zero. Research:
+`.docs/research/2026-08-13-root-interactive-input.md`. The provider-driven
+installed TUI response remains the explicit next consumer probe.

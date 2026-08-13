@@ -286,6 +286,9 @@ pub const SessionRecord = struct {
     continued_from_session_id: ?[]u8 = null,
     display_name: ?[]u8 = null,
     agent_profile: ?[]u8 = null,
+    /// Immutable access scope selected when this session was admitted. Legacy
+    /// records omit the field and remain workspace-contained by default.
+    full_access_mode: bool = false,
     /// Heap-owned because the large optional-by-value shape miscompiled under
     /// clean Zig 0.15.1 ReleaseFast builds. Pointer presence is the stable
     /// discriminant; the receipt itself remains immutable session state.
@@ -445,6 +448,7 @@ pub fn deinitContextCheckpoints(allocator: std.mem.Allocator, checkpoints: []Con
 
 pub const ToolRiskClass = enum {
     read_only,
+    interactive,
     write_capable,
     command_execution,
     delegating,
@@ -454,6 +458,7 @@ pub const ToolRiskClass = enum {
 /// Parse a risk class label string into the enum, or null if invalid.
 pub fn parseReviewRiskLabel(text: []const u8) ?ToolRiskClass {
     if (std.mem.eql(u8, text, "read_only")) return .read_only;
+    if (std.mem.eql(u8, text, "interactive")) return .interactive;
     if (std.mem.eql(u8, text, "write_capable")) return .write_capable;
     if (std.mem.eql(u8, text, "command_execution")) return .command_execution;
     if (std.mem.eql(u8, text, "delegating")) return .delegating;

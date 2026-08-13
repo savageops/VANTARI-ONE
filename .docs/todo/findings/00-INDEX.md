@@ -46,7 +46,7 @@ closeout cannot override current source and runtime proof.
 | 20 | P1 | [Tool capability truth](20-tool-capability-truth.md) | eval, DAP, TTSR, search, capability probes | pending |
 | 21 | P1 | [Work-state and prompt consolidation](21-work-state-and-prompt-consolidation.md) | tickets, workspace tools, prompt builder | ticket-policy slice closed; remaining work-state/prompt duplication pending |
 | 22 | P1 | [Documentation and WIP truth](22-documentation-and-wip-truth.md) | project records, public docs, 021/035/036/PLUG | closed 2026-08-13 after Move40 reconciliation |
-| 30 | P2 | [TUI operator hierarchy](30-tui-operator-hierarchy.md) | TUI read model and Agent Hub | pending |
+| 30 | P2 | [TUI operator hierarchy](30-tui-operator-hierarchy.md) | TUI read model; Agent Hub deferred by Move 50 YAGNI decision | closed 2026-08-13 |
 | 31 | P2 | [Gated harness repair loop](31-gated-harness-repair-loop.md) | failure evidence, approval, replay, regression | pending |
 
 ## Promotion floor

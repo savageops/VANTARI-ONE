@@ -172,6 +172,9 @@ pub fn launchFromCheckpoint(
     prompt: []const u8,
     requested_name: ?[]const u8,
 ) ![]u8 {
+    var parent_session = try store.readSessionRecord(allocator, service.config.workspace_root, parent_session_id);
+    defer parent_session.deinit(allocator);
+
     // Create the child session with the parent reference.
     const child_profile = profile_contract.defaultSubagentProfile();
     const agent_name = if (requested_name) |value|
@@ -185,6 +188,7 @@ pub fn launchFromCheckpoint(
         .parent_session_id = parent_session_id,
         .display_name = agent_name,
         .agent_profile = child_profile.id,
+        .full_access_mode = parent_session.full_access_mode,
     });
     defer child_session.deinit(allocator);
 
@@ -453,6 +457,8 @@ fn renderEligibilitySnapshot(
 
     var session = try store.readSessionRecord(allocator, service.config.workspace_root, session_id);
     defer session.deinit(allocator);
+    var parent_config = service.config.*;
+    parent_config.full_access_mode = session.full_access_mode;
     const has_group_target = if (session.execution_receipt) |receipt| receipt.group_id.len > 0 else false;
 
     var registry = try agent_spec.loadRegistry(allocator, service.config.workspace_root);
@@ -471,7 +477,7 @@ fn renderEligibilitySnapshot(
 
     if (block_reason == null) {
         for (registry.all()) |spec| {
-            var route = routes.resolve(allocator, service.config.*, spec.route_role, .{
+            var route = routes.resolve(allocator, parent_config, spec.route_role, .{
                 .max_steps = spec.max_steps,
                 .max_tool_calls = spec.max_tool_calls,
                 .execution_kind = spec.execution_kind,
@@ -539,6 +545,13 @@ fn launchTicket(
     const capacity = try readCapacity(service);
     if (capacity.available == 0) return child_supervisor.Error.PoolFull;
 
+    var parent_full_access_mode = service.config.full_access_mode;
+    if (request.source_session_id.len > 0) {
+        var parent = store.readSessionRecord(allocator, service.config.workspace_root, request.source_session_id) catch return Error.MissingParentSession;
+        parent_full_access_mode = parent.full_access_mode;
+        parent.deinit(allocator);
+    }
+
     var registry = try agent_spec.loadRegistry(allocator, service.config.workspace_root);
     defer registry.deinit();
     const spec = try resolveTicketAgent(&registry, request.agent_hint, request.category);
@@ -548,7 +561,9 @@ fn launchTicket(
         route.deinit(std.heap.page_allocator);
         std.heap.page_allocator.destroy(route);
     };
-    route.* = routes.resolve(std.heap.page_allocator, service.config.*, spec.route_role, .{
+    var parent_config = service.config.*;
+    parent_config.full_access_mode = parent_full_access_mode;
+    route.* = routes.resolve(std.heap.page_allocator, parent_config, spec.route_role, .{
         .max_steps = spec.max_steps,
         .max_tool_calls = spec.max_tool_calls,
         .execution_kind = spec.execution_kind,
@@ -573,8 +588,6 @@ fn launchTicket(
     defer allocator.free(child_session_id);
 
     const parent_session_id: []const u8 = if (request.source_session_id.len > 0) blk: {
-        var parent = store.readSessionRecord(allocator, service.config.workspace_root, request.source_session_id) catch return Error.MissingParentSession;
-        parent.deinit(allocator);
         break :blk request.source_session_id;
     } else try ticketSessionId(allocator, "coordinator", request.ticket_id);
     const owns_synthetic_parent = request.source_session_id.len == 0;
@@ -644,6 +657,7 @@ fn launchTicket(
                 .status = .initialized,
                 .display_name = display_name,
                 .agent_profile = "root",
+                .full_access_mode = parent_full_access_mode,
             }),
             else => return err,
         };
@@ -656,6 +670,7 @@ fn launchTicket(
         .parent_session_id = parent_session_id,
         .display_name = display_name,
         .agent_profile = route.capability_profile_id,
+        .full_access_mode = parent_full_access_mode,
     }, &execution_receipt);
     defer child_session.deinit(allocator);
     errdefer |err| markSessionAdmissionFailed(service.config.workspace_root, child_session.id, @errorName(err));
@@ -790,7 +805,9 @@ fn resumeTicket(
         route.deinit(std.heap.page_allocator);
         std.heap.page_allocator.destroy(route);
     };
-    route.* = routes.resolve(std.heap.page_allocator, service.config.*, receipt_role, .{
+    var parent_config = service.config.*;
+    parent_config.full_access_mode = child_session.full_access_mode;
+    route.* = routes.resolve(std.heap.page_allocator, parent_config, receipt_role, .{
         .max_steps = receipt.budget.max_steps,
         .max_tool_calls = receipt.budget.max_tool_calls,
         .execution_kind = receipt_kind,
@@ -905,6 +922,8 @@ fn launchBatch(
     try scope_contract.validateDelegationScope(delegation_scope, parent_profile);
     var parent_session = try store.readSessionRecord(allocator, service.config.workspace_root, parent_session_id);
     defer parent_session.deinit(allocator);
+    var parent_config = service.config.*;
+    parent_config.full_access_mode = parent_session.full_access_mode;
     if (parent_session.execution_receipt) |receipt| {
         if (tasks_to_launch.len > receipt.budget.max_children) return Error.InvalidBatch;
     }
@@ -941,7 +960,7 @@ fn launchBatch(
         const spec = try registry.resolve(task.agent_id);
         if (route_templates.contains(spec.id)) continue;
         const template = try std.heap.page_allocator.create(routes.ResolvedRoute);
-        template.* = routes.resolve(std.heap.page_allocator, service.config.*, spec.route_role, .{
+        template.* = routes.resolve(std.heap.page_allocator, parent_config, spec.route_role, .{
             .max_steps = spec.max_steps,
             .max_tool_calls = spec.max_tool_calls,
             .execution_kind = spec.execution_kind,
@@ -1036,6 +1055,7 @@ fn launchBatch(
             .parent_session_id = parent_session_id,
             .display_name = name,
             .agent_profile = route.capability_profile_id,
+            .full_access_mode = parent_session.full_access_mode,
         }, &execution_receipt);
         defer child_session.deinit(allocator);
 
