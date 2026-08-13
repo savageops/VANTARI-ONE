@@ -56,7 +56,7 @@ pub const CommandProbe = struct {
 };
 
 pub const Error = error{
-    AgentCatalogRequired,
+    AgentEligibilityRequired,
     AgentServiceUnavailable,
     CapabilityDenied,
     CommandFailed,
@@ -281,6 +281,13 @@ pub const AgentService = struct {
     capacityFn: ?*const fn (
         ctx: ?*anyopaque,
     ) anyerror!AgentCapacitySnapshot = null,
+    eligibilityFn: ?*const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        session_id: []const u8,
+        parent_profile_id: []const u8,
+        depth_remaining: usize,
+    ) anyerror![]u8 = null,
     statusFn: *const fn (
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
@@ -377,6 +384,17 @@ pub const AgentService = struct {
         return read_capacity(self.context);
     }
 
+    pub fn eligibility(
+        self: AgentService,
+        allocator: std.mem.Allocator,
+        session_id: []const u8,
+        parent_profile_id: []const u8,
+        depth_remaining: usize,
+    ) anyerror![]u8 {
+        const read_eligibility = self.eligibilityFn orelse return Error.AgentServiceUnavailable;
+        return read_eligibility(self.context, allocator, session_id, parent_profile_id, depth_remaining);
+    }
+
     pub fn status(
         self: AgentService,
         allocator: std.mem.Allocator,
@@ -404,10 +422,9 @@ pub const AgentService = struct {
         return self.listFn(self.context, allocator, parent_session_id);
     }
 
-    /// Converge all completed child sessions into the parent. Reads each
-    /// child's output, merges them into a convergence summary, writes a
-    /// `converged` shard checkpoint + merged assistant message to the parent.
-    /// This is the branch-and-converge reprocessing step (roadmap P0-2).
+    /// Reconcile completed child evidence and mark its shard checkpoint
+    /// converged. Child summaries remain mailbox/context inputs; convergence
+    /// never writes a synthetic assistant transcript message into the parent.
     pub fn converge(
         self: AgentService,
         allocator: std.mem.Allocator,
@@ -500,7 +517,7 @@ pub const ExecutionContext = struct {
     command_probe: ?CommandProbe = null,
     tool_events: ?ToolEventSink = null,
     file_inspection_ledger: ?*FileInspectionLedger = null,
-    agent_discovery_ledger: ?*AgentDiscoveryLedger = null,
+    agent_eligibility_ledger: ?*AgentEligibilityLedger = null,
     orchestrator_only: bool = false,
     workspace_state_enabled: bool = false,
     capability_profile_id: ?[]const u8 = null,
@@ -508,23 +525,27 @@ pub const ExecutionContext = struct {
     memory_policy: @import("../../shared/types.zig").MemoryPolicy = .{},
 };
 
-pub const AgentDiscoveryLedger = struct {
-    discovered: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+pub const AgentEligibilityLedger = struct {
+    current: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     park_after_launch: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
-    pub fn mark(self: *AgentDiscoveryLedger) void {
-        self.discovered.store(true, .release);
+    pub fn markCurrent(self: *AgentEligibilityLedger) void {
+        self.current.store(true, .release);
     }
 
-    pub fn hasDiscovered(self: *const AgentDiscoveryLedger) bool {
-        return self.discovered.load(.acquire);
+    pub fn invalidate(self: *AgentEligibilityLedger) void {
+        self.current.store(false, .release);
     }
 
-    pub fn noteLaunch(self: *AgentDiscoveryLedger, background: bool) void {
+    pub fn hasCurrent(self: *const AgentEligibilityLedger) bool {
+        return self.current.load(.acquire);
+    }
+
+    pub fn noteLaunch(self: *AgentEligibilityLedger, background: bool) void {
         if (!background) self.park_after_launch.store(true, .release);
     }
 
-    pub fn consumeParkRequest(self: *AgentDiscoveryLedger) bool {
+    pub fn consumeParkRequest(self: *AgentEligibilityLedger) bool {
         return self.park_after_launch.swap(false, .acq_rel);
     }
 };

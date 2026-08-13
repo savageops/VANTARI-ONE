@@ -8,7 +8,7 @@ VANTARI drives the AI model. VANTARI is the pilot in the cockpit; the model is t
 
 The harness is capable of anything — chatbot, parallel multi-agent orchestrator, silent background worker, Telegram bot. But the harness does not decide which. **The prompt does.** The system prompt is the ignition: it determines whether VAR1 behaves as a chatty assistant, a ruthless delegating orchestrator, a quiet long-running researcher, or a hybrid that speaks little and fans out wide. Every behavioral dimension — reasoning depth, verbosity, delegation aggressiveness, tool preference, response cadence — is a prompt-level control, not a code-level switch.
 
-This makes VAR1 a **bring-your-own-prompt** system. The shipped default prompt (`builder.zig`) is one opinion — a senior engineering orchestrator that delegates ravenously, verifies obsessively, and synthesizes canonically. An operator can replace it entirely via `.var/prompts/system.md` and the same harness becomes a different product. The kernel guarantees the mechanics (durable state, tool safety, recovery, streaming); the prompt determines the behavior. Refine the prompting and VAR1 does whatever you want, however you want.
+This makes VAR1 a **bring-your-own-prompt** system. The shipped default prompt (`builder.zig`) is one opinion — a senior engineering operator that weighs solo work, inspection, messaging, challenge, delegation, queueing, and wake intent from current evidence. An operator can replace it entirely via `.var/prompts/system.md` and the same harness becomes a different product. The kernel guarantees the mechanics (durable state, tool safety, recovery, streaming); the prompt determines the behavior. Refine the prompting and VAR1 does whatever you want, however you want.
 
 The default prompt embodies this philosophy: it makes the model *act* as the orchestrator without ever explaining the machinery underneath. The strategy lives in the behavior, not in the prose.
 
@@ -215,17 +215,35 @@ Both default to `false`. When enabled, they create a two-tier cognitive pipeline
 
 ### Role-Routed Specialists
 
-Seven built-in specialists with enforced tool-class profiles, each routable to independent provider/model/wire configurations:
+Twelve built-in specialist identities with enforced tool-class profiles, each routable to independent provider/model/wire configurations:
 
 | Profile | Capability | Role |
 |---|---|---|
 | `general` | subagent | Bounded general-purpose |
 | `recon` | read-only | Repository/evidence reconnaissance |
 | `planner` | model_task (1 turn, no tools) | Plan synthesis |
+| `spec` | model_task | Contract and boundary synthesis |
 | `compactor` | model_task | Dense summary |
 | `implementer` | write | Bounded implementation |
+| `doc_writer` | write | Large document persistence |
+| `scaffold` | subagent | Proof-gated chain decomposition |
+| `orchestrator_parent` | subagent | Prompt-selected high-fanout coordination |
+| `harvester` | read-only | Competitive evidence harvest |
 | `reviewer` | model_task | Findings-first review |
 | `validator` | recon | Independent validation probes |
+
+### Model-Selected Eligibility
+
+`agents {}` hot-loads the effective registry and asks the existing
+`AgentService` to resolve every route before advertising it. The returned
+`var1.agent_eligibility.v1` payload contains sorted eligible and unavailable
+specialists, fixed-pool pressure, current-team aggregates, depth/contact bounds,
+communication targets, queue/wake modes, and a SHA-256 receipt over the exact
+snapshot. Private instruction capsules and child transcripts stay out of the
+parent context. The snapshot does not select an agent or reserve capacity;
+`launch_agent` and `send_agent_message` revalidate at the side-effect boundary.
+Prompt profiles choose whether the model remains quiet, inspects, messages,
+challenges, launches, queues, or wakes without a second executor branch.
 
 ### Bounded In-Process Supervisor
 
@@ -304,13 +322,14 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - `src/core/executor/draft.zig` — draft compilation module
 - `src/core/executor/buffer.zig` — buffer speculation service
 - `src/core/prompts/builder.zig` — system prompt assembly (all layers)
+- `src/core/agents/service.zig` — route eligibility, launch, supervision, and convergence composition
 - `src/core/agents/mailbox.zig` — sequence-addressed direct/parent/group delivery and unread cursor
 - `src/core/agents/supervisor.zig` — bounded in-process delegation
 - `src/core/tickets/index.zig` — canonical ticket ledger, queue projection, claims, leases, and repair evidence
 - `src/core/scheduler/store.zig` — scheduled jobs, attempts, process-exclusive leadership, and generation projection
 - `src/core/scheduler/service.zig` — capacity-aware ticket dispatch and stale-owner reconciliation under one leadership guard
 - `src/core/sessions/summaries.zig` — bounded durable session/agent turn summaries
-- `src/core/agents/spec.zig` — agent specialist definitions
+- `src/core/agents/spec.zig` — agent specialist definitions and canonical eligibility receipt
 - `src/core/providers/routes.zig` — per-agent route resolution
 - `src/core/providers/openai_compatible.zig` — transport, streaming, effort/temperature
 - `src/core/tools/runtime.zig` — tool dispatch and catalog
@@ -348,6 +367,7 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - Self-tuning doctrine
 - Plugin management surface (manage_plugin — list/info/enable/disable)
 - Role-routed bounded delegation with silent advisors
+- Route-resolved model-selected specialist/team snapshot with deterministic receipt
 - Sequence-addressed direct/parent/group agent messaging with queue/wake intent
 - Surgical precision work ethic
 - One generation-bound `turn_terminal` settlement for completed, failed,
@@ -371,6 +391,7 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Session submission | **Source proven** | `run --session-id` routes through `LocalClient` and owner `session/send`; the retired per-session `run-session` process no longer bypasses shared capacity or nested delegation. |
 | Child branch/convergence | **Owner-lifetime proven** | Fixed-pool convergence now survives presentation-client exit and routes the bounded child summary through the durable parent mailbox without transcript replication. Scheduler leadership is process-exclusive and generation-fenced; owner-process death still marks running receipts stale instead of resuming a worker. |
 | Agent mailbox | **Source proven** | Direct, parent, and current-group delivery uses recipient event sequence, sender receipt, queue/wake intent, and provider-success unread cursor. Owner-generation death/restart reconciliation remains open. |
+| Agent eligibility | **Source proven** | One hot-loaded `AgentService` snapshot advertises only route-resolvable specialists with capacity/team/communication state and an exact SHA-256 receipt. Quiet and hive prompt profiles choose different actions through the same executor; installed replacement remains pending. |
 | Write-intent ledger | **Frontier scaffold** | Reserve/commit helpers and tests exist; write-capable tools do not call them on the canonical mutation path. |
 | Byte-level session integrity | **Source and installed proven** | One LF-only reader owns BOM, invalid-UTF-8, JSON/schema, duplicate, and non-monotonic boundaries across event/message/context/intent/summary projections. Append refuses a poisoned current tail without rewriting it; operator-facing corruption events remain a later diagnostics decision. |
 | Context compiler | **Shipped source path** | One builder compiles transcript plus checkpoint state and validates tool topology before provider dispatch. |

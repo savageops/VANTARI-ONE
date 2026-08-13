@@ -59,8 +59,8 @@ test "prompt builder emits ordered guardrails and tool contract" {
     // Delegation protocol — "never delegate understanding" rule + synthesis procedure.
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Never delegate understanding") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "falsify before averaging") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Read-only tracks (research, recon) parallelize freely") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "emit multiple launch_agent calls in a single assistant turn") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Read-only tracks (research, recon) can parallelize freely") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "quiet, inspect, message, challenge, launch, queue, or wake") != null);
 
     // Continuity protocol — interjection + memory + session summary.
     try std.testing.expect(std.mem.indexOf(u8, prompt, "USER_STEER_MESSAGE") != null);
@@ -174,4 +174,43 @@ test "prompt builder fails closed for explicit missing or empty prompt layers" {
             empty_policy,
         ),
     );
+}
+
+test "prompt profiles choose collaboration posture without executor branches" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = std.testing.allocator;
+    const workspace_root = try tmpWorkspacePath(allocator, &tmp);
+    defer allocator.free(workspace_root);
+
+    const quiet_path = try std.fs.path.join(allocator, &.{ workspace_root, ".var", "prompts", "quiet.md" });
+    defer allocator.free(quiet_path);
+    const hive_path = try std.fs.path.join(allocator, &.{ workspace_root, ".var", "prompts", "hive.md" });
+    defer allocator.free(hive_path);
+    try VAR1.shared.fsutil.writeText(quiet_path, "# Quiet profile\nWork inline. Stay quiet unless collaboration is necessary.\n");
+    try VAR1.shared.fsutil.writeText(hive_path, "# Hive profile\nInspect the team and collaborate whenever independent evidence can compound.\n");
+
+    var quiet_policy = VAR1.shared.types.PromptPolicy{
+        .system_prompt_file = try allocator.dupe(u8, ".var/prompts/quiet.md"),
+    };
+    defer quiet_policy.deinit(allocator);
+    const quiet = try VAR1.core.prompts.buildAgentSystemPrompt(allocator, execCtx(workspace_root), quiet_policy);
+    defer allocator.free(quiet);
+
+    var hive_policy = VAR1.shared.types.PromptPolicy{
+        .system_prompt_file = try allocator.dupe(u8, ".var/prompts/hive.md"),
+    };
+    defer hive_policy.deinit(allocator);
+    const hive = try VAR1.core.prompts.buildAgentSystemPrompt(allocator, execCtx(workspace_root), hive_policy);
+    defer allocator.free(hive);
+
+    try std.testing.expect(std.mem.indexOf(u8, quiet, "Work inline. Stay quiet") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hive, "Inspect the team and collaborate") != null);
+    try std.testing.expect(std.mem.indexOf(u8, quiet, "Delegate ravenously") == null);
+    try std.testing.expect(std.mem.indexOf(u8, quiet, "Delegate the moment work is branchable") == null);
+    try std.testing.expect(std.mem.indexOf(u8, hive, "Delegate the moment work is branchable") == null);
+    try std.testing.expect(std.mem.indexOf(u8, quiet, "quiet, inspect, message, challenge, launch, queue, or wake") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hive, "quiet, inspect, message, challenge, launch, queue, or wake") != null);
+    try std.testing.expect(std.mem.indexOf(u8, quiet, "- send_agent_message:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hive, "- send_agent_message:") != null);
 }

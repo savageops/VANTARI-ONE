@@ -29,6 +29,8 @@ apps/backend/src/host/owner_client.zig
 apps/backend/src/host/owner_state.zig
 apps/backend/src/host/http_bridge.zig
 apps/backend/src/host/stdio_client.zig
+apps/backend/src/core/agents/spec.zig
+apps/backend/src/core/agents/service.zig
 apps/backend/src/core/agents/mailbox.zig
 
 Rules:
@@ -47,6 +49,10 @@ Rules:
 - Scheduler leadership is process-exclusive and generation-fenced in source.
 - Ticket claim, worker generation, lease, capability, and deterministic child
   identity commit in one process-serialized ticket row before child creation.
+- agents {} returns var1.agent_eligibility.v1: sorted route-resolvable
+  specialists, unavailable route classes, fixed-pool/team pressure,
+  communication choices, and a SHA-256 receipt. Prompts choose solo, inspect,
+  message, challenge, launch, queue, or wake; launch/config revalidates effects.
 - Agent messaging uses one events.jsonl mailbox: direct, parent, current_group;
   queue/wake; durable recipient sequence, sender receipt, and provider-success
   unread cursor. Messages never assign tickets, launch work, or copy transcripts.

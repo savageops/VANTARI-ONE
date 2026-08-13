@@ -358,6 +358,14 @@ Child agents are normal bounded sessions. The model chooses eligible actions;
 `launch_agent` carries the hard scope fields that the kernel validates before
 spawning a child session:
 
+`agents {}` returns one `var1.agent_eligibility.v1` snapshot before launch or
+agent-configuration mutation. It hot-loads configured specialists, excludes
+unresolvable routes, shows fixed-pool and current-team pressure, advertises
+direct/parent/group communication choices, and binds the sorted snapshot to a
+SHA-256 receipt. The active prompt can stay solo, inspect, message, challenge,
+launch, accept queueing, or request a wake; the kernel does not hardcode that
+posture and revalidates every side effect.
+
 | Field | Contract |
 |---|---|
 | `scope_depth` | Maximum delegation depth; zero-value scope rejected |
@@ -772,6 +780,7 @@ Every tool call, context window, and model interaction is recorded in structured
 | Durable scheduler records and attempts | **Source proven; two-kernel leadership gate passed** |
 | Buffered ticket admission and fixed agent capacity | **Source proven; installed crash-recovery proof pending** |
 | Sequence-addressed direct/group/parent agent mailbox | **Source proven; owner-crash delivery reconciliation pending** |
+| Model-selected route eligibility and team snapshot | **Source proven; installed replacement pending** |
 | Plugin runtime with typed socket execution | **In progress** |
 | Provider fallback chains | Planned |
 | Identity auth against `auth.vantari.one` — PKCE OAuth mirroring the openai-codex pattern | Planned |
@@ -896,13 +905,14 @@ vantari auth status|login|logout <provider>    identity and provider auth
 | [`apps/backend/architecture.md`](./apps/backend/architecture.md) | Canonical architecture map with sequence diagrams and state machines |
 | [`.docs/research/2026-08-12-full-harness-sitrep.md`](./.docs/research/2026-08-12-full-harness-sitrep.md) | Current full-harness design, pipeline, proof, concerns, and closure order |
 | [`.docs/research/2026-08-13-sequence-addressed-agent-mailbox.md`](./.docs/research/2026-08-13-sequence-addressed-agent-mailbox.md) | Agent-mailbox competitive harvest, event grammar, context boundary, and residual risk |
+| [`.docs/research/2026-08-13-model-selected-agent-eligibility.md`](./.docs/research/2026-08-13-model-selected-agent-eligibility.md) | Eight-reference selection harvest, deterministic eligibility receipt, prompt-profile tracer, and rejected selector architecture |
 | [`.docs/todo/findings/00-INDEX.md`](./.docs/todo/findings/00-INDEX.md) | Priority-ordered executable readiness findings |
 
 <br/>
 
 ## Validation
 
-The pinned graph currently passes 1,943 test cases across `apps/backend/src/`
+The pinned Debug and ReleaseFast graphs currently pass 1,946 test cases across `apps/backend/src/`
 and `apps/backend/tests/`. They target state transitions, protocol edges, and
 failure pressure rather than line coverage:
 
@@ -918,6 +928,8 @@ failure pressure rather than line coverage:
 - Direct/group/parent agent mail, replay, provider-failure unread retention,
   safe-boundary wake, ticket claim, and child-completion convergence without
   transcript replication
+- Deterministic route eligibility, unavailable-route filtering, depth and
+  capacity pressure, and quiet-versus-hive prompt behavior through one executor
 
 ```powershell
 cd apps/backend

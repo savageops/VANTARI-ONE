@@ -35,6 +35,11 @@ second runtime owner.
 - Assignment admits ticket work to the queue. It does not launch an agent.
 - `agent_routes.max_concurrency` is the sole ticket execution capacity knob.
   Do not invent or restore a `tickets` execution-policy section.
+- Call `agents {}` when the current decision needs collaboration evidence. Read
+  `var1.agent_eligibility.v1` for route-resolved specialists, pool/team pressure,
+  communication choices, and its SHA-256 receipt. The snapshot is not an order:
+  the active prompt may stay quiet, inspect, message, challenge, launch, queue,
+  or wake. Launch/configuration still requires a current snapshot.
 - `send_agent_message` writes bounded direct, parent, or current-group input to
   the recipient event spine. Use `queue` for the next run and `wake` for the
   next safe boundary of a live run. A message never assigns or launches work.
@@ -62,7 +67,8 @@ requires source/installed SHA-256 equality and the installed consumer path.
 - Scheduler leadership is source-proven with one crash-released lock and
   generation fence across two kernels. Ticket claim, lease, capability, and
   deterministic child identity now commit in one process-serialized row before
-  child materialization. Direct/group/parent mail, provider-success unread
+  child materialization. Route-resolved specialist/team eligibility with a
+  deterministic receipt, direct/group/parent mail, provider-success unread
   cursor, child completion, and ticket-claim notices are source-proven on
   `events.jsonl`. Mid-turn owner-crash and delivery reconciliation remain roadmap
   work. Do not infer them from admission or source-only proof.

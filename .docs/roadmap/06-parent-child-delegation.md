@@ -106,10 +106,10 @@ compiled base id
 
 - Built-in ids may be edited or disabled. Removing their config row resets them to the compiled floor.
 - New ids must `extends` one built-in id. Inheritance fixes `execution_kind` and `capability_profile_id`; config cannot add arbitrary tools, code, credentials, or provider endpoints.
-- `agents {}` returns only compact selection data. It never injects instruction capsules into the parent context.
+- `agents {}` returns only route-resolved eligibility, capacity/team aggregates, communication choices, and a deterministic receipt. It never injects instruction capsules or child transcripts into the parent context.
 - `launch_agent` resolves the selected id from a fresh registry read. A launched child keeps its receipt even when config changes afterward.
 - `configure_agent` performs an atomic config mutation and validates the full effective registry before commit.
-- `agents.orchestrator_only = true` limits the root catalog to agent-control tools and requires one successful `agents {}` discovery before launch or config mutation. Child profiles keep their inherited capability floors.
+- `agents.orchestrator_only = true` limits the root catalog to agent-control tools and requires one current `agents {}` snapshot before launch or config mutation; it does not require discovery as the first turn action. Child profiles keep their inherited capability floors.
 - Child sessions receive only explicit shared context, one finite task, their private instruction capsule, and the output contract. They never inherit the parent transcript.
 - Each terminal child result converges exactly once. The parent condition wakes on the first unconsumed terminal child, rebuilds through the context compiler, and may synthesize, delegate more work, or park again while siblings continue.
 
@@ -246,9 +246,9 @@ Agent ids remain stable when the operator remaps roles to a different API or mod
 - [x] capability denial holds at catalog and dispatch.
 - [x] parent cancellation produces terminal evidence for every child.
 - [x] TUI shows queued/running/waiting/failed/completed state from typed events.
-- [x] Hot-load upsert/reset changes the compact catalog on the next `agents {}` call without restart.
+- [x] Hot-load upsert/reset changes the route-eligible snapshot on the next `agents {}` call without restart.
 - [x] Bounded-burst checkpoint instructions survive project-local prompt overrides.
-- [x] installed `%LOCALAPPDATA%\Vantari\bin\vantari.exe` reproduces the claims.
+- [ ] current eligibility receipt reproduced by installed `%LOCALAPPDATA%\Vantari\bin\vantari.exe`; move 38 owns replacement after active operator processes exit.
 
 ## Installed proof
 

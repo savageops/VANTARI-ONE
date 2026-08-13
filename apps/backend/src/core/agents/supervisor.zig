@@ -612,6 +612,15 @@ pub const Supervisor = struct {
         return self.capacityLocked();
     }
 
+    /// Project configured idle capacity without starting worker threads. Once
+    /// started, the actual pool ceiling remains authoritative.
+    pub fn capacityProjection(self: *Supervisor, configured_max: usize) tools.AgentCapacitySnapshot {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        if (self.started) return self.capacityLocked();
+        return .{ .max = configured_max, .available = configured_max };
+    }
+
     fn capacityLocked(self: *Supervisor) tools.AgentCapacitySnapshot {
         const active = self.activeCountsLocked();
         const occupied = active.queued + active.running;

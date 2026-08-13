@@ -60,6 +60,7 @@ pub const Service = struct {
             .launchBatchFn = launchBatchFromHandle,
             .launchTicketFn = launchTicketFromHandle,
             .capacityFn = capacityFromHandle,
+            .eligibilityFn = eligibilityFromHandle,
             .statusFn = statusFromHandle,
             .waitFn = waitFromHandle,
             .listFn = listFromHandle,
@@ -120,6 +121,17 @@ fn launchTicketFromHandle(
 fn capacityFromHandle(ctx_ptr: ?*anyopaque) anyerror!tools.AgentCapacitySnapshot {
     const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
     return readCapacity(service);
+}
+
+fn eligibilityFromHandle(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    session_id: []const u8,
+    parent_profile_id: []const u8,
+    depth_remaining: usize,
+) anyerror![]u8 {
+    const service: *Service = @ptrCast(@alignCast(ctx_ptr.?));
+    return renderEligibilitySnapshot(service, allocator, session_id, parent_profile_id, depth_remaining);
 }
 
 /// Launch a child session checkpoint-addressed to a parent checkpoint. The
@@ -362,6 +374,110 @@ fn ensureSupervisorStarted(service: *Service, allocator: std.mem.Allocator) !usi
 fn readCapacity(service: *Service) !tools.AgentCapacitySnapshot {
     _ = try ensureSupervisorStarted(service, std.heap.page_allocator);
     return service.supervisor.capacity();
+}
+
+fn appendEligibilityAgent(
+    allocator: std.mem.Allocator,
+    output: *std.array_list.Managed(agent_spec.EligibilityAgent),
+    spec: agent_spec.AgentSpec,
+    route: routes.ResolvedRoute,
+) !void {
+    const provider_id = try allocator.dupe(u8, route.providerId());
+    errdefer allocator.free(provider_id);
+    const model = try allocator.dupe(u8, route.config.openai_model);
+    errdefer allocator.free(model);
+    const effort = try allocator.dupe(u8, route.config.effort);
+    errdefer allocator.free(effort);
+    try output.append(.{
+        .id = spec.id,
+        .when_to_use = spec.when_to_use,
+        .kind = route.execution_kind.label(),
+        .route_role = route.role.label(),
+        .capability_profile = spec.capability_profile_id,
+        .provider = provider_id,
+        .model = model,
+        .effort = effort,
+        .max_children = spec.max_children,
+    });
+}
+
+fn eligibilityBlockReason(profile: profile_contract.CapabilityProfile, depth_remaining: usize) ?[]const u8 {
+    if (!profile.delegation_policy.allow_child_launch) return "delegation_denied";
+    if (depth_remaining == 0 or profile.budget_policy.max_scope_depth_without_reason == 0) return "depth_exhausted";
+    if (profile.budget_policy.max_contact_budget_without_reason == 0) return "contact_budget_exhausted";
+    return null;
+}
+
+fn renderEligibilitySnapshot(
+    service: *Service,
+    allocator: std.mem.Allocator,
+    session_id: []const u8,
+    parent_profile_id: []const u8,
+    depth_remaining: usize,
+) ![]u8 {
+    const profile = try profile_contract.resolveProfile(parent_profile_id);
+    const block_reason = eligibilityBlockReason(profile, depth_remaining);
+    const configured_max = try config_file.loadAgentMaxConcurrency(allocator, service.config.workspace_root);
+    const capacity = service.supervisor.capacityProjection(configured_max);
+    const team = service.supervisor.waitParent(session_id, 0);
+
+    var session = try store.readSessionRecord(allocator, service.config.workspace_root, session_id);
+    defer session.deinit(allocator);
+    const has_group_target = if (session.execution_receipt) |receipt| receipt.group_id.len > 0 else false;
+
+    var registry = try agent_spec.loadRegistry(allocator, service.config.workspace_root);
+    defer registry.deinit();
+    var eligible = std.array_list.Managed(agent_spec.EligibilityAgent).init(allocator);
+    defer {
+        for (eligible.items) |agent| {
+            allocator.free(agent.provider);
+            allocator.free(agent.model);
+            allocator.free(agent.effort);
+        }
+        eligible.deinit();
+    }
+    var unavailable = std.array_list.Managed(agent_spec.UnavailableAgent).init(allocator);
+    defer unavailable.deinit();
+
+    if (block_reason == null) {
+        for (registry.all()) |spec| {
+            var route = routes.resolve(allocator, service.config.*, spec.route_role, .{
+                .max_steps = spec.max_steps,
+                .max_tool_calls = spec.max_tool_calls,
+                .execution_kind = spec.execution_kind,
+                .capability_profile_id = spec.capability_profile_id,
+            }) catch |err| {
+                if (err == error.OutOfMemory) return err;
+                try unavailable.append(.{ .id = spec.id, .reason = "route_unavailable" });
+                continue;
+            };
+            defer route.deinit(allocator);
+            try appendEligibilityAgent(allocator, &eligible, spec, route);
+        }
+    }
+
+    return agent_spec.renderEligibilitySnapshot(allocator, eligible.items, unavailable.items, .{
+        .parent_profile_id = profile.id,
+        .delegation_allowed = block_reason == null,
+        .delegation_reason = block_reason,
+        .depth_remaining = depth_remaining,
+        .scope_without_reason = profile.budget_policy.max_scope_depth_without_reason,
+        .contact_without_reason = profile.budget_policy.max_contact_budget_without_reason,
+        .capacity_max = capacity.max,
+        .capacity_queued = capacity.queued,
+        .capacity_running = capacity.running,
+        .capacity_available = capacity.available,
+        .team_groups = team.groups,
+        .team_queued = team.queued,
+        .team_running = team.running,
+        .team_completed = team.completed,
+        .team_failed = team.failed,
+        .team_cancelled = team.cancelled,
+        .team_ready = team.ready,
+        .team_terminal = team.terminal,
+        .has_parent_target = session.parent_session_id != null,
+        .has_group_target = has_group_target,
+    });
 }
 
 fn resolveTicketAgent(

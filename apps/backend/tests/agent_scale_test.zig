@@ -121,6 +121,142 @@ const ScaleTransport = struct {
     }
 };
 
+test "agent eligibility is deterministic and filters exhausted depth before launch" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = std.testing.allocator;
+    const workspace_root = try tmpWorkspacePath(allocator, &tmp, "eligibility");
+    defer allocator.free(workspace_root);
+    const config = try makeConfig(allocator, workspace_root);
+    defer config.deinit(allocator);
+    var service = VAR1.core.agent_runtime.Service.initWithTransport(&config, .{
+        .context = null,
+        .sendFn = ScaleTransport.send,
+    });
+    defer service.deinit();
+    var parent = try VAR1.core.session_store.initSession(allocator, workspace_root, "eligibility parent");
+    defer parent.deinit(allocator);
+    const handle = service.handle();
+
+    const first = try handle.eligibility(allocator, parent.id, "root", 3);
+    defer allocator.free(first);
+    const second = try handle.eligibility(allocator, parent.id, "root", 3);
+    defer allocator.free(second);
+    try std.testing.expectEqualStrings(first, second);
+    try std.testing.expect(std.mem.indexOf(u8, first, "var1.agent_eligibility.v1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "\"eligible\":[{") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "\"capacity\":{\"max\":6,\"queued\":0,\"running\":0,\"available\":6}") != null);
+    try std.testing.expectEqual(@as(usize, 0), service.supervisor.workerLimit());
+
+    const config_path = try VAR1.core.config_file.path(allocator, workspace_root);
+    defer allocator.free(config_path);
+    try VAR1.shared.fsutil.writeText(config_path,
+        \\{"version":1,"agent_routes":{"roles":{"recon":{"provider_id":"missing-provider"}}}}
+    );
+    const filtered = try handle.eligibility(allocator, parent.id, "root", 3);
+    defer allocator.free(filtered);
+    try std.testing.expect(std.mem.indexOf(u8, filtered, "\"id\":\"recon\",\"reason\":\"route_unavailable\"") != null);
+    try std.testing.expect(!std.mem.eql(u8, first, filtered));
+
+    const exhausted = try handle.eligibility(allocator, parent.id, "root", 0);
+    defer allocator.free(exhausted);
+    try std.testing.expect(std.mem.indexOf(u8, exhausted, "\"eligible\":[]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, exhausted, "\"reason\":\"depth_exhausted\"") != null);
+}
+
+const ProfileTransport = struct {
+    calls: usize = 0,
+    saw_profile: bool = false,
+    saw_eligibility: bool = false,
+
+    fn send(
+        ctx_ptr: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        _: []const u8,
+        _: []const u8,
+        payload: []const u8,
+    ) anyerror![]u8 {
+        const ctx: *ProfileTransport = @ptrCast(@alignCast(ctx_ptr.?));
+        ctx.calls += 1;
+        if (std.mem.indexOf(u8, payload, "QUIET_PROFILE")) |_| {
+            ctx.saw_profile = true;
+            return allocator.dupe(u8, "{\"model\":\"profile-model\",\"choices\":[{\"message\":{\"content\":\"quiet-inline\"}}]}");
+        }
+        if (std.mem.indexOf(u8, payload, "HIVE_PROFILE")) |_| ctx.saw_profile = true;
+        if (std.mem.indexOf(u8, payload, "var1.agent_eligibility.v1") != null and
+            std.mem.indexOf(u8, payload, "model_choices") != null and
+            std.mem.indexOf(u8, payload, "communication") != null)
+        {
+            ctx.saw_eligibility = true;
+            return allocator.dupe(u8, "{\"model\":\"profile-model\",\"choices\":[{\"message\":{\"content\":\"hive-inspected-team\"}}]}");
+        }
+        return allocator.dupe(u8,
+            \\{"model":"profile-model","choices":[{"message":{"tool_calls":[{"id":"profile-agents","type":"function","function":{"name":"agents","arguments":"{}"}}]}}]}
+        );
+    }
+};
+
+fn runPromptProfile(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    marker: []const u8,
+    transport_state: *ProfileTransport,
+) ![]u8 {
+    const prompt_path = try std.fs.path.join(allocator, &.{ workspace_root, ".var", "prompts", "profile.md" });
+    defer allocator.free(prompt_path);
+    try VAR1.shared.fsutil.writeText(prompt_path, marker);
+    var config = try makeConfig(allocator, workspace_root);
+    defer config.deinit(allocator);
+    config.prompt_policy.system_prompt_file = try allocator.dupe(u8, ".var/prompts/profile.md");
+    const transport = VAR1.core.provider_runtime.Transport{
+        .context = transport_state,
+        .sendFn = ProfileTransport.send,
+    };
+    var service = VAR1.core.agent_runtime.Service.initWithTransport(&config, transport);
+    defer service.deinit();
+    var session = try VAR1.core.session_store.initSession(allocator, workspace_root, "profile route proof");
+    defer session.deinit(allocator);
+    const result = try VAR1.core.executor.runPromptWithOptions(allocator, config, "", .{
+        .transport = transport,
+        .execution_context = .{
+            .workspace_root = workspace_root,
+            .agent_service = service.handle(),
+            .orchestrator_only = true,
+            .capability_profile_id = "root",
+            .delegation_depth_remaining = 2,
+        },
+        .session_id = session.id,
+    });
+    defer result.deinit(allocator);
+    return allocator.dupe(u8, result.output);
+}
+
+test "prompt profile alone selects solo or team inspection through one executor" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = std.testing.allocator;
+    const quiet_root = try tmpWorkspacePath(allocator, &tmp, "quiet-profile");
+    defer allocator.free(quiet_root);
+    const hive_root = try tmpWorkspacePath(allocator, &tmp, "hive-profile");
+    defer allocator.free(hive_root);
+
+    var quiet_transport = ProfileTransport{};
+    const quiet = try runPromptProfile(allocator, quiet_root, "# QUIET_PROFILE\nWork inline and do not inspect the team.\n", &quiet_transport);
+    defer allocator.free(quiet);
+    try std.testing.expectEqualStrings("quiet-inline", quiet);
+    try std.testing.expect(quiet_transport.saw_profile);
+    try std.testing.expect(!quiet_transport.saw_eligibility);
+    try std.testing.expectEqual(@as(usize, 1), quiet_transport.calls);
+
+    var hive_transport = ProfileTransport{};
+    const hive = try runPromptProfile(allocator, hive_root, "# HIVE_PROFILE\nInspect the eligible team before deciding.\n", &hive_transport);
+    defer allocator.free(hive);
+    try std.testing.expectEqualStrings("hive-inspected-team", hive);
+    try std.testing.expect(hive_transport.saw_profile);
+    try std.testing.expect(hive_transport.saw_eligibility);
+    try std.testing.expectEqual(@as(usize, 2), hive_transport.calls);
+}
+
 const ParkTransport = struct {
     mutex: std.Thread.Mutex = .{},
     parent_calls: usize = 0,

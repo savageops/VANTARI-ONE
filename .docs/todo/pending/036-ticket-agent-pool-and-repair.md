@@ -241,7 +241,7 @@ Every row above compounds the parent ratchet.
 
 [`../findings/11-persistent-agent-worker-and-scheduler-arbitration.md`](../findings/11-persistent-agent-worker-and-scheduler-arbitration.md)
 
-Moves 24–25 are closed in source. One shared ticket-ledger process lock serializes
+Moves 24–27 are closed in source. One shared ticket-ledger process lock serializes
 projection, revision validation, and append; the winning row commits lease,
 generation, capability, attempt, and deterministic child identity before one
 child is materialized. The two-kernel proof at
@@ -249,8 +249,11 @@ child is materialized. The two-kernel proof at
 and one matching child. Direct create-as-assigned and transition-to-assigned
 retain two queued tickets with zero claims or sessions. The unused four-key
 ticket policy is deleted; `agent_routes.max_concurrency` is the sole capacity
-setting. Move 26 is next: add one bounded sequence-addressed direct/group/parent
-mailbox on the existing session/event spine.
+setting. One sequence-addressed mailbox now owns bounded direct/group/parent
+delivery. One receipt-bound `agents {}` snapshot exposes only route-resolvable
+specialists plus current pool/team/communication state while quiet and hive
+prompts choose different actions through the same executor. Move 28 is next:
+make configured fixed capacity govern active, idle, and queued projections.
 
 ## Stop Condition
 

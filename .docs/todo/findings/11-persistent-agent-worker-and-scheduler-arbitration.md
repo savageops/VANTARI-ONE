@@ -24,6 +24,10 @@ current-group delivery, persists recipient sequence and sender receipt, injects
 bounded unread input, and advances the cursor only after provider success.
 Child completion and ticket-claim notices now use that path without parent
 transcript injection.
+Move 27 closes model-selection drift: `agents {}` now projects only
+route-resolvable specialists plus current pool/team/communication state, binds
+the exact sorted snapshot to a receipt, and leaves collaboration posture to the
+active prompt.
 Move 25 closes assignment ambiguity: create-as-assigned and
 transition-to-assigned append queue state only, and the dead ticket execution
 policy is deleted.
@@ -56,6 +60,11 @@ policy is deleted.
 - [agent_message.zig](../../../apps/backend/src/core/tools/builtin/agent_message.zig)
   exposes the sole model-facing collaboration write without assigning or
   launching work.
+- [spec.zig](../../../apps/backend/src/core/agents/spec.zig) renders one sorted
+  `var1.agent_eligibility.v1` snapshot and hashes its exact canonical payload.
+- [service.zig](../../../apps/backend/src/core/agents/service.zig) hot-loads the
+  registry, filters failed routes, and reads the existing supervisor/session
+  projections without adding a selector, registry, or team bus.
 - [roadmap move 21](../../roadmap/21-persistent-execution-owner.md) proves one
   owner/kernel generation across client detach, 20 concurrent clients,
   duplicate-start pressure, graceful stop, forced crash, and zero cleanup.
@@ -67,6 +76,12 @@ Retain the shipped-source execution owner and its sole `AgentService`/
 generation projection. Retain the process-serialized ticket claim and
 deterministic child identity. Do not create a parallel pool or admission ledger.
 
+Retain the shipped eligibility projection. Let the prompt choose quiet, inspect,
+message, challenge, launch, queue, or wake from one route-resolved snapshot. Keep
+capacity, team, depth, contact, and communication state read-only in discovery;
+revalidate at launch and message effects. Do not add a selector model, behavior
+mode branch, shared transcript, or capacity reservation token.
+
 Retain the shipped sequence-addressed mailbox. Resolve direct, parent, and
 current-group targets from session receipts. Keep bounded messages and references
 on the existing event spine with unread cursors and explicit wake intent. Reuse
@@ -77,6 +92,10 @@ transcript, or message-created work lifecycle.
 
 - Assigning a ticket creates no session and starts no provider turn.
 - One claim creates one durable child session.
+- Identical route/team/capacity state yields an identical eligibility payload and
+  receipt; changed or unavailable state changes the receipt and visible choices.
+- Quiet and hive prompts choose different collaboration actions through the same
+  executor and tool runtime.
 - Closing the TUI does not stop claimed work.
 - Killing the worker leaves a durable stale receipt; restarting reconciles and resumes or requeues exactly once.
 - Two concurrent kernels produce one lease winner and one LeaseUnavailable loser.
@@ -92,6 +111,8 @@ admission pass in source. Queue-only assignment and deletion of the unused ticke
 policy also pass. Direct/group/parent and nested-parent mailbox delivery,
 idempotent receipts, provider-failure replay, safe-boundary wake, ticket claim,
 and child-completion convergence pass in source without transcript replication.
+Route filtering, depth denial, queue-only pressure, receipt verification, and
+quiet-versus-hive prompt selection also pass through the canonical executor.
 Installed replacement and active-turn owner-crash/delivery reconciliation remain
 open; this finding stays pending.
 
@@ -105,6 +126,8 @@ open; this finding stays pending.
 - [OpenAI Codex](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents_spec.rs): queued directed message plus separate wake-bearing follow-up semantics.
 - [Claude Code teams](https://code.claude.com/docs/en/agent-teams): independent teammate contexts, direct mailbox delivery, and shared task awareness; current resumption limits are a VANTARI rejection target.
 - [AutoGen Core](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/framework/message-and-communication.html): serializable direct and broadcast data; reject its topic/subscription breadth for this local hierarchy.
+- [OpenAI Agents SDK orchestration](https://openai.github.io/openai-agents-python/multi_agent/): model-owned orchestration with dynamically enabled destinations; reject callback and handoff object layers.
+- [AutoGen selector teams](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/selector-group-chat.html): concise candidate descriptions before model selection; reject a second selector call and broadcast history.
 
 ## Out of scope
 

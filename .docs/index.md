@@ -29,6 +29,7 @@ This directory contains project records, research, planning chains, and complete
 
 - [`research/2026-08-12-full-harness-sitrep.md`](research/2026-08-12-full-harness-sitrep.md) — full design, owner, pipeline, method, proof, competitive harvest, readiness concerns, and WIP accountability.
 - [`research/2026-08-13-sequence-addressed-agent-mailbox.md`](research/2026-08-13-sequence-addressed-agent-mailbox.md) — Move 26 competitive harvest, compression decision, mailbox event grammar, prompt boundary, and crash-recovery residual.
+- [`research/2026-08-13-model-selected-agent-eligibility.md`](research/2026-08-13-model-selected-agent-eligibility.md) — Move 27 eight-reference harvest, deterministic route-eligibility receipt, prompt-profile proof, and rejected selector architecture.
 - [`todo/findings/00-INDEX.md`](todo/findings/00-INDEX.md) — executable P0/P1/P2 closure order; current authority over older completion claims.
 - [`roadmap/24-harness-capability-next-90.md`](roadmap/24-harness-capability-next-90.md) — 90 dependency-ordered moves ranked by operator value, capability leverage, integrity risk, and friction removed.
 - [`roadmap/21-persistent-execution-owner.md`](roadmap/21-persistent-execution-owner.md) — source-complete single-owner lifecycle: reconnect, duplicate exclusion, graceful/crash recovery, process cleanup, and blocked installed gate.

@@ -306,7 +306,7 @@ sequenceDiagram
 
 The review gate is a kernel state transition, not a copied reviewer-agent architecture. Read-only tools receive review evidence and continue through the existing dispatch. Write-capable, workspace-state, and delegation tools are classified from active `ToolDefinition.review_risk` metadata before execution. Tool names absent from the active catalog, including context-unavailable tools, are denied before dispatch and returned to the provider as `ToolReviewBlocked`, preserving the OpenAI-compatible tool-call protocol.
 
-Delegation is validated at one catalog-first agent boundary. In root orchestrator mode, `agents {}` must precede launch or configuration mutation. `launch_agent` accepts one `{ context, tasks[] }` batch whose task ids must come from that hot-loaded catalog. `core/agents/spec.zig` resolves editable personas over compiled execution-kind and capability-profile floors; custom ids must inherit through `extends`, so config cannot grant arbitrary tools or provider credentials. `configure_agent` validates and atomically replaces `config.json`; the next discovery or launch reads the new registry. Child prompts contain only the selected private capsule, explicit shared context, finite task, and output contract. The parent transcript is never copied into a child window.
+Delegation is validated at one eligibility-first agent boundary. In root orchestrator mode, `agents {}` must precede launch or configuration mutation, but it is not a mandatory first-turn action. `AgentService` hot-loads the registry, resolves every route, reads fixed-pool and current-team projections, and returns one sorted `var1.agent_eligibility.v1` snapshot with a SHA-256 receipt. The active prompt chooses whether to stay quiet, inspect, message, challenge, launch, accept queueing, or wake; no executor branch selects for it. `launch_agent` accepts one `{ context, tasks[] }` batch whose task ids must be route-eligible and revalidates scope, route, depth, contact, and capacity before effects. `core/agents/spec.zig` resolves editable personas over compiled execution-kind and capability-profile floors; custom ids must inherit through `extends`, so config cannot grant arbitrary tools or provider credentials. `configure_agent` validates and atomically replaces `config.json`; the next eligibility or launch read sees the new registry. Child prompts contain only the selected private capsule, explicit shared context, finite task, and output contract. The parent transcript is never copied into a child window.
 
 Derivative memory and evaluator evidence are deliberately non-authoritative. `src/core/memory/derivative.zig` requires `session_id`, `source_seq_start`, and `source_seq_end`, and rejects transcript replay-shaped payloads. `src/core/evaluation/events.zig` appends redacted heartbeat/evaluator events with evaluator mutation forbidden. RecursiveMAS latent transfer, GRASP gradients, dynamic markets, autonomous background evolution, exact tokenizer integration, and plugin auto-discovery remain unsupported behavior until there is a tested contract for cancellation, idempotency, cold-start recovery, and lifecycle ownership.
 
@@ -392,6 +392,10 @@ commits worker generation, lease, attempt, capability hash, and a deterministic
 child-session id before `AgentService` can create or submit that session.
 Move 25 proves every assignment path is ledger-only and deletes the unused
 ticket execution-policy surface.
+Move 27 replaces definition-only discovery and always-on fan-out prose with one
+route-resolved eligibility/team snapshot. A deterministic receipt binds current
+capacity, team, communication, depth, contact, eligible, and unavailable state;
+quiet and hive prompts select different actions through the same executor.
 
 `core/executor/loop.zig` parks a waiting parent on the supervisor condition without a provider call. The first unconsumed terminal child sends its bounded canonical summary through the parent mailbox, which wakes the parent, rebuilds through the context compiler, and permits the next routing/synthesis turn while unfinished siblings remain supervised. A parent cannot emit terminal output while any owned child remains active. Full specialists execute as ordinary isolated VAR1 child sessions. Tool-free `model_task` specialists use one provider turn and validate their supplied output schema without acquiring a second transcript or tool runtime.
 
@@ -457,6 +461,8 @@ exact owner-generation delivery reconciliation across process death.
   bounded durable session summaries used by session navigation and the child-agent TUI row
 - `src/core/agents/profile.zig` + `scope.zig`
   runtime-enforced tool-class profiles and scoped delegation validation
+- `src/core/agents/spec.zig` + `service.zig`
+  hot-loaded route eligibility, fixed-pool/team projection, and deterministic snapshot receipt
 - `src/core/providers/routes.zig`
   secret-bearing route resolution plus secret-free provider/model/wire/thinking identity for execution receipts
 - `src/core/memory/`

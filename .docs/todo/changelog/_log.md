@@ -2087,3 +2087,56 @@ replacement after the live operator processes exit.
 **Next todo:** move 27 — let the model choose from one compact eligible
 specialist/team snapshot while the kernel filters only invalid or unavailable
 routes, capacity, depth, and contact budgets.
+
+## 2026-08-13 - Roadmap move 27 model-selected agent eligibility
+
+**Changed:**
+
+- Replaced definition-only `agents {}` output with one
+  `var1.agent_eligibility.v1` projection owned by the existing `AgentService` and
+  `core/agents/spec.zig`. It hot-loads the registry, resolves routes, reads the
+  fixed pool and current team, sorts canonical rows, and hashes the exact
+  snapshot. No selector model, team bus, registry, scheduler, or capacity token
+  was added.
+- Exposed eligible specialist identity/when-to-use/route/profile/provider/model,
+  stable unavailable-route classes, depth/contact bounds, capacity/team
+  aggregates, direct/parent/current-group targets, and queue/wake modes. Private
+  capsules and child transcripts remain demand-loaded and private.
+- Kept read-only discovery side-effect-free: an unstarted supervisor projects
+  configured idle capacity without initializing worker threads; a started
+  supervisor projects its actual live ceiling and occupancy.
+- Removed always-on fan-out and first-tool-call prompt mandates. The active
+  system/operator prompt now chooses quiet, inspect, message, challenge, launch,
+  queue, or wake. Launch/configuration requires current eligibility evidence;
+  configuration invalidates that evidence, and launch and messaging still
+  revalidate at the effect boundary.
+- Updated the visible schema-repair text and every current contract/readme/skill/
+  machine guide/roadmap/finding/workspace record to name eligibility rather than
+  the retired compact agent catalog.
+
+**Proof:**
+
+- Red tracer first failed on missing `EligibilityAgent` and
+  `AgentService.eligibility`; the landed graph passes Debug and ReleaseFast at
+  19/19 steps and 1,946/1,946 tests. ReleaseFast build passes 9/9.
+- Determinism pressure proves input-order independence, exact receipt
+  recomputation, changed-state receipt change, `route_unavailable`,
+  `depth_exhausted`, and saturated `queue_only` admission.
+- One captured provider transport proves a quiet profile completes inline in one
+  call while a hive profile calls `agents {}`, observes eligibility plus
+  communication state, and completes on call two through the same executor.
+- GGUF duplicate-owner audit: seven production files and 115 segments; one
+  expected import/declaration adjacency candidate between `service.zig` and
+  `supervisor.zig`, zero exact duplicates, and no second selection/pool owner.
+- Source ReleaseFast SHA-256 is
+  `8CB2B28182BE153458C211BBF5A500F1BCD1726BAAB517771C4939697CC72B42`.
+  Installed SHA-256 remains
+  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
+  operator-owned PIDs 12028 and 14452 remain untouched.
+
+**Boundary:** Move 27 is source-closed. The snapshot is advisory evidence, not a
+reservation or selection token. Move 28 owns active/idle/queued capacity truth;
+move 29 owns owner-generation recovery; move 38 owns installed replacement.
+
+**Next todo:** move 28 — make configured fixed capacity govern active, idle, and
+queued projections under contention.

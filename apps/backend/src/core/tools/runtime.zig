@@ -43,7 +43,7 @@ pub const AgentEventSink = module.AgentEventSink;
 pub const ToolEventSink = module.ToolEventSink;
 pub const ExecutionContext = module.ExecutionContext;
 pub const FileInspectionLedger = module.FileInspectionLedger;
-pub const AgentDiscoveryLedger = module.AgentDiscoveryLedger;
+pub const AgentEligibilityLedger = module.AgentEligibilityLedger;
 pub const DelegationScope = module.DelegationScope;
 
 const agent_tool_definitions = agents.definitions;
@@ -297,8 +297,8 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
         return "search_files is unavailable because its required iex executable dependency is not resolvable. Use list_files and read_file until capability availability reports search_files as available.";
     }
 
-    if (std.mem.eql(u8, error_name, "AgentCatalogRequired")) {
-        return "Call agents with an empty JSON object first. Select only an id returned by that hot-loaded compact catalog, then call launch_agent or configure_agent.";
+    if (std.mem.eql(u8, error_name, "AgentEligibilityRequired")) {
+        return "Call agents with an empty JSON object first. Select only a route-eligible id from that current specialist/team snapshot, then call launch_agent or configure_agent.";
     }
 
     if (std.mem.eql(u8, tool_name, "launch_agent") and std.mem.eql(u8, error_name, "UnsupportedDelegationScope")) {
@@ -325,7 +325,7 @@ pub fn renderToolCallSummary(allocator: std.mem.Allocator, tool_calls: []const t
 }
 
 pub fn toolCallLogLabel(tool_name: []const u8) []const u8 {
-    if (std.mem.eql(u8, tool_name, "agents")) return "agent_catalog_discovery";
+    if (std.mem.eql(u8, tool_name, "agents")) return "agent_eligibility_snapshot";
     if (std.mem.eql(u8, tool_name, "configure_agent")) return "agent_registry_mutation";
     if (std.mem.eql(u8, tool_name, "launch_agent")) return "child_run_dispatch";
     if (std.mem.eql(u8, tool_name, "agent_status")) return "child_run_status_check";
@@ -480,8 +480,8 @@ fn ensureToolAllowed(execution_context: ExecutionContext, tool_name: []const u8)
     if (execution_context.orchestrator_only) {
         if (!agents.handles(tool_name) and !agent_message.handles(tool_name)) return Error.CapabilityDenied;
         if (agents.handles(tool_name) and !std.mem.eql(u8, tool_name, "agents")) {
-            const ledger = execution_context.agent_discovery_ledger orelse return Error.AgentCatalogRequired;
-            if (!ledger.hasDiscovered()) return Error.AgentCatalogRequired;
+            const ledger = execution_context.agent_eligibility_ledger orelse return Error.AgentEligibilityRequired;
+            if (!ledger.hasCurrent()) return Error.AgentEligibilityRequired;
         }
     }
     const profile_id = execution_context.capability_profile_id orelse return;

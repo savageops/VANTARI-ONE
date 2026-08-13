@@ -8,13 +8,13 @@ const module = @import("../module.zig");
 pub const definitions = [_]types.ToolDefinition{
     .{
         .name = "agents",
-        .description = "Hot-load the compact available-agent catalog from config.json. Call this before selecting, launching, or changing a specialist.",
+        .description = "Read one compact route-eligible specialist and current-team snapshot with a deterministic receipt. Use it when collaboration evidence helps; launch and agent-configuration mutation require a current snapshot.",
         .review_risk = .read_only,
         .parameters_json =
         \\{"type":"object","properties":{},"additionalProperties":false}
         ,
         .example_json = "{}",
-        .usage_hint = "This is specialist discovery, not launched-run status. Match the task to when_to_use, then pass the returned id to launch_agent. Private child instructions are intentionally omitted.",
+        .usage_hint = "The snapshot exposes only executable choices, hard bounds, aggregate team/capacity state, and queue/wake delivery. Match the task to when_to_use or stay solo. Use list_agents only when detailed launched-run inventory is useful. Private child instructions and transcripts are omitted.",
     },
     .{
         .name = "launch_agent",
@@ -148,9 +148,9 @@ pub const definitions = [_]types.ToolDefinition{
         \\    "max_tool_calls": { "type": "integer", "minimum": 0, "maximum": 4096 },
         \\    "max_children": { "type": "integer", "minimum": 0, "maximum": 64 },
         \\    "output_contract": { "type": "string" },
-        \\    "doctrine_tags": { "type": "string", "description": "Distilled doctrine tags (kebab-case, space separated) rendered into the model-visible catalog." },
+        \\    "doctrine_tags": { "type": "string", "description": "Distilled doctrine metadata stored with this specialist definition." },
         \\    "ticket_ownership": { "type": "boolean", "description": "Agent may transition states of tickets it owns. Agents can never close tickets - that authority is kernel-only." },
-        \\    "checkpoint_contract": { "type": "string", "description": "Live checkpoint summary contract the agent keeps current while working." },
+        \\    "checkpoint_contract": { "type": "string", "description": "Checkpoint metadata stored with this specialist definition." },
         \\    "autonomy": { "type": "string", "enum": ["directed","bounded","self_directed"] },
         \\    "effort": { "type": "string", "description": "Optional per-agent effort override; absent = VANTARI decides." },
         \\    "temperature": { "type": "number", "description": "Optional per-agent temperature override; absent = VANTARI decides." }
@@ -160,7 +160,7 @@ pub const definitions = [_]types.ToolDefinition{
         \\}
         ,
         .example_json = "{\"action\":\"upsert\",\"id\":\"frontend_recon\",\"extends\":\"recon\",\"description\":\"Frontend ownership recon.\",\"when_to_use\":\"Use for frontend architecture work.\",\"instruction\":\"Inspect frontend only and return exact evidence.\",\"doctrine_tags\":\"evidence-first findings-ledger\",\"ticket_ownership\":true,\"autonomy\":\"directed\"}",
-        .usage_hint = "Use reset to remove a custom id or return a built-in id to its compiled floor. Call agents again after mutation to observe the hot-loaded effective catalog.",
+        .usage_hint = "Use reset to remove a custom id or return a built-in id to its compiled floor. Call agents again after mutation to observe the hot-loaded route-eligible snapshot.",
     },
 };
 
@@ -185,7 +185,7 @@ pub fn execute(
     arguments_json: []const u8,
 ) ![]u8 {
     if (std.mem.eql(u8, tool_name, "agents")) {
-        return executeAgentCatalog(allocator, execution_context, arguments_json);
+        return executeAgentEligibility(allocator, execution_context, arguments_json);
     }
     if (std.mem.eql(u8, tool_name, "launch_agent")) {
         return executeLaunchAgent(allocator, execution_context, arguments_json);
@@ -294,7 +294,7 @@ fn executeLaunchAgent(
         delegation_scope,
     );
     defer allocator.free(content);
-    if (execution_context.agent_discovery_ledger) |ledger| ledger.noteLaunch(parsed.value.background);
+    if (execution_context.agent_eligibility_ledger) |ledger| ledger.noteLaunch(parsed.value.background);
 
     return module.okEnvelope(allocator, "launch_agent", content);
 }
@@ -373,8 +373,7 @@ fn executeWaitAllAgents(
     // Try waitParent first (aggregated wait across all groups)
     if (service.waitParentFn) |waitParent| {
         const snapshot = try waitParent(service.context, parent_session_id, parsed.value.timeout_ms);
-        const content = try std.fmt.allocPrint(allocator,
-            "{{\"schema\":\"var1.agent_group_snapshot.v1\",\"groups\":{d},\"queued\":{d},\"running\":{d},\"completed\":{d},\"failed\":{d},\"cancelled\":{d},\"ready\":{},\"terminal\":{}}}", .{
+        const content = try std.fmt.allocPrint(allocator, "{{\"schema\":\"var1.agent_group_snapshot.v1\",\"groups\":{d},\"queued\":{d},\"running\":{d},\"completed\":{d},\"failed\":{d},\"cancelled\":{d},\"ready\":{},\"terminal\":{}}}", .{
             snapshot.groups,
             snapshot.queued,
             snapshot.running,
@@ -405,7 +404,7 @@ fn executeListAgents(
     return module.okEnvelope(allocator, "list_agents", content);
 }
 
-fn executeAgentCatalog(
+fn executeAgentEligibility(
     allocator: std.mem.Allocator,
     execution_context: module.ExecutionContext,
     arguments_json: []const u8,
@@ -416,11 +415,17 @@ fn executeAgentCatalog(
     });
     defer parsed.deinit();
 
-    var registry = try agent_spec.loadRegistry(allocator, execution_context.workspace_root);
-    defer registry.deinit();
-    const content = try agent_spec.renderCatalog(allocator, registry);
+    const service = execution_context.agent_service orelse return module.Error.AgentServiceUnavailable;
+    const session_id = execution_context.session_id orelse execution_context.parent_session_id orelse return module.Error.MissingParentSession;
+    const parent_profile_id = execution_context.capability_profile_id orelse "root";
+    const content = try service.eligibility(
+        allocator,
+        session_id,
+        parent_profile_id,
+        execution_context.delegation_depth_remaining,
+    );
     defer allocator.free(content);
-    if (execution_context.agent_discovery_ledger) |ledger| ledger.mark();
+    if (execution_context.agent_eligibility_ledger) |ledger| ledger.markCurrent();
     return module.okEnvelope(allocator, "agents", content);
 }
 
@@ -500,10 +505,11 @@ fn executeConfigureAgent(
     else
         return module.Error.InvalidArguments;
     defer evidence.deinit(allocator);
+    if (execution_context.agent_eligibility_ledger) |ledger| ledger.invalidate();
 
     const content = try std.fmt.allocPrint(
         allocator,
-        "{{\"schema\":\"var1.agent_config_effect.v1\",\"action\":{f},\"agent_id\":{f},\"config_path\":{f},\"before_bytes\":{d},\"after_bytes\":{d},\"before_sha256\":{f},\"after_sha256\":{f},\"hotload\":\"next agents or launch_agent call\"}}",
+        "{{\"schema\":\"var1.agent_config_effect.v1\",\"action\":{f},\"agent_id\":{f},\"config_path\":{f},\"before_bytes\":{d},\"after_bytes\":{d},\"before_sha256\":{f},\"after_sha256\":{f},\"hotload\":\"next agents snapshot\"}}",
         .{
             std.json.fmt(evidence.action, .{}),
             std.json.fmt(evidence.agent_id, .{}),

@@ -24,18 +24,13 @@ pub const AgentSpec = struct {
     max_tool_calls: usize,
     max_children: usize,
     output_contract: []const u8,
-    /// Distilled doctrine tags (kebab-case, space separated) baked into the
-    /// model-visible catalog so every specialist carries the doctrine without
-    /// re-reading AGENTS.md: evidence-first capability-truth ticket-discipline
-    /// harvest-before-originate proof-gated append-only no-parallel-systems
-    /// stale-owner-reconciliation cold-start-replayable.
+    /// Distilled doctrine metadata retained in the editable definition. The
+    /// private instruction capsule, not this metadata, controls child behavior.
     doctrine_tags: []const u8,
     /// Agent may transition states of tickets it owns (assigned→in_progress→
     /// complete). Agents NEVER close tickets; no config knob widens this.
     ticket_ownership: bool,
-    /// Live checkpoint contract the agent must keep current while working
-    /// (>=3-sentence summary row) so the parent, siblings, and cold-start
-    /// recovery can see progress and state. Rendered into the catalog.
+    /// Declarative checkpoint metadata retained in the editable definition.
     checkpoint_contract: []const u8,
     /// Direction mode: "directed" (execute only the assigned ticket),
     /// "bounded" (assigned ticket plus explicitly bounded adjacent evidence),
@@ -314,7 +309,7 @@ const built_in_specs = [_]AgentSpec{
 };
 
 /// Compiled floors remain available for receipt compatibility and legacy
-/// callers. Live discovery and launch must use loadRegistry instead.
+/// callers. Live eligibility and launch must use loadRegistry instead.
 pub fn all() []const AgentSpec {
     return built_in_specs[0..];
 }
@@ -325,7 +320,7 @@ pub fn resolve(spec_id: []const u8) Error!AgentSpec {
 
 /// Parse the canonical config on every call. No process-local cache exists:
 /// external edits and configure_agent mutations become visible on the next
-/// catalog read or launch admission.
+/// eligibility read or launch admission.
 pub fn loadRegistry(allocator: std.mem.Allocator, workspace_root: []const u8) !Registry {
     var parsed = try config_file.readValidatedDocument(allocator, workspace_root);
     defer parsed.deinit();
@@ -380,34 +375,137 @@ pub fn loadRegistryFromValue(allocator: std.mem.Allocator, document: std.json.Va
     };
 }
 
-/// Compact model-facing selection data. Private instruction capsules stay out
-/// of the parent context and are injected only into the selected child prompt.
-pub fn renderCatalog(allocator: std.mem.Allocator, registry: Registry) ![]u8 {
+pub const EligibilityAgent = struct {
+    id: []const u8,
+    when_to_use: []const u8,
+    kind: []const u8,
+    route_role: []const u8,
+    capability_profile: []const u8,
+    provider: []const u8,
+    model: []const u8,
+    effort: []const u8,
+    max_children: usize,
+};
+
+pub const UnavailableAgent = struct {
+    id: []const u8,
+    reason: []const u8,
+};
+
+pub const EligibilityState = struct {
+    parent_profile_id: []const u8,
+    delegation_allowed: bool,
+    delegation_reason: ?[]const u8 = null,
+    depth_remaining: usize,
+    scope_without_reason: usize,
+    contact_without_reason: usize,
+    capacity_max: usize = 0,
+    capacity_queued: usize = 0,
+    capacity_running: usize = 0,
+    capacity_available: usize = 0,
+    team_groups: usize = 0,
+    team_queued: usize = 0,
+    team_running: usize = 0,
+    team_completed: usize = 0,
+    team_failed: usize = 0,
+    team_cancelled: usize = 0,
+    team_ready: bool = false,
+    team_terminal: bool = true,
+    has_parent_target: bool = false,
+    has_group_target: bool = false,
+};
+
+/// Render the only model-facing specialist discovery surface. The service
+/// supplies route-resolved rows and live owner snapshots; this function sorts
+/// them and binds the exact canonical snapshot to a deterministic receipt.
+/// Private instructions and child transcripts never enter this projection.
+pub fn renderEligibilitySnapshot(
+    allocator: std.mem.Allocator,
+    eligible: []const EligibilityAgent,
+    unavailable: []const UnavailableAgent,
+    state: EligibilityState,
+) ![]u8 {
+    const sorted_eligible = try allocator.dupe(EligibilityAgent, eligible);
+    defer allocator.free(sorted_eligible);
+    std.mem.sort(EligibilityAgent, sorted_eligible, {}, struct {
+        fn lessThan(_: void, left: EligibilityAgent, right: EligibilityAgent) bool {
+            return std.mem.lessThan(u8, left.id, right.id);
+        }
+    }.lessThan);
+
+    const sorted_unavailable = try allocator.dupe(UnavailableAgent, unavailable);
+    defer allocator.free(sorted_unavailable);
+    std.mem.sort(UnavailableAgent, sorted_unavailable, {}, struct {
+        fn lessThan(_: void, left: UnavailableAgent, right: UnavailableAgent) bool {
+            return std.mem.lessThan(u8, left.id, right.id);
+        }
+    }.lessThan);
+
+    const admission = if (!state.delegation_allowed)
+        "denied"
+    else if (state.capacity_available == 0)
+        "queue_only"
+    else
+        "start_or_queue";
+    const model_choices = [_][]const u8{ "quiet", "inspect", "message", "challenge", "launch", "queue", "wake" };
+    const delivery = [_][]const u8{ "queue", "wake" };
+    var targets: [3][]const u8 = undefined;
+    var target_count: usize = 1;
+    targets[0] = "direct";
+    if (state.has_parent_target) {
+        targets[target_count] = "parent";
+        target_count += 1;
+    }
+    if (state.has_group_target) {
+        targets[target_count] = "current_group";
+        target_count += 1;
+    }
+    const snapshot_view = .{
+        .model_choices = model_choices[0..],
+        .delegation = .{
+            .allowed = state.delegation_allowed,
+            .reason = state.delegation_reason,
+            .parent_profile = state.parent_profile_id,
+            .depth_remaining = if (state.depth_remaining == std.math.maxInt(usize)) null else state.depth_remaining,
+            .scope_without_reason = state.scope_without_reason,
+            .contact_without_reason = state.contact_without_reason,
+            .admission = admission,
+        },
+        .capacity = .{
+            .max = state.capacity_max,
+            .queued = state.capacity_queued,
+            .running = state.capacity_running,
+            .available = state.capacity_available,
+        },
+        .team = .{
+            .groups = state.team_groups,
+            .queued = state.team_queued,
+            .running = state.team_running,
+            .completed = state.team_completed,
+            .failed = state.team_failed,
+            .cancelled = state.team_cancelled,
+            .ready = state.team_ready,
+            .terminal = state.team_terminal,
+        },
+        .communication = .{
+            .inspect = "list_agents",
+            .targets = targets[0..target_count],
+            .delivery = delivery[0..],
+        },
+        .eligible = sorted_eligible,
+        .unavailable = sorted_unavailable,
+    };
+    var snapshot = std.array_list.Managed(u8).init(allocator);
+    defer snapshot.deinit();
+    try snapshot.writer().print("{f}", .{std.json.fmt(snapshot_view, .{})});
+
+    const receipt = contentHash(snapshot.items);
     var output = std.array_list.Managed(u8).init(allocator);
     errdefer output.deinit();
-    const writer = output.writer();
-    try writer.writeAll("{\"schema\":\"var1.agent_catalog.v1\",\"hotloaded\":true,\"agents\":[");
-    for (registry.specs, 0..) |spec, index| {
-        if (index > 0) try writer.writeByte(',');
-        // Doctrine tags, ticket ownership, checkpoint contract, autonomy, and
-        // effort are model-visible: the catalog IS the doctrine surface the
-        // operator prompt steers with — no second prompt layer.
-        try writer.print("{{\"id\":{f},\"description\":{f},\"when_to_use\":{f},\"kind\":{f},\"route_role\":{f},\"capability_profile\":{f},\"output_contract\":{f},\"doctrine\":{f},\"ticket_ownership\":{s},\"checkpoint\":{f},\"autonomy\":{f},\"effort\":{f}}}", .{
-            std.json.fmt(spec.id, .{}),
-            std.json.fmt(spec.description, .{}),
-            std.json.fmt(spec.when_to_use, .{}),
-            std.json.fmt(spec.execution_kind.label(), .{}),
-            std.json.fmt(spec.route_role.label(), .{}),
-            std.json.fmt(spec.capability_profile_id, .{}),
-            std.json.fmt(spec.output_contract, .{}),
-            std.json.fmt(spec.doctrine_tags, .{}),
-            if (spec.ticket_ownership) "true" else "false",
-            std.json.fmt(spec.checkpoint_contract, .{}),
-            std.json.fmt(spec.autonomy, .{}),
-            std.json.fmt(spec.effort, .{}),
-        });
-    }
-    try writer.writeAll("]}");
+    try output.writer().print("{{\"schema\":\"var1.agent_eligibility.v1\",\"receipt\":\"sha256:{s}\",\"snapshot\":{s}}}", .{
+        receipt[0..],
+        snapshot.items,
+    });
     return output.toOwnedSlice();
 }
 
@@ -424,7 +522,7 @@ pub fn upsertConfiguredAgent(
 }
 
 /// Reset removes the configured row. Built-in ids fall back to their compiled
-/// floor; custom ids disappear from the next hot-loaded catalog.
+/// floor; custom ids disappear from the next hot-loaded eligibility snapshot.
 pub fn resetConfiguredAgent(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
@@ -782,15 +880,35 @@ test "custom personas cannot escalate inherited model task capability" {
     try std.testing.expectError(Error.InvalidAgentDefinition, loadRegistryFromValue(std.testing.allocator, parsed.value));
 }
 
-test "compact catalog omits private instruction capsules" {
+test "compact eligibility snapshot omits private instruction capsules" {
     const document = "{\"version\":1}";
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
     defer parsed.deinit();
     var registry = try loadRegistryFromValue(std.testing.allocator, parsed.value);
     defer registry.deinit();
-    const catalog = try renderCatalog(std.testing.allocator, registry);
-    defer std.testing.allocator.free(catalog);
-    try std.testing.expect(std.mem.indexOf(u8, catalog, "when_to_use") != null);
-    try std.testing.expect(std.mem.indexOf(u8, catalog, "instruction_capsule") == null);
-    try std.testing.expect(std.mem.indexOf(u8, catalog, "Inspect only. Return findings") == null);
+    const recon = try registry.resolve("recon");
+    const rows = [_]EligibilityAgent{.{
+        .id = recon.id,
+        .when_to_use = recon.when_to_use,
+        .kind = recon.execution_kind.label(),
+        .route_role = recon.route_role.label(),
+        .capability_profile = recon.capability_profile_id,
+        .provider = "fixture",
+        .model = "fixture",
+        .effort = "",
+        .max_children = recon.max_children,
+    }};
+    const snapshot = try renderEligibilitySnapshot(std.testing.allocator, &rows, &.{}, .{
+        .parent_profile_id = "root",
+        .delegation_allowed = true,
+        .depth_remaining = 1,
+        .scope_without_reason = 1,
+        .contact_without_reason = 1,
+        .capacity_max = 1,
+        .capacity_available = 1,
+    });
+    defer std.testing.allocator.free(snapshot);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot, "when_to_use") != null);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot, "instruction_capsule") == null);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot, "Inspect only. Return findings") == null);
 }

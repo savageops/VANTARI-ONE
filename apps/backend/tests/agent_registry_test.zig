@@ -1,7 +1,7 @@
 const std = @import("std");
 const VAR1 = @import("VAR1");
 
-const registry_case_count = 53;
+const registry_case_count = 56;
 
 fn registryFromDocument(document: []const u8) !VAR1.core.agent_spec.Registry {
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
@@ -19,6 +19,19 @@ fn tmpWorkspacePath(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir, suff
     return std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, suffix });
 }
 
+fn makeConfig(allocator: std.mem.Allocator, workspace_root: []const u8) !VAR1.shared.types.Config {
+    return .{
+        .openai_base_url = try allocator.dupe(u8, "http://127.0.0.1:1234"),
+        .openai_api_key = try allocator.dupe(u8, "eligibility-secret"),
+        .openai_model = try allocator.dupe(u8, "eligibility-model"),
+        .auth_provider = try allocator.dupe(u8, "active"),
+        .max_steps = 256,
+        .max_tool_calls_per_turn = 32,
+        .max_tool_calls_per_session = 256,
+        .workspace_root = try allocator.dupe(u8, workspace_root),
+    };
+}
+
 fn makeToolCall(name: []const u8, arguments_json: []const u8) !VAR1.shared.types.ToolCall {
     return .{
         .id = try std.testing.allocator.dupe(u8, "registry-call"),
@@ -32,6 +45,52 @@ fn findDefinition(name: []const u8) ?VAR1.shared.types.ToolDefinition {
         if (std.mem.eql(u8, definition.name, name)) return definition;
     }
     return null;
+}
+
+fn renderFixtureEligibility(registry: VAR1.core.agent_spec.Registry) ![]u8 {
+    const rows = try std.testing.allocator.alloc(VAR1.core.agent_spec.EligibilityAgent, registry.all().len);
+    defer std.testing.allocator.free(rows);
+    for (registry.all(), 0..) |spec, index| {
+        rows[index] = .{
+            .id = spec.id,
+            .when_to_use = spec.when_to_use,
+            .kind = spec.execution_kind.label(),
+            .route_role = spec.route_role.label(),
+            .capability_profile = spec.capability_profile_id,
+            .provider = "fixture-provider",
+            .model = "fixture-model",
+            .effort = spec.effort,
+            .max_children = spec.max_children,
+        };
+    }
+    return VAR1.core.agent_spec.renderEligibilitySnapshot(
+        std.testing.allocator,
+        rows,
+        &.{},
+        .{
+            .parent_profile_id = "root",
+            .delegation_allowed = true,
+            .depth_remaining = 3,
+            .scope_without_reason = 1,
+            .contact_without_reason = 1,
+            .capacity_max = 6,
+            .capacity_available = 6,
+        },
+    );
+}
+
+fn expectEligibilityReceipt(envelope: []const u8) !void {
+    const receipt_marker = "\"receipt\":\"sha256:";
+    const snapshot_marker = ",\"snapshot\":";
+    const receipt_offset = std.mem.indexOf(u8, envelope, receipt_marker) orelse return error.MissingReceipt;
+    const receipt_start = receipt_offset + receipt_marker.len;
+    try std.testing.expect(envelope.len > receipt_start + 64);
+    const receipt = envelope[receipt_start .. receipt_start + 64];
+    const snapshot_offset = std.mem.indexOf(u8, envelope, snapshot_marker) orelse return error.MissingSnapshot;
+    const snapshot_start = snapshot_offset + snapshot_marker.len;
+    try std.testing.expect(envelope.len > snapshot_start and envelope[envelope.len - 1] == '}');
+    const expected = VAR1.core.agent_spec.contentHash(envelope[snapshot_start .. envelope.len - 1]);
+    try std.testing.expectEqualStrings(expected[0..], receipt);
 }
 
 fn verifyRegistryCase(index: usize) !void {
@@ -60,21 +119,21 @@ fn verifyRegistryCase(index: usize) !void {
         5 => {
             var registry = try registryFromDocument("{\"version\":1}");
             defer registry.deinit();
-            const catalog = try VAR1.core.agent_spec.renderCatalog(std.testing.allocator, registry);
+            const catalog = try renderFixtureEligibility(registry);
             defer std.testing.allocator.free(catalog);
-            try std.testing.expect(std.mem.indexOf(u8, catalog, "var1.agent_catalog.v1") != null);
+            try std.testing.expect(std.mem.indexOf(u8, catalog, "var1.agent_eligibility.v1") != null);
         },
         6 => {
             var registry = try registryFromDocument("{\"version\":1}");
             defer registry.deinit();
-            const catalog = try VAR1.core.agent_spec.renderCatalog(std.testing.allocator, registry);
+            const catalog = try renderFixtureEligibility(registry);
             defer std.testing.allocator.free(catalog);
             try std.testing.expect(std.mem.indexOf(u8, catalog, "when_to_use") != null);
         },
         7 => {
             var registry = try registryFromDocument("{\"version\":1}");
             defer registry.deinit();
-            const catalog = try VAR1.core.agent_spec.renderCatalog(std.testing.allocator, registry);
+            const catalog = try renderFixtureEligibility(registry);
             defer std.testing.allocator.free(catalog);
             try std.testing.expect(std.mem.indexOf(u8, catalog, "Inspect only. Return findings") == null);
         },
@@ -146,7 +205,7 @@ fn verifyRegistryCase(index: usize) !void {
         33 => {
             var registry = try registryFromDocument("{\"version\":1,\"agents\":{\"definitions\":{\"custom\":{\"extends\":\"recon\",\"instruction\":\"PRIVATE-CAPSULE-DO-NOT-LEAK\"}}}}");
             defer registry.deinit();
-            const catalog = try VAR1.core.agent_spec.renderCatalog(std.testing.allocator, registry);
+            const catalog = try renderFixtureEligibility(registry);
             defer std.testing.allocator.free(catalog);
             try std.testing.expect(std.mem.indexOf(u8, catalog, "PRIVATE-CAPSULE-DO-NOT-LEAK") == null);
         },
@@ -207,37 +266,48 @@ fn verifyRegistryCase(index: usize) !void {
             defer tmp.cleanup();
             const workspace = try tmpWorkspacePath(std.testing.allocator, &tmp, "catalog-ledger");
             defer std.testing.allocator.free(workspace);
-            var ledger = VAR1.core.tool_runtime.AgentDiscoveryLedger{};
+            const config = try makeConfig(std.testing.allocator, workspace);
+            defer config.deinit(std.testing.allocator);
+            var service = VAR1.core.agent_runtime.Service.init(&config);
+            defer service.deinit();
+            var parent = try VAR1.core.session_store.initSession(std.testing.allocator, workspace, "eligibility parent");
+            defer parent.deinit(std.testing.allocator);
+            var ledger = VAR1.core.tool_runtime.AgentEligibilityLedger{};
             var call = try makeToolCall("agents", "{}");
             defer call.deinit(std.testing.allocator);
             const output = try VAR1.core.tool_runtime.execute(std.testing.allocator, .{
                 .workspace_root = workspace,
+                .session_id = parent.id,
+                .parent_session_id = parent.id,
+                .agent_service = service.handle(),
+                .capability_profile_id = "root",
+                .delegation_depth_remaining = 3,
                 .orchestrator_only = true,
-                .agent_discovery_ledger = &ledger,
+                .agent_eligibility_ledger = &ledger,
             }, call);
             defer std.testing.allocator.free(output);
-            try std.testing.expect(ledger.hasDiscovered());
-            try std.testing.expect(std.mem.indexOf(u8, output, "var1.agent_catalog.v1") != null);
+            try std.testing.expect(ledger.hasCurrent());
+            try std.testing.expect(std.mem.indexOf(u8, output, "var1.agent_eligibility.v1") != null);
         },
         42 => {
-            var ledger = VAR1.core.tool_runtime.AgentDiscoveryLedger{};
+            var ledger = VAR1.core.tool_runtime.AgentEligibilityLedger{};
             var call = try makeToolCall("launch_agent", "{\"context\":\"\",\"tasks\":[{\"agent\":\"recon\",\"task\":\"x\"}]}");
             defer call.deinit(std.testing.allocator);
-            try std.testing.expectError(VAR1.core.tool_runtime.Error.AgentCatalogRequired, VAR1.core.tool_runtime.execute(std.testing.allocator, .{
+            try std.testing.expectError(VAR1.core.tool_runtime.Error.AgentEligibilityRequired, VAR1.core.tool_runtime.execute(std.testing.allocator, .{
                 .workspace_root = ".",
                 .orchestrator_only = true,
-                .agent_discovery_ledger = &ledger,
+                .agent_eligibility_ledger = &ledger,
             }, call));
         },
         43 => {
-            var ledger = VAR1.core.tool_runtime.AgentDiscoveryLedger{};
-            ledger.mark();
+            var ledger = VAR1.core.tool_runtime.AgentEligibilityLedger{};
+            ledger.markCurrent();
             var call = try makeToolCall("read_file", "{\"path\":\"README.md\"}");
             defer call.deinit(std.testing.allocator);
             try std.testing.expectError(VAR1.core.tool_runtime.Error.CapabilityDenied, VAR1.core.tool_runtime.execute(std.testing.allocator, .{
                 .workspace_root = ".",
                 .orchestrator_only = true,
-                .agent_discovery_ledger = &ledger,
+                .agent_eligibility_ledger = &ledger,
             }, call));
         },
         44 => {
@@ -269,13 +339,12 @@ fn verifyRegistryCase(index: usize) !void {
         47 => {
             var registry = try registryFromDocument("{\"version\":1}");
             defer registry.deinit();
-            const catalog = try VAR1.core.agent_spec.renderCatalog(std.testing.allocator, registry);
+            const catalog = try renderFixtureEligibility(registry);
             defer std.testing.allocator.free(catalog);
-            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"doctrine\":\"ticket-discipline") != null);
-            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"ticket_ownership\":true") != null);
-            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"ticket_ownership\":false") != null);
-            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"checkpoint\":\"var1.summary.v1\"") != null);
-            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"autonomy\":\"self_directed\"") != null);
+            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"provider\":\"fixture-provider\"") != null);
+            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"model\":\"fixture-model\"") != null);
+            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"doctrine\"") == null);
+            try std.testing.expect(std.mem.indexOf(u8, catalog, "\"instruction_capsule\"") == null);
         },
         48 => {
             var tmp = std.testing.tmpDir(.{});
@@ -328,6 +397,73 @@ fn verifyRegistryCase(index: usize) !void {
             try std.testing.expectEqualStrings("harvest-before-originate six-competitor-floor source-or-retract evidence-ledger benchmark-deep", harvester.doctrine_tags);
             const reviewer = try VAR1.core.agent_spec.resolve("reviewer");
             try std.testing.expectEqualStrings("findings-first capability-truth no-parallel-systems falsification-pressure maintainer-craft", reviewer.doctrine_tags);
+        },
+        53 => {
+            const general = try VAR1.core.agent_spec.resolve("general");
+            const recon = try VAR1.core.agent_spec.resolve("recon");
+            const first_rows = [_]VAR1.core.agent_spec.EligibilityAgent{
+                .{ .id = recon.id, .when_to_use = recon.when_to_use, .kind = recon.execution_kind.label(), .route_role = recon.route_role.label(), .capability_profile = recon.capability_profile_id, .provider = "p", .model = "m", .effort = "", .max_children = recon.max_children },
+                .{ .id = general.id, .when_to_use = general.when_to_use, .kind = general.execution_kind.label(), .route_role = general.route_role.label(), .capability_profile = general.capability_profile_id, .provider = "p", .model = "m", .effort = "", .max_children = general.max_children },
+            };
+            const second_rows = [_]VAR1.core.agent_spec.EligibilityAgent{ first_rows[1], first_rows[0] };
+            const state = VAR1.core.agent_spec.EligibilityState{
+                .parent_profile_id = "root",
+                .delegation_allowed = true,
+                .depth_remaining = 2,
+                .scope_without_reason = 1,
+                .contact_without_reason = 1,
+                .capacity_max = 2,
+                .capacity_available = 1,
+            };
+            const first = try VAR1.core.agent_spec.renderEligibilitySnapshot(std.testing.allocator, &first_rows, &.{}, state);
+            defer std.testing.allocator.free(first);
+            const second = try VAR1.core.agent_spec.renderEligibilitySnapshot(std.testing.allocator, &second_rows, &.{}, state);
+            defer std.testing.allocator.free(second);
+            try std.testing.expectEqualStrings(first, second);
+            try expectEligibilityReceipt(first);
+            var changed_state = state;
+            changed_state.capacity_available = 0;
+            const changed = try VAR1.core.agent_spec.renderEligibilitySnapshot(std.testing.allocator, &first_rows, &.{}, changed_state);
+            defer std.testing.allocator.free(changed);
+            try expectEligibilityReceipt(changed);
+            try std.testing.expect(!std.mem.eql(u8, first, changed));
+        },
+        54 => {
+            const unavailable = [_]VAR1.core.agent_spec.UnavailableAgent{
+                .{ .id = "reviewer", .reason = "route_unavailable" },
+            };
+            const snapshot = try VAR1.core.agent_spec.renderEligibilitySnapshot(std.testing.allocator, &.{}, &unavailable, .{
+                .parent_profile_id = "root",
+                .delegation_allowed = true,
+                .depth_remaining = 1,
+                .scope_without_reason = 1,
+                .contact_without_reason = 1,
+                .capacity_max = 1,
+                .capacity_running = 1,
+                .capacity_available = 0,
+            });
+            defer std.testing.allocator.free(snapshot);
+            try std.testing.expect(std.mem.indexOf(u8, snapshot, "\"admission\":\"queue_only\"") != null);
+            try std.testing.expect(std.mem.indexOf(u8, snapshot, "\"reason\":\"route_unavailable\"") != null);
+            try std.testing.expect(std.mem.indexOf(u8, snapshot, "\"model_choices\":[\"quiet\",\"inspect\",\"message\",\"challenge\",\"launch\",\"queue\",\"wake\"]") != null);
+        },
+        55 => {
+            var tmp = std.testing.tmpDir(.{});
+            defer tmp.cleanup();
+            const workspace = try tmpWorkspacePath(std.testing.allocator, &tmp, "eligibility-invalidation");
+            defer std.testing.allocator.free(workspace);
+            var ledger = VAR1.core.tool_runtime.AgentEligibilityLedger{};
+            ledger.markCurrent();
+            var call = try makeToolCall("configure_agent", "{\"action\":\"upsert\",\"id\":\"fresh_recon\",\"extends\":\"recon\"}");
+            defer call.deinit(std.testing.allocator);
+            const output = try VAR1.core.tool_runtime.execute(std.testing.allocator, .{
+                .workspace_root = workspace,
+                .orchestrator_only = true,
+                .agent_eligibility_ledger = &ledger,
+            }, call);
+            defer std.testing.allocator.free(output);
+            try std.testing.expect(std.mem.indexOf(u8, output, "var1.agent_config_effect.v1") != null);
+            try std.testing.expect(!ledger.hasCurrent());
         },
         else => return error.UnknownRegistryCase,
     }

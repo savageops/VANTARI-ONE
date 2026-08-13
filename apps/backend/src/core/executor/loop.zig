@@ -189,12 +189,12 @@ pub fn runPromptWithOptions(
     var file_inspection_ledger = tools.FileInspectionLedger.init(allocator);
     defer file_inspection_ledger.deinit();
     execution_context.file_inspection_ledger = &file_inspection_ledger;
-    var agent_discovery_ledger = tools.AgentDiscoveryLedger{};
+    var agent_eligibility_ledger = tools.AgentEligibilityLedger{};
     const root_agent_run = execution_context.agent_service != null and
         (execution_context.capability_profile_id == null or
             std.mem.eql(u8, execution_context.capability_profile_id.?, "root"));
     if (execution_context.agent_service != null) {
-        execution_context.agent_discovery_ledger = &agent_discovery_ledger;
+        execution_context.agent_eligibility_ledger = &agent_eligibility_ledger;
     }
     if (root_agent_run) {
         const agent_policy = try config_file.loadAgentPolicy(allocator, config.workspace_root);
@@ -670,7 +670,7 @@ pub fn runPromptWithOptions(
 
             if (requires_child_supervision) {
                 const agent_service = execution_context.agent_service orelse return tools.Error.AgentServiceUnavailable;
-                const park_after_launch = if (execution_context.agent_discovery_ledger) |ledger|
+                const park_after_launch = if (execution_context.agent_eligibility_ledger) |ledger|
                     ledger.consumeParkRequest()
                 else
                     true;

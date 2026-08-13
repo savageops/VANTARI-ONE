@@ -1585,19 +1585,18 @@ test "agent system prompt teaches schema repair and file-tool roles" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Select-String/Get-ChildItem") != null);
 }
 
-test "orchestrator prompt requires compact discovery and signal-driven continuation" {
+test "orchestrator prompt exposes model-selected collaboration and signal-driven continuation" {
     const prompt = try VAR1.core.prompts.buildAgentSystemPrompt(std.testing.allocator, .{
         .workspace_root = ".",
         .orchestrator_only = true,
     }, .{});
     defer std.testing.allocator.free(prompt);
 
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Your first tool call must be agents with {}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Direct task-artifact tools are unavailable in this parent context") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "eligible snapshot lets you choose whether to inspect, message, challenge, launch, accept queueing, wake, or remain quiet") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Your first tool call must be agents with {}") == null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "private child instructions") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "I'll pick up as soon as an agent reports back.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "wakes on the first ready child result") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "checkpoint what converged and immediately route the next bounded slice") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "a checkpoint is continuation evidence, not a final answer") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "The parent wakes on the first ready child result and resumes automatically") != null);
 }
 
 test "tool call summary masks child supervision tool names in logs" {
