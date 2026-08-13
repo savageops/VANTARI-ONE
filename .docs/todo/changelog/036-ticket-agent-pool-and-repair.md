@@ -4,22 +4,20 @@ type: parent
 protocol_version: "3.0"
 spec_status: approved
 category: feature
-status: pending
+status: done
 epic_boundary: "Add a durable buffered ticket execution plane that claims assigned work through the existing supervisor and scheduler, recovers stale runs, and exposes truthful ticket/pool evidence to clients."
 subtodo_start: /todo/pending/036a-ticket-agent-pool-and-repair.md
-subtodo_final: /todo/changelog/036g-ticket-agent-pool-and-repair.md
-continuation: "Reopened by the 2026-08-12 harness audit. Findings 10 and 13 are closed. Resolve finding 11 through roadmap moves 21-30, add focused fix and re-review units, then repeat installed proof before parent archival."
+subtodo_final: /todo/changelog/036h-ticket-agent-pool-and-repair-terminal-review.md
+continuation: "Archived by the 2026-08-13 installed terminal review. Findings 10, 11, and 13 pass; Move 30 source and installed proof pass; Move 32 reconciles the remaining project frontiers before Move 33."
 source_message_policy: "Every lettered unit MUST include source_message_anchor, source_message_excerpt, source_message_proof_obligation, and an Original User Message Proof section with verbatim snippets from the original user message."
 ---
 # 036 Ticket agent pool and repair queue
 
-> [!warning] Current audit supersession
-> The archived 036g receipt remains historical evidence, but its completion
-> judgment is not current. The full-harness audit proved process-local worker
-> ownership and missing durable agent mail. Move 23 has since closed the
-> non-atomic scheduler leader lease with a two-kernel generation-fenced proof.
-> Findings 10 and 13 are closed. This parent remains pending until finding 11 is repaired and a
-> new terminal review passes.
+> [!note] Current closure state
+> The archived 036g receipt remains historical evidence. The reopened repair
+> seam is now closed by the installed terminal review: Move 23 has a
+> two-kernel generation-fenced proof, finding 11 has source and installed
+> evidence, and no unresolved 036 defect remains.
 
 ## Objective
 
@@ -187,7 +185,7 @@ The external harvest is closed by `.docs/research/2026-08-10-ticket-agent-pool-a
 
 | File | Phase | Role | Status |
 |------|-------|------|--------|
-| `/todo/pending/036-ticket-agent-pool-and-repair.md` | parent | Chain root | pending |
+| `/todo/changelog/036-ticket-agent-pool-and-repair.md` | parent | Chain root | archived |
 | `/todo/changelog/036a-ticket-agent-pool-and-repair.md` | a | Baseline / contract lock | archived |
 | `/todo/changelog/036b-ticket-agent-pool-and-repair.md` | b | Ticket schema, projection, transitions, claims, leases | archived |
 | `/todo/changelog/036c-ticket-agent-pool-and-repair.md` | c | Supervisor capacity and ticket launch seam | archived |
@@ -195,10 +193,11 @@ The external harvest is closed by `.docs/research/2026-08-10-ticket-agent-pool-a
 | `/todo/changelog/036e-ticket-agent-pool-and-repair.md` | e | Typed event/TUI/RPC operator projection | archived |
 | `/todo/changelog/036f-ticket-agent-pool-and-repair.md` | f | Integrated adversarial and installed proof | archived |
 | `/todo/changelog/036g-ticket-agent-pool-and-repair.md` | g | Review / QC / closeout | archived |
+| `/todo/changelog/036h-ticket-agent-pool-and-repair-terminal-review.md` | h | Post-reopen installed terminal review | archived |
 
-The original 036a-036g units are archived, but the parent is reopened by
-post-review evidence. Do not archive it until the current findings ledger
-produces focused repair units and a new terminal re-review.
+The original 036a-036g units are archived. Post-review repair work is now
+covered by roadmap moves 21-30 and the new 036h terminal review. The installed
+consumer path passes; no unresolved 036 defect remains.
 
 ## Execution Index
 
@@ -211,6 +210,7 @@ produces focused repair units and a new terminal re-review.
 | 5 | `036e` | Operator read model and TUI | Continue to `036f`. |
 | 6 | `036f` | Full feature proof | Continue to `036g`. |
 | 7 | `036g` | Review / QC / architectural judgment | `NONE` if pass; create a focused fix/re-review only if evidence requires it. |
+| 8 | `036h` | Post-reopen installed terminal review | `NONE`; parent is archived. |
 
 Every row above compounds the parent ratchet.
 
@@ -225,6 +225,7 @@ Every row above compounds the parent ratchet.
 | `e` | Implementation unit 4 | typed event projection, RPC/TUI read model, UI tests | `d` | No |
 | `f` | Implementation unit 5 | integrated tests, docs, Windows installed proof | `e` | No |
 | `g` | Review / regression / closeout | read-only audit and final evidence | `f` | No |
+| `h` | Post-reopen terminal review | installed lifecycle, source graph, hash/process/docs readback | moves 21-30 | No |
 
 ## Validation Expectations
 
@@ -255,18 +256,18 @@ settle as completed work with `repair_required=true`; `TicketStore.close` reject
 repair closure without approval, exact rerun, and regression evidence. Debug and
 ReleaseFast pass 1,953/1,953; TUI passes 61/61; source SHA-256 is
 `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`.
-Installed SHA-256 remains
-`5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
-operator-owned PIDs 12028/14452 remain active. Keep this parent open until the
-same tracer passes against the hash-matched installed binary and a new terminal
-review archives.
+Installed SHA-256 now matches source at
+`F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`.
+The installed lifecycle, owner lifecycle, and owner tracer all pass with zero
+proof-owned processes. 036h records the new terminal review and is archived
+with this parent.
 
 ## Stop Condition
 
-Stop only after findings 10, 11, and 13 pass, a new terminal review is archived,
-the isolated broad graph is green, and built/installed hashes match with clean
-process exit.
+Stop condition is satisfied: findings 10, 11, and 13 pass, 036h records the new
+terminal review, the isolated broad graph is green, built/installed hashes match,
+and process exit is clean.
 
 ## Next todo
 
-[`../findings/11-persistent-agent-worker-and-scheduler-arbitration.md`](../findings/11-persistent-agent-worker-and-scheduler-arbitration.md)
+[`../../roadmap/24-harness-capability-next-90.md#move-32`](../../roadmap/24-harness-capability-next-90.md#move-32)

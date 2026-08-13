@@ -1,7 +1,7 @@
 ---
 type: finding
 id: harness-finding-22
-status: pending
+status: closed
 priority: P1
 owner: .docs
 source: ../../research/2026-08-12-full-harness-sitrep.md
@@ -11,7 +11,12 @@ source: ../../research/2026-08-12-full-harness-sitrep.md
 
 ## Finding
 
-Public docs and planning records mix shipped, source-present, installed-proven, frontier, and local-only states. Chain 036 claims complete despite source-level lifecycle defects; chain 035 has source implementation but no installed consumer proof; the browser client is ignored; backend docs claim write intents, probing, DAP, eval, TTSR, and quota behavior beyond runtime truth.
+Public docs and planning records previously mixed shipped, source-present,
+installed-proven, frontier, local-only, and unavailable states. The current
+records preserve historical receipts while naming the live boundary: 021c is
+the next auth unit, 035g/035h still require installed provider consumer proof,
+036 is archived after installed lifecycle proof, browser routes remain
+non-shipped, and frontier scaffolds remain explicitly labeled.
 
 ## Required mechanism
 
@@ -21,8 +26,8 @@ Keep one current technical summary and one findings index. Mark every capability
 
 - 021: a-b archived; c-f pending; current frontier 021c.
 - 035: a-f archived; g-h pending; source implementation present; installed proof missing.
-- 036: a-g archived; parent remains pending. Findings 10 and 13 are closed;
-  finding 11 and roadmap moves 21–30 are its sole current repair frontier.
+- 036: a-h and parent archived; findings 10, 11, and 13 are closed; roadmap
+  moves 21–32 and 38 are closed.
 - PLUG: parent and a-h pending; unstarted; lower priority than P0 integrity work.
 
 ## Acceptance
@@ -41,3 +46,17 @@ Keep one current technical summary and one findings index. Mark every capability
 ## Out of scope
 
 Do not erase historical closeout records or fabricate proof to make a chain green.
+
+## Closure receipt — Move 32 (2026-08-13)
+
+- Filesystem reconciliation confirms `021a` and `021b` are in
+  `.docs/todo/changelog/`; `021c` is the sole active 021 frontier.
+- The 036 parent and 036h terminal review are in `.docs/todo/changelog/`;
+  finding 11 and the installed owner/ticket lifecycle gates are closed.
+- `.docs/workspace.json` parses with the current source/installed SHA-256
+  `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`,
+  `installed_hash_matches: true`, and an empty installed process census.
+- Public README, backend README, architecture, technical summary, docs index,
+  roadmap, research, findings, and changelog now state the same boundaries.
+- Dedicated installed eligibility/capacity snapshot probes are not inferred
+  from the composed ticket lifecycle proof; the docs name them as unrun.

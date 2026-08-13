@@ -253,9 +253,8 @@ expiry, terminal evidence settles first. A surviving nonterminal child resumes
 under a new worker generation on that same session; only a missing claimed
 session returns to `assigned`. Heartbeat advances only while the fixed pool owns
 the exact session. The transcript, execution receipt, attempt, and mailbox cursor
-do not move. This recovery is source-proven; installed worker-kill/restart proof
-remains open, and external side-effect certainty still requires the write-intent
-ledger.
+do not move. This recovery is source and installed proven; arbitrary external
+side-effect certainty still requires the write-intent ledger.
 
 The TUI keeps this mechanic legible without adding a status forest: the footer shows pool and queue pressure when non-zero; the activity group shows `Agents completed/total`; each keyed child row ends with a bounded turn summary sourced from the child session summary ledger. Tool lifecycle names remain typed event metadata, not the visible child summary. The persistent footer omits `Esc cancel`.
 
@@ -790,9 +789,9 @@ Every tool call, context window, and model interaction is recorded in structured
 | Wire-protocol routing — Chat Completions, Responses, Anthropic Messages | **Shipped** |
 | Provider model discovery and local context-window detection | **Shipped** |
 | Durable scheduler records and attempts | **Source proven; two-kernel leadership gate passed** |
-| Buffered ticket admission, fixed capacity, and same-session owner recovery | **Source Windows process mesh passed; installed hash-matched run pending** |
-| Sequence-addressed direct/group/parent agent mailbox | **Source Windows restart/delivery mesh passed; installed hash-matched run pending** |
-| Model-selected route eligibility and team snapshot | **Source proven; installed replacement pending** |
+| Buffered ticket admission, fixed capacity, and same-session owner recovery | **Source and installed Windows process meshes passed** |
+| Sequence-addressed direct/group/parent agent mailbox | **Source and installed Windows restart/delivery meshes passed** |
+| Model-selected route eligibility and team snapshot | **Source proven; dedicated installed snapshot proof not run** |
 | Plugin runtime with typed socket execution | **In progress** |
 | Provider fallback chains | Planned |
 | Identity auth against `auth.vantari.one` — PKCE OAuth mirroring the openai-codex pattern | Planned |

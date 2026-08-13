@@ -62,11 +62,11 @@ Rules:
 - Agent messaging uses one events.jsonl mailbox: direct, parent, current_group;
   queue/wake; durable recipient sequence, sender receipt, and provider-success
   unread cursor. Messages never assign tickets, launch work, or copy transcripts.
-- The source Windows lifecycle mesh proves queue-only assignment, one claim,
-  client detach, exact owner-tree loss, generation replacement, same-session
-  resume, nested direct/group/parent delivery, one terminal ticket, and zero
-  proof-owned processes. Do not infer installed crash/restart proof or
-  exactly-once arbitrary external effects; those remain separate roadmap gates.
+- The source and installed Windows lifecycle meshes prove queue-only assignment,
+  one claim, client detach, exact owner-tree loss, generation replacement,
+  same-session resume, nested direct/group/parent delivery, one terminal ticket,
+  cold readback, and zero proof-owned processes. Do not infer exactly-once
+  arbitrary external effects; that remains a separate roadmap gate.
 
 Commands from apps/backend:
 scripts/zigw.ps1 build test --summary all

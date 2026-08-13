@@ -1,7 +1,7 @@
 ---
 type: finding
 id: harness-finding-11
-status: pending
+status: closed
 priority: P0
 owner: apps/backend/src/core/agents
 source: ../../research/2026-08-12-full-harness-sitrep.md
@@ -166,10 +166,16 @@ and regression evidence. Owner lifecycle evidence is retained at
 leadership evidence is retained at
 `.zig-cache/owner-proofs/b80d4d5bcc7f438089f9a35dce16ce9a`. Source SHA-256
 is `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`;
-installed remains the move-19 hash while operator PIDs 12028/14452 are active.
-The 10-file, 139-segment lifecycle audit finds six candidates and zero exact
-duplicates. This finding stays pending until the installed tracer and new
-terminal review pass.
+installed and source now match at
+`F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`.
+The installed lifecycle root is
+`.zig-cache/owner-proofs/825a25155fa64fe78b26a47789025ec9`; owner lifecycle and
+owner tracer roots are
+`.zig-cache/owner-proofs/9cc5d7b8a1624e49937cb3b78716e1bb` and
+`.zig-cache/owner-proofs/65df1918745748ae9736cd9ba438fb13`. The 10-file,
+139-segment lifecycle audit finds six candidates and zero exact duplicates.
+The 036h terminal review passes and finding 11 is closed. Move 62 still owns
+arbitrary external-effect certainty; Moves 71-80 own causal repair promotion.
 
 ## Source and salvage
 

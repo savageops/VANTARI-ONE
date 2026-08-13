@@ -398,11 +398,11 @@ The project-local execution owner keeps this sole service/pool/scheduler
 composition alive across TUI and CLI detach. Move 29 makes its durable child
 identity source-resumable after owner death: terminal evidence settles first;
 an existing nonterminal session receives one generation-fenced `resume`; only
-an absent claimed session requeues. Move 30's source Windows process mesh kills
+an absent claimed session requeues. Move 30's source and installed Windows process meshes kill
 the exact owner/kernel tree, waits for lease expiry, creates a new owner
 generation, resumes the same child session and receipt, completes nested
 collaboration, and leaves zero proof-owned processes. The hash-matched installed
-run remains open.
+run passes with the same evidence.
 Move 23 closes scheduler leadership.
 Move 24 closes ticket admission split-brain: `core/tickets` holds one shared
 process lock across projection, validation, and append; the winning claim row
@@ -442,7 +442,8 @@ topic/subscription broker. Tickets remain the only work lifecycle. Move 29
 preserves the same recipient session and cursor across owner-generation recovery;
 it does not copy or reset delivery state. Move 30's source process tracer proves
 nested direct/group/parent delivery exactly once after owner replacement, with no
-recipient transcript copy. Installed crash proof remains open.
+recipient transcript copy. The installed crash proof passes through the same
+hash-matched binary.
 
 ## Module ownership
 
@@ -609,11 +610,10 @@ Latest local Windows validation on 2026-08-13:
   duplicates, and no second recovery owner.
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
-- Current source SHA-256 is
+- Current source and installed SHA-256 match at
   `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`.
-  Installed move-19 SHA-256 remains
-  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
-  replacement waits for operator-owned PIDs 12028/14452 to exit naturally.
+  Move 38 installation and the installed owner/ticket lifecycle proofs pass;
+  the final installed process census is zero.
 - The source ticket lifecycle mesh at
   `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`
   proves assignment without launch, one claim, noninteractive TUI detach, exact

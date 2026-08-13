@@ -12,8 +12,8 @@ source_message_anchor: pipeline-qc
 source_message_excerpt: "goal is not done until QC of both, and QC of entire pipeline."
 source_message_proof_obligation: Proves the cost model end-to-end by making the operator-visible TUI surface render measured tokens and accumulated session cost from the typed event stream — the pipeline's final consumer.
 idempotency_contract: idempotent — TUI state additions; re-application overwrites the same struct/function regions.
-blocked_reason: "The source implementation is present, but the active installed binary has a different hash and is owned by a running operator TUI/kernel pair. The isolated broad graph also retains three failures."
-unblock_action: "After the active installed pair exits, finish the isolated broad failures, install the current ReleaseFast binary, run one priced and one unpriced live provider turn, read back turn_finished v2, and verify /status totals."
+blocked_reason: "The source implementation, pinned Debug/ReleaseFast graph, focused TUI graph, and hash-matched installed artifact are present. The remaining gate is one real installed provider consumer run: priced and unpriced turns, event-ledger readback, and /status totals."
+unblock_action: "Using the current installed ReleaseFast binary, run one priced and one unpriced live provider turn, read the unified turn_terminal.v1 payload from events.jsonl, confirm the measured fields and accumulated /status projection, then execute 035h QC."
 resumption_point: "Post-flight validation of the existing recordTurnTelemetry and renderStatus implementation; do not reimplement the source slice."
 ---
 
@@ -95,7 +95,7 @@ Test access: follow the existing pattern used for TUI unit tests — check how `
 
 **Manual proof (pipeline QC):** run the installed owner/TUI flow against the z.ai provider, complete a turn, verify `var1.turn_terminal.v1` carries the cost fields in `events.jsonl`, and `/status` shows the cost line.
 
-## Source evidence (installed proof pending, 2026-08-12)
+## Source evidence (installed provider proof pending, refreshed 2026-08-13)
 
 - Source gate cleared on committed HEAD `5323166`: the broad graph passes 19/19
   steps and 1959/1959 tests. This does not clear the installed-provider proof
@@ -104,8 +104,8 @@ Test access: follow the existing pattern used for TUI unit tests — check how `
 - TUI parses the unified terminal payload: `recordTurnTelemetry` captures `prompt_tokens/completion_tokens/cached_tokens/cost_total_usd` (tui_chat.zig); `/status` renders the session cost line (commands.zig `renderStatus`).
 - New TUI telemetry tests pass: priced-cost accumulation across two turns (0.0001 + 0.0002 = 0.0003), null-cost leaves `has_session_cost` false, `turn_started` refreshes window estimate without accumulating cost.
 
-**Remaining gate:** preserve the active installed owner pair, then install the
-matching ReleaseFast binary when that pair exits. Run one priced and one
-unpriced provider turn, read the unified terminal payload from `events.jsonl`,
-and confirm the accumulated `/status` projection. Do not archive on source-test
+**Remaining gate:** run one priced and one unpriced provider turn through the
+current installed ReleaseFast binary, read the unified terminal payload from
+`events.jsonl`, and confirm the accumulated `/status` projection. The binary
+hash and process-cleanup gate are already closed; do not archive on source-test
 evidence alone.

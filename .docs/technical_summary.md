@@ -93,7 +93,7 @@ health response. Clients reject stale state, protocol drift, workspace mismatch,
 generation mismatch, and another executable. This source path survives
 presentation detach and recovers once after graceful stop or owner crash. It
 now reconstructs one persisted ticket child on the same session after lease
-expiry; Move 30 still must prove that path through an installed forced kill.
+expiry; Move 30 proves that path through source and installed forced-kill runs.
 
 ## Buffered ticket execution
 
@@ -131,8 +131,8 @@ existing nonterminal session appends one revision-fenced `resume`, replaces only
 worker generation and lease, and submits the immutable receipt's same group,
 task, session, attempt, capability, transcript, and mailbox cursor. A missing
 session alone appends `requeue`. Cold receipt reconstruction defers active
-ticket-owned sessions instead of writing `StaleAgentOwner`. Chain 036 remains
-pending for installed kill/restart proof.
+ticket-owned sessions instead of writing `StaleAgentOwner`. Chain 036 is
+archived after source and installed lifecycle proof.
 
 ## Agent eligibility
 
@@ -175,8 +175,9 @@ claim and child session are durable. Neither path appends collaboration content
 to `messages.jsonl`; the old convergence-specific transcript append and bespoke
 `ticket_claimed` event are removed. Same-session owner recovery preserves the
 existing recipient event spine and cursor; replay adds neither another delivery
-nor another cursor. Move 30 passes the composed source Windows restart/delivery
-mesh; its hash-matched installed run remains open.
+nor another cursor. Move 30 passes the composed source and installed Windows
+restart/delivery mesh; its hash-matched installed run passes with final
+zero-process cleanup.
 
 ## TUI projection contract
 
@@ -311,12 +312,10 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   and torn rows, and append refusal preserved the poisoned 107-byte ledger
   exactly. No CRC fields, sidecar quarantine ledger, auto-truncation path, or
   repair daemon was added.
-- The last installed-proven move-19 artifact remains SHA-256
-  `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
-  Current source ReleaseFast is
+- The current source ReleaseFast and installed artifact share SHA-256
   `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`.
-  Replacement is blocked while operator-owned installed PIDs 12028 and 14452
-  remain active; source/installed equality is not claimed.
+  Move 38 installation, owner lifecycle, and ticket lifecycle promotion all
+  pass; the final installed process census is zero.
 - Installed `session/send` against a disposable local provider imported all
   1,176 legacy summary rows, appended one terminal v2 row, retained 1,177
   unique sequences, wrote contiguous unique `user,assistant,tool,assistant`
@@ -333,8 +332,8 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
   returned `requested` and exited with zero process. Its legacy terminal name is
   retained only as historical proof; move 19 removed that writer.
-- Moves 5–20, 22–29, and 31 plus findings 10 and 13 are closed. Moves 21 and 30
-  are source-complete and await the installed replacement gate. Six synchronized 100-way probes cover
+- Moves 5–31 and 38 plus findings 10, 11, and 13 are closed. Six synchronized
+  100-way probes cover
   admission, summary, message, event, tracked-TUI replay, and shutdown. The
   latest Debug and ReleaseFast graphs pass 1,953/1,953. The native two-kernel admission
   proof retains one schedule attempt, one ticket claim, and one matching child
@@ -342,7 +341,8 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   same durable session. The source Windows lifecycle mesh then proves queue-only
   assignment, TUI detach, exact owner/kernel tree death, lease expiry, a new
   generation, one same-session resume, nested collaboration, one completed ticket,
-  and final zero processes. Hash-matched installed owner-kill proof remains P0.
+  and final zero processes. Arbitrary external-effect certainty remains a
+  separate P0 boundary.
 - Move 26 ships the hive's source mailbox: durable direct/group/parent delivery,
   selective summary/artifact references, nested normal sessions, queue/wake
   intent, and a restart-readable unread cursor. Move 27 adds route-resolved,
@@ -355,10 +355,11 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   139-segment audit finds zero exact duplicates. Move 30's source process tracer
   records one claim, one resume, two nested children, direct/group/parent delivery,
   six unique received messages, and zero transcript copies at
-  `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`.
+  `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`; the installed
+  lifecycle root is `.zig-cache/owner-proofs/825a25155fa64fe78b26a47789025ec9`.
   Failed and cancelled terminal sessions project `repair_required`; repair closure
   still requires approval, exact rerun, and regression evidence. The installed
-  run remains open. Move 62 retains arbitrary external-effect certainty.
+  run passes. Move 62 retains arbitrary external-effect certainty.
 - `git diff --check` exits 0 with line-ending warnings only.
 
 See [`research/2026-08-12-full-harness-sitrep.md`](research/2026-08-12-full-harness-sitrep.md)

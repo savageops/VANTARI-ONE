@@ -2311,3 +2311,62 @@ own causal repair promotion.
 **Next todo:** preserve the active installed pair; run duplicate-owner audit and
 checkpoint this source result. Execute the same tracer against the installed path
 after those processes exit naturally.
+
+## 2026-08-13 - Move 30 installed promotion and 036h terminal closure
+
+**State:** closed.
+
+**Proof:**
+
+- Installed `vantari.exe` was replaced through `apps/backend/scripts/install_windows.ps1`
+  after the operator-owned process pair exited. The installed SHA-256 matches the
+  current ReleaseFast artifact:
+  `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`.
+- The installed ticket lifecycle mesh passes at
+  `.zig-cache/owner-proofs/825a25155fa64fe78b26a47789025ec9`: queue-only
+  assignment, owner detach, exact tree death, generation replacement,
+  same-session resume, nested direct/group/parent delivery, cold ticket/session/
+  message readback, terminal settlement, and final zero processes.
+- Independent installed owner lifecycle passes at
+  `.zig-cache/owner-proofs/9cc5d7b8a1624e49937cb3b78716e1bb`; the installed
+  owner tracer passes at `.zig-cache/owner-proofs/65df1918745748ae9736cd9ba438fb13`.
+- Pinned Zig Debug/ReleaseFast graphs pass 19/19 and 1,953/1,953; focused TUI
+  passes 9/9 and 61/61. The 10-file 139-segment duplicate audit reports zero
+  exact duplicates. No proof-owned `vantari.exe` process remains.
+
+**Closure:** Move 21, Move 30, Move 38, finding 11, and parent ticket 036 are
+closed. The new `036h-ticket-agent-pool-and-repair-terminal-review.md` and the
+036 parent are archived. The remaining boundary is arbitrary external-effect
+  certainty, owned by the write-intent and self-repair roadmap; this closure does
+  not claim exactly-once effects outside VANTARI's ledgers.
+
+**Next todo:** Move 32 — repair stale pending/archive manifests and current
+frontier records before advancing the next capability slice.
+
+## 2026-08-13 - Move 32 documentation and frontier reconciliation
+
+**State:** closed.
+
+**Changed:**
+
+- Corrected the 021 parent manifest: 021a and 021b now point to their archived
+  files, while 021c is the sole active frontier.
+- Archived 036 and 036h are now the current ticket-chain records; finding 11,
+  Move 21, Move 30, and Move 38 carry installed proof rather than source-only
+  or active-process wording.
+- Reconciled `.docs/workspace.json`, the findings index, technical summary,
+  root/backend READMEs, architecture, research, roadmap, and current changelog
+  with the installed hash and zero-process evidence.
+- Kept dedicated installed eligibility/capacity snapshot probes explicitly
+  unrun; the composed ticket lifecycle proof does not inflate those claims.
+
+**Proof:** `.docs/workspace.json` parses with
+`installed_hash_matches: true`; source and installed SHA-256 are
+`F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`; the
+filesystem has 021a/021b and 036/036h in changelog, 021c pending, no 036 parent
+in pending, and zero active `vantari.exe` processes. The stale-frontier probe
+finds no current-state references to the old installed PIDs or open 036/finding
+11 gates outside historical receipts.
+
+**Next todo:** Move 33 — execute 021c Codex OAuth login, persistence, refresh,
+logout, and sanitized CLI status through the canonical auth ledger.

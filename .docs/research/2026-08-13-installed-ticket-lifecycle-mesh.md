@@ -139,11 +139,20 @@ regression evidence. Moves 71-80 own the actual self-repair promotion loop; Move
 ## Installed promotion gate
 
 The tracer can run against a source-built ReleaseFast artifact without touching
-the operator's active installation. That result is source Windows proof only.
-Move 30 closes only when the same script runs against
-`%LOCALAPPDATA%\Vantari\bin\vantari.exe`, its SHA-256 equals the current
-ReleaseFast source artifact, the noninteractive TUI detach boundary passes, and
-the installed process count returns to zero.
+the operator's active installation. Move 30's installed promotion gate passed
+on 2026-08-13: the same script ran against
+`%LOCALAPPDATA%\Vantari\bin\vantari.exe`, its SHA-256 equaled the current
+ReleaseFast source artifact, the noninteractive TUI detach boundary passed, and
+the installed process count returned to zero.
+
+Installed evidence:
+
+- ticket lifecycle: `.zig-cache/owner-proofs/825a25155fa64fe78b26a47789025ec9`;
+- owner lifecycle: `.zig-cache/owner-proofs/9cc5d7b8a1624e49937cb3b78716e1bb`;
+- owner tracer: `.zig-cache/owner-proofs/65df1918745748ae9736cd9ba438fb13`;
+- source and installed SHA-256:
+  `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`;
+- final installed process census: zero `vantari.exe` processes.
 
 ## Source Windows result
 
@@ -214,10 +223,9 @@ repair. No proof-only owner branch or alternate process runtime remains.
 
 ## Current boundary
 
-This is source Windows proof, not installed promotion. Installed SHA-256 remains
-`5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
-Operator-owned installed PIDs 12028 and 14452 remain active and untouched. Move
-30, finding 11, and parent ticket 036 remain open until those processes exit, the
-current source artifact is installed atomically, the same tracer passes through
-that installed path, source and installed hashes match, and a new terminal review
-archives.
+Source and installed ReleaseFast artifacts match at SHA-256
+`F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`.
+Move 30, finding 11, and parent ticket 036 are closed by the installed run and
+the 036h terminal review. The remaining boundary is arbitrary external-effect
+certainty, which belongs to the write-intent and self-repair roadmap rather than
+to owner or ticket lifecycle recovery.

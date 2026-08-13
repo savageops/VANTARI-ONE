@@ -35,7 +35,7 @@ This directory contains project records, research, planning chains, and complete
 - [`research/2026-08-13-installed-ticket-lifecycle-mesh.md`](research/2026-08-13-installed-ticket-lifecycle-mesh.md) — Move 30 composed Windows process tracer, detached-owner crash repair, source restart/mailbox proof, and hash-matched installed promotion boundary.
 - [`todo/findings/00-INDEX.md`](todo/findings/00-INDEX.md) — executable P0/P1/P2 closure order; current authority over older completion claims.
 - [`roadmap/24-harness-capability-next-90.md`](roadmap/24-harness-capability-next-90.md) — 90 dependency-ordered moves ranked by operator value, capability leverage, integrity risk, and friction removed.
-- [`roadmap/21-persistent-execution-owner.md`](roadmap/21-persistent-execution-owner.md) — source-complete single-owner lifecycle: reconnect, duplicate exclusion, graceful/crash recovery, process cleanup, and blocked installed gate.
+- [`roadmap/21-persistent-execution-owner.md`](roadmap/21-persistent-execution-owner.md) — closed single-owner lifecycle: reconnect, duplicate exclusion, graceful/crash recovery, process cleanup, and installed proof.
 - [`roadmap/20-adversarial-concurrency-mesh.md`](roadmap/20-adversarial-concurrency-mesh.md) — closed six-seam 100-way contention mesh with exact ledger, replay, and shutdown evidence and no new harness.
 - [`roadmap/19-single-terminal-event.md`](roadmap/19-single-terminal-event.md) — closed single-settlement contract, seven-source harvest, generation binding, cold-start validation, and installed Windows proof.
 - [`roadmap/18-generation-bound-cancellation.md`](roadmap/18-generation-bound-cancellation.md) — closed exact-run cancellation contract, seven-source harvest, stale-generation race, and installed Windows proof.
@@ -43,6 +43,7 @@ This directory contains project records, research, planning chains, and complete
 - [`research/2026-08-09-tui-status-surface-and-repair-loop.md`](research/2026-08-09-tui-status-surface-and-repair-loop.md) — compact TUI telemetry, durable summary projection, and repair-loop boundary.
 - [`research/2026-08-10-ticket-agent-pool-and-repair-queue.md`](research/2026-08-10-ticket-agent-pool-and-repair-queue.md) — buffered ticket admission, fixed agent capacity, leases, and stale-owner repair.
 - Runtime access boundary — `runtime.full_access_mode` is default-off, validated, and projected through one shared path resolver; the technical owner is recorded in [`technical_summary.md`](technical_summary.md) and [`workspace.json`](workspace.json).
-- [`todo/changelog/036g-ticket-agent-pool-and-repair.md`](todo/changelog/036g-ticket-agent-pool-and-repair.md) — historical ticket/pool closeout receipt. The 2026-08-12 audit supersedes its production-complete conclusion. Moves 21–29 close source mechanics; Move 30 now passes the composed source Windows process mesh. Hash-matched installed parity and the new terminal review remain open.
+- [`todo/changelog/036-ticket-agent-pool-and-repair.md`](todo/changelog/036-ticket-agent-pool-and-repair.md) — archived parent receipt for the ticket/pool chain; 036h closes the reopened installed lifecycle review.
+- [`todo/changelog/036h-ticket-agent-pool-and-repair-terminal-review.md`](todo/changelog/036h-ticket-agent-pool-and-repair-terminal-review.md) — installed owner/ticket lifecycle, source graph, hash equality, process census, and documentation terminal review.
 
 Historical or nested archival records remain in place. Do not treat them as the current owner when a source module or this index names a newer contract.

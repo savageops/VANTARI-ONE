@@ -7,7 +7,7 @@ category: feature
 status: pending
 next_todo: /todo/pending/021c-codex-subscription-auth.md
 epic_boundary: "Add Codex subscription authentication to VAR1 by extending the canonical `.var/auth/auth.json` ledger, resolver, login flow, and provider transport without introducing a second auth store."
-subtodo_start: /todo/pending/021a-codex-subscription-auth.md
+subtodo_start: /todo/changelog/021a-codex-subscription-auth.md
 subtodo_final: /todo/pending/021f-codex-subscription-auth.md
 continuation: "After each completed execution unit: record evidence, set status done, move to /todo/changelog/, continue immediately to next_todo. Never batch-archive. Never pause between units."
 ---
@@ -74,14 +74,16 @@ The current VAR1 runtime already persists provider API-key state under `.var/aut
 | File | Phase | Role | Status |
 |------|-------|------|--------|
 | `/todo/pending/021-codex-subscription-auth.md` | parent | Chain root | pending |
-| `/todo/pending/021a-codex-subscription-auth.md` | a | Baseline / contract lock | pending |
-| `/todo/pending/021b-codex-subscription-auth.md` | b | Auth ledger schema and resolver | pending |
+| `/todo/changelog/021a-codex-subscription-auth.md` | a | Baseline / contract lock | archived |
+| `/todo/changelog/021b-codex-subscription-auth.md` | b | Auth ledger schema and resolver | archived |
 | `/todo/pending/021c-codex-subscription-auth.md` | c | Codex OAuth login and CLI surfaces | pending |
 | `/todo/pending/021d-codex-subscription-auth.md` | d | Codex subscription provider transport | pending |
 | `/todo/pending/021e-codex-subscription-auth.md` | e | Docs, fixtures, and operator status hardening | pending |
 | `/todo/pending/021f-codex-subscription-auth.md` | f | Verification / closeout | pending |
 
-Chain is complete when all rows read `archived` and all files are in `/todo/changelog/`.
+Units 021a and 021b are archived with evidence. The active frontier is 021c;
+the chain is complete when 021c-021f also read `archived` and all files are in
+`/todo/changelog/`.
 
 ## Phase Plan
 
@@ -103,4 +105,4 @@ Chain is complete when all rows read `archived` and all files are in `/todo/chan
 - Evidence format expected: exact command, exit code, and stdout excerpt for each validation command.
 
 ## Next todo
-`/todo/pending/021a-codex-subscription-auth.md`
+`/todo/pending/021c-codex-subscription-auth.md`

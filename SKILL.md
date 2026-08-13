@@ -80,9 +80,9 @@ requires source/installed SHA-256 equality and the installed consumer path.
   same-session resume, nested direct/group/parent delivery, one terminal ticket,
   and zero proof-owned processes. Failure and cancellation project
   `repair_required`; closure still requires approval, exact rerun, and regression
-  evidence. Installed hash-matched worker-kill/restart proof remains open;
-  exactly-once external effects remain behind the write-intent ledger. Do not
-  infer either from source-only proof.
+  evidence. Installed hash-matched worker-kill/restart proof passes through the
+  real binary; exactly-once external effects remain behind the write-intent
+  ledger. Do not infer arbitrary external-effect certainty from lifecycle proof.
 
 Read `README.md`, `apps/backend/architecture.md`, and
 `.docs/roadmap/24-harness-capability-next-90.md` for deeper contracts.

@@ -1,7 +1,7 @@
 ---
 type: architecture-decision
 id: roadmap-21-persistent-execution-owner
-status: in_progress
+status: closed
 source_state: complete
 updated: 2026-08-13
 owners:
@@ -253,10 +253,10 @@ Do not implement detach/restart policy until this path passes.
 | Duplicate-start pressure | passed | `prove-owner-lifecycle.ps1` reports 20/20 clients against one first owner/kernel; foreground `serve` rejects a duplicate with `code=AlreadyRunning`. Final lifecycle root: `.zig-cache/owner-proofs/a9035dcbf5e945c7942a46885c896458`. |
 | Stale-owner recovery | passed for owner lifecycle | Graceful stop and forced owner death each produce one new generation. Forced crash leaves the owner and Job-owned kernel at zero before recovery. Running-turn exactly-once reconciliation remains move 29. |
 | Shutdown cleanup | passed | Connection jobs drain, child stdin closes, Job cleanup completes, and the lifecycle tracer reports `final_zero_processes: true`. |
-| Canonical graph | passed | Pinned Zig 0.15.1: current graph 19/19 steps and 1,933/1,933 tests, including stalled-owner socket-deadline, explicit-workspace precedence, retired-launcher, owner-submission, shared process-lock, scheduler race, ticket-ledger exclusion, deterministic-session, and assignment-only falsifiers; all 53 declared registry cases execute; final ReleaseFast 9/9. |
+| Canonical graph | passed | Pinned Zig 0.15.1: current graph 19/19 steps and 1,953/1,953 tests, including stalled-owner socket-deadline, explicit-workspace precedence, retired-launcher, owner-submission, shared process-lock, scheduler race, ticket-ledger exclusion, deterministic-session, and assignment-only falsifiers; all declared registry cases execute; final ReleaseFast 9/9. |
 | Duplicate ownership | passed | GGUF audit inspected 110 segments across nine owner-adjacent files: two import/declaration adjacency candidates, zero exact duplicates, and no second lifecycle, workspace, transport, or process-tree owner. |
-| Source artifact | passed | Current `zig-out/bin/vantari.exe` SHA-256 is `77A2B111DCA35AA08E4D33973D83AB2FB9783E6C4D423A09611D24F0EE3142FD`; hidden-owner tracer root `.zig-cache/owner-proofs/9de64f4dbfe9483684875605ad39de10` remains the owner-path proof, and scheduler/ticket root `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1` proves the current two-kernel admission slice. |
-| Installed Windows proof | blocked | Installed SHA-256 remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`. Operator-owned installed TUI PID 12028 and kernel PID 14452 remain active; replacement is move 38 after natural exit. |
+| Source artifact | passed | Current source ReleaseFast SHA-256 is `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`; source owner/ticket proofs remain retained under `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`, and the installed artifact matches this hash. |
+| Installed Windows proof | passed | Installed SHA-256 matches `F1CAE59A9562A9610478D74AF6D7EF8F2C68E9764BBE91A7E277491958AAA727`. Owner lifecycle, ticket lifecycle, and owner tracer pass at `.zig-cache/owner-proofs/9cc5d7b8a1624e49937cb3b78716e1bb`, `.zig-cache/owner-proofs/825a25155fa64fe78b26a47789025ec9`, and `.zig-cache/owner-proofs/65df1918745748ae9736cd9ba438fb13`; final process census is zero. |
 
 ## Rollback
 

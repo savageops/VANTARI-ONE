@@ -11,10 +11,11 @@ source: ../../research/2026-08-12-full-harness-sitrep.md
 This ledger converts the full-harness SITREP into executable work. Closed work
 owns request lifetime, test roots, summary/message sequencing, exact event
 transport and TUI replay, one valid-prefix ledger contract, and generation-bound
-cancellation. Move 21 is source-complete: one project-local execution owner now
-survives presentation detach and excludes duplicate starts. Finding 11 remains
-open for installed owner-crash proof and remaining multi-process writer
-authority; source reconciliation is closed by Move 29. Move 23 closes scheduler
+cancellation. Move 21 is source and installed proven: one project-local
+execution owner now survives presentation detach and excludes duplicate starts.
+Finding 11 is closed by the hash-matched installed owner/ticket lifecycle
+meshes and 036h terminal review; source reconciliation is closed by Move 29.
+Move 23 closes scheduler
 leadership; move 24 closes ticket claim/lease/child admission split-brain; move
 25 proves queue-only assignment and deletes the dead ticket-policy surface.
 Move 26 closes the sequence-addressed direct/group/parent mailbox in source.
@@ -23,10 +24,11 @@ receipt without adding a selector runtime. Move 28 closes fixed-pool capacity
 truth and idle-boundary config refresh without adding a second pool or ledger.
 Move 29 closes generation-fenced same-session owner recovery in source without
 a second lease store, copied mailbox cursor, or unconditional requeue. Move 30
-now composes those owners through a source-built Windows crash/restart mesh:
-assignment, claim, detach, exact tree death, generation replacement, nested
-mailbox delivery, terminal settlement, and zero-process cleanup pass. Finding 11
-stays open until the hash-matched installed run and terminal review pass.
+now composes those owners through source and installed Windows crash/restart
+meshes: assignment, claim, detach, exact tree death, generation replacement,
+nested mailbox delivery, terminal settlement, cold readback, and zero-process
+cleanup pass. Finding 11 is closed by the hash-matched installed run and 036h
+terminal review.
 
 [`../../roadmap/24-harness-capability-next-90.md`](../../roadmap/24-harness-capability-next-90.md) expands this ledger into the current 90-move execution order. This findings index remains the immediate P0/P1/P2 authority; roadmap 24 sequences the downstream capability and friction-removal work behind it.
 
@@ -35,7 +37,7 @@ Execute one item at a time in priority and numeric order. Do not start PLUG, TUI
 | Order | Priority | Finding | Owner surface | Status |
 |---|---|---|---|---|
 | 10 | P0 | [Kernel lifetime and RPC admission](10-kernel-lifetime-and-rpc-admission.md) | host/stdio client and server | closed 2026-08-12 |
-| 11 | P0 | [Persistent agent worker and scheduler arbitration](11-persistent-agent-worker-and-scheduler-arbitration.md) | agents, scheduler, host | moves 21–29 source-complete/closed; pending move 30 installed proof |
+| 11 | P0 | [Persistent agent worker and scheduler arbitration](11-persistent-agent-worker-and-scheduler-arbitration.md) | agents, scheduler, host | closed 2026-08-13 after installed lifecycle mesh and 036h review |
 | 12 | P0 | [Test isolation and runtime hygiene](12-test-isolation-and-runtime-hygiene.md) | build/test root, install/state hygiene | closed 2026-08-12 |
 | 13 | P0 | [Concurrent ledgers and replay identity](13-concurrent-ledgers-and-replay-identity.md) | sessions, protocol, TUI cursor | closed 2026-08-12 |
 | 20 | P1 | [Tool capability truth](20-tool-capability-truth.md) | eval, DAP, TTSR, search, capability probes | pending |
@@ -54,7 +56,9 @@ The ledger closes only when:
 4. Every event consumer advances by ledger sequence.
 5. Built and installed ReleaseFast hashes match.
 6. A live provider/tool turn produces replayable session and event evidence.
-7. Chain 035 and reopened 036 pass a new terminal review; no pending parent claims complete.
+7. Chain 035 and reopened 036 pass a new terminal review; 036 now passes and is
+   archived, while 035 remains independently pending on its installed provider/
+   cost gate.
 
 ## Source-message proof
 
