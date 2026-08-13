@@ -412,7 +412,7 @@ fn boundedText(value: []const u8, max_len: usize) []const u8 {
 
 const TicketHarness = struct {
     store: tickets.TicketStore,
-    capacity_snapshot: tools.AgentCapacitySnapshot = .{ .max = 1, .available = 1 },
+    capacity_snapshot: tools.AgentCapacitySnapshot = tools.AgentCapacitySnapshot.fromCounts(1, 0, 0),
     launch_count: usize = 0,
     permanent_failure: bool = false,
     backpressure: bool = false,
@@ -629,7 +629,7 @@ test "scheduler dispatches oldest assigned ticket through the typed agent servic
     defer allocator.free(ticket_id);
     var harness = TicketHarness{
         .store = store,
-        .capacity_snapshot = .{ .max = 1, .available = 1 },
+        .capacity_snapshot = tools.AgentCapacitySnapshot.fromCounts(1, 0, 0),
     };
     var service = try Service.initWithAgentService(allocator, &config, .{ .context = null, .sendFn = provider.httpSend }, ticketHarnessAgentService(&harness));
     defer service.deinit();
@@ -680,7 +680,7 @@ test "scheduler leaves assigned tickets queued when supervisor capacity is full"
     defer allocator.free(ticket_id);
     var harness = TicketHarness{
         .store = store,
-        .capacity_snapshot = .{ .max = 1, .available = 0 },
+        .capacity_snapshot = tools.AgentCapacitySnapshot.fromCounts(1, 0, 1),
     };
     var service = try Service.initWithAgentService(allocator, &config, .{ .context = null, .sendFn = provider.httpSend }, ticketHarnessAgentService(&harness));
     defer service.deinit();
@@ -715,7 +715,7 @@ test "scheduler dispatches the oldest ticket first under partial capacity" {
     defer allocator.free(newest_id);
     var harness = TicketHarness{
         .store = store,
-        .capacity_snapshot = .{ .max = 2, .available = 1 },
+        .capacity_snapshot = tools.AgentCapacitySnapshot.fromCounts(2, 0, 1),
     };
     var service = try Service.initWithAgentService(allocator, &config, .{ .context = null, .sendFn = provider.httpSend }, ticketHarnessAgentService(&harness));
     defer service.deinit();
@@ -751,7 +751,7 @@ test "scheduler durably blocks permanent ticket launch failures" {
     defer allocator.free(ticket_id);
     var harness = TicketHarness{
         .store = store,
-        .capacity_snapshot = .{ .max = 1, .available = 1 },
+        .capacity_snapshot = tools.AgentCapacitySnapshot.fromCounts(1, 0, 0),
         .permanent_failure = true,
     };
     var service = try Service.initWithAgentService(allocator, &config, .{ .context = null, .sendFn = provider.httpSend }, ticketHarnessAgentService(&harness));
@@ -786,7 +786,7 @@ test "scheduler preserves assignment across expected pool backpressure" {
     defer allocator.free(ticket_id);
     var harness = TicketHarness{
         .store = store,
-        .capacity_snapshot = .{ .max = 1, .available = 1 },
+        .capacity_snapshot = tools.AgentCapacitySnapshot.fromCounts(1, 0, 0),
         .backpressure = true,
     };
     var service = try Service.initWithAgentService(allocator, &config, .{ .context = null, .sendFn = provider.httpSend }, ticketHarnessAgentService(&harness));

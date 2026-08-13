@@ -1284,6 +1284,11 @@ fn handleEventsSubscribe(allocator: std.mem.Allocator) ![]u8 {
     });
 }
 
+/// Operator health projection / Join canonical Supervisor capacity and ticket
+/// ledger counts without taking scheduling authority. Why: clients need active,
+/// idle, queued, and admission truth from one read path. Preserves: unavailable
+/// capacity is explicit rather than a healthy zero pool. Evidence: Move 28 RPC
+/// projection tests.
 fn handleHealthGet(server: *Server) ![]u8 {
     var agent_pool_healthy = true;
     const capacity = server.agent_service.capacity() catch blk: {
@@ -1308,6 +1313,7 @@ fn handleHealthGet(server: *Server) ![]u8 {
         .agent_pool_max = capacity.max,
         .agent_pool_queued = capacity.queued,
         .agent_pool_running = capacity.running,
+        .agent_pool_idle = capacity.idle,
         .agent_pool_available = capacity.available,
         .tickets_unassigned = ticket_snapshot.unassigned,
         .tickets_assigned = ticket_snapshot.assigned,
@@ -1845,8 +1851,9 @@ fn noopReconcile(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8) anyerror!u
     return error.UnexpectedCall;
 }
 
+// Keep the health fixture internally coherent so projection tests catch drift.
 fn testHealthCapacity(_: ?*anyopaque) anyerror!tools.AgentCapacitySnapshot {
-    return .{ .max = 4, .queued = 2, .running = 1, .available = 3 };
+    return tools.AgentCapacitySnapshot.fromCounts(4, 2, 1);
 }
 
 const test_config = types.Config{
@@ -2107,7 +2114,8 @@ test "health/get projects Supervisor capacity and ticket ledger pressure" {
     try std.testing.expectEqual(@as(usize, 4), parsed.value.agent_pool_max);
     try std.testing.expectEqual(@as(usize, 2), parsed.value.agent_pool_queued);
     try std.testing.expectEqual(@as(usize, 1), parsed.value.agent_pool_running);
-    try std.testing.expectEqual(@as(usize, 3), parsed.value.agent_pool_available);
+    try std.testing.expectEqual(@as(usize, 3), parsed.value.agent_pool_idle);
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.agent_pool_available);
     try std.testing.expectEqual(@as(usize, 0), parsed.value.tickets_unassigned);
     try std.testing.expectEqual(@as(usize, 1), parsed.value.tickets_assigned);
     try std.testing.expectEqual(@as(usize, 0), parsed.value.tickets_in_progress);
@@ -2115,6 +2123,7 @@ test "health/get projects Supervisor capacity and ticket ledger pressure" {
     try std.testing.expectEqual(@as(usize, 0), parsed.value.tickets_completed);
     try std.testing.expectEqual(@as(usize, 0), parsed.value.tickets_closed);
     try std.testing.expect(parsed.value.ticket_ledger_healthy);
+    try std.testing.expect(std.mem.indexOf(u8, response, "agent_pool_idle") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "agent_pool_available") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "tickets_assigned") != null);
 }

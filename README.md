@@ -702,8 +702,12 @@ The setting is hot-loaded for the next turn and is available through the TUI Set
 Agent definitions may tune persona, route role, ticket ownership, checkpoint contract, autonomy, effort, and temperature. Omitted or `null` effort/temperature leaves the decision with VANTARI and the resolved route; configuration exposes capability, it does not replace the kernel's orchestration judgment.
 
 Ticket execution has no policy toggle. `assigned` appends queue state only; the
-scheduler may claim work after `agent_routes.max_concurrency` reports a free
-fixed-pool slot. Agent prompts can decide what work to admit and how to
+scheduler may claim work only when the fixed-pool projection reports nonzero
+`available` capacity. `running` is active work, `idle = max - running`, `queued`
+is admitted backlog, and `available = idle - queued` saturated at zero. A changed
+`agent_routes.max_concurrency` value replaces the same physical pool at its next
+idle boundary; active work drains under the actual prior ceiling. Agent prompts
+can decide what work to admit and how to
 orchestrate it, but they cannot skip the claim, lease, session, or terminal
 evidence boundary. Agents may complete owned tickets but never close them.
 

@@ -28,6 +28,10 @@ Move 27 closes model-selection drift: `agents {}` now projects only
 route-resolvable specialists plus current pool/team/communication state, binds
 the exact sorted snapshot to a receipt, and leaves collaboration posture to the
 active prompt.
+Move 28 closes capacity drift: one `AgentCapacitySnapshot.fromCounts` owner
+derives active, idle, queued, and admission headroom; the same physical pool
+applies changed config only at an idle boundary while busy projections retain
+the actual old ceiling.
 Move 25 closes assignment ambiguity: create-as-assigned and
 transition-to-assigned append queue state only, and the dead ticket execution
 policy is deleted.
@@ -65,6 +69,13 @@ policy is deleted.
 - [service.zig](../../../apps/backend/src/core/agents/service.zig) hot-loads the
   registry, filters failed routes, and reads the existing supervisor/session
   projections without adding a selector, registry, or team bus.
+- [module.zig](../../../apps/backend/src/core/tools/module.zig) owns the sole
+  capacity arithmetic; [supervisor.zig](../../../apps/backend/src/core/agents/supervisor.zig)
+  tracks submitted closures through their terminal persistence tail and replaces
+  the existing pool only after it becomes idle.
+- [agent_scale_test.zig](../../../apps/backend/tests/agent_scale_test.zig) drives
+  20 tasks through a three-worker ceiling, observes queued backlog, proves
+  `running <= max`, drains a live reduction, and applies one worker at release.
 - [roadmap move 21](../../roadmap/21-persistent-execution-owner.md) proves one
   owner/kernel generation across client detach, 20 concurrent clients,
   duplicate-start pressure, graceful stop, forced crash, and zero cleanup.
@@ -96,6 +107,9 @@ transcript, or message-created work lifecycle.
   receipt; changed or unavailable state changes the receipt and visible choices.
 - Quiet and hive prompts choose different collaboration actions through the same
   executor and tool runtime.
+- Configured active work never exceeds the physical pool ceiling; idle, queued,
+  and ticket-admission projections remain coherent through contention, release,
+  and config refresh.
 - Closing the TUI does not stop claimed work.
 - Killing the worker leaves a durable stale receipt; restarting reconciles and resumes or requeues exactly once.
 - Two concurrent kernels produce one lease winner and one LeaseUnavailable loser.
@@ -113,8 +127,11 @@ idempotent receipts, provider-failure replay, safe-boundary wake, ticket claim,
 and child-completion convergence pass in source without transcript replication.
 Route filtering, depth denial, queue-only pressure, receipt verification, and
 quiet-versus-hive prompt selection also pass through the canonical executor.
-Installed replacement and active-turn owner-crash/delivery reconciliation remain
-open; this finding stays pending.
+Configured capacity now passes Debug and ReleaseFast at 1,947/1,947 tests; a
+20-task tracer reaches three active calls, preserves backlog separately, drains
+under the old ceiling, and applies the reduced ceiling at idle. The 256-segment
+audit finds zero exact duplicates. Installed replacement and active-turn
+owner-crash/delivery reconciliation remain open; this finding stays pending.
 
 ## Source and salvage
 

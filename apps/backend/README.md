@@ -109,8 +109,12 @@ The `log_ticket` tool supports `create`, `transition` (with reason), and `list`.
 
 Assignment is queue admission. It does not launch an agent directly. The
 scheduler claims assigned tickets only when `agent_routes.max_concurrency`
-reports a free slot, then calls the existing `AgentService` and fixed-pool
-`Supervisor` path. No `tickets` config branch changes this state machine.
+projects nonzero `available` capacity, then calls the existing `AgentService` and
+fixed-pool `Supervisor` path. `running` is active work, `idle = max - running`,
+`queued` is admitted backlog, and `available = idle - queued` saturated at zero.
+A changed ceiling replaces the same physical pool at its next idle boundary;
+active work drains and reports the actual prior ceiling. No `tickets` config
+branch, second pool, or pending-capacity ledger changes this state machine.
 Heartbeats, leases, stale-owner requeue, terminal reconciliation, and repair
 evidence remain durable scheduler/ticket state.
 

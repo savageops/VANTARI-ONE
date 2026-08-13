@@ -41,6 +41,13 @@ only when consolidation or deletion cannot close the canonical consumer path.
 - Ticket execution semantics are not configurable. `agent_routes.max_concurrency`
   is the sole capacity setting; do not restore `tickets.auto_assign`,
   `tickets.proactive_workpool`, or another assignment-to-launch branch.
+- `AgentCapacitySnapshot.fromCounts` is the sole pool-count arithmetic owner.
+  `running` is active work, `idle = max - running`, `queued` is admitted backlog,
+  and `available = idle - queued` saturated at zero. Do not clamp `running` or
+  use `idle` as ticket admission headroom.
+- A changed `agent_routes.max_concurrency` value replaces the same physical pool
+  at its next idle boundary. A busy pool drains and reports its actual prior
+  ceiling; do not add a pending-capacity ledger, resizable pool, or second pool.
 - `apps/backend/src/core/scheduler/` claims assigned tickets only when `apps/backend/src/core/agents/supervisor.zig` reports fixed-pool capacity, then routes through `core/agents/service.zig`. Do not add a second worker registry or direct assignment launcher.
 - `apps/backend/src/shared/process_lock.zig` owns crash-released inter-process exclusion. A scheduler tick holds `.var/schedules/lease.lock`, publishes and reads back one nonzero generation in `lease.json`, and releases only after scheduled-job and ticket mutations finish. Do not restore read/check/write leadership or add a scheduler-local lock primitive.
 - `apps/backend/src/core/tickets/index.zig` serializes every ticket projection and mutation through `.var/tickets/ledger.lock`. One claim row commits revision, worker generation, lease, attempt, capability hash, and deterministic child-session identity before session materialization. Do not create a child before the winning claim append or add a second admission ledger.

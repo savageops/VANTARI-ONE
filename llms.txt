@@ -41,7 +41,9 @@ Rules:
   share one lease.
 - Tickets own work lifecycle. Assignment is queue admission, not execution.
 - agent_routes.max_concurrency is the sole ticket execution capacity setting;
-  there is no tickets execution-policy branch.
+  running is active, idle=max-running, queued is admitted backlog, and
+  available=idle-queued saturated at zero. A changed value replaces the same
+  pool at its next idle boundary; there is no tickets execution-policy branch.
 - messages.jsonl remains complete and append-only. context.jsonl is a model-visible
   checkpoint ledger, not a transcript.
 - Use typed tools and advertised availability. search_files requires iex.

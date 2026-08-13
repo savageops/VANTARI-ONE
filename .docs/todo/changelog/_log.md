@@ -2140,3 +2140,51 @@ move 29 owns owner-generation recovery; move 38 owns installed replacement.
 
 **Next todo:** move 28 — make configured fixed capacity govern active, idle, and
 queued projections under contention.
+
+## 2026-08-13 - Roadmap move 28 fixed-pool capacity truth
+
+**Changed:**
+
+- Added `AgentCapacitySnapshot.fromCounts` as the sole arithmetic owner for
+  `running`, `idle`, `queued`, and saturated ticket-admission `available`.
+  Eligibility, health, CLI, and TUI carry the additive values without owning
+  scheduling or recomputing capacity.
+- Made the sole `Supervisor` pool re-read `agent_routes.max_concurrency` at
+  capacity and launch boundaries. Submitted closure-tail accounting prevents
+  replacement while old work can still touch supervisor state; a busy pool
+  drains and reports its actual ceiling, then the next idle read replaces that
+  same pool.
+- Corrected impossible health/scheduler fixtures and the stale unit expectation
+  that clamped queued plus running work to `max`. Model-selected batches may
+  expose backlog above `max`; ticket claims still require `available > 0`.
+- Kept the TUI footer shape unchanged. Moves 41–45 own the minimal display; this
+  move supplies its canonical read model only.
+
+**Proof:**
+
+- The red tracer first failed on the missing `idle` field. Its landed 20-task
+  pressure reaches three simultaneous provider calls, observes queued backlog,
+  preserves `running <= max`, drains a live reduction under the old ceiling, and
+  applies max one after release.
+- Debug and ReleaseFast graphs pass 19/19 steps and 1,947/1,947 tests. ReleaseFast
+  build passes 9/9; source SHA-256 is
+  `6E6A80054C4982AA9F1D86E9415B2422A4F7B7670080795243A91818279A360A`.
+- GGUF duplicate-owner audit: eight files, 256 segments, 12 candidate pairs,
+  zero exact duplicates, and no second pool/capacity owner.
+- `git diff --check` exits 0 with line-ending warnings only. Installed SHA-256
+  remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
+  operator-owned PIDs 12028 and 14452 remain untouched.
+
+**Competitive decision:** Codex contributes active-slot reservation and bounded
+pending dispatch; Zig contributes the proven fixed run queue; pi, Eve, OpenAI
+Agents SDK, Google ADK, LangGraph, Claude Code, and Microsoft Agent Framework
+clarify the split between orchestration choice and execution ceiling. VANTARI
+keeps one pool and one projection while adding explicit idle/admission truth and
+safe live config convergence.
+
+**Boundary:** Move 28 is source-closed. It adds no worker roster, dynamic pool,
+pending-capacity ledger, scheduler policy, or footer expansion. Move 29 owns
+owner-generation crash recovery; move 38 owns installed replacement.
+
+**Next todo:** move 29 — persist heartbeat, owner generation, expiry, mailbox
+delivery cursor, and exactly-once resume-or-requeue reconciliation.

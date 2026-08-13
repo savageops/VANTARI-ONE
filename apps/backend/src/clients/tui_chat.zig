@@ -151,6 +151,7 @@ const ChatState = struct {
     agent_pool_max: usize = 0,
     agent_pool_queued: usize = 0,
     agent_pool_running: usize = 0,
+    agent_pool_idle: usize = 0,
     agent_pool_available: usize = 0,
     agent_pool_healthy: bool = false,
     agent_pool_known: bool = false,
@@ -376,12 +377,17 @@ const ChatState = struct {
         self.jumpToBottom();
     }
 
+    /// TUI health read model / Copy canonical pool and ticket projections into
+    /// frame state without admitting work. Why: later footer and Agent Hub views
+    /// must not recompute idle or queue semantics. Preserves: old kernels remain
+    /// parseable through additive defaults. Evidence: Move 28 telemetry test.
     fn applyHealthTelemetry(self: *ChatState, health: protocol.HealthGetResult) void {
         self.agent_pool_known = true;
         self.agent_pool_healthy = health.agent_pool_healthy;
         self.agent_pool_max = health.agent_pool_max;
         self.agent_pool_queued = health.agent_pool_queued;
         self.agent_pool_running = health.agent_pool_running;
+        self.agent_pool_idle = health.agent_pool_idle;
         self.agent_pool_available = health.agent_pool_available;
         self.tickets_assigned = health.tickets_assigned;
         self.tickets_in_progress = health.tickets_in_progress;
@@ -1726,6 +1732,7 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
         .agent_pool_max = parsed_health.value.agent_pool_max,
         .agent_pool_queued = parsed_health.value.agent_pool_queued,
         .agent_pool_running = parsed_health.value.agent_pool_running,
+        .agent_pool_idle = parsed_health.value.agent_pool_idle,
         .agent_pool_available = parsed_health.value.agent_pool_available,
         .agent_pool_healthy = parsed_health.value.agent_pool_healthy,
         .agent_pool_known = true,
@@ -4538,7 +4545,8 @@ test "tui footer projects canonical pool and buffered ticket pressure" {
         .agent_pool_max = 4,
         .agent_pool_queued = 2,
         .agent_pool_running = 1,
-        .agent_pool_available = 3,
+        .agent_pool_idle = 3,
+        .agent_pool_available = 1,
         .tickets_assigned = 2,
         .tickets_in_progress = 1,
         .ticket_ledger_healthy = true,
@@ -4546,7 +4554,8 @@ test "tui footer projects canonical pool and buffered ticket pressure" {
     try std.testing.expectEqual(@as(usize, 4), state.agent_pool_max);
     try std.testing.expectEqual(@as(usize, 2), state.agent_pool_queued);
     try std.testing.expectEqual(@as(usize, 1), state.agent_pool_running);
-    try std.testing.expectEqual(@as(usize, 3), state.agent_pool_available);
+    try std.testing.expectEqual(@as(usize, 3), state.agent_pool_idle);
+    try std.testing.expectEqual(@as(usize, 1), state.agent_pool_available);
     try std.testing.expectEqual(@as(usize, 2), state.tickets_assigned);
     try std.testing.expectEqual(@as(usize, 1), state.tickets_in_progress);
     try std.testing.expect(state.ticket_ledger_healthy);

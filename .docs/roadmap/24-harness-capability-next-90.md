@@ -73,8 +73,9 @@ advance the queue until the real installed consumer path proves it.
 | 25 | delete/add-tests | closed | Assignment remains a ledger-only transition for both create-as-assigned and unassigned-to-assigned paths: two assigned tickets produce zero claims, active sessions, or session records. Removed the four dead `tickets` execution-policy keys, loader, validation, and docs; `agent_routes.max_concurrency` is the sole capacity setting. One registry loop now executes all 53 declared cases instead of silently omitting ten. The graph passes 1,933/1,933; ReleaseFast is 9/9; the 94-segment audit found one adjacent import/declaration candidate, zero exact pairs, and no duplicate queue or execution owner. |
 | 26 | add/delete/consolidate | closed | One `events.jsonl` mailbox now owns direct, parent, and current-group delivery with bounded body/references, queue/wake intent, sender receipt, recipient sequence, and provider-success cursor. Child completion and ticket-claim notices use it; convergence-specific transcript injection and the bespoke claim event are deleted. Debug and ReleaseFast pass 1,943/1,943; ReleaseFast is 9/9; the 116-segment audit found five declaration/import adjacency candidates, zero exact pairs, and no second mailbox or convergence owner. Source SHA-256 is `227CDA755E5A7E7BC3152DA4653DAB6AF1630D1288BB0919CFA648F69618C654`; installed replacement remains move 38. |
 | 27 | consolidate/add-tests | closed | `agents {}` now returns one sorted `var1.agent_eligibility.v1` snapshot from the live `AgentService`: only route-resolvable specialists, stable unavailable classes, fixed-pool/team pressure, depth/contact bounds, communication targets/modes, and an exact SHA-256 receipt. Read-only eligibility projects configured idle capacity without starting worker threads; agent configuration invalidates prior eligibility. Removed always-on fan-out and first-call prompt mandates; quiet and hive profiles choose different actions through the same executor. Debug and ReleaseFast pass 1,946/1,946; ReleaseFast is 9/9; the final 115-segment audit finds one import/declaration adjacency candidate, zero exact pairs, and no second owner. Source SHA-256 is `8CB2B28182BE153458C211BBF5A500F1BCD1726BAAB517771C4939697CC72B42`; installed replacement remains move 38. |
+| 28 | consolidate/add-tests | closed | `AgentCapacitySnapshot.fromCounts` now solely derives running, idle, queued, and saturated ticket-admission headroom. Submitted closure tails fence idle-boundary replacement of the same physical pool; busy work drains under its actual ceiling. A 20-task probe reaches three active calls with visible backlog, preserves `running <= max`, then applies a live reduction to one after release. Debug and ReleaseFast pass 1,947/1,947; ReleaseFast is 9/9; the 256-segment audit finds 12 candidates, zero exact pairs, and no second capacity owner. Source SHA-256 is `6E6A80054C4982AA9F1D86E9415B2422A4F7B7670080795243A91818279A360A`; installed replacement remains move 38. |
 | 31 | delete/consolidate | closed | Retired prompt leak and brittle prose assertions removed; broad graph green. |
-| 38 | consolidate | reopened/pending | Historical install proof passed for an earlier artifact. Current ReleaseFast is `8CB2B28182BE153458C211BBF5A500F1BCD1726BAAB517771C4939697CC72B42`; installed remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`. Replace and rerun installed smokes only after operator-owned PIDs 12028/14452 exit naturally. |
+| 38 | consolidate | reopened/pending | Historical install proof passed for an earlier artifact. Current ReleaseFast is `6E6A80054C4982AA9F1D86E9415B2422A4F7B7670080795243A91818279A360A`; installed remains `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`. Replace and rerun installed smokes only after operator-owned PIDs 12028/14452 exit naturally. |
 
 ## Competitive basis
 
@@ -236,9 +237,9 @@ advance the queue until the real installed consumer path proves it.
 
 ## Immediate frontier
 
-Start at move 28. Moves 1-20 and 22-27 are closed; move 21 is source-complete
-and blocked only at installed replacement. Move 27 closes model-selected,
-route-resolved collaboration evidence; moves 28-30 finish capacity truth and
-crash reconciliation.
+Start at move 29. Moves 1-20 and 22-28 are closed; move 21 is source-complete
+and blocked only at installed replacement. Move 28 closes coherent fixed-pool
+capacity truth and idle-boundary config refresh without a second owner; moves
+29-30 finish owner-generation reconciliation and installed crash/restart proof.
 Do not spend implementation time on PLUG, context sharding, or autonomous repair
 while that band remains red.

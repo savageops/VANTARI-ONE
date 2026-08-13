@@ -402,6 +402,7 @@ pub const EligibilityState = struct {
     capacity_max: usize = 0,
     capacity_queued: usize = 0,
     capacity_running: usize = 0,
+    capacity_idle: usize = 0,
     capacity_available: usize = 0,
     team_groups: usize = 0,
     team_queued: usize = 0,
@@ -475,6 +476,7 @@ pub fn renderEligibilitySnapshot(
             .max = state.capacity_max,
             .queued = state.capacity_queued,
             .running = state.capacity_running,
+            .idle = state.capacity_idle,
             .available = state.capacity_available,
         },
         .team = .{

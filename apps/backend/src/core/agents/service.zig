@@ -365,10 +365,14 @@ fn nextBranchSeq(
     return max_seq + 1;
 }
 
+/// Configured capacity activation / Re-read the sole pool ceiling at every
+/// admission or health boundary. Why: the long-lived execution owner must not
+/// freeze the first Settings value. Preserves: Supervisor returns the actual
+/// busy ceiling until idle replacement is safe. Evidence: Move 28 config-refresh
+/// contention test.
 fn ensureSupervisorStarted(service: *Service, allocator: std.mem.Allocator) !usize {
     const max_concurrency = try config_file.loadAgentMaxConcurrency(allocator, service.config.workspace_root);
-    try service.supervisor.start(max_concurrency);
-    return max_concurrency;
+    return service.supervisor.start(max_concurrency);
 }
 
 fn readCapacity(service: *Service) !tools.AgentCapacitySnapshot {
@@ -408,6 +412,11 @@ fn eligibilityBlockReason(profile: profile_contract.CapabilityProfile, depth_rem
     return null;
 }
 
+/// Model eligibility projection / Join route-resolved specialists with the
+/// actual configured pool and current team state. Why: the model chooses from
+/// truthful active, idle, queued, and communication options. Preserves: an
+/// unused pool is not started by discovery. Evidence: Moves 27-28 eligibility
+/// receipt and capacity tests.
 fn renderEligibilitySnapshot(
     service: *Service,
     allocator: std.mem.Allocator,
@@ -418,7 +427,7 @@ fn renderEligibilitySnapshot(
     const profile = try profile_contract.resolveProfile(parent_profile_id);
     const block_reason = eligibilityBlockReason(profile, depth_remaining);
     const configured_max = try config_file.loadAgentMaxConcurrency(allocator, service.config.workspace_root);
-    const capacity = service.supervisor.capacityProjection(configured_max);
+    const capacity = try service.supervisor.capacityProjection(configured_max);
     const team = service.supervisor.waitParent(session_id, 0);
 
     var session = try store.readSessionRecord(allocator, service.config.workspace_root, session_id);
@@ -466,6 +475,7 @@ fn renderEligibilitySnapshot(
         .capacity_max = capacity.max,
         .capacity_queued = capacity.queued,
         .capacity_running = capacity.running,
+        .capacity_idle = capacity.idle,
         .capacity_available = capacity.available,
         .team_groups = team.groups,
         .team_queued = team.queued,
@@ -787,8 +797,7 @@ fn launchBatch(
         };
     }
 
-    const max_concurrency = try config_file.loadAgentMaxConcurrency(allocator, service.config.workspace_root);
-    try service.supervisor.start(max_concurrency);
+    const max_concurrency = try ensureSupervisorStarted(service, allocator);
     const group_id = try newGroupId(allocator);
     defer allocator.free(group_id);
     const parent_checkpoint_id = blk: {

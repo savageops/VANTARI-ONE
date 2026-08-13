@@ -166,6 +166,7 @@ pub const Supervisor = struct {
     pool: std.Thread.Pool = undefined,
     started: bool = false,
     max_concurrency: usize = 0,
+    pool_entries: usize = 0,
     groups: std.StringHashMapUnmanaged(*Group) = .{},
     parents: std.StringHashMapUnmanaged(*ParentState) = .{},
     event_sink: tools.AgentEventSink = .{},
@@ -173,15 +174,28 @@ pub const Supervisor = struct {
 
     const allocator = std.heap.page_allocator;
 
-    /// Start the fixed worker pool after the enclosing Service has a stable address.
-    pub fn start(self: *Supervisor, max_concurrency: usize) !void {
+    /// Fixed-pool activation / Start the one physical pool after Service has a
+    /// stable address and refresh its configured size only when no submitted
+    /// closure can still touch Supervisor state. Why: config remains effective
+    /// without a second pool or unsafe live replacement. Preserves: a busy pool
+    /// reports its actual ceiling until it drains. Evidence: Move 28
+    /// idle-boundary refresh and contention tests.
+    pub fn start(self: *Supervisor, max_concurrency: usize) !usize {
         if (max_concurrency == 0 or max_concurrency > 64) return Error.InvalidConcurrency;
         self.mutex.lock();
         defer self.mutex.unlock();
-        if (self.started) return;
+        if (self.started and self.max_concurrency == max_concurrency) return self.max_concurrency;
+        if (self.started) {
+            const active = self.activeCountsLocked();
+            if (self.pool_entries != 0 or active.queued != 0 or active.running != 0) return self.max_concurrency;
+            self.pool.deinit();
+            self.started = false;
+            self.max_concurrency = 0;
+        }
         try self.pool.init(.{ .allocator = allocator, .n_jobs = max_concurrency });
         self.max_concurrency = max_concurrency;
         self.started = true;
+        return self.max_concurrency;
     }
 
     pub fn deinit(self: *Supervisor) void {
@@ -333,13 +347,17 @@ pub const Supervisor = struct {
         return self.submitGroupInternal(input, &.{prepared_task}, true);
     }
 
+    /// Group admission / Publish one group into the sole Supervisor queue and
+    /// reserve closure-tail accounting before spawning. Why: pool replacement
+    /// must see queued work even between publication and worker entry.
+    /// Preserves: ticket groups require admission headroom while model-selected
+    /// batches may queue. Evidence: Move 28 contention test.
     fn submitGroupInternal(
         self: *Supervisor,
         input: GroupInput,
         prepared_tasks: []const *Task,
         require_capacity: bool,
     ) !void {
-        if (!self.started) return Error.InvalidConcurrency;
         if (prepared_tasks.len == 0) return Error.EmptyGroup;
 
         const group = try allocator.create(Group);
@@ -365,9 +383,12 @@ pub const Supervisor = struct {
         };
 
         self.mutex.lock();
+        if (!self.started) {
+            self.mutex.unlock();
+            return Error.InvalidConcurrency;
+        }
         if (require_capacity) {
-            const active = self.activeCountsLocked();
-            if (active.queued + active.running >= self.max_concurrency) {
+            if (self.capacityLocked().available == 0) {
                 self.mutex.unlock();
                 return Error.PoolFull;
             }
@@ -384,6 +405,7 @@ pub const Supervisor = struct {
             return err;
         };
         for (group.tasks) |task| task.group = group;
+        self.pool_entries += group.tasks.len;
         self.mutex.unlock();
 
         self.emitGroupEvent(group, "child_group_started") catch {};
@@ -394,6 +416,7 @@ pub const Supervisor = struct {
         for (group.tasks) |task| {
             self.pool.spawn(runTaskEntry, .{ self, task }) catch |err| {
                 self.finishTask(task, .failed, @errorName(err));
+                self.releasePoolEntry();
             };
         }
     }
@@ -612,24 +635,42 @@ pub const Supervisor = struct {
         return self.capacityLocked();
     }
 
-    /// Project configured idle capacity without starting worker threads. Once
-    /// started, the actual pool ceiling remains authoritative.
-    pub fn capacityProjection(self: *Supervisor, configured_max: usize) tools.AgentCapacitySnapshot {
+    /// Discovery capacity projection / Avoid starting an unused pool, but apply
+    /// changed config at an idle boundary once a physical pool exists. Why:
+    /// model discovery must see the same ceiling as health and launch without
+    /// manufacturing resident workers. Preserves: busy projections stay actual.
+    /// Evidence: Move 27 no-start and Move 28 config-refresh tests.
+    pub fn capacityProjection(self: *Supervisor, configured_max: usize) !tools.AgentCapacitySnapshot {
+        self.mutex.lock();
+        const was_started = self.started;
+        self.mutex.unlock();
+        if (was_started) _ = try self.start(configured_max);
+
         self.mutex.lock();
         defer self.mutex.unlock();
         if (self.started) return self.capacityLocked();
-        return .{ .max = configured_max, .available = configured_max };
+        return tools.AgentCapacitySnapshot.fromCounts(configured_max, 0, 0);
     }
 
+    /// Live capacity projection / Read active and queued task state while the
+    /// Supervisor mutex fixes one causal point. Why: every consumer must share
+    /// the same idle and admission arithmetic. Preserves: terminal tasks release
+    /// both projections. Evidence: Move 28 saturation and release tests.
     fn capacityLocked(self: *Supervisor) tools.AgentCapacitySnapshot {
         const active = self.activeCountsLocked();
-        const occupied = active.queued + active.running;
-        return .{
-            .max = self.max_concurrency,
-            .queued = active.queued,
-            .running = active.running,
-            .available = if (occupied < self.max_concurrency) self.max_concurrency - occupied else 0,
-        };
+        return tools.AgentCapacitySnapshot.fromCounts(self.max_concurrency, active.queued, active.running);
+    }
+
+    /// Pool-entry release / Mark one submitted closure unable to touch this
+    /// Supervisor again. Why: task lifecycle may become terminal before event
+    /// persistence returns. Preserves: pool replacement waits through that tail.
+    /// Evidence: Move 28 idle resize plus full shutdown tests.
+    fn releasePoolEntry(self: *Supervisor) void {
+        self.mutex.lock();
+        std.debug.assert(self.pool_entries > 0);
+        self.pool_entries -= 1;
+        self.mutex.unlock();
+        self.condition.broadcast();
     }
 
     fn activeCountsLocked(self: *Supervisor) ActiveCounts {
@@ -878,6 +919,7 @@ fn notifyMailboxDelivery(
 }
 
 fn runTaskEntry(supervisor: *Supervisor, task: *Task) void {
+    defer supervisor.releasePoolEntry();
     supervisor.mutex.lock();
     if (isTerminal(task.lifecycle)) {
         supervisor.mutex.unlock();
@@ -1371,6 +1413,7 @@ test "ticket capacity counts queued and running work and releases terminal tasks
     try std.testing.expectEqual(@as(usize, 3), snapshot.max);
     try std.testing.expectEqual(@as(usize, 1), snapshot.queued);
     try std.testing.expectEqual(@as(usize, 1), snapshot.running);
+    try std.testing.expectEqual(@as(usize, 2), snapshot.idle);
     try std.testing.expectEqual(@as(usize, 1), snapshot.available);
 
     queued.lifecycle = .completed;
@@ -1378,6 +1421,7 @@ test "ticket capacity counts queued and running work and releases terminal tasks
     snapshot = supervisor.capacity();
     try std.testing.expectEqual(@as(usize, 0), snapshot.queued);
     try std.testing.expectEqual(@as(usize, 0), snapshot.running);
+    try std.testing.expectEqual(@as(usize, 3), snapshot.idle);
     try std.testing.expectEqual(@as(usize, 3), snapshot.available);
 
     queued.lifecycle = .queued;
@@ -1385,6 +1429,7 @@ test "ticket capacity counts queued and running work and releases terminal tasks
     supervisor.max_concurrency = 1;
     snapshot = supervisor.capacity();
     try std.testing.expectEqual(@as(usize, 1), snapshot.max);
-    try std.testing.expectEqual(@as(usize, 1), snapshot.queued + snapshot.running);
+    try std.testing.expectEqual(@as(usize, 2), snapshot.queued + snapshot.running);
+    try std.testing.expectEqual(@as(usize, 0), snapshot.idle);
     try std.testing.expectEqual(@as(usize, 0), snapshot.available);
 }

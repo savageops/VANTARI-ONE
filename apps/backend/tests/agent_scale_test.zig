@@ -145,7 +145,7 @@ test "agent eligibility is deterministic and filters exhausted depth before laun
     try std.testing.expectEqualStrings(first, second);
     try std.testing.expect(std.mem.indexOf(u8, first, "var1.agent_eligibility.v1") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "\"eligible\":[{") != null);
-    try std.testing.expect(std.mem.indexOf(u8, first, "\"capacity\":{\"max\":6,\"queued\":0,\"running\":0,\"available\":6}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "\"capacity\":{\"max\":6,\"queued\":0,\"running\":0,\"idle\":6,\"available\":6}") != null);
     try std.testing.expectEqual(@as(usize, 0), service.supervisor.workerLimit());
 
     const config_path = try VAR1.core.config_file.path(allocator, workspace_root);
@@ -565,6 +565,97 @@ test "batch groups scale through one bounded pool at 1 5 20 and 100 tasks" {
         }
         try std.testing.expectEqual(task_count, receipt_count);
     }
+}
+
+// Prove that a config refresh changes the one physical pool at an idle
+// boundary and that backlog never becomes an active-worker count.
+test "configured capacity projects active idle and queued truth under contention" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try tmpWorkspacePath(allocator, &tmp, "configured-capacity");
+    defer allocator.free(workspace_root);
+    const config_path = try VAR1.core.config_file.path(allocator, workspace_root);
+    defer allocator.free(config_path);
+    try VAR1.shared.fsutil.writeText(config_path,
+        \\{"version":1,"agent_routes":{"max_concurrency":6}}
+    );
+
+    const config = try makeConfig(allocator, workspace_root);
+    defer config.deinit(allocator);
+    var transport_state = ScaleTransport{ .delay_ms = 30 };
+    var service = VAR1.core.agent_runtime.Service.initWithTransport(&config, .{
+        .context = &transport_state,
+        .sendFn = ScaleTransport.send,
+    });
+    defer service.deinit();
+    const handle = service.handle();
+
+    const initial = try handle.capacity();
+    try std.testing.expectEqual(@as(usize, 6), initial.max);
+    try std.testing.expectEqual(@as(usize, 6), initial.idle);
+    try std.testing.expectEqual(@as(usize, 6), initial.available);
+
+    try VAR1.shared.fsutil.writeText(config_path,
+        \\{"version":1,"agent_routes":{"max_concurrency":3}}
+    );
+    const refreshed = try handle.capacity();
+    try std.testing.expectEqual(@as(usize, 3), refreshed.max);
+    try std.testing.expectEqual(@as(usize, 3), refreshed.idle);
+    try std.testing.expectEqual(@as(usize, 3), refreshed.available);
+
+    var parent = try VAR1.core.session_store.initSession(allocator, workspace_root, "capacity parent");
+    defer parent.deinit(allocator);
+    var tasks: [20]VAR1.core.tool_runtime.AgentTaskRequest = undefined;
+    for (&tasks) |*task| task.* = .{
+        .agent_id = "planner",
+        .task = "Return one deterministic capacity fixture result.",
+    };
+    const launched = try handle.launchBatch(allocator, parent.id, "capacity contention", tasks[0..], .{
+        .scope_depth = 1,
+        .contact_budget = tasks.len,
+        .escalation_reason = "configured capacity contention proof",
+        .parent_capability_profile = "root",
+    });
+    defer allocator.free(launched);
+
+    var observed_contention = false;
+    var sample_count: usize = 0;
+    while (sample_count < 500) : (sample_count += 1) {
+        const snapshot = try handle.capacity();
+        try std.testing.expectEqual(@as(usize, 3), snapshot.max);
+        try std.testing.expect(snapshot.running <= snapshot.max);
+        try std.testing.expectEqual(snapshot.max - snapshot.running, snapshot.idle);
+        try std.testing.expectEqual((snapshot.max - snapshot.running) -| snapshot.queued, snapshot.available);
+        if (snapshot.running == snapshot.max and snapshot.queued > 0) {
+            observed_contention = true;
+            break;
+        }
+        std.Thread.sleep(std.time.ns_per_ms);
+    }
+    try std.testing.expect(observed_contention);
+
+    // A busy pool drains under its physical ceiling. The next idle capacity
+    // projection replaces that same pool with the newly configured ceiling.
+    try VAR1.shared.fsutil.writeText(config_path,
+        \\{"version":1,"agent_routes":{"max_concurrency":1}}
+    );
+    const draining = try handle.capacity();
+    try std.testing.expectEqual(@as(usize, 3), draining.max);
+    try std.testing.expect(draining.running <= draining.max);
+    try std.testing.expectEqual(draining.max - draining.running, draining.idle);
+    try std.testing.expectEqual((draining.max - draining.running) -| draining.queued, draining.available);
+
+    const terminal = try waitForParent(handle, parent.id);
+    try std.testing.expectEqual(tasks.len, terminal.completed);
+    try std.testing.expectEqual(@as(usize, 0), terminal.failed + terminal.cancelled);
+    const released = try handle.capacity();
+    try std.testing.expectEqual(@as(usize, 1), released.max);
+    try std.testing.expectEqual(@as(usize, 0), released.running);
+    try std.testing.expectEqual(@as(usize, 0), released.queued);
+    try std.testing.expectEqual(@as(usize, 1), released.idle);
+    try std.testing.expectEqual(@as(usize, 1), released.available);
+    try std.testing.expectEqual(@as(usize, 3), transport_state.max_active);
 }
 
 test "ticket claim notice uses mailbox evidence without transcript or bespoke event" {

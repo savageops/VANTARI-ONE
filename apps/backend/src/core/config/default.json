@@ -36,7 +36,7 @@
   },
   "agent_routes": {
     "_help": {
-      "max_concurrency": "Maximum in-process agent or model-task workers allowed to execute concurrently. Additional admitted tasks remain queued in the same parent-owned supervisor.",
+      "max_concurrency": "Maximum in-process agent or model-task workers allowed to execute concurrently. Additional admitted tasks remain queued in the same parent-owned supervisor. A changed value replaces the one physical pool at the next idle capacity boundary; active work drains under the actual prior ceiling.",
       "roles": "Optional operator-owned overrides keyed by general, recon, planning, compaction, implementation, review, or validation. Each role accepts provider_id, model, wire_api, thinking_mode, effort, temperature, context_window_tokens, and reserve_output_tokens. A provider_id references auth.json; credentials, execution kind, and capability profile never appear here."
     },
     "max_concurrency": 6,

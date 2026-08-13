@@ -165,6 +165,7 @@ pub const HealthGetResult = struct {
     agent_pool_max: usize = 0,
     agent_pool_queued: usize = 0,
     agent_pool_running: usize = 0,
+    agent_pool_idle: usize = 0,
     agent_pool_available: usize = 0,
     /// Ticket counts projected from the valid event prefix. A poisoned suffix
     /// preserves the prefix counts while making the health boundary visible.

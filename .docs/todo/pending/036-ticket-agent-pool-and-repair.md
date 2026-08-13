@@ -241,7 +241,7 @@ Every row above compounds the parent ratchet.
 
 [`../findings/11-persistent-agent-worker-and-scheduler-arbitration.md`](../findings/11-persistent-agent-worker-and-scheduler-arbitration.md)
 
-Moves 24–27 are closed in source. One shared ticket-ledger process lock serializes
+Moves 24–28 are closed in source. One shared ticket-ledger process lock serializes
 projection, revision validation, and append; the winning row commits lease,
 generation, capability, attempt, and deterministic child identity before one
 child is materialized. The two-kernel proof at
@@ -252,8 +252,13 @@ ticket policy is deleted; `agent_routes.max_concurrency` is the sole capacity
 setting. One sequence-addressed mailbox now owns bounded direct/group/parent
 delivery. One receipt-bound `agents {}` snapshot exposes only route-resolvable
 specialists plus current pool/team/communication state while quiet and hive
-prompts choose different actions through the same executor. Move 28 is next:
-make configured fixed capacity govern active, idle, and queued projections.
+prompts choose different actions through the same executor. One canonical
+capacity constructor now separates active, idle, queued, and ticket-admission
+headroom. A 20-task pressure probe holds active work at three, exposes backlog,
+drains a live config reduction under the old ceiling, then replaces the same pool
+at one worker. Debug and ReleaseFast pass 1,947/1,947; a 256-segment audit finds
+zero exact duplicates. Move 29 is next: persist owner-generation heartbeat,
+expiry, mailbox cursor, and exactly-once resume-or-requeue reconciliation.
 
 ## Stop Condition
 

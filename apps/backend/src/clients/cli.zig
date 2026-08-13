@@ -173,6 +173,7 @@ const ParsedHealthResult = struct {
     agent_pool_max: usize = 0,
     agent_pool_queued: usize = 0,
     agent_pool_running: usize = 0,
+    agent_pool_idle: usize = 0,
     agent_pool_available: usize = 0,
     tickets_unassigned: usize = 0,
     tickets_assigned: usize = 0,
@@ -969,10 +970,14 @@ fn executeHealthViaKernel(allocator: std.mem.Allocator, workspace_root: []const 
     try writeStdout(text_payload);
 }
 
+/// CLI health rendering / Preserve the kernel's distinct active, idle, queued,
+/// and admission counts in stable text output. Why: collapsing idle into
+/// available hides queued pressure. Preserves: JSON remains additive and older
+/// kernels parse with zero defaults. Evidence: Move 28 CLI projection test.
 fn formatHealthText(allocator: std.mem.Allocator, health: ParsedHealthResult) ![]u8 {
     return std.fmt.allocPrint(
         allocator,
-        "VAR1 health\nstatus: {s}\nmodel: {s}\neffort: {s}\nthinking_mode: {s}\ncontext_window_tokens: {d}\nreserve_output_tokens: {d}\nworkspace_root: {s}\nbase_url: {s}\nauth_provider: {s}\nsubscription_plan: {s}\nsubscription_status: {s}\nscheduler_supervisor: {s}\nagent_pool: {d}/{d} running, {d} available, {d} queued, status={s}\ntickets: {d} assigned, {d} in_progress, {d} blocked\nticket_ledger: {s}\n",
+        "VAR1 health\nstatus: {s}\nmodel: {s}\neffort: {s}\nthinking_mode: {s}\ncontext_window_tokens: {d}\nreserve_output_tokens: {d}\nworkspace_root: {s}\nbase_url: {s}\nauth_provider: {s}\nsubscription_plan: {s}\nsubscription_status: {s}\nscheduler_supervisor: {s}\nagent_pool: {d}/{d} running, {d} idle, {d} available, {d} queued, status={s}\ntickets: {d} assigned, {d} in_progress, {d} blocked\nticket_ledger: {s}\n",
         .{
             if (health.ok) "ready" else "unhealthy",
             health.model,
@@ -988,6 +993,7 @@ fn formatHealthText(allocator: std.mem.Allocator, health: ParsedHealthResult) ![
             if (health.scheduler_supervisor) "running" else "unavailable",
             health.agent_pool_running,
             health.agent_pool_max,
+            health.agent_pool_idle,
             health.agent_pool_available,
             health.agent_pool_queued,
             if (health.agent_pool_healthy) "healthy" else "unavailable",
@@ -1847,6 +1853,7 @@ test "cli health projection preserves pool and ticket pressure for installed con
         .agent_pool_max = 6,
         .agent_pool_queued = 2,
         .agent_pool_running = 3,
+        .agent_pool_idle = 3,
         .agent_pool_available = 1,
         .tickets_unassigned = 4,
         .tickets_assigned = 2,
@@ -1859,13 +1866,14 @@ test "cli health projection preserves pool and ticket pressure for installed con
 
     const rendered = try renderJsonAlloc(std.testing.allocator, health);
     defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "agent_pool_idle") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "agent_pool_available") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "tickets_blocked") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "ticket_ledger_healthy") != null);
 
     const text = try formatHealthText(std.testing.allocator, health);
     defer std.testing.allocator.free(text);
-    try std.testing.expect(std.mem.indexOf(u8, text, "agent_pool: 3/6 running, 1 available, 2 queued, status=healthy") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "agent_pool: 3/6 running, 3 idle, 1 available, 2 queued, status=healthy") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "tickets: 2 assigned, 3 in_progress, 1 blocked") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "ticket_ledger: healthy") != null);
 }

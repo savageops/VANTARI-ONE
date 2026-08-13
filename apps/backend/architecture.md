@@ -139,8 +139,11 @@ log_ticket transition(assigned)
 
 There is no second worker registry or ticket execution policy. Assignment is
 always a ledger-only admission; `agent_routes.max_concurrency` is the sole
-configured capacity ceiling. Health and client projections expose pool/queue
-pressure without taking ownership of scheduling.
+configured capacity ceiling. One canonical projection keeps `running` active
+work, `idle = max - running`, `queued` admitted backlog, and
+`available = idle - queued` saturated at zero. Ticket admission uses
+`available`, not `idle`. Health and clients carry those values without taking
+ownership of scheduling.
 
 ## Session message flow
 
@@ -382,10 +385,17 @@ Every session directory contains:
 
 `core/agents/service.zig` validates one `{ context, tasks[] }` batch, resolves routes, persists secret-free execution receipts, then admits the group to `core/agents/supervisor.zig`. The supervisor owns one fixed `std.Thread.Pool`, O(1) group/parent indexes, a completion condition, cancellation, terminal-event ordering, and idempotent mailbox-backed convergence. Healthy wait/status paths do not scan `.var/sessions`; ledger traversal is an explicit cold-start recovery path.
 
+`core/tools/module.zig:AgentCapacitySnapshot.fromCounts` owns pool arithmetic.
+The supervisor counts submitted closures through their terminal persistence tail,
+so a config refresh cannot replace a pool while an old closure can still touch
+supervisor state. A changed ceiling replaces the same physical pool only at an
+idle boundary. A busy pool drains and reports its actual prior ceiling; queued
+backlog remains visible and may exceed `max` for a model-selected batch.
+
 The project-local execution owner keeps this sole service/pool/scheduler
 composition alive across TUI and CLI detach. It does not make in-memory child
 work crash-resumable: owner death still requires the generation-fenced
-reconciliation assigned to moves 27–30. Move 23 closes scheduler leadership.
+reconciliation assigned to moves 29–30. Move 23 closes scheduler leadership.
 Move 24 closes ticket admission split-brain: `core/tickets` holds one shared
 process lock across projection, validation, and append; the winning claim row
 commits worker generation, lease, attempt, capability hash, and a deterministic
@@ -396,6 +406,8 @@ Move 27 replaces definition-only discovery and always-on fan-out prose with one
 route-resolved eligibility/team snapshot. A deterministic receipt binds current
 capacity, team, communication, depth, contact, eligible, and unavailable state;
 quiet and hive prompts select different actions through the same executor.
+Move 28 makes configured capacity truthful across eligibility, health, CLI, and
+TUI read models and proves a 20-task batch never exceeds the physical ceiling.
 
 `core/executor/loop.zig` parks a waiting parent on the supervisor condition without a provider call. The first unconsumed terminal child sends its bounded canonical summary through the parent mailbox, which wakes the parent, rebuilds through the context compiler, and permits the next routing/synthesis turn while unfinished siblings remain supervised. A parent cannot emit terminal output while any owned child remains active. Full specialists execute as ordinary isolated VAR1 child sessions. Tool-free `model_task` specialists use one provider turn and validate their supplied output schema without acquiring a second transcript or tool runtime.
 
@@ -545,7 +557,7 @@ The current validation lane should always prove these slices together:
 Latest local Windows validation on 2026-08-13:
 
 - ReleaseFast build -> 9/9 steps succeeded.
-- Isolated broad test graph -> 19/19 steps and 1943/1943 tests passed. The lower
+- Debug and ReleaseFast test graphs -> 19/19 steps and 1947/1947 tests passed. The lower
   total is intentional: 45 one-case registry wrappers were replaced by one loop
   that executes every one of the 53 declared cases, including ten that had no
   test declaration.
@@ -569,10 +581,15 @@ Latest local Windows validation on 2026-08-13:
   safe-boundary continuation, child-completion, and ticket-claim mailbox probes
   pass without transcript replication. The 116-segment audit found five
   declaration/import adjacency candidates and zero exact pairs.
+- Configured pool pressure reaches three active workers with queued backlog under
+  a 20-task probe, preserves `running <= max`, exposes coherent idle/admission
+  counts, drains under the old ceiling after a live reduction, then replaces the
+  same pool at one worker. An eight-file, 256-segment GGUF audit found 12
+  candidates, zero exact duplicates, and no second capacity owner.
 - Installed tools reports search_files unavailable because the required iex
   executable is absent.
 - Current source SHA-256 is
-  `227CDA755E5A7E7BC3152DA4653DAB6AF1630D1288BB0919CFA648F69618C654`.
+  `6E6A80054C4982AA9F1D86E9415B2422A4F7B7670080795243A91818279A360A`.
   Installed move-19 SHA-256 remains
   `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`;
   replacement waits for operator-owned PIDs 12028/14452 to exit naturally.

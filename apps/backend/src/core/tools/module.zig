@@ -184,7 +184,24 @@ pub const AgentCapacitySnapshot = struct {
     max: usize = 0,
     queued: usize = 0,
     running: usize = 0,
+    idle: usize = 0,
     available: usize = 0,
+
+    /// Capacity projection / Derive every pool count from one configured
+    /// ceiling. Why: idle workers and new-ticket admission are not the same
+    /// quantity when admitted work is queued. Preserves: running remains
+    /// unclamped so `running <= max` stays falsifiable. Evidence: Move 28
+    /// contention and health projection tests.
+    pub fn fromCounts(max: usize, queued: usize, running: usize) AgentCapacitySnapshot {
+        const idle = max -| running;
+        return .{
+            .max = max,
+            .queued = queued,
+            .running = running,
+            .idle = idle,
+            .available = idle -| queued,
+        };
+    }
 };
 
 /// One scheduler-admitted ticket carried into the canonical agent runtime.
@@ -1018,7 +1035,7 @@ fn testTicketLaunchCallback(
 }
 
 fn testCapacityCallback(_: ?*anyopaque) anyerror!AgentCapacitySnapshot {
-    return .{ .max = 4, .queued = 1, .running = 2, .available = 1 };
+    return AgentCapacitySnapshot.fromCounts(4, 1, 2);
 }
 
 test "agent service exposes typed ticket launch and capacity callbacks" {
@@ -1038,6 +1055,7 @@ test "agent service exposes typed ticket launch and capacity callbacks" {
     try std.testing.expectEqual(@as(usize, 4), snapshot.max);
     try std.testing.expectEqual(@as(usize, 1), snapshot.queued);
     try std.testing.expectEqual(@as(usize, 2), snapshot.running);
+    try std.testing.expectEqual(@as(usize, 2), snapshot.idle);
     try std.testing.expectEqual(@as(usize, 1), snapshot.available);
 
     var receipt = try service.launchTicket(std.testing.allocator, .{

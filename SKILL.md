@@ -34,7 +34,10 @@ second runtime owner.
   `events.jsonl`, `session.json`, and `output.txt` as separate owners.
 - Assignment admits ticket work to the queue. It does not launch an agent.
 - `agent_routes.max_concurrency` is the sole ticket execution capacity knob.
-  Do not invent or restore a `tickets` execution-policy section.
+  `running` is active, `idle = max - running`, `queued` is admitted backlog, and
+  `available = idle - queued` saturated at zero. Config changes apply to the same
+  physical pool at its next idle boundary. Do not invent a second pool, pending
+  capacity ledger, or restore a `tickets` execution-policy section.
 - Call `agents {}` when the current decision needs collaboration evidence. Read
   `var1.agent_eligibility.v1` for route-resolved specialists, pool/team pressure,
   communication choices, and its SHA-256 receipt. The snapshot is not an order:

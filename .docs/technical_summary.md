@@ -113,6 +113,11 @@ The scheduler claims only when `agent_routes.max_concurrency` reports capacity,
 then uses the existing `AgentService` and `Supervisor` owners. Ticket execution
 has no policy branch; the removed `auto_assign`, `proactive_workpool`,
 `close_authority`, and `reopen_with_reasoning` keys had no runtime consumer.
+`AgentCapacitySnapshot.fromCounts` is the only pool arithmetic owner: `running`
+is active work, `idle = max - running`, `queued` is admitted backlog, and
+`available = idle - queued` saturated at zero. Ticket admission uses
+`available`. A changed ceiling replaces the same physical pool only after its
+submitted closures drain; busy projections retain the actual prior ceiling.
 There is no second worker registry or background status bus. The fixed pool now lives in one persistent
 owner tree and survives TUI/CLI exit. Scheduler leadership now holds one
 crash-released OS lock through the full tick and reads back a random nonzero
@@ -300,7 +305,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - The last installed-proven move-19 artifact remains SHA-256
   `5DBF0B5F0D82954D80BD9E21202BCC46EE534CE6FD70A483464F95F878AD33DC`.
   Current source ReleaseFast is
-  `8CB2B28182BE153458C211BBF5A500F1BCD1726BAAB517771C4939697CC72B42`.
+  `6E6A80054C4982AA9F1D86E9415B2422A4F7B7670080795243A91818279A360A`.
   Replacement is blocked while operator-owned installed PIDs 12028 and 14452
   remain active; source/installed equality is not claimed.
 - Installed `session/send` against a disposable local provider imported all
@@ -319,18 +324,21 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   cancels for 1 and 6 returned `stale_run` while newer runs completed; exact 11
   returned `requested` and exited with zero process. Its legacy terminal name is
   retained only as historical proof; move 19 removed that writer.
-- Moves 5–20 and 22–27 plus findings 10 and 13 are closed. Move 21 is source-complete
+- Moves 5–20 and 22–28 plus findings 10 and 13 are closed. Move 21 is source-complete
   and awaits the installed replacement gate. Six synchronized 100-way probes cover
   admission, summary, message, event, tracked-TUI replay, and shutdown. The
-  latest Debug and ReleaseFast graphs pass 1,946/1,946. The native two-kernel admission
+  latest Debug and ReleaseFast graphs pass 1,947/1,947. The native two-kernel admission
   proof retains one schedule attempt, one ticket claim, and one matching child
   session under one nonzero generation; mid-turn owner-crash recovery remains P0.
 - Move 26 ships the hive's source mailbox: durable direct/group/parent delivery,
   selective summary/artifact references, nested normal sessions, queue/wake
   intent, and a restart-readable unread cursor. Move 27 adds route-resolved,
   receipt-bound team awareness and proves quiet/hive prompt selection through one
-  executor. Moves 28–30 retain capacity truth, owner-generation reconciliation,
-  and installed crash/restart proof.
+  executor. Move 28 adds one coherent active/idle/queued/admission projection and
+  idle-boundary config refresh; its 20-task pressure reaches three concurrent
+  calls without exceeding the configured ceiling. A 256-segment audit finds zero
+  exact duplicates. Moves 29–30 retain owner-generation reconciliation and
+  installed crash/restart proof.
 - `git diff --check` exits 0 with line-ending warnings only.
 
 See [`research/2026-08-12-full-harness-sitrep.md`](research/2026-08-12-full-harness-sitrep.md)
