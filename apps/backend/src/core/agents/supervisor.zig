@@ -1162,6 +1162,19 @@ fn onChildSessionEvent(
 ) anyerror!void {
     if (!shouldProjectChildEvent(event_type)) return;
     const task: *Task = @ptrCast(@alignCast(ctx.?));
+
+    // Summary updates are already durable tool events. Reuse that boundary to
+    // refresh the parent's keyed child row while the child is still running;
+    // do not add a poller or a second summary stream.
+    if (isSummaryToolCompletion(event_type, message)) {
+        if (summaries.readSummary(std.heap.page_allocator, task.group.?.workspace_root, task.session_id) catch null) |row_value| {
+            var row = row_value;
+            defer row.deinit(std.heap.page_allocator);
+            taskSupervisor(task).emitTaskEvent(task, "child_progress", "summary", row.summary) catch {};
+            return;
+        }
+    }
+
     const projected_type = if (std.mem.eql(u8, event_type, "session_waiting")) "child_waiting" else "child_progress";
     const phase = if (std.mem.eql(u8, event_type, "session_waiting")) "waiting" else event_type;
 
@@ -1206,6 +1219,11 @@ fn shouldProjectChildEvent(event_type: []const u8) bool {
     };
     for (projected) |candidate| if (std.mem.eql(u8, event_type, candidate)) return true;
     return false;
+}
+
+fn isSummaryToolCompletion(event_type: []const u8, message: []const u8) bool {
+    return std.mem.eql(u8, event_type, "tool_completed") and
+        std.mem.eql(u8, message, "tool completed: update_session_summary");
 }
 
 fn disposeRoute(task: *Task) void {
@@ -1364,6 +1382,12 @@ test "child elapsed snapshot uses live or terminal task time and clamps invalid 
     try std.testing.expectEqual(@as(i64, 1_250), taskElapsedMs(1_000, 0, 2_250));
     try std.testing.expectEqual(@as(i64, 2_000), taskElapsedMs(1_000, 3_000, 9_999));
     try std.testing.expectEqual(@as(i64, 0), taskElapsedMs(3_000, 2_000, 9_999));
+}
+
+test "summary tool completion is the live child-summary projection boundary" {
+    try std.testing.expect(isSummaryToolCompletion("tool_completed", "tool completed: update_session_summary"));
+    try std.testing.expect(!isSummaryToolCompletion("tool_started", "tool completed: update_session_summary"));
+    try std.testing.expect(!isSummaryToolCompletion("tool_completed", "tool completed: read_file"));
 }
 
 test "group snapshots are terminal only after every task reaches a terminal state" {

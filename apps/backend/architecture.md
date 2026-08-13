@@ -432,7 +432,7 @@ prevents cold receipt reconstruction from racing ticket recovery with
 
 `core/executor/loop.zig` parks a waiting parent on the supervisor condition without a provider call. The first unconsumed terminal child sends its bounded canonical summary through the parent mailbox, which wakes the parent, rebuilds through the context compiler, and permits the next routing/synthesis turn while unfinished siblings remain supervised. A parent cannot emit terminal output while any owned child remains active. Full specialists execute as ordinary isolated VAR1 child sessions. Tool-free `model_task` specialists use one provider turn and validate their supplied output schema without acquiring a second transcript or tool runtime.
 
-Child assistant/reasoning deltas and tool transcripts stay in the child ledger. The parent event spine receives bounded lifecycle events plus mailbox delivery; it never receives a copied child transcript. Every child `session.json` keeps a heap-owned immutable execution receipt containing the secret-free resolved agent, route, model, wire API, budgets, group, and branch identity; explicit checked JSON decoding preserves that receipt across optimized status rewrites and cold recovery. CLI, stdio, and TUI consume the same projection. The TUI renders Search, Explore, Agents, and To-dos through one group/item grammar with `[ ]`, `[>]`, `[x]`, `[!]`, `[-]` markers and `|--` / `` `--`` child rails; tool lifecycle phases remain event metadata while the child row is replaced by the bounded `assistant_response` summary from `sessions/summaries.jsonl`. No second status bus exists.
+Child assistant/reasoning deltas and tool transcripts stay in the child ledger. The parent event spine receives bounded lifecycle events plus mailbox delivery; it never receives a copied child transcript. Every child `session.json` keeps a heap-owned immutable execution receipt containing the secret-free resolved agent, route, model, wire API, budgets, group, and branch identity; explicit checked JSON decoding preserves that receipt across optimized status rewrites and cold recovery. CLI, stdio, and TUI consume the same projection. The TUI renders Search, Explore, Agents, and To-dos through one group/item grammar with `[ ]`, `[>]`, `[x]`, `[!]`, `[-]` markers and `|--` / `` `--`` child rails; the child row receives the bounded `assistant_response` summary or a live `update_session_summary` refresh from `sessions/summaries.jsonl`, while tool lifecycle phases remain event metadata. No second status bus exists.
 
 ### Sequence-addressed agent mailbox
 
@@ -567,7 +567,7 @@ The current validation lane should always prove these slices together:
 - role-routed agent batches prove bounded 1/5/20/100 admission, zero provider-spin waiting, O(1) healthy lookup, exact convergence, cancellation, and receipt recovery
 - parked parents wake on the first terminal child, compile each ready result once, and remain non-terminal while siblings are active
 - parent child-control events remain bounded while assistant/reasoning deltas stay in child ledgers
-- TUI activity families share one nested checkbox/rail projection driven by contiguous sequence-bearing typed events; child rows show bounded canonical turn summaries, not tool phase labels
+- TUI activity families share one nested checkbox/rail projection driven by contiguous sequence-bearing typed events; child rows show bounded canonical turn summaries, refreshed live by the existing summary-tool boundary, not tool phase labels
 - ticket assignment queues work without direct launch; scheduler claims through the fixed pool and reconciles stale owners
 - derivative memory rejects transcript replay while citing source sequence ranges
 - heartbeat/evaluator evidence appends redacted non-mutating events
@@ -675,10 +675,12 @@ Latest local Windows validation on 2026-08-13:
   the event carries it. Lower-signal phase/time metadata yields before the
   canonical quoted summary when the row is narrow. The supervisor computes
   elapsed time from its existing task timestamps; no timer, poller, heartbeat,
-  chat-bubble event, or second ledger was added. Focused TUI is `78/78`; Debug is
+  chat-bubble event, or second ledger was added. Move 50 reuses the existing
+  `tool_completed` hook for `update_session_summary` to refresh the quoted row
+  without a poller or new event family. Focused TUI is `78/78`; Debug is
   `19/19` with `2,000/2,000`; ReleaseFast/install is `9/9`; source and installed
   SHA-256 match
-  `6D7F72DD3E1C03DF3A6FA71C07CD6DEA6A020391C8F85A0B1B395C9670DE93BF`; exact
+  `6814396B7E2A134E9ECAED9DA5B6567FEAA01824DAC948CC54DC725EFC3DF178`; exact
   proof-owned owner/kernel teardown leaves zero VANTARI processes.
 - The source ticket lifecycle mesh at
   `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`
@@ -916,7 +918,8 @@ is no active run.
 
 `ChatState.messages` is the sole TUI activity read model. A child is keyed by
 `group_id + task_id`; the supervisor supplies the canonical child summary from
-`sessions/summaries.jsonl` at `assistant_response`. The row renders a compact
+`sessions/summaries.jsonl` at `assistant_response` and refreshes it at the existing
+`update_session_summary` completion boundary. The row renders a compact
 state marker, known typed phase, elapsed snapshot, and bounded quoted summary.
 `○` represents queued/running, `◉` represents complete, and failure/cancel
 markers stay explicit. Later tool or terminal events update the same keyed row,

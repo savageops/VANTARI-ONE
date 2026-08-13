@@ -14,7 +14,6 @@ One binary; one protocol; one owner for runtime truth.
 [![Downloads](https://img.shields.io/github/downloads/savageops/VANTARI-ONE/total?label=Downloads&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases)
 [![Tests](https://img.shields.io/badge/Tests-1%2C996%20cases-0f766e)](#validation)
 [![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-f7a41d?logo=zig)](https://ziglang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-0f766e)](./LICENSE)
 
 [![Stars](https://img.shields.io/github/stars/savageops/VANTARI-ONE?label=Stars&color=111111)](https://github.com/savageops/VANTARI-ONE/stargazers)
 [![Issues](https://img.shields.io/github/issues/savageops/VANTARI-ONE?label=Issues&color=111111)](https://github.com/savageops/VANTARI-ONE/issues)
@@ -256,7 +255,7 @@ the exact session. The transcript, execution receipt, attempt, and mailbox curso
 do not move. This recovery is source and installed proven; arbitrary external
 side-effect certainty still requires the write-intent ledger.
 
-The TUI keeps this mechanic legible without adding a status forest: one non-wrapping footer row shows `status · prompt mode · model · effort · context used/capacity/percent · remaining`; unknown accounting stays `ctx —`, and narrow fitting drops lower-signal detail before codepoint-safe truncation. The footer shows pool and queue pressure only when non-zero, and priced session cost only when terminal telemetry carries a finite value; the activity group shows `Agents completed/total`; `○` marks queued/running activity and `◉` marks complete activity, with explicit failure/cancel markers. Each keyed child row ends with known typed phase and elapsed snapshots when available, followed by a bounded quoted turn summary sourced from the child session summary ledger; later tool/terminal phases retain the summary and update the same row. Tool lifecycle names remain typed event metadata, not the visible child summary. The composer is a focused surface above a quieter metadata row, and cancellation copy appears only while a run is actively cancelling; the persistent footer omits `Esc cancel`.
+The TUI keeps this mechanic legible without adding a status forest: one non-wrapping footer row shows `status · prompt mode · model · effort · context used/capacity/percent · remaining`; unknown accounting stays `ctx —`, and narrow fitting drops lower-signal detail before codepoint-safe truncation. The footer shows pool and queue pressure only when non-zero, and priced session cost only when terminal telemetry carries a finite value; the activity group shows `Agents completed/total`; `○` marks queued/running activity and `◉` marks complete activity, with explicit failure/cancel markers. Each keyed child row ends with known typed phase and elapsed snapshots when available, followed by a bounded quoted turn summary sourced from the child session summary ledger; an existing `update_session_summary` completion refreshes that quote while the child is still running, and later tool/terminal phases retain it on the same row. Tool lifecycle names remain typed event metadata, not the visible child summary. The composer is a focused surface above a quieter metadata row, and cancellation copy appears only while a run is actively cancelling; the persistent footer omits `Esc cancel`.
 
 <br/>
 
@@ -974,8 +973,9 @@ failure pressure rather than line coverage:
   effort, context remaining/unknown state, and codepoint-safe truncation
 - Signal-gated footer pressure and priced session cost: active/max agents,
   queue, and finite `turn_terminal.cost_total_usd`; unknown pricing stays quiet
-- Agent group/child `○`/`◉` markers, typed phase and elapsed snapshots, bounded
-  quoted summary retention through tool/terminal phases, and valid UTF-8
+- Agent group/child `○`/`◉` markers, typed phase and elapsed snapshots, live
+  summary refresh at the existing summary-tool boundary, bounded quoted summary
+  retention through tool/terminal phases, and valid UTF-8
   one-row summary truncation
 
 ```powershell
@@ -984,9 +984,3 @@ cd apps/backend
 ```
 
 The count is test inventory, not a substitute for a green checkout. Release proof requires the complete build graph above, a freshly installed Windows binary, provider health, and an end-to-end session through the installed executable. A passing assertion is useful only when it proves an invariant a shallow implementation would violate.
-
-<br/>
-
-## License
-
-MIT. See [`LICENSE`](./LICENSE).

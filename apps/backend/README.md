@@ -291,7 +291,7 @@ challenges, launches, queues, or wakes without a second executor branch.
 
 ### Bounded In-Process Supervisor
 
-Children run on a fixed `std.Thread.Pool` (default 6 workers, max 64) with hard concurrency limits, O(1) group/parent indexes, condition-based wait, cancellation, and cold-only ledger recovery. The supervisor provides idempotent mailbox-backed convergence — a child's bounded terminal summary reaches its parent once without copying the child transcript — and emits typed child phase plus elapsed snapshots through the existing child-event envelope.
+Children run on a fixed `std.Thread.Pool` (default 6 workers, max 64) with hard concurrency limits, O(1) group/parent indexes, condition-based wait, cancellation, and cold-only ledger recovery. The supervisor provides idempotent mailbox-backed convergence — a child's bounded terminal summary reaches its parent once without copying the child transcript — and emits typed child phase plus elapsed snapshots through the existing child-event envelope. The same envelope refreshes the keyed parent row when `update_session_summary` completes.
 
 ### Child Prompt Protocol
 
@@ -332,7 +332,7 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - **Dual-mode reasoning dock** — 4 rows, ∞ for live reasoning, ◊ for buffer preview
 - **Input history** — Up/Down-arrow cycling through previous messages (persistent ring buffer, cap 1000)
 - **Agent activity tree** — nested group/item rows with tree connectors
-- **Agent turn summaries** — each keyed child row shows `○` queued/running or `◉` complete, known typed phase/elapsed metadata, and a bounded quoted summary from the canonical child session summary ledger; tool phases update the same row and never replace it with `tool_completed`
+- **Agent turn summaries** — each keyed child row shows `○` queued/running or `◉` complete, known typed phase/elapsed metadata, and a bounded quoted summary from the canonical child session summary ledger; `update_session_summary` refreshes that quote while running, tool phases update the same row, and none replace it with `tool_completed`
 - **Minimal agent group rows** — `Agents completed/total`; no persistent `waiting on N` filler; failure/cancel markers remain explicit
 - **Replay-safe activity** — live and cold TUI projections consume contiguous sequence-bearing parent events; legacy sequence-less activity rows are not rendered
 - **Live streaming** — assistant deltas, reasoning deltas, and tool progress rendered in real-time

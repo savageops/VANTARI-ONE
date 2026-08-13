@@ -878,7 +878,9 @@ const ChatState = struct {
         // The child row is an agent summary surface. Tool lifecycle phases
         // remain available in the typed event spine, but they do not replace
         // the agent's own turn summary in the visible tree.
-        const summary = if (phase != null and std.mem.eql(u8, phase.?, "assistant_response") and parsed.value.detail != null)
+        const summary = if (phase != null and
+            (std.mem.eql(u8, phase.?, "assistant_response") or std.mem.eql(u8, phase.?, "summary")) and
+            parsed.value.detail != null)
             parsed.value.detail
         else if (std.mem.eql(u8, event_type, "child_finished") and parsed.value.detail != null)
             parsed.value.detail
@@ -2296,6 +2298,7 @@ fn compactAgentSummary(allocator: std.mem.Allocator, summary: []const u8) ![]u8 
 
 fn activityPhaseLabel(phase: ?[]const u8) ?[]const u8 {
     const value = phase orelse return null;
+    if (std.mem.eql(u8, value, "summary")) return null;
     if (std.mem.eql(u8, value, "starting") or std.mem.eql(u8, value, "child_started")) return "starting";
     if (std.mem.eql(u8, value, "session_started")) return "session";
     if (std.mem.eql(u8, value, "tool_requested") or
@@ -5177,12 +5180,14 @@ test "tui child replay keeps one keyed row per group and task" {
     try std.testing.expectEqualStrings("Recon - running · response · 2.3s \"Mapped the workspace and found the backend owner.\"", state.messages.items[1].text);
     try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"tool_completed\",\"detail\":\"tool completed: read_file\",\"elapsed_ms\":3125}");
     try std.testing.expectEqualStrings("Recon - running · tool · 3.1s \"Mapped the workspace and found the backend owner.\"", state.messages.items[1].text);
-    try state.addProgress("child_finished", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"completed\",\"phase\":\"complete\",\"elapsed_ms\":3456}");
+    try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"summary\",\"detail\":\"Found the tweet and queued the next check.\",\"elapsed_ms\":4125}");
+    try std.testing.expectEqualStrings("Recon - running · 4.1s \"Found the tweet and queued the next check.\"", state.messages.items[1].text);
+    try state.addProgress("child_finished", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"completed\",\"phase\":\"complete\",\"elapsed_ms\":4567}");
     try state.addProgress("child_group_finished", "{\"group_id\":\"group-one\",\"completed\":1,\"terminal\":true}");
     try std.testing.expectEqual(@as(usize, 2), state.messages.items.len);
     try std.testing.expectEqualStrings("Agents 1/1", state.messages.items[0].text);
     try std.testing.expectEqual(ActivityState.completed, state.messages.items[0].activity_state);
-    try std.testing.expectEqualStrings("Recon - complete · 3.4s \"Mapped the workspace and found the backend owner.\"", state.messages.items[1].text);
+    try std.testing.expectEqualStrings("Recon - complete · 4.5s \"Found the tweet and queued the next check.\"", state.messages.items[1].text);
     try std.testing.expectEqual(ActivityState.completed, state.messages.items[1].activity_state);
 
     try state.addProgress("child_group_recovered", "{\"group_id\":\"group-one\",\"tasks\":1,\"stale_owners_reconciled\":1,\"terminal\":true}");
