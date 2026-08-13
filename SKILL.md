@@ -63,6 +63,11 @@ second runtime owner.
   when nonzero or unhealthy; priced session cost appears only for finite,
   nonnegative terminal telemetry. Keep it a read model, not a settings registry,
   cost poller, or status bus.
+- Agent activity reuses the keyed `group_id + task_id` row and canonical child
+  summary boundary: groups show `Agents completed/total`, `○` means
+  queued/running, `◉` means complete, and the child row keeps a bounded quoted
+  summary through later tool/terminal phases. Do not add a bubble event,
+  summary poller, transcript copy, or second activity ledger.
 - Use `vantari auth status --json` for secret-free provider/account/plan state.
   Run `vantari auth login openai-codex` for the browser PKCE path or its manual
   redirect fallback; use `vantari auth logout <provider-id>` for one-record

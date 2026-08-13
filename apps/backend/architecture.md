@@ -659,6 +659,16 @@ Latest local Windows validation on 2026-08-13:
   SHA-256 match
   `D83E9A843286E79861FD5FA25514DD18C17B3307DDEC7A2842216B9DA3AB38EA`; exact
   owner/kernel tree teardown leaves zero VANTARI processes.
+- Moves 46–48 keep unknown or zero-capacity context as `ctx —` and close the
+  child activity projection on the existing keyed row. Groups render
+  `Agents completed/total`; `○` means queued/running and `◉` means complete.
+  At the canonical child `assistant_response` boundary, the row stores and
+  renders a bounded quoted summary. Later tool/terminal events update lifecycle
+  state without replacing that summary, and `tool_completed` remains typed
+  event metadata. Focused TUI is `78/78`; Debug is `19/19` with `2,000/2,000`;
+  ReleaseFast/install is `9/9`; source and installed SHA-256 match
+  `C7B3EE8E4B41D12D486D7C73F3E209834EEE91619364FE0ABE5A676E8C7EA9B7`; exact
+  owner/kernel tree teardown leaves zero VANTARI processes.
 - The source ticket lifecycle mesh at
   `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`
   proves assignment without launch, one claim, noninteractive TUI detach, exact
@@ -890,3 +900,14 @@ context/remaining order and codepoint-safe width fitting. Unknown context stays
 `ctx —`; terminal events clear the cancellation flag. Escape/Ctrl-C and active `/cancel` interjections share
 the generation-bound `requestCancel` owner; idle `/cancel` reports that there
 is no active run.
+
+### TUI child activity projection
+
+`ChatState.messages` is the sole TUI activity read model. A child is keyed by
+`group_id + task_id`; the supervisor supplies the canonical child summary from
+`sessions/summaries.jsonl` at `assistant_response`. The row renders a compact
+state marker, lifecycle label, and bounded quoted summary. `○` represents
+queued/running, `◉` represents complete, and failure/cancel markers stay
+explicit. Later tool or terminal events update the same keyed row and retain
+the summary. The projection does not create a bubble event, poller, transcript
+copy, or second summary ledger.

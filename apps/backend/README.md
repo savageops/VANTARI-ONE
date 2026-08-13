@@ -332,8 +332,8 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - **Dual-mode reasoning dock** — 4 rows, ∞ for live reasoning, ◊ for buffer preview
 - **Input history** — Up/Down-arrow cycling through previous messages (persistent ring buffer, cap 1000)
 - **Agent activity tree** — nested group/item rows with tree connectors
-- **Agent turn summaries** — each keyed child row shows a bounded summary from the canonical child session summary ledger; tool phases update the state marker and never replace the row with `tool_completed`
-- **Minimal agent group rows** — `Agents completed/total`; no persistent `waiting on N` filler
+- **Agent turn summaries** — each keyed child row shows `○` queued/running or `◉` complete plus a bounded quoted summary from the canonical child session summary ledger; tool phases update the state marker and never replace the row with `tool_completed`
+- **Minimal agent group rows** — `Agents completed/total`; no persistent `waiting on N` filler; failure/cancel markers remain explicit
 - **Replay-safe activity** — live and cold TUI projections consume contiguous sequence-bearing parent events; legacy sequence-less activity rows are not rendered
 - **Live streaming** — assistant deltas, reasoning deltas, and tool progress rendered in real-time
 - **Operator metadata row** — one non-wrapping row for status, prompt mode, model, effort, context used/capacity/remaining, and signal-bearing agent/queue/cost pressure; active/max and queue appear only when useful, finite priced session cost is compact, unknown context stays `ctx —`, and persistent `Esc cancel` text is omitted
@@ -407,7 +407,7 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - Buffered ticket execution (assignment queue, fixed pool capacity, live-owner heartbeat, generation-fenced same-session resume, absent-session requeue, terminal-first reconciliation)
 - Process tracking ledger
 - Dual-mode reasoning dock (4 rows, ∞/◊ glyphs, buffer preview)
-- TUI Unicode glyph system (○/◉/✓/✗/⊘ markers, ├──/└── connectors, ◍/◉ group headers)
+- TUI Unicode glyph system (○ queued/running, ◉ complete, ✗/⊘ failure/cancel, ├──/└── connectors)
 - Braille spinner (variable-speed, wall-clock derived)
 - TUI input history (Up/Down cycling)
 - 9-word military checkpoint contract for subagents

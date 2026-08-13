@@ -131,7 +131,7 @@ Typed events are the runtime's nervous system. String breadcrumbs may exist only
 - TUI progress is a read model over `events.jsonl`, not a separate speculative status bus.
 - Tool spans update a single keyed row in clients. Do not append request/start/done rows for one tool invocation.
 - Child activity uses one keyed `group_id + task_id` row. Tool phases update its typed state marker; the `assistant_response` boundary supplies the bounded child turn summary from `sessions/summaries.jsonl`.
-- Child group rows show `Agents completed/total`. Do not render the removed `waiting on N` filler or expose `tool_completed` as the child's visible summary.
+- Child group rows show `Agents completed/total` with `○` for queued/running and `◉` for complete; child rows use the same state language and render the latest canonical summary as a bounded quoted suffix. Later tool/terminal events update the keyed state without replacing the summary. Do not render the removed `waiting on N` filler, expose `tool_completed` as the child's visible summary, or add a chat-bubble event, poller, second ledger, or TUI-owned summary bus.
 - Command stdout/stderr are untrusted data. Parse only runtime-owned envelopes; render output as bounded display text.
 - Raw command bytes use only `var1.tool_output_delta.v1.chunk_b64` with `tool_call_id`, stream, and cap evidence. Encode through the shared typed protocol serializer; do not add top-level byte fields, raw JSON interpolation, or a payload store while the bounded inline envelope satisfies the runtime cap.
 - Event cursors use monotonic ledger position plus replay suppression. Timestamp-only cursors are insufficient under same-millisecond bursts.

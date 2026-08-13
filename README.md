@@ -92,7 +92,7 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
 | **Kernel surface** | 115 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 1,998 passing backend cases across source and adversarial pipeline suites |
+| **Proof surface** | 2,000 passing backend cases across source and adversarial pipeline suites |
 | **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
 | **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |
@@ -256,7 +256,7 @@ the exact session. The transcript, execution receipt, attempt, and mailbox curso
 do not move. This recovery is source and installed proven; arbitrary external
 side-effect certainty still requires the write-intent ledger.
 
-The TUI keeps this mechanic legible without adding a status forest: one non-wrapping footer row shows `status · prompt mode · model · effort · context used/capacity/percent · remaining`; unknown accounting stays `ctx —`, and narrow fitting drops lower-signal detail before codepoint-safe truncation. The footer shows pool and queue pressure only when non-zero, and priced session cost only when terminal telemetry carries a finite value; the activity group shows `Agents completed/total`; each keyed child row ends with a bounded turn summary sourced from the child session summary ledger. Tool lifecycle names remain typed event metadata, not the visible child summary. The composer is a focused surface above a quieter metadata row, and cancellation copy appears only while a run is actively cancelling; the persistent footer omits `Esc cancel`.
+The TUI keeps this mechanic legible without adding a status forest: one non-wrapping footer row shows `status · prompt mode · model · effort · context used/capacity/percent · remaining`; unknown accounting stays `ctx —`, and narrow fitting drops lower-signal detail before codepoint-safe truncation. The footer shows pool and queue pressure only when non-zero, and priced session cost only when terminal telemetry carries a finite value; the activity group shows `Agents completed/total`; `○` marks queued/running activity and `◉` marks complete activity, with explicit failure/cancel markers. Each keyed child row ends with a bounded quoted turn summary sourced from the child session summary ledger and retains that summary through later tool/terminal phases. Tool lifecycle names remain typed event metadata, not the visible child summary. The composer is a focused surface above a quieter metadata row, and cancellation copy appears only while a run is actively cancelling; the persistent footer omits `Esc cancel`.
 
 <br/>
 
@@ -950,7 +950,7 @@ vantari auth status|login|logout <provider>    identity and provider auth
 
 ## Validation
 
-The pinned Debug and ReleaseFast graphs currently pass 1,998 test cases across `apps/backend/src/`
+The pinned Debug and ReleaseFast graphs currently pass 2,000 test cases across `apps/backend/src/`
 and `apps/backend/tests/`. They target state transitions, protocol edges, and
 failure pressure rather than line coverage:
 
@@ -974,6 +974,8 @@ failure pressure rather than line coverage:
   effort, context remaining/unknown state, and codepoint-safe truncation
 - Signal-gated footer pressure and priced session cost: active/max agents,
   queue, and finite `turn_terminal.cost_total_usd`; unknown pricing stays quiet
+- Agent group/child `○`/`◉` markers, bounded quoted summary retention through
+  tool/terminal phases, and valid UTF-8 one-row summary truncation
 
 ```powershell
 cd apps/backend
