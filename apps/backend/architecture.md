@@ -669,6 +669,17 @@ Latest local Windows validation on 2026-08-13:
   ReleaseFast/install is `9/9`; source and installed SHA-256 match
   `C7B3EE8E4B41D12D486D7C73F3E209834EEE91619364FE0ABE5A676E8C7EA9B7`; exact
   owner/kernel tree teardown leaves zero VANTARI processes.
+- Move 49 keeps that same keyed row and adds the existing child-event phase plus
+  elapsed snapshot: `starting`, `session`, `tool`, `model`, `waiting`, `response`,
+  and `complete` are compact labels, while elapsed time is rendered only when
+  the event carries it. Lower-signal phase/time metadata yields before the
+  canonical quoted summary when the row is narrow. The supervisor computes
+  elapsed time from its existing task timestamps; no timer, poller, heartbeat,
+  chat-bubble event, or second ledger was added. Focused TUI is `78/78`; Debug is
+  `19/19` with `2,000/2,000`; ReleaseFast/install is `9/9`; source and installed
+  SHA-256 match
+  `6D7F72DD3E1C03DF3A6FA71C07CD6DEA6A020391C8F85A0B1B395C9670DE93BF`; exact
+  proof-owned owner/kernel teardown leaves zero VANTARI processes.
 - The source ticket lifecycle mesh at
   `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`
   proves assignment without launch, one claim, noninteractive TUI detach, exact
@@ -906,8 +917,9 @@ is no active run.
 `ChatState.messages` is the sole TUI activity read model. A child is keyed by
 `group_id + task_id`; the supervisor supplies the canonical child summary from
 `sessions/summaries.jsonl` at `assistant_response`. The row renders a compact
-state marker, lifecycle label, and bounded quoted summary. `○` represents
-queued/running, `◉` represents complete, and failure/cancel markers stay
-explicit. Later tool or terminal events update the same keyed row and retain
-the summary. The projection does not create a bubble event, poller, transcript
-copy, or second summary ledger.
+state marker, known typed phase, elapsed snapshot, and bounded quoted summary.
+`○` represents queued/running, `◉` represents complete, and failure/cancel
+markers stay explicit. Later tool or terminal events update the same keyed row,
+retain the summary, and replace only the phase/time snapshot when present. The
+projection does not create a bubble event, timer, poller, transcript copy, or
+second summary ledger.

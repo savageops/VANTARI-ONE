@@ -85,6 +85,8 @@ const Message = struct {
     tool_call_id: ?[]u8 = null,
     activity_parent_id: ?[]u8 = null,
     activity_summary: ?[]u8 = null,
+    activity_phase: ?[]u8 = null,
+    activity_elapsed_ms: i64 = 0,
     activity_kind: ActivityKind = .none,
     activity_state: ActivityState = .pending,
     activity_last: bool = false,
@@ -95,6 +97,7 @@ const Message = struct {
         if (self.tool_call_id) |tool_call_id| allocator.free(tool_call_id);
         if (self.activity_parent_id) |parent_id| allocator.free(parent_id);
         if (self.activity_summary) |summary| allocator.free(summary);
+        if (self.activity_phase) |phase| allocator.free(phase);
     }
 
     fn freeText(self: Message, allocator: std.mem.Allocator) void {
@@ -854,11 +857,17 @@ const ChatState = struct {
             status: []const u8 = "queued",
             phase: ?[]const u8 = null,
             detail: ?[]const u8 = null,
+            elapsed_ms: i64 = 0,
         };
         var parsed = std.json.parseFromSlice(ChildEvent, self.allocator, message, .{ .ignore_unknown_fields = true }) catch return;
         defer parsed.deinit();
         if (parsed.value.group_id.len == 0 or parsed.value.task_id.len == 0) return;
-        const phase = parsed.value.phase orelse parsed.value.status;
+        const phase: ?[]const u8 = if (parsed.value.phase) |value|
+            value
+        else if (std.mem.eql(u8, event_type, "child_waiting"))
+            "waiting"
+        else
+            null;
         const state: ActivityState = if (std.mem.eql(u8, event_type, "child_waiting"))
             .running
         else
@@ -869,13 +878,13 @@ const ChatState = struct {
         // The child row is an agent summary surface. Tool lifecycle phases
         // remain available in the typed event spine, but they do not replace
         // the agent's own turn summary in the visible tree.
-        const summary = if (std.mem.eql(u8, phase, "assistant_response") and parsed.value.detail != null)
+        const summary = if (phase != null and std.mem.eql(u8, phase.?, "assistant_response") and parsed.value.detail != null)
             parsed.value.detail
         else if (std.mem.eql(u8, event_type, "child_finished") and parsed.value.detail != null)
             parsed.value.detail
         else
             null;
-        if (try self.updateChildActivity(key, parsed.value.name, state, summary)) return;
+        if (try self.updateChildActivity(key, parsed.value.name, state, phase, parsed.value.elapsed_ms, summary)) return;
 
         var compact_summary: ?[]u8 = null;
         defer if (compact_summary) |value| self.allocator.free(value);
@@ -884,12 +893,14 @@ const ChatState = struct {
             self.allocator,
             parsed.value.name,
             state,
+            phase,
+            parsed.value.elapsed_ms,
             compact_summary,
             self.last_transcript_body_width,
         );
         defer self.allocator.free(text);
         try self.upsertActivityProgress(key, text, .item, state, parsed.value.group_id);
-        if (compact_summary) |value| try self.setActivitySummary(key, value);
+        try self.setActivityMetadata(key, compact_summary, phase, parsed.value.elapsed_ms);
     }
 
     fn updateChildActivity(
@@ -897,6 +908,8 @@ const ChatState = struct {
         activity_id: []const u8,
         name: []const u8,
         state: ActivityState,
+        phase: ?[]const u8,
+        elapsed_ms: i64,
         summary: ?[]const u8,
     ) !bool {
         for (self.messages.items) |*message| {
@@ -908,15 +921,21 @@ const ChatState = struct {
             defer if (compact_summary) |value| self.allocator.free(value);
             if (summary) |value| compact_summary = try compactAgentSummary(self.allocator, value);
             const display_summary = compact_summary orelse message.activity_summary;
+            const display_phase = phase orelse message.activity_phase;
+            const display_elapsed_ms = if (elapsed_ms > 0) elapsed_ms else message.activity_elapsed_ms;
             const replacement = try formatAgentActivitySummary(
                 self.allocator,
                 name,
                 state,
+                display_phase,
+                display_elapsed_ms,
                 display_summary,
                 self.last_transcript_body_width,
             );
             errdefer self.allocator.free(replacement);
             if (compact_summary) |value| try self.replaceActivitySummary(message, value);
+            if (phase) |value| try self.replaceActivityPhase(message, value);
+            if (elapsed_ms > 0) message.activity_elapsed_ms = elapsed_ms;
             message.replaceTextOwned(self.allocator, replacement);
             message.activity_state = state;
             return true;
@@ -924,12 +943,20 @@ const ChatState = struct {
         return false;
     }
 
-    fn setActivitySummary(self: *ChatState, activity_id: []const u8, summary: []const u8) !void {
+    fn setActivityMetadata(
+        self: *ChatState,
+        activity_id: []const u8,
+        summary: ?[]const u8,
+        phase: ?[]const u8,
+        elapsed_ms: i64,
+    ) !void {
         for (self.messages.items) |*message| {
             if (message.role != .progress) continue;
             const existing = message.tool_call_id orelse continue;
             if (!std.mem.eql(u8, existing, activity_id)) continue;
-            try self.replaceActivitySummary(message, summary);
+            if (summary) |value| try self.replaceActivitySummary(message, value);
+            if (phase) |value| try self.replaceActivityPhase(message, value);
+            if (elapsed_ms > 0) message.activity_elapsed_ms = elapsed_ms;
             return;
         }
     }
@@ -938,6 +965,12 @@ const ChatState = struct {
         const replacement = try self.allocator.dupe(u8, summary);
         if (message.activity_summary) |existing| self.allocator.free(existing);
         message.activity_summary = replacement;
+    }
+
+    fn replaceActivityPhase(self: *ChatState, message: *Message, phase: []const u8) !void {
+        const replacement = try self.allocator.dupe(u8, phase);
+        if (message.activity_phase) |existing| self.allocator.free(existing);
+        message.activity_phase = replacement;
     }
 
     fn upsertToolStarted(self: *ChatState, message: []const u8) !void {
@@ -2247,7 +2280,7 @@ fn activityTitle(tool_name: []const u8) []const u8 {
     return tool_name;
 }
 
-const max_agent_summary_bytes: usize = 144;
+const max_agent_summary_width: usize = 144;
 
 fn compactAgentSummary(allocator: std.mem.Allocator, summary: []const u8) ![]u8 {
     var compact = std.array_list.Managed(u8).init(allocator);
@@ -2261,37 +2294,97 @@ fn compactAgentSummary(allocator: std.mem.Allocator, summary: []const u8) ![]u8 
     return compact.toOwnedSlice();
 }
 
-fn formatAgentActivityDetail(
+fn activityPhaseLabel(phase: ?[]const u8) ?[]const u8 {
+    const value = phase orelse return null;
+    if (std.mem.eql(u8, value, "starting") or std.mem.eql(u8, value, "child_started")) return "starting";
+    if (std.mem.eql(u8, value, "session_started")) return "session";
+    if (std.mem.eql(u8, value, "tool_requested") or
+        std.mem.eql(u8, value, "tool_reviewed") or
+        std.mem.eql(u8, value, "tool_started") or
+        std.mem.eql(u8, value, "tool_finished") or
+        std.mem.eql(u8, value, "tool_completed")) return "tool";
+    if (std.mem.eql(u8, value, "model_task_provider_turn")) return "model";
+    if (std.mem.eql(u8, value, "waiting") or std.mem.eql(u8, value, "session_waiting")) return "waiting";
+    if (std.mem.eql(u8, value, "assistant_response")) return "response";
+    if (std.mem.eql(u8, value, "complete") or
+        std.mem.eql(u8, value, "child_finished") or
+        std.mem.eql(u8, value, protocol_events.turn_terminal_event_type)) return "complete";
+    if (std.mem.eql(u8, value, "cold_start_reconciliation")) return "reconcile";
+    return null;
+}
+
+fn formatActivityElapsed(allocator: std.mem.Allocator, elapsed_ms: i64) ![]u8 {
+    const value: i64 = @max(elapsed_ms, @as(i64, 0));
+    if (value < 1_000) return std.fmt.allocPrint(allocator, "{d}ms", .{value});
+    const seconds = @divTrunc(value, @as(i64, 1_000));
+    if (value < 60_000) return std.fmt.allocPrint(allocator, "{d}.{d}s", .{ seconds, @divTrunc(@rem(value, @as(i64, 1_000)), @as(i64, 100)) });
+    if (seconds < 3_600) return std.fmt.allocPrint(allocator, "{d}m {d}s", .{ @divTrunc(seconds, @as(i64, 60)), @rem(seconds, @as(i64, 60)) });
+    return std.fmt.allocPrint(allocator, "{d}h {d}m", .{ @divTrunc(seconds, @as(i64, 3_600)), @divTrunc(@rem(seconds, @as(i64, 3_600)), @as(i64, 60)) });
+}
+
+fn formatAgentActivityHeader(
     allocator: std.mem.Allocator,
     name: []const u8,
-    detail: []const u8,
-    body_width: usize,
+    state: ActivityState,
+    phase: ?[]const u8,
+    elapsed_ms: i64,
 ) ![]u8 {
-    const available = @min(max_agent_summary_bytes, body_width -| (name.len + 9));
-    if (available == 0) return truncateEnd(allocator, name, body_width);
-    const compact = try truncateEnd(allocator, detail, available);
-    defer allocator.free(compact);
-    return std.fmt.allocPrint(allocator, "{s} - {s}", .{ name, compact });
+    var header = std.array_list.Managed(u8).init(allocator);
+    errdefer header.deinit();
+    const writer = header.writer();
+    try writer.print("{s} - {s}", .{ name, activityStateLabel(state) });
+    if (activityPhaseLabel(phase)) |label| {
+        if (!(state == .completed and std.mem.eql(u8, label, "complete"))) {
+            try writer.print(" · {s}", .{label});
+        }
+    }
+    if (elapsed_ms > 0) {
+        const elapsed = try formatActivityElapsed(allocator, elapsed_ms);
+        defer allocator.free(elapsed);
+        try writer.print(" · {s}", .{elapsed});
+    }
+    return header.toOwnedSlice();
 }
 
 fn formatAgentActivitySummary(
     allocator: std.mem.Allocator,
     name: []const u8,
     state: ActivityState,
+    phase: ?[]const u8,
+    elapsed_ms: i64,
     summary: ?[]const u8,
     body_width: usize,
 ) ![]u8 {
-    const status = activityStateLabel(state);
-    const value = summary orelse return formatAgentActivityDetail(allocator, name, status, body_width);
-    if (value.len == 0) return formatAgentActivityDetail(allocator, name, status, body_width);
+    const full_header = try formatAgentActivityHeader(allocator, name, state, phase, elapsed_ms);
+    defer allocator.free(full_header);
+    const value = summary orelse return truncateEnd(allocator, full_header, body_width);
+    if (value.len == 0) return truncateEnd(allocator, full_header, body_width);
 
-    const prefix = try std.fmt.allocPrint(allocator, "{s} - {s} \"", .{ name, status });
-    defer allocator.free(prefix);
-    const available = @min(max_agent_summary_bytes, body_width -| (footerVisualWidth(prefix) + 1));
-    if (available == 0) return truncateEnd(allocator, name, body_width);
+    var phase_header: ?[]u8 = null;
+    defer if (phase_header) |owned| allocator.free(owned);
+    var core_header: ?[]u8 = null;
+    defer if (core_header) |owned| allocator.free(owned);
+    var header = full_header;
+    var available = @min(max_agent_summary_width, body_width -| (footerVisualWidth(header) + 3));
+    if (available == 0) {
+        if (phase != null) {
+            phase_header = try formatAgentActivityHeader(allocator, name, state, phase, 0);
+            if (footerVisualWidth(phase_header.?) + 3 <= body_width) {
+                header = phase_header.?;
+            } else {
+                core_header = try formatAgentActivityHeader(allocator, name, state, null, 0);
+                header = core_header.?;
+            }
+        } else {
+            core_header = try formatAgentActivityHeader(allocator, name, state, null, 0);
+            header = core_header.?;
+        }
+        available = @min(max_agent_summary_width, body_width -| (footerVisualWidth(header) + 3));
+    }
+    if (available == 0) return truncateEnd(allocator, header, body_width);
     const compact = try truncateEnd(allocator, value, available);
     defer allocator.free(compact);
-    return std.fmt.allocPrint(allocator, "{s}{s}\"", .{ prefix, compact });
+    return std.fmt.allocPrint(allocator, "{s} \"{s}\"", .{ header, compact });
 }
 
 fn isAgentLifecycleTool(tool_name: []const u8) bool {
@@ -5061,6 +5154,7 @@ test "tui child replay keeps one keyed row per group and task" {
         .subscription_status = "active",
     };
     defer state.deinit();
+    state.last_transcript_body_width = 120;
 
     try state.addProgress("child_group_started", "{\"group_id\":\"group-one\",\"queued\":1,\"terminal\":false}");
     try std.testing.expectEqualStrings("Agents 0/1", state.messages.items[0].text);
@@ -5075,20 +5169,20 @@ test "tui child replay keeps one keyed row per group and task" {
     try state.addProgress("child_started", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\"}");
     try std.testing.expectEqualStrings("Recon - running", state.messages.items[1].text);
     try std.testing.expectEqual(ActivityState.running, state.messages.items[1].activity_state);
-    try state.addProgress("child_waiting", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"waiting\"}");
-    try std.testing.expectEqualStrings("Recon - running", state.messages.items[1].text);
-    try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"tool_completed\",\"detail\":\"tool completed: read_file\"}");
-    try std.testing.expectEqualStrings("Recon - running", state.messages.items[1].text);
-    try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"assistant_response\",\"detail\":\"Mapped the workspace and found the backend owner.\"}");
-    try std.testing.expectEqualStrings("Recon - running \"Mapped the workspace and found the backend owner.\"", state.messages.items[1].text);
-    try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"tool_completed\",\"detail\":\"tool completed: read_file\"}");
-    try std.testing.expectEqualStrings("Recon - running \"Mapped the workspace and found the backend owner.\"", state.messages.items[1].text);
-    try state.addProgress("child_finished", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"completed\"}");
+    try state.addProgress("child_waiting", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"waiting\",\"elapsed_ms\":900}");
+    try std.testing.expectEqualStrings("Recon - running · waiting · 900ms", state.messages.items[1].text);
+    try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"tool_completed\",\"detail\":\"tool completed: read_file\",\"elapsed_ms\":1250}");
+    try std.testing.expectEqualStrings("Recon - running · tool · 1.2s", state.messages.items[1].text);
+    try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"assistant_response\",\"detail\":\"Mapped the workspace and found the backend owner.\",\"elapsed_ms\":2345}");
+    try std.testing.expectEqualStrings("Recon - running · response · 2.3s \"Mapped the workspace and found the backend owner.\"", state.messages.items[1].text);
+    try state.addProgress("child_progress", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"running\",\"phase\":\"tool_completed\",\"detail\":\"tool completed: read_file\",\"elapsed_ms\":3125}");
+    try std.testing.expectEqualStrings("Recon - running · tool · 3.1s \"Mapped the workspace and found the backend owner.\"", state.messages.items[1].text);
+    try state.addProgress("child_finished", "{\"group_id\":\"group-one\",\"task_id\":\"task-one\",\"name\":\"Recon\",\"status\":\"completed\",\"phase\":\"complete\",\"elapsed_ms\":3456}");
     try state.addProgress("child_group_finished", "{\"group_id\":\"group-one\",\"completed\":1,\"terminal\":true}");
     try std.testing.expectEqual(@as(usize, 2), state.messages.items.len);
     try std.testing.expectEqualStrings("Agents 1/1", state.messages.items[0].text);
     try std.testing.expectEqual(ActivityState.completed, state.messages.items[0].activity_state);
-    try std.testing.expectEqualStrings("Recon - complete \"Mapped the workspace and found the backend owner.\"", state.messages.items[1].text);
+    try std.testing.expectEqualStrings("Recon - complete · 3.4s \"Mapped the workspace and found the backend owner.\"", state.messages.items[1].text);
     try std.testing.expectEqual(ActivityState.completed, state.messages.items[1].activity_state);
 
     try state.addProgress("child_group_recovered", "{\"group_id\":\"group-one\",\"tasks\":1,\"stale_owners_reconciled\":1,\"terminal\":true}");
@@ -5116,13 +5210,13 @@ test "tui agent child rows show a bounded turn summary instead of tool phases" {
     state.last_transcript_body_width = 42;
 
     try state.addProgress("child_admitted", "{\"group_id\":\"group-two\",\"task_id\":\"task-two\",\"name\":\"Scout\",\"status\":\"queued\"}");
-    try state.addProgress("child_progress", "{\"group_id\":\"group-two\",\"task_id\":\"task-two\",\"name\":\"Scout\",\"status\":\"running\",\"phase\":\"tool_completed\",\"detail\":\"tool completed: search_files\"}");
-    try std.testing.expectEqualStrings("Scout - running", state.messages.items[0].text);
+    try state.addProgress("child_progress", "{\"group_id\":\"group-two\",\"task_id\":\"task-two\",\"name\":\"Scout\",\"status\":\"running\",\"phase\":\"tool_completed\",\"detail\":\"tool completed: search_files\",\"elapsed_ms\":1250}");
+    try std.testing.expectEqualStrings("Scout - running · tool · 1.2s", state.messages.items[0].text);
 
-    try state.addProgress("child_progress", "{\"group_id\":\"group-two\",\"task_id\":\"task-two\",\"name\":\"Scout\",\"status\":\"running\",\"phase\":\"assistant_response\",\"detail\":\"This is a long agent turn summary that must stay on one compact row for the operator.\"}");
+    try state.addProgress("child_progress", "{\"group_id\":\"group-two\",\"task_id\":\"task-two\",\"name\":\"Scout\",\"status\":\"running\",\"phase\":\"assistant_response\",\"detail\":\"This is a long agent turn summary that must stay on one compact row for the operator.\",\"elapsed_ms\":2345}");
     try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "tool_completed") == null);
     try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "...\"") != null);
-    try std.testing.expect(state.messages.items[0].text.len <= 42);
+    try std.testing.expect(footerVisualWidth(state.messages.items[0].text) <= 42);
 }
 
 test "tui agent summary truncation preserves utf8 and display width" {
@@ -5131,6 +5225,8 @@ test "tui agent summary truncation preserves utf8 and display width" {
         allocator,
         "Scout",
         .running,
+        "assistant_response",
+        2345,
         "分析 workspace 🛰️ and preserve the latest agent summary",
         32,
     );

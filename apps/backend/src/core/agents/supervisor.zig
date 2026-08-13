@@ -797,14 +797,16 @@ pub const Supervisor = struct {
         detail: ?[]const u8,
     ) !void {
         const group = task.group orelse return;
+        const now_ms = std.time.milliTimestamp();
         self.mutex.lock();
         const child_seq = task.next_event_seq;
         task.next_event_seq += 1;
         const lifecycle = task.lifecycle;
+        const elapsed_ms = taskElapsedMs(task.started_at_ms, task.finished_at_ms, now_ms);
         self.mutex.unlock();
         const message = try std.fmt.allocPrint(
             allocator,
-            "{{\"schema\":\"var1.child_event.v1\",\"group_id\":{f},\"child_session_id\":{f},\"task_id\":{f},\"child_seq\":{d},\"name\":{f},\"agent_spec_id\":{f},\"route_role\":{f},\"capability_profile_id\":{f},\"status\":{f},\"phase\":{f},\"detail\":{f}}}",
+            "{{\"schema\":\"var1.child_event.v1\",\"group_id\":{f},\"child_session_id\":{f},\"task_id\":{f},\"child_seq\":{d},\"name\":{f},\"agent_spec_id\":{f},\"route_role\":{f},\"capability_profile_id\":{f},\"status\":{f},\"phase\":{f},\"detail\":{f},\"elapsed_ms\":{d}}}",
             .{
                 std.json.fmt(group.id, .{}),
                 std.json.fmt(task.session_id, .{}),
@@ -817,6 +819,7 @@ pub const Supervisor = struct {
                 std.json.fmt(taskLifecycleLabel(lifecycle), .{}),
                 std.json.fmt(phase, .{}),
                 std.json.fmt(detail, .{}),
+                elapsed_ms,
             },
         );
         defer allocator.free(message);
@@ -884,7 +887,7 @@ pub const Supervisor = struct {
             return false;
         }
         const task_event_committed = blk: {
-            self.emitTaskEvent(task, "child_finished", null, detail) catch break :blk false;
+            self.emitTaskEvent(task, "child_finished", "complete", detail) catch break :blk false;
             break :blk true;
         };
 
@@ -942,7 +945,7 @@ fn runTaskEntry(supervisor: *Supervisor, task: *Task) void {
     task.lifecycle = .running;
     task.started_at_ms = std.time.milliTimestamp();
     supervisor.mutex.unlock();
-    supervisor.emitTaskEvent(task, "child_started", null, null) catch {};
+    supervisor.emitTaskEvent(task, "child_started", "starting", null) catch {};
 
     const route = task.route orelse {
         supervisor.finishTask(task, .failed, "MissingResolvedRoute");
@@ -1348,6 +1351,19 @@ fn allTasksConverged(tasks: []const *Task) bool {
 
 fn timeoutToNs(timeout_ms: usize) u64 {
     return std.math.mul(u64, @intCast(timeout_ms), std.time.ns_per_ms) catch std.math.maxInt(u64);
+}
+
+fn taskElapsedMs(started_at_ms: i64, finished_at_ms: i64, now_ms: i64) i64 {
+    if (started_at_ms <= 0) return 0;
+    const end_ms = if (finished_at_ms > 0) finished_at_ms else now_ms;
+    return @max(@as(i64, 0), end_ms - started_at_ms);
+}
+
+test "child elapsed snapshot uses live or terminal task time and clamps invalid values" {
+    try std.testing.expectEqual(@as(i64, 0), taskElapsedMs(0, 0, 500));
+    try std.testing.expectEqual(@as(i64, 1_250), taskElapsedMs(1_000, 0, 2_250));
+    try std.testing.expectEqual(@as(i64, 2_000), taskElapsedMs(1_000, 3_000, 9_999));
+    try std.testing.expectEqual(@as(i64, 0), taskElapsedMs(3_000, 2_000, 9_999));
 }
 
 test "group snapshots are terminal only after every task reaches a terminal state" {

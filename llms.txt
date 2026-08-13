@@ -27,9 +27,10 @@ status bus exists.
 Agent activity uses the same keyed parent-event projection and child
 `sessions/summaries.jsonl` boundary: groups show `Agents completed/total`, `○`
 means queued/running, `◉` means complete, and each child keeps a bounded quoted
-summary through later tool/terminal phases. `tool_completed` is typed event
-metadata, not the visible child conclusion; there is no bubble event, poller, or
-second summary ledger.
+summary through later tool/terminal phases. Known typed phase and elapsed
+snapshots use the same row and yield to the summary when width is tight.
+`tool_completed` is typed event metadata, not the visible child conclusion; there
+is no bubble event, poller, or second summary ledger.
 
 Canonical execution path:
 operator input -> public LocalClient facade -> project-local execution owner ->
