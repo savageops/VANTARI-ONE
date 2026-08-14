@@ -574,8 +574,9 @@ const Server = struct {
             bsrv.deinit();
         }
         // Request workers and services are joined above. Only then may the
-        // process-local session-owned eval workers be terminated.
+        // process-local session-owned workers be terminated.
         eval_tool.deinitAll();
+        tools.dap_tool.deinitAll();
         self.buffer_projection.deinit(self.allocator);
         self.runtime.deinit(self.allocator);
         self.input_broker.deinit(self.allocator);

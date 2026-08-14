@@ -20,6 +20,7 @@ const session_summaries = @import("builtin/session_summaries.zig");
 const update_session_summary = @import("builtin/update_session_summary.zig");
 const memory = @import("builtin/memory.zig");
 const eval_tool = @import("builtin/eval.zig");
+pub const dap_tool = @import("builtin/dap.zig");
 pub const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
 const agent_message = @import("builtin/agent_message.zig");
@@ -53,7 +54,7 @@ const interactive_tool_definitions = ask_user.definitions;
 const agent_and_collaboration_tool_definitions = agent_tool_definitions ++ collaboration_tool_definitions;
 
 const workspace_state_tool_definitions = workspace_state_tools.definitions;
-const base_tool_definitions = registry.file_tool_definitions ++ [_]types.ToolDefinition{eval_tool.definition};
+const base_tool_definitions = registry.file_tool_definitions ++ dap_tool.definitions ++ [_]types.ToolDefinition{eval_tool.definition};
 const file_plus_collaboration_tool_definitions = base_tool_definitions ++ collaboration_tool_definitions;
 const file_plus_interactive_tool_definitions = file_plus_collaboration_tool_definitions ++ interactive_tool_definitions;
 const file_plus_workspace_state_tool_definitions = file_plus_interactive_tool_definitions ++ workspace_state_tool_definitions;
@@ -481,6 +482,9 @@ pub fn executeWithRunner(
     if (ask_user.handles(tool_call.name)) {
         return ask_user.execute(allocator, execution_context, tool_call.arguments_json, tool_call.id);
     }
+    if (dap_tool.handles(tool_call.name)) {
+        return dap_tool.execute(allocator, execution_context, tool_call.name, tool_call.arguments_json, runner);
+    }
     if (workspace_state_tools.handles(tool_call.name)) {
         return workspace_state_tools.execute(allocator, execution_context.workspace_root, tool_call.name, tool_call.arguments_json, runner);
     }
@@ -526,7 +530,7 @@ pub fn toolClassForName(tool_name: []const u8) ?profile_contract.ToolClass {
         std.mem.eql(u8, tool_name, "memory_write") or
         std.mem.eql(u8, tool_name, "log_ticket") or
         std.mem.eql(u8, tool_name, "update_session_summary")) return .file_write;
-    if (std.mem.eql(u8, tool_name, "shell_exec") or std.mem.eql(u8, tool_name, "eval")) return .command;
+    if (std.mem.eql(u8, tool_name, "shell_exec") or std.mem.eql(u8, tool_name, "eval") or dap_tool.handles(tool_name)) return .command;
     if (std.mem.eql(u8, tool_name, "schedule_job")) return .scheduling;
     if (ask_user.handles(tool_name)) return .interaction;
     if (agent_message.handles(tool_name)) return .collaboration;
@@ -564,6 +568,19 @@ test "tool catalog includes the built-in coding tools" {
     try std.testing.expect(std.mem.indexOf(u8, catalog, "search_files") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "replace_in_file") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "shell_exec") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "dap_attach") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "dap_detach") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "Example JSON: {\"pattern\":\"read_file\",\"path\":\"src\",\"glob\":\"*.zig\",\"max_results\":20}") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "todo_slice") == null);
+}
+
+test "DAP stays out of read-only recon profiles" {
+    const definitions = builtinDefinitionsForContext(.{
+        .workspace_root = ".",
+        .capability_profile_id = "recon",
+    });
+    for (definitions) |definition| {
+        try std.testing.expect(!std.mem.startsWith(u8, definition.name, "dap_"));
+    }
+    try std.testing.expectEqual(profile_contract.ToolClass.command, toolClassForName("dap_attach").?);
 }

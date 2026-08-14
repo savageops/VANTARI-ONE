@@ -7,7 +7,6 @@ const process_tree = @import("../../shared/process_tree.zig");
 /// Owns bounded command-child execution for shell and persistent eval. Why:
 /// these paths must share deadlines and Windows tree teardown. Preserves one
 /// lifecycle owner and truthful cleanup evidence for this command surface.
-
 pub const PersistentTerminationReceipt = struct {
     termination_requested: bool = false,
     tree_teardown_attempted: bool = false,
@@ -26,6 +25,22 @@ pub const PersistentReadResult = struct {
 
     pub fn deinit(self: PersistentReadResult, allocator: std.mem.Allocator) void {
         allocator.free(self.line);
+    }
+};
+
+/// One response read from a Content-Length framed worker. Why: DAP/LSP
+/// adapters can emit several messages in one pipe read, so line framing or
+/// EOF-based reads can discard the next event and hang the session. Preserves:
+/// exact frame boundaries, bounded memory, and the same teardown receipt as
+/// persistent eval.
+pub const PersistentFrameReadResult = struct {
+    frame: []u8,
+    truncated: bool = false,
+    timed_out: bool = false,
+    termination: PersistentTerminationReceipt = .{},
+
+    pub fn deinit(self: PersistentFrameReadResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.frame);
     }
 };
 
@@ -95,6 +110,124 @@ const LineReader = struct {
     }
 };
 
+const FrameReader = struct {
+    allocator: std.mem.Allocator,
+    file: std.fs.File,
+    output: std.array_list.Managed(u8),
+    mutex: std.Thread.Mutex = .{},
+    condition: std.Thread.Condition = .{},
+    done: bool = false,
+    saw_frame: bool = false,
+    read_error: ?anyerror = null,
+    truncated: bool = false,
+    max_bytes: usize,
+    max_frame_bytes: usize,
+
+    fn init(
+        allocator: std.mem.Allocator,
+        file: std.fs.File,
+        max_bytes: usize,
+        max_frame_bytes: usize,
+    ) FrameReader {
+        return .{
+            .allocator = allocator,
+            .file = file,
+            .output = std.array_list.Managed(u8).init(allocator),
+            .max_bytes = max_bytes,
+            .max_frame_bytes = max_frame_bytes,
+        };
+    }
+
+    fn finish(self: *FrameReader, read_error: ?anyerror, saw_frame: bool) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.read_error = read_error;
+        self.saw_frame = saw_frame;
+        self.done = true;
+        self.condition.broadcast();
+    }
+
+    /// Read one complete DAP/LSP frame without consuming bytes from the next
+    /// frame. Header reads are byte-sized until the delimiter; body reads are
+    /// bounded by the declared remaining length. Why: a single adapter read
+    /// commonly contains an event followed by a response.
+    fn run(self: *FrameReader) void {
+        var header: [4096]u8 = undefined;
+        var header_len: usize = 0;
+        var content_length: ?usize = null;
+
+        while (header_len < header.len) {
+            var one: [1]u8 = undefined;
+            const count = self.file.read(&one) catch |err| {
+                self.finish(err, false);
+                return;
+            };
+            if (count == 0) {
+                self.finish(null, false);
+                return;
+            }
+
+            header[header_len] = one[0];
+            header_len += 1;
+            if (header_len < 4) continue;
+            if (header[header_len - 4] != '\r' or
+                header[header_len - 3] != '\n' or
+                header[header_len - 2] != '\r' or
+                header[header_len - 1] != '\n') continue;
+
+            content_length = parseContentLength(header[0 .. header_len - 4]);
+            break;
+        }
+
+        const length = content_length orelse {
+            self.finish(error.NoContentLength, false);
+            return;
+        };
+        if (length > self.max_frame_bytes) {
+            self.finish(error.FrameTooLarge, false);
+            return;
+        }
+
+        var remaining = length;
+        var buffer: [4096]u8 = undefined;
+        while (remaining > 0) {
+            const request_len = @min(remaining, buffer.len);
+            const count = self.file.read(buffer[0..request_len]) catch |err| {
+                self.finish(err, false);
+                return;
+            };
+            if (count == 0) {
+                self.finish(null, false);
+                return;
+            }
+
+            if (self.output.items.len < self.max_bytes) {
+                const keep = @min(count, self.max_bytes - self.output.items.len);
+                self.output.appendSlice(buffer[0..keep]) catch |err| {
+                    self.finish(err, false);
+                    return;
+                };
+                if (keep < count) self.truncated = true;
+            } else {
+                self.truncated = true;
+            }
+            remaining -= count;
+        }
+
+        self.finish(null, true);
+    }
+};
+
+fn parseContentLength(headers: []const u8) ?usize {
+    var lines = std.mem.splitSequence(u8, headers, "\r\n");
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "Content-Length:")) continue;
+        const value = std.mem.trim(u8, line["Content-Length:".len..], " \t");
+        return std.fmt.parseUnsigned(usize, value, 10) catch null;
+    }
+    return null;
+}
+
 /// Owns one interactive child and its stdio handles. Why: persistent eval
 /// needs a long-lived namespace, but its process lifecycle must remain the
 /// same bounded owner as shell execution. Preserves: stdin serialization,
@@ -152,11 +285,19 @@ pub const PersistentProcess = struct {
     /// persistent workers have one ordered request/response channel. Preserves:
     /// framing and the single-flight invariant.
     pub fn writeLine(self: *PersistentProcess, line: []const u8) !void {
+        return self.writeBytes(line);
+    }
+
+    /// Write one already-framed request without interleaving callers. Why:
+    /// protocol adapters own their framing, but not their child lifecycle.
+    /// Preserves one serialized stdin owner for eval, DAP, and future framed
+    /// workers.
+    pub fn writeBytes(self: *PersistentProcess, bytes: []const u8) !void {
         if (!self.active) return error.ProcessNotRunning;
         self.stdin_mutex.lock();
         defer self.stdin_mutex.unlock();
         const stdin = self.stdin orelse return error.MissingChildStdin;
-        stdin.writeAll(line) catch {
+        stdin.writeAll(bytes) catch {
             _ = self.terminateChild();
             return error.ProcessPipeClosed;
         };
@@ -234,6 +375,82 @@ pub const PersistentProcess = struct {
         allocator.destroy(reader);
         return .{
             .line = line,
+            .truncated = truncated,
+            .termination = .{ .pipes_drained = true },
+        };
+    }
+
+    /// Read one Content-Length frame with a bounded deadline. Why: DAP/LSP
+    /// use message framing, not newline or EOF framing. Preserves exact frame
+    /// ownership and the same Windows process-tree teardown proof as readLine.
+    pub fn readContentLengthFrame(
+        self: *PersistentProcess,
+        allocator: std.mem.Allocator,
+        timeout_ms: usize,
+        max_bytes: usize,
+        max_frame_bytes: usize,
+    ) !PersistentFrameReadResult {
+        if (!self.active) return error.ProcessNotRunning;
+        const stdout = self.stdout orelse return error.MissingChildStdout;
+        self.stdout = null;
+
+        const reader = try allocator.create(FrameReader);
+        reader.* = FrameReader.init(allocator, stdout, max_bytes, max_frame_bytes);
+        errdefer {
+            self.stdout = reader.file;
+            reader.output.deinit();
+            allocator.destroy(reader);
+        }
+
+        const thread = try std.Thread.spawn(.{}, FrameReader.run, .{reader});
+
+        reader.mutex.lock();
+        if (!reader.done) reader.condition.timedWait(&reader.mutex, timeoutToNs(timeout_ms)) catch {};
+        const timed_out = !reader.done;
+        reader.mutex.unlock();
+
+        if (timed_out) {
+            const termination = self.terminateChild();
+            reader.file.close();
+            const pipes_drained = joinReader(thread);
+            if (pipes_drained) {
+                reader.output.deinit();
+                allocator.destroy(reader);
+            }
+            return .{
+                .frame = try allocator.dupe(u8, ""),
+                .timed_out = true,
+                .termination = .{
+                    .termination_requested = termination.termination_requested,
+                    .tree_teardown_attempted = termination.tree_teardown_attempted,
+                    .child_reaped = termination.child_reaped,
+                    .pipes_drained = pipes_drained,
+                },
+            };
+        }
+
+        thread.join();
+        self.stdout = reader.file;
+
+        if (reader.read_error) |err| {
+            reader.output.deinit();
+            allocator.destroy(reader);
+            _ = self.terminateChild();
+            return err;
+        }
+        if (!reader.saw_frame) {
+            reader.output.deinit();
+            allocator.destroy(reader);
+            _ = self.terminateChild();
+            return error.ProcessPipeClosed;
+        }
+
+        const frame = try reader.output.toOwnedSlice();
+        const truncated = reader.truncated;
+        reader.output.deinit();
+        allocator.destroy(reader);
+        return .{
+            .frame = frame,
             .truncated = truncated,
             .termination = .{ .pipes_drained = true },
         };
