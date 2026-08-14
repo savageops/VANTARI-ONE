@@ -2193,6 +2193,14 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
         };
         switch (event) {
             .key_press => |key| {
+                // A live question is the modal owner. Route it before any
+                // other overlay so a stale settings projection cannot steal
+                // Enter/Escape or Shift+Tab from the waiting turn.
+                if (state.input_state != null) {
+                    state.handleQuestionKey(key, &input);
+                    continue;
+                }
+
                 // Settings overlay key routing — when the panel is open, all keys
                 // go to the settings handler except Ctrl-C (force exit).
                 if (state.settings_state) |*ss| {
@@ -2213,11 +2221,6 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                         }
                         continue;
                     }
-                }
-
-                if (state.input_state != null) {
-                    state.handleQuestionKey(key, &input);
-                    continue;
                 }
 
                 if (key.matches('c', .{ .ctrl = true })) break;
@@ -2451,6 +2454,39 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         std.time.milliTimestamp(),
     );
 
+    // Vaxis retains printed text until this frame reaches `vx.render`.
+    // Both modal surfaces use one frame-owned arena instead of borrowing
+    // helper-stack or immediately-freed buffers.
+    var frame_arena = std.heap.ArenaAllocator.init(state.allocator);
+    defer frame_arena.deinit();
+    const frame_allocator = frame_arena.allocator();
+
+    // Interactive questions own the complete frame. Keeping them out of the
+    // transcript/footer layout prevents a long batch, a zero-height transcript,
+    // reasoning dock, or status-bar placement from colliding with the modal.
+    // This is the same ownership shape as Settings, while the existing
+    // question_view.State remains the only controller and response serializer.
+    if (state.input_state) |*active| {
+        active.draw(
+            root,
+            input,
+            .{
+                .panel = styles.meta_surface,
+                .title = styles.autocomplete_name,
+                .prompt = styles.meta_value,
+                .option = styles.meta_value,
+                .selected = styles.autocomplete_selected,
+                .hint = styles.meta_value,
+                .input = styles.composer,
+                .confirm = styles.meta_value,
+            },
+            frame_allocator,
+        );
+        try vx.render(writer);
+        try writer.flush();
+        return;
+    }
+
     // Settings overlay — when open, render full-screen instead of normal layout.
     if (state.settings_state) |*ss| {
         if (ss.open) {
@@ -2463,14 +2499,6 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
             return;
         }
     }
-
-    // Vaxis retains printed text until this frame reaches `vx.render`.
-    // Interactive question rows use the same boundary, so give their bounded
-    // formatting one frame-owned arena instead of borrowing helper-stack or
-    // immediately-freed buffers.
-    var frame_arena = std.heap.ArenaAllocator.init(state.allocator);
-    defer frame_arena.deinit();
-    const frame_allocator = frame_arena.allocator();
 
     root.fill(.{ .style = styles.surface });
 
@@ -2501,14 +2529,10 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         @intCast(@min(state.autocompleteHeight(), @as(usize, available_autocomplete_height)))
     else
         0;
-    const question_footer_height = if (state.input_state) |*active|
-        active.panelHeight(root.height -| top_status_height)
-    else
-        base_footer_height +| autocomplete_height;
     var layout = computeLayoutForPosition(
         root.height,
         @intCast(reasoning_rows.items.len),
-        question_footer_height,
+        base_footer_height +| autocomplete_height,
         state.status_bar_position,
     );
     if (state.input_state == null) {
@@ -2540,42 +2564,24 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         .width = root.width,
         .height = layout.footer_height,
     });
-    if (state.input_state) |*active| {
-        active.draw(
-            input_win,
-            input,
-            .{
-                .panel = styles.composer,
-                .title = styles.assistant,
-                .prompt = styles.text,
-                .option = styles.user_text,
-                .selected = styles.assistant,
-                .hint = styles.meta_value,
-                .input = styles.composer,
-                .confirm = styles.text,
-            },
-            frame_allocator,
-        );
-    } else {
-        input_win.fill(.{ .style = styles.meta_surface });
-        drawAutocomplete(input_win, state, layout.editor_y);
-        const composer_row = input_win.child(.{
-            .x_off = 0,
-            .y_off = @intCast(layout.editor_y),
-            .width = input_win.width,
-            .height = 1,
-        });
-        composer_row.fill(.{ .style = styles.composer });
-        const editor = composer_row.child(.{
-            .x_off = 1,
-            .y_off = 0,
-            .width = composer_row.width -| 2,
-            .height = 1,
-        });
-        input.drawWithStyle(editor, styles.composer);
-        if (state.status_bar_position == .bottom) {
-            footer_meta_owned = try drawStatusBar(input_win, state, footer_frame, layout.meta_y);
-        }
+    input_win.fill(.{ .style = styles.meta_surface });
+    drawAutocomplete(input_win, state, layout.editor_y);
+    const composer_row = input_win.child(.{
+        .x_off = 0,
+        .y_off = @intCast(layout.editor_y),
+        .width = input_win.width,
+        .height = 1,
+    });
+    composer_row.fill(.{ .style = styles.composer });
+    const editor = composer_row.child(.{
+        .x_off = 1,
+        .y_off = 0,
+        .width = composer_row.width -| 2,
+        .height = 1,
+    });
+    input.drawWithStyle(editor, styles.composer);
+    if (state.status_bar_position == .bottom) {
+        footer_meta_owned = try drawStatusBar(input_win, state, footer_frame, layout.meta_y);
     }
 
     if (state.status_bar_position == .top) {
@@ -6194,8 +6200,19 @@ test "tui question panel survives the Vaxis render boundary in every prompt mode
         state.prompt_mode = mode;
         state.last_event_seq = 0;
         try std.testing.expect(try state.recordProgressEvent(1, "input_requested", request));
-        try draw(&vx, &writer.writer, &state, &input);
-        try std.testing.expect(writer.written().len > 0);
+        // The modal must remain safe when it owns the whole frame, including
+        // the cramped sizes that previously made footer/transcript geometry
+        // collide. The same controller is used in every prompt mode.
+        for ([_]u16{ 14, 4, 1 }) |rows| {
+            try vx.resize(allocator, &writer.writer, .{
+                .rows = rows,
+                .cols = 120,
+                .x_pixel = 0,
+                .y_pixel = 0,
+            });
+            try draw(&vx, &writer.writer, &state, &input);
+            try std.testing.expect(writer.written().len > 0);
+        }
         state.clearInputRequest();
     }
 }

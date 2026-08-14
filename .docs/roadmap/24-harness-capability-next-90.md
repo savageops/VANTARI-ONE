@@ -358,6 +358,16 @@ and top/bottom status placement persist through the existing settings/config
   Installed promotion remains deferred. Research and receipt are
   `.docs/research/2026-08-14-context-shard-projection-move70.md` and
   `.docs/todo/changelog/062-context-shard-projection-move70.md`.
+  The question-modal follow-up is now source-complete: `question_view.State`
+  owns the complete Vaxis frame, normal/`orchestrate`/`build`/`align`/`plan`
+  share one settings-style horizontal-row review surface, and multi-select
+  Enter/Space stays on the row until review while deselected `Other` text is
+  cleared. Focused TUI Debug and ReleaseFast are `136/136`; full Debug is
+  `19/19` and `2,168/2,168`; source ReleaseFast is `9/9` at SHA-256
+  `EDE276134231600AE8978B0C88BCBA6C26F7F303A5336025D5B0E371852EC8F8`.
+  Installed promotion remains deferred. Research and receipt are
+  `.docs/research/2026-08-14-question-modal-frame.md` and
+  `.docs/todo/changelog/063-question-modal-frame.md`.
   Provider-driven installed question response remains an explicit residual for
   the Move52a consumer path because live promotion is deferred. The TUI input repair
 is installed-proven at `74981E5C9CF956E3F3003FA15FDEB1D94F05A55BE9192FD4EDB1F0DE2FDE62AD`:

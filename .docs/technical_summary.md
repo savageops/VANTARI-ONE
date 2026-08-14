@@ -391,6 +391,28 @@ slots. `orchestrate`, `build`, `align`, and `plan` share the controller. Root
   `.docs/research/2026-08-14-question-panel-input-lifecycle.md`, and
   `.docs/research/2026-08-14-question-panel-event-loop-recovery.md`.
 
+## Current question modal boundary — 2026-08-14
+
+The question controller now owns the complete Vaxis frame while an
+`input_requested` request is active. It uses the existing settings/autocomplete
+visual hierarchy and keeps one horizontal row per visible question, inline
+`Other` input, and one review/submit state. Transcript, reasoning-dock,
+status-bar, and composer layout are not calculated until the modal settles, so
+a long batch or a cramped viewport cannot collide with the normal footer.
+
+`orchestrate`, `build`, `align`, and `plan` still share the same controller and
+broker path. Multi-select Enter/Space toggles in place until review; deselecting
+`Other` clears its custom text. The existing idle/streaming
+`ChatState.handleQuestionKey` boundary remains the only input error boundary.
+Focused TUI Debug and ReleaseFast are both `136/136`, including 14/4/1-row
+modal rendering. Full Debug is `19/19` steps and `2,168/2,168` tests; source
+ReleaseFast is `9/9` at SHA-256
+`EDE276134231600AE8978B0C88BCBA6C26F7F303A5336025D5B0E371852EC8F8`.
+Installed promotion and provider-driven live response remain deferred; the
+preserved installed owner remains on
+`F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+Receipt: `.docs/todo/changelog/063-question-modal-frame.md`.
+
 ## Current task-branch context boundary — 2026-08-14
 
 Move 70 keeps the existing execution receipt, context compiler, session ledger,

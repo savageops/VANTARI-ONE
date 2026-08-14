@@ -153,7 +153,7 @@ pub const State = struct {
                 question.other_text = try self.allocator.dupe(u8, trimmed);
                 self.editing_other = false;
                 input.clearAndFree();
-                self.advanceOrConfirm();
+                if (!question.multiple) self.advanceOrConfirm();
                 return .consumed;
             }
             try input.update(.{ .key_press = key });
@@ -208,20 +208,30 @@ pub const State = struct {
             return .consumed;
         }
         if (key.matches(' ', .{})) {
-            const option = &question.options.items[self.option_cursor];
-            option.selected = !option.selected;
-            if (!option.selected and std.mem.eql(u8, option.id, "f")) {
-                if (question.other_text) |value| self.allocator.free(value);
-                question.other_text = null;
-            }
+            self.toggleOption(question);
             return .consumed;
         }
         if (key.matches(tui.Key.enter, .{})) {
             const current = &question.options.items[self.option_cursor];
+            if (question.multiple) {
+                // Multi-select questions stay on their row until the review
+                // state. Enter and Space are both toggles, matching the
+                // settings-style reference controller. Selecting Other with
+                // Enter opens the inline editor instead of advancing.
+                if (std.mem.eql(u8, current.id, "f") and (!current.selected or question.other_text == null)) {
+                    current.selected = true;
+                    self.editing_other = true;
+                    input.clearAndFree();
+                    return .consumed;
+                }
+                self.toggleOption(question);
+                return .consumed;
+            }
             if (!question.multiple) {
                 for (question.options.items) |*option| option.selected = false;
             }
             current.selected = true;
+            if (!std.mem.eql(u8, current.id, "f")) self.clearOther(question);
             if (std.mem.eql(u8, current.id, "f") and question.other_text == null) {
                 self.editing_other = true;
                 input.clearAndFree();
@@ -231,6 +241,17 @@ pub const State = struct {
             return .consumed;
         }
         return .consumed;
+    }
+
+    fn toggleOption(self: *State, question: *Question) void {
+        const option = &question.options.items[self.option_cursor];
+        option.selected = !option.selected;
+        if (!option.selected and std.mem.eql(u8, option.id, "f")) self.clearOther(question);
+    }
+
+    fn clearOther(self: *State, question: *Question) void {
+        if (question.other_text) |value| self.allocator.free(value);
+        question.other_text = null;
     }
 
     fn advanceOrConfirm(self: *State) void {
@@ -599,7 +620,8 @@ fn expectQuestionScreenTextOwnership(
 }
 
 test "question controller selects, confirms, and serializes answers" {
-    var state = try State.initFromJson(std.testing.allocator,
+    var state = try State.initFromJson(
+        std.testing.allocator,
         "{\"request_id\":\"call-1\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Pick\",\"options\":[{\"id\":\"a\",\"label\":\"One\"},{\"id\":\"f\",\"label\":\"Other\"}]}]}",
     );
     defer state.deinit();
@@ -616,7 +638,8 @@ test "question controller selects, confirms, and serializes answers" {
 }
 
 test "question controller rejects empty answers and captures Other text" {
-    var state = try State.initFromJson(std.testing.allocator,
+    var state = try State.initFromJson(
+        std.testing.allocator,
         "{\"request_id\":\"call-2\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Pick\",\"options\":[{\"id\":\"a\",\"label\":\"One\"},{\"id\":\"f\",\"label\":\"Other\"}]}]}",
     );
     defer state.deinit();
@@ -647,7 +670,8 @@ test "question controller rejects empty answers and captures Other text" {
 }
 
 test "question controller keeps all question rows navigable before review" {
-    var state = try State.initFromJson(std.testing.allocator,
+    var state = try State.initFromJson(
+        std.testing.allocator,
         "{\"request_id\":\"call-3\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"First\",\"options\":[{\"id\":\"a\",\"label\":\"One\"},{\"id\":\"b\",\"label\":\"Two\"}]},{\"id\":\"q2\",\"prompt\":\"Second\",\"options\":[{\"id\":\"a\",\"label\":\"Alpha\"},{\"id\":\"b\",\"label\":\"Beta\"}]}]}",
     );
     defer state.deinit();
@@ -665,6 +689,44 @@ test "question controller keeps all question rows navigable before review" {
     try std.testing.expectEqual(@as(usize, 1), state.question_index);
     try std.testing.expectEqual(Action.consumed, try state.handleKey(shift_tab, &input));
     try std.testing.expectEqual(@as(usize, 0), state.question_index);
+}
+
+test "question controller keeps multi-select on the row until review and clears Other" {
+    var unicode = try tui.Unicode.init(std.testing.allocator);
+    defer unicode.deinit(std.testing.allocator);
+    var input = TextInput.init(std.testing.allocator, &unicode);
+    defer input.deinit();
+    var state = try State.initFromJson(
+        std.testing.allocator,
+        "{\"request_id\":\"call-multi\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Pick any\",\"multiple\":true,\"options\":[{\"id\":\"a\",\"label\":\"One\"},{\"id\":\"f\",\"label\":\"Other\"}]}]}",
+    );
+    defer state.deinit();
+    const enter_key: tui.Key = .{ .codepoint = tui.Key.enter };
+    const right_key: tui.Key = .{ .codepoint = tui.Key.right };
+    const tab_key: tui.Key = .{ .codepoint = tui.Key.tab };
+    const text_key: tui.Key = .{ .codepoint = 'x', .text = "custom" };
+
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(enter_key, &input));
+    try std.testing.expect(!state.confirming);
+    try std.testing.expect(state.questions.items[0].options.items[0].selected);
+
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(right_key, &input));
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(enter_key, &input));
+    try std.testing.expect(state.editing_other);
+    try input.update(.{ .key_press = text_key });
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(enter_key, &input));
+    try std.testing.expect(!state.confirming);
+    try std.testing.expectEqual(@as(usize, 0), state.question_index);
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(tab_key, &input));
+    try std.testing.expect(state.confirming);
+
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(.{ .codepoint = tui.Key.escape }, &input));
+    state.option_cursor = 1;
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(enter_key, &input));
+    const response = try state.responseJson(std.testing.allocator, false);
+    defer std.testing.allocator.free(response);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"selected\":[\"a\"]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"other\":\"custom\"") == null);
 }
 
 test "question controller guards empty panel dimensions and rejects malformed input" {
@@ -687,7 +749,8 @@ test "question panel render cells keep state or frame-owned text through the fra
     defer unicode.deinit(allocator);
     var screen = try tui.Screen.init(allocator, .{ .rows = 8, .cols = 120, .x_pixel = 0, .y_pixel = 0 });
     defer screen.deinit(allocator);
-    var state = try State.initFromJson(allocator,
+    var state = try State.initFromJson(
+        allocator,
         "{\"request_id\":\"call-render\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Direction\",\"options\":[{\"id\":\"a\",\"label\":\"Fast\"},{\"id\":\"b\",\"label\":\"Careful\"}]},{\"id\":\"q2\",\"prompt\":\"Scope\",\"options\":[{\"id\":\"a\",\"label\":\"Local\"},{\"id\":\"b\",\"label\":\"Full\"}]}]}",
     );
     defer state.deinit();
@@ -729,7 +792,8 @@ test "question panel sanitizes untrusted text and survives clipped viewports" {
     const allocator = std.testing.allocator;
     var unicode = try tui.Unicode.init(allocator);
     defer unicode.deinit(allocator);
-    var state = try State.initFromJson(allocator,
+    var state = try State.initFromJson(
+        allocator,
         "{\"request_id\":\"call-safe\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Choose\\n a\\tpath\",\"options\":[{\"id\":\"server-choice\",\"label\":\"Fast\\r\\npath\"},{\"id\":\"safe-choice\",\"label\":\"Careful\"}]}]}",
     );
     defer state.deinit();

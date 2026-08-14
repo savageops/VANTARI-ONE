@@ -3225,3 +3225,18 @@ steps and `2,166/2,166` tests; source ReleaseFast passed `9/9` with SHA-256
 Installed promotion remains deferred. Research and receipt:
 `.docs/research/2026-08-14-context-shard-projection-move70.md` and
 `.docs/todo/changelog/062-context-shard-projection-move70.md`.
+
+**Question modal frame closure receipt (2026-08-14):** The existing question
+controller now owns the complete Vaxis frame, so transcript, reasoning-dock,
+status-bar, and footer geometry cannot collide with a long `ask_user` batch.
+Normal, `orchestrate`, `build`, `align`, and `plan` continue to share one
+controller and broker path. Multi-select Enter/Space remains on the question
+until review, and deselecting `Other` clears its custom text. Focused TUI Debug
+and ReleaseFast both passed `9/9` steps and `136/136` tests; full Debug passed
+`19/19` steps and `2,168/2,168`; source ReleaseFast passed `9/9` with SHA-256
+`EDE276134231600AE8978B0C88BCBA6C26F7F303A5336025D5B0E371852EC8F8`.
+Installed promotion remains deferred and the installed owner remains on
+`F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+Research and receipt:
+`.docs/research/2026-08-14-question-modal-frame.md` and
+`.docs/todo/changelog/063-question-modal-frame.md`.

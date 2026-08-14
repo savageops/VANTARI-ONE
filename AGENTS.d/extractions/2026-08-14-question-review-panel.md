@@ -24,10 +24,17 @@ options stay horizontal, and submission is an explicit review boundary.
 - Keep `ask_user`, `input_requested`, `InputBroker`, and `input/respond` as the
   only protocol owners. Do not add a question poller, transcript copy, or mode
   branch.
-- Render one settings-style row per question in `question_view.State`. Use
+- Give `question_view.State` the complete Vaxis frame, using the same quiet
+  modal ownership shape as Settings and the command palette. Render one
+  settings-style row per question in that frame. This keeps transcript,
+  reasoning-dock, status-bar, and footer layout out of the question path.
+  Use
   Up/Down for question focus, Left/Right for option focus, Enter to select,
   Space to toggle multi-select, Tab/Shift+Tab to move rows, and a review state
   before submit.
+- For multi-select questions, Enter and Space toggle without advancing. The
+  final review state is the only submit boundary; clear `Other` text when its
+  option is deselected.
 - Clamp question and option cursors before every access. Bound row rendering to
   the viewport and keep inline `f / Other` input in the same panel. The frame
   projection must sanitize invalid UTF-8/control text, use static display keys,
