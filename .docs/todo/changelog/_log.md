@@ -1,5 +1,22 @@
 # Execution Log
 
+## 2026-08-14 - Source-anchored repair candidates (Move 74)
+
+**Outcome:** Added one proposal-only repair candidate socket to the existing
+tool runtime and event spine. It blocks source drift before mutation.
+
+- `repair_candidate` resolves and inspects an existing target, captures its
+  before hash, hashes the exact operation/path/patch descriptor, and appends
+  one `var1.repair_candidate.v1` event with expected/current baseline hashes.
+- Ready candidates still declare `mutation_allowed: false`; baseline drift
+  returns typed `RepairBaselineConflict`; no write intent, approval, patcher, or
+  second ledger was added.
+- Full Debug and ReleaseFast pass `19/19` steps and `2,182/2,182` tests.
+  Source ReleaseFast passes `9/9`; source SHA-256 is
+  `E92BD7C72EBF06D2D6B43F0ECF85B90AD6E0C34605D72833B96CBD5F0B7BB0FD`.
+- Installed promotion remains deferred. Receipt:
+  `.docs/todo/changelog/068-repair-candidate-baseline.md`.
+
 ## 2026-08-14 - Deterministic causal diagnosis (Move 73)
 
 **Outcome:** Added a bounded causal-diagnosis record inside the existing

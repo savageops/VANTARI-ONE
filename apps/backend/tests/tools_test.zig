@@ -474,6 +474,56 @@ test "real write tools leave committed intent evidence in the owning session" {
     try std.testing.expect(std.mem.indexOf(u8, replace_output, "\"effect\":") != null);
 }
 
+test "repair candidate records ready and drift-blocked proposals without mutation" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "repair candidate");
+    defer session.deinit(std.testing.allocator);
+
+    const file_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, "notes", "candidate.zig" });
+    defer std.testing.allocator.free(file_path);
+    try VAR1.shared.fsutil.writeText(file_path, "const answer = 1;\n");
+
+    const baseline = try VAR1.core.evaluation.events.sourceBaseline(std.testing.allocator);
+    defer std.testing.allocator.free(baseline);
+
+    const ready_args = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"candidate_id\":\"candidate-ready\",\"failure_id\":\"failure-1\",\"path\":\"notes/candidate.zig\",\"operation\":\"replace_in_file\",\"patch\":\"const answer = 2;\\n\",\"expected_source_baseline\":{f}}}",
+        .{std.json.fmt(baseline, .{})},
+    );
+    defer std.testing.allocator.free(ready_args);
+    var ready_call = try makeToolCallWithId(std.testing.allocator, "call-candidate-ready", "repair_candidate", ready_args);
+    defer ready_call.deinit(std.testing.allocator);
+    const ready_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, sessionExecCtx(workspace_root, session.id), ready_call);
+    defer std.testing.allocator.free(ready_output);
+    try std.testing.expect(std.mem.indexOf(u8, ready_output, "STATUS ready") != null);
+
+    const stale_args = "{\"candidate_id\":\"candidate-stale\",\"failure_id\":\"failure-1\",\"path\":\"notes/candidate.zig\",\"operation\":\"replace_in_file\",\"patch\":\"const answer = 3;\",\"expected_source_baseline\":\"git:stale\"}";
+    var stale_call = try makeToolCallWithId(std.testing.allocator, "call-candidate-stale", "repair_candidate", stale_args);
+    defer stale_call.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        VAR1.core.tool_runtime.Error.RepairBaselineConflict,
+        VAR1.core.tool_runtime.execute(std.testing.allocator, sessionExecCtx(workspace_root, session.id), stale_call),
+    );
+
+    const unchanged = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, file_path);
+    defer std.testing.allocator.free(unchanged);
+    try std.testing.expectEqualStrings("const answer = 1;\n", unchanged);
+
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
+    try std.testing.expectEqual(@as(usize, 2), events.len);
+    try std.testing.expectEqualStrings("repair_candidate", events[0].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[0].message, "\"baseline_match\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[0].message, "const answer = 2") == null);
+    try std.testing.expectEqualStrings("repair_candidate", events[1].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[1].message, "\"status\":\"baseline_conflict\"") != null);
+}
+
 test "append primitive preserves existing file content" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

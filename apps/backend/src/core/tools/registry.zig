@@ -9,6 +9,7 @@ const read_file = @import("builtin/read_file.zig");
 const write_file = @import("builtin/write_file.zig");
 const append_file = @import("builtin/append_file.zig");
 const replace_in_file = @import("builtin/replace_in_file.zig");
+const repair_candidate = @import("builtin/repair_candidate.zig");
 const shell_exec = @import("builtin/shell_exec.zig");
 const schedule_job = @import("builtin/schedule_job.zig");
 const log_ticket = @import("builtin/log_ticket.zig");
@@ -38,6 +39,7 @@ pub const file_tool_definitions = [_]types.ToolDefinition{
     write_file.definition,
     append_file.definition,
     replace_in_file.definition,
+    repair_candidate.definition,
     shell_exec.definition,
     schedule_job.definition,
     log_ticket.definition,

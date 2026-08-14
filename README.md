@@ -284,6 +284,14 @@ failure evidence to a fixed invariant, binds a deterministic diagnosis ID to
 the `session_started.seq` → `turn_terminal.seq` span, and keeps completed and
 cancelled turns free of repair diagnosis.
 
+The proposal-only `repair_candidate` tool records a source-anchored candidate
+in that same event spine. It requires an inspected existing target, captures the
+before hash, hashes the operation/path/patch descriptor, and records expected and
+current source baselines. Source drift returns a typed conflict; even a matching
+candidate reports `mutation_allowed:false` and performs no write. Approval and
+application remain a later, explicit stage over the existing reviewed write
+tools.
+
 ```text
 session/create ─► session/send ─► [executor loop] ─► session/get
                                                     ─► session/compact

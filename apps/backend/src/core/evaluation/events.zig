@@ -8,6 +8,8 @@ pub const Error = error{
 
 pub const repair_receipt_event_type = "repair_receipt";
 pub const repair_receipt_schema = "var1.repair_receipt.v1";
+pub const repair_candidate_event_type = "repair_candidate";
+pub const repair_candidate_schema = "var1.repair_candidate.v1";
 
 const repair_environment_keys = [_][]const u8{
     "VANTARI_HOME",
@@ -129,6 +131,68 @@ pub fn appendRepairReceiptEvent(
 
     try store.appendEvent(allocator, workspace_root, session_id, .{
         .event_type = repair_receipt_event_type,
+        .message = message,
+        .timestamp_ms = std.time.milliTimestamp(),
+    });
+}
+
+/// Persist a proposal-only repair candidate. The candidate carries hashes and
+/// source-baseline identity, never the patch body. Applying a candidate is a
+/// later, explicitly approved operation owned by the normal write tools.
+pub fn appendRepairCandidateEvent(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    candidate_id: []const u8,
+    failure_id: []const u8,
+    operation: []const u8,
+    target_path: []const u8,
+    before_sha256: []const u8,
+    patch_sha256: []const u8,
+    expected_source_baseline: []const u8,
+    current_source_baseline: []const u8,
+    baseline_match: bool,
+) !void {
+    const required = [_][]const u8{
+        session_id,
+        candidate_id,
+        failure_id,
+        operation,
+        target_path,
+        before_sha256,
+        patch_sha256,
+        expected_source_baseline,
+        current_source_baseline,
+    };
+    for (required) |value| {
+        if (std.mem.trim(u8, value, " \t\r\n").len == 0) return Error.EmptyEvidence;
+    }
+
+    const expected_baseline_hash = contentHash(expected_source_baseline);
+    const current_baseline_hash = contentHash(current_source_baseline);
+    const message = try std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"{s}\",\"candidate_id\":{f},\"failure_id\":{f},\"operation\":{f},\"target_path\":{f},\"before_sha256\":\"sha256:{s}\",\"patch_sha256\":\"sha256:{s}\",\"expected_source_baseline\":{f},\"expected_source_baseline_sha256\":\"sha256:{s}\",\"current_source_baseline\":{f},\"current_source_baseline_sha256\":\"sha256:{s}\",\"baseline_match\":{},\"status\":\"{s}\",\"mutation_allowed\":false}}",
+        .{
+            repair_candidate_schema,
+            std.json.fmt(candidate_id, .{}),
+            std.json.fmt(failure_id, .{}),
+            std.json.fmt(operation, .{}),
+            std.json.fmt(target_path, .{}),
+            before_sha256,
+            patch_sha256,
+            std.json.fmt(expected_source_baseline, .{}),
+            expected_baseline_hash[0..],
+            std.json.fmt(current_source_baseline, .{}),
+            current_baseline_hash[0..],
+            baseline_match,
+            if (baseline_match) "ready" else "baseline_conflict",
+        },
+    );
+    defer allocator.free(message);
+
+    try store.appendEvent(allocator, workspace_root, session_id, .{
+        .event_type = repair_candidate_event_type,
         .message = message,
         .timestamp_ms = std.time.milliTimestamp(),
     });
@@ -315,4 +379,41 @@ test "repair receipt persists exact input and hashes transient replay state" {
     try std.testing.expect(std.mem.indexOf(u8, events[0].message, "tool_catalog_sha256\":\"sha256:") != null);
     try std.testing.expect(std.mem.indexOf(u8, events[0].message, "source_baseline\":\"git:abc123\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, events[0].message, "environment_sha256\":\"sha256:") != null);
+}
+
+test "repair candidate receipt blocks source drift without persisting patch text" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var session = try store.initSession(std.testing.allocator, workspace_root, "repair candidate");
+    defer session.deinit(std.testing.allocator);
+
+    try appendRepairCandidateEvent(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "candidate-1",
+        "failure-1",
+        "replace_in_file",
+        "apps/backend/src/core/example.zig",
+        "before-hash",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "git:expected",
+        "git:current",
+        false,
+    );
+
+    const events = try store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer @import("../../shared/types.zig").deinitSessionEvents(std.testing.allocator, events);
+
+    try std.testing.expectEqual(@as(usize, 1), events.len);
+    try std.testing.expectEqualStrings(repair_candidate_event_type, events[0].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[0].message, "\"schema\":\"var1.repair_candidate.v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[0].message, "\"status\":\"baseline_conflict\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[0].message, "\"baseline_match\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[0].message, "\"mutation_allowed\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[0].message, "patch body") == null);
 }

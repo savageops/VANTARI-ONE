@@ -60,6 +60,8 @@ pub const Error = error{
     MissingParentSession,
     MemoryWritesDisabled,
     PatternNotFound,
+    InvalidRepairCandidate,
+    RepairBaselineConflict,
     ToolPayloadExceeded,
     ToolUnavailable,
     UnknownTool,

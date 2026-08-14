@@ -467,6 +467,26 @@ Installed promotion remains deferred; the preserved installed owner remains
 on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
 Receipt: `.docs/todo/changelog/067-repair-diagnosis-move73.md`.
 
+## Current repair-candidate boundary — 2026-08-14
+
+Move 74 composes the candidate proposal into the existing tool registry/runtime
+and `events.jsonl` owner. `repair_candidate` resolves the target through shared
+access mode, requires an existing inspected file, captures its before hash,
+hashes the operation/path/patch descriptor, and records expected/current source
+baselines. It never writes, reserves a write intent, stores patch body, or
+allows mutation. A drift mismatch appends `baseline_conflict` evidence and
+returns typed `RepairBaselineConflict`; a matching baseline returns `ready` but
+still reports `mutation_allowed:false`. Moves 75–80 own approval, application,
+exact-input replay, evaluation, rollback, and promotion.
+
+Full Debug and ReleaseFast are `19/19` steps and `2,182/2,182` tests. The
+source ReleaseFast build is `9/9` at SHA-256
+`E92BD7C72EBF06D2D6B43F0ECF85B90AD6E0C34605D72833B96CBD5F0B7BB0FD`.
+The existing full-frame question modal is source-verified across all prompt
+modes; installed promotion remains deferred and the preserved installed owner
+remains on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+Receipt: `.docs/todo/changelog/068-repair-candidate-baseline.md`.
+
 ## Current task-branch context boundary — 2026-08-14
 
 Move 70 keeps the existing execution receipt, context compiler, session ledger,
