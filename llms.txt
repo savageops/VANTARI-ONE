@@ -123,8 +123,13 @@ Rules:
   `replace_in_file` payload through the reviewed writer. A completed
   `var1.repair_rollback.v1` receipt requires the candidate pre-apply hash;
   started/completed rows retain the failed hypothesis and deterministic retry
-  identity makes repeats no-op. Move 80 still owns promotion and cold-start
-  reconciliation. No patcher, worker, git reset, or second ledger exists.
+  identity makes repeats no-op.
+- Move 80 closes the repair loop on the same event spine: a passing treatment
+  over a failed/cancelled baseline appends one idempotent
+  `var1.repair_regression.v1` receipt. Cold-start `session/get`/`session/list`
+  closes orphaned rerun and rollback starts exactly once; it never replays
+  provider I/O or file mutation, and ambiguous bytes remain
+  `recovery_required`. No patcher, worker, git reset, or second ledger exists.
 - runtime.full_access_mode is false by default; resolved child routes carry it
   into the shared file/search/LSP/shell execution context, and it never relocates
   .var.

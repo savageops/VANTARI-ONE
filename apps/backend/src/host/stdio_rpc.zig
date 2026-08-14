@@ -1678,6 +1678,51 @@ fn appendRepairRollbackTerminal(
     ) catch {};
 }
 
+fn appendRepairRegressionIfEligible(
+    server: *Server,
+    source_session_id: []const u8,
+    treatment_session_id: []const u8,
+    candidate_event_seq: u64,
+    approval_event_seq: u64,
+    applied_event_seq: u64,
+    evaluation_id: []const u8,
+    evaluation_event_seq: u64,
+    passed: bool,
+    baseline_status: types.SessionStatus,
+    treatment_status: types.SessionStatus,
+    source_baseline: []const u8,
+) !void {
+    if (!passed or candidate_event_seq == 0 or approval_event_seq == 0 or applied_event_seq == 0 or
+        (baseline_status != .failed and baseline_status != .cancelled) or treatment_status != .completed) return;
+
+    const regression_identity = try std.fmt.allocPrint(
+        server.allocator,
+        "repair-regression\x00{s}\x00{d}",
+        .{ source_session_id, evaluation_event_seq },
+    );
+    defer server.allocator.free(regression_identity);
+    const regression_digest = evaluation_events.contentHash(regression_identity);
+    const regression_id = try std.fmt.allocPrint(server.allocator, "repair-regression-{s}", .{regression_digest[0..]});
+    defer server.allocator.free(regression_id);
+
+    _ = try evaluation_events.appendRepairRegressionEvent(
+        server.allocator,
+        server.config.workspace_root,
+        source_session_id,
+        regression_id,
+        evaluation_id,
+        source_session_id,
+        treatment_session_id,
+        candidate_event_seq,
+        approval_event_seq,
+        applied_event_seq,
+        evaluation_event_seq,
+        types.statusLabel(baseline_status),
+        types.statusLabel(treatment_status),
+        source_baseline,
+    );
+}
+
 /// Roll back one failed repair treatment with an operator-supplied inverse
 /// `replace_in_file` payload. The existing source/treatment/evaluation rows
 /// remain immutable. The normal reviewed writer performs the mutation, and a
@@ -2244,7 +2289,7 @@ fn handleRepairRerun(server: *Server, params: ?std.json.Value) ![]u8 {
         config_match,
         provider_dispatched,
     );
-    _ = try evaluation_events.appendRepairEvaluationEvent(
+    const evaluation_result = try evaluation_events.appendRepairEvaluationEvent(
         server.allocator,
         server.config.workspace_root,
         source_session.id,
@@ -2266,6 +2311,21 @@ fn handleRepairRerun(server: *Server, params: ?std.json.Value) ![]u8 {
                 .max_cost_usd = max_cost_usd,
             },
         },
+    );
+
+    try appendRepairRegressionIfEligible(
+        server,
+        source_session.id,
+        child_session.id,
+        applied.value.candidate_event_seq,
+        applied.value.approval_event_seq,
+        applied_event_seq,
+        rerun_id,
+        evaluation_result.event_seq,
+        evaluation_result.passed,
+        source_session.status,
+        completed_child.status,
+        source_baseline,
     );
 
     return renderJsonAlloc(server.allocator, protocol_types.RepairRerunResult{
@@ -2356,6 +2416,251 @@ fn handleSessionGet(server: *Server, params: ?std.json.Value) ![]u8 {
     });
 }
 
+/// Close repair control-plane spans that were interrupted after their started
+/// receipt. Recovery never repeats a provider turn or file mutation: a
+/// completed child is evaluated and promoted if eligible, while an incomplete
+/// rerun/rollback receives one terminal reconciliation receipt.
+fn reconcileRepairLifecycles(server: *Server, session: *types.SessionRecord) !void {
+    if (session.status == .running and server.runtime.isRunning(session.id)) return;
+
+    server.repair_apply_mutex.lock();
+    defer server.repair_apply_mutex.unlock();
+
+    const events = try store.readEvents(server.allocator, server.config.workspace_root, session.id);
+    defer types.deinitSessionEvents(server.allocator, events);
+
+    for (events) |*event| {
+        if (!std.mem.eql(u8, event.event_type, evaluation_events.repair_rerun_started_event_type)) continue;
+        var started = std.json.parseFromSlice(RepairRerunPayload, server.allocator, event.message, .{
+            .ignore_unknown_fields = true,
+        }) catch continue;
+        defer started.deinit();
+        if (!std.mem.eql(u8, started.value.schema, evaluation_events.repair_rerun_schema)) continue;
+
+        var completed = false;
+        for (events) |*candidate| {
+            if (!std.mem.eql(u8, candidate.event_type, evaluation_events.repair_rerun_completed_event_type)) continue;
+            var parsed = std.json.parseFromSlice(RepairRerunPayload, server.allocator, candidate.message, .{
+                .ignore_unknown_fields = true,
+            }) catch continue;
+            defer parsed.deinit();
+            if (std.mem.eql(u8, parsed.value.schema, evaluation_events.repair_rerun_schema) and
+                std.mem.eql(u8, parsed.value.rerun_id, started.value.rerun_id))
+            {
+                completed = true;
+                break;
+            }
+        }
+        if (completed) continue;
+
+        var child = store.readSessionRecord(server.allocator, server.config.workspace_root, started.value.child_session_id) catch {
+            _ = try evaluation_events.appendRepairRerunEvent(
+                server.allocator,
+                server.config.workspace_root,
+                session.id,
+                .completed,
+                started.value.rerun_id,
+                started.value.source_receipt_seq,
+                started.value.applied_event_seq,
+                started.value.child_session_id,
+                started.value.original_input_sha256,
+                started.value.config_sha256,
+                started.value.source_baseline,
+                "missing_child",
+                false,
+                false,
+                false,
+            );
+            continue;
+        };
+        defer child.deinit(server.allocator);
+
+        if (child.status == .running) {
+            if (server.runtime.isRunning(child.id)) continue;
+            if (!(try isStaleUnownedRunningSession(server, &child))) continue;
+            try commitAndEmitTurnTerminal(server, &child, null, .{
+                .outcome = .failed,
+                .detail = "Repair treatment was marked running but no active kernel execution owns it.",
+            });
+        }
+
+        const child_events = try store.readEvents(server.allocator, server.config.workspace_root, child.id);
+        defer types.deinitSessionEvents(server.allocator, child_events);
+        var input_match = false;
+        var config_match = false;
+        var provider_dispatched = false;
+        for (child_events) |*child_event| {
+            if (std.mem.eql(u8, child_event.event_type, "turn_started")) provider_dispatched = true;
+            if (!std.mem.eql(u8, child_event.event_type, evaluation_events.repair_receipt_event_type)) continue;
+            var child_receipt = std.json.parseFromSlice(evaluation_events.RepairReceiptPayload, server.allocator, child_event.message, .{
+                .ignore_unknown_fields = true,
+            }) catch continue;
+            defer child_receipt.deinit();
+            if (!std.mem.eql(u8, child_receipt.value.schema, evaluation_events.repair_receipt_schema)) continue;
+            input_match = std.mem.eql(u8, child_receipt.value.original_input_sha256, started.value.original_input_sha256);
+            config_match = std.mem.eql(u8, child_receipt.value.config_sha256, started.value.config_sha256);
+        }
+
+        const outcome = if (child.status == .initialized) "abandoned" else types.statusLabel(child.status);
+        _ = try evaluation_events.appendRepairRerunEvent(
+            server.allocator,
+            server.config.workspace_root,
+            session.id,
+            .completed,
+            started.value.rerun_id,
+            started.value.source_receipt_seq,
+            started.value.applied_event_seq,
+            started.value.child_session_id,
+            started.value.original_input_sha256,
+            started.value.config_sha256,
+            started.value.source_baseline,
+            outcome,
+            input_match,
+            config_match,
+            provider_dispatched,
+        );
+
+        var evaluation_event_seq: u64 = 0;
+        var evaluation_passed = false;
+        for (events) |*candidate| {
+            if (!std.mem.eql(u8, candidate.event_type, evaluation_events.repair_evaluation_event_type)) continue;
+            var evaluation = std.json.parseFromSlice(evaluation_events.RepairEvaluationPayload, server.allocator, candidate.message, .{
+                .ignore_unknown_fields = true,
+            }) catch continue;
+            defer evaluation.deinit();
+            if (!std.mem.eql(u8, evaluation.value.schema, evaluation_events.repair_evaluation_schema) or
+                !std.mem.eql(u8, evaluation.value.evaluation_id, started.value.rerun_id)) continue;
+            evaluation_event_seq = candidate.seq;
+            evaluation_passed = evaluation.value.passed;
+            break;
+        }
+        if (evaluation_event_seq == 0 and
+            std.mem.eql(u8, outcome, "completed") and
+            input_match and
+            config_match)
+        {
+            const evaluation_result = try evaluation_events.appendRepairEvaluationEvent(
+                server.allocator,
+                server.config.workspace_root,
+                session.id,
+                events,
+                .{
+                    .evaluation_id = started.value.rerun_id,
+                    .baseline_session_id = session.id,
+                    .treatment_session_id = child.id,
+                    .baseline_events = events,
+                    .treatment_events = child_events,
+                    .input_match = input_match,
+                    .config_match = config_match,
+                    .provider_dispatched = provider_dispatched,
+                },
+            );
+            evaluation_event_seq = evaluation_result.event_seq;
+            evaluation_passed = evaluation_result.passed;
+        }
+
+        if (evaluation_event_seq != 0 and evaluation_passed) {
+            var candidate_event_seq: u64 = 0;
+            var approval_event_seq: u64 = 0;
+            for (events) |*candidate| {
+                if (candidate.seq != started.value.applied_event_seq or
+                    !std.mem.eql(u8, candidate.event_type, evaluation_events.repair_candidate_applied_event_type)) continue;
+                var applied = std.json.parseFromSlice(evaluation_events.RepairCandidateAppliedPayload, server.allocator, candidate.message, .{
+                    .ignore_unknown_fields = true,
+                }) catch break;
+                defer applied.deinit();
+                candidate_event_seq = applied.value.candidate_event_seq;
+                approval_event_seq = applied.value.approval_event_seq;
+                break;
+            }
+            try appendRepairRegressionIfEligible(
+                server,
+                session.id,
+                child.id,
+                candidate_event_seq,
+                approval_event_seq,
+                started.value.applied_event_seq,
+                started.value.rerun_id,
+                evaluation_event_seq,
+                evaluation_passed,
+                session.status,
+                child.status,
+                started.value.source_baseline,
+            );
+        }
+    }
+
+    for (events) |*event| {
+        if (!std.mem.eql(u8, event.event_type, evaluation_events.repair_rollback_started_event_type)) continue;
+        var started = std.json.parseFromSlice(evaluation_events.RepairRollbackPayload, server.allocator, event.message, .{
+            .ignore_unknown_fields = true,
+        }) catch continue;
+        defer started.deinit();
+        if (!std.mem.eql(u8, started.value.schema, evaluation_events.repair_rollback_schema)) continue;
+
+        var completed = false;
+        for (events) |*candidate| {
+            if (!std.mem.eql(u8, candidate.event_type, evaluation_events.repair_rollback_completed_event_type)) continue;
+            var parsed = std.json.parseFromSlice(evaluation_events.RepairRollbackPayload, server.allocator, candidate.message, .{
+                .ignore_unknown_fields = true,
+            }) catch continue;
+            defer parsed.deinit();
+            if (std.mem.eql(u8, parsed.value.schema, evaluation_events.repair_rollback_schema) and
+                std.mem.eql(u8, parsed.value.rollback_id, started.value.rollback_id))
+            {
+                completed = true;
+                break;
+            }
+        }
+        if (completed) continue;
+
+        var current_sha256 = try server.allocator.dupe(u8, "unavailable");
+        var baseline_restored = false;
+        var status: []const u8 = "recovery_required";
+        const contents = fsutil.readTextAlloc(server.allocator, started.value.target_path) catch null;
+        if (contents) |contents_value| {
+            defer server.allocator.free(contents_value);
+            const digest = evaluation_events.contentHash(contents_value);
+            server.allocator.free(current_sha256);
+            current_sha256 = try std.fmt.allocPrint(server.allocator, "sha256:{s}", .{digest[0..]});
+            for (events) |*candidate| {
+                if (candidate.seq != started.value.candidate_event_seq or
+                    !std.mem.eql(u8, candidate.event_type, evaluation_events.repair_candidate_event_type)) continue;
+                var parsed_candidate = std.json.parseFromSlice(evaluation_events.RepairCandidatePayload, server.allocator, candidate.message, .{
+                    .ignore_unknown_fields = true,
+                }) catch break;
+                defer parsed_candidate.deinit();
+                baseline_restored = evaluation_events.contentHashMatches(parsed_candidate.value.before_sha256, contents_value);
+                break;
+            }
+            if (baseline_restored) {
+                status = "rolled_back_recovered";
+            } else if (evaluation_events.contentHashMatches(started.value.expected_current_sha256, contents_value)) {
+                status = "abandoned";
+            }
+        }
+        defer server.allocator.free(current_sha256);
+        _ = try evaluation_events.appendRepairRollbackEvent(
+            server.allocator,
+            server.config.workspace_root,
+            session.id,
+            .completed,
+            started.value.rollback_id,
+            started.value.evaluation_id,
+            started.value.candidate_event_seq,
+            started.value.approval_event_seq,
+            started.value.applied_event_seq,
+            started.value.target_path,
+            started.value.expected_current_sha256,
+            current_sha256,
+            started.value.inverse_patch_sha256,
+            started.value.source_baseline,
+            status,
+            baseline_restored,
+        );
+    }
+}
+
 fn reconcileStaleRunningSession(server: *Server, session: *types.SessionRecord) !void {
     if (session.status == .running) {
         const persisted_terminal = try store.readCurrentTurnTerminal(server.allocator, server.config.workspace_root, session.id);
@@ -2379,6 +2684,7 @@ fn reconcileStaleRunningSession(server: *Server, session: *types.SessionRecord) 
     // Only non-running or proven-stale sessions are safe to reconcile. An
     // active owner may still be between reservation and commit.
     _ = try store.reconcileAbandonedIntents(server.allocator, server.config.workspace_root, session.id);
+    try reconcileRepairLifecycles(server, session);
 }
 
 fn commitAndEmitTurnTerminal(
@@ -3961,7 +4267,6 @@ test "repair/rerun rejects a changed effective config before provider dispatch" 
         "sha256:patch",
         "sha256:effect",
     );
-
     const request = try std.fmt.allocPrint(
         std.testing.allocator,
         "{{\"jsonrpc\":\"2.0\",\"id\":\"rerun-1\",\"method\":\"repair/rerun\",\"params\":{{\"session_id\":{f},\"source_receipt_seq\":1,\"applied_event_seq\":2}}}}",
@@ -4024,7 +4329,9 @@ test "repair/rerun reuses the exact input and config through the normal provider
     const stdout_file = try attachTestStdout(&tmp, &server, "repair-rerun-success-output.bin");
     defer stdout_file.close();
 
-    var session = try store.initSession(std.testing.allocator, workspace_root, "rerun the exact failed input");
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "rerun the exact failed input", .{
+        .status = .failed,
+    });
     defer session.deinit(std.testing.allocator);
     const baseline = try evaluation_events.sourceBaseline(std.testing.allocator);
     defer std.testing.allocator.free(baseline);
@@ -4058,6 +4365,11 @@ test "repair/rerun reuses the exact input and config through the normal provider
         "sha256:patch",
         "sha256:effect",
     );
+    try store.appendEvent(std.testing.allocator, workspace_root, session.id, .{
+        .event_type = protocol_events.turn_terminal_event_type,
+        .message = "{\"schema\":\"var1.turn_terminal.v1\",\"outcome\":\"failed\",\"detail\":\"baseline failed\"}",
+        .timestamp_ms = std.time.milliTimestamp(),
+    });
 
     const request = try std.fmt.allocPrint(
         std.testing.allocator,
@@ -4094,9 +4406,147 @@ test "repair/rerun reuses the exact input and config through the normal provider
 
     const source_events = try store.readEvents(std.testing.allocator, workspace_root, session.id);
     defer types.deinitSessionEvents(std.testing.allocator, source_events);
-    try std.testing.expectEqualStrings(evaluation_events.repair_evaluation_event_type, source_events[4].event_type);
-    try std.testing.expect(std.mem.indexOf(u8, source_events[4].message, "\"treatment_outcome\":\"completed\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source_events[4].message, "\"passed\":true") != null);
+    try std.testing.expectEqual(@as(usize, 7), source_events.len);
+    try std.testing.expectEqualStrings(evaluation_events.repair_evaluation_event_type, source_events[5].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, source_events[5].message, "\"baseline_outcome\":\"failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source_events[5].message, "\"treatment_outcome\":\"completed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source_events[5].message, "\"passed\":true") != null);
+    try std.testing.expectEqualStrings(evaluation_events.repair_regression_event_type, source_events[6].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, source_events[6].message, "\"old_baseline_failed\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source_events[6].message, "\"new_treatment_passed\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source_events[6].message, "\"executor_mutation\":\"forbidden\"") != null);
+}
+
+test "session/get reconciles interrupted repair lifecycles exactly once" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    const stdout_file = try attachTestStdout(&tmp, &server, "repair-recovery-output.bin");
+    defer stdout_file.close();
+
+    var source_session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "recover failed repair", .{
+        .status = .failed,
+    });
+    defer source_session.deinit(std.testing.allocator);
+    var child_session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "interrupted treatment", .{
+        .status = .initialized,
+        .continued_from_session_id = source_session.id,
+        .display_name = "repair-rerun-cold",
+    });
+    defer child_session.deinit(std.testing.allocator);
+
+    const target_path = try fsutil.resolveWithAccessMode(std.testing.allocator, workspace_root, "notes/recovery.txt", false);
+    defer std.testing.allocator.free(target_path);
+    try fsutil.writeText(target_path, "unrelated\n");
+    const source_baseline = try evaluation_events.sourceBaseline(std.testing.allocator);
+    defer std.testing.allocator.free(source_baseline);
+    const before_digest = evaluation_events.contentHash("before\n");
+    const patch_digest = evaluation_events.contentHash("inverse patch");
+    const candidate_seq = try evaluation_events.appendRepairCandidateEvent(
+        std.testing.allocator,
+        workspace_root,
+        source_session.id,
+        "candidate-recovery",
+        "failure-recovery",
+        "replace_in_file",
+        target_path,
+        before_digest[0..],
+        patch_digest[0..],
+        source_baseline,
+        source_baseline,
+        true,
+    );
+    _ = try evaluation_events.appendRepairRerunEvent(
+        std.testing.allocator,
+        workspace_root,
+        source_session.id,
+        .started,
+        "rerun-recovery",
+        10,
+        11,
+        child_session.id,
+        "sha256:input",
+        "sha256:config",
+        source_baseline,
+        "running",
+        true,
+        true,
+        false,
+    );
+    _ = try evaluation_events.appendRepairRollbackEvent(
+        std.testing.allocator,
+        workspace_root,
+        source_session.id,
+        .started,
+        "rollback-recovery",
+        "evaluation-recovery",
+        candidate_seq,
+        2,
+        3,
+        target_path,
+        "sha256:expected-after",
+        "pending",
+        "sha256:inverse",
+        source_baseline,
+        "running",
+        false,
+    );
+
+    const first_request = try std.fmt.allocPrint(std.testing.allocator, "{{\"jsonrpc\":\"2.0\",\"id\":\"repair-recovery-1\",\"method\":\"session/get\",\"params\":{{\"session_id\":{f}}}}}", .{
+        std.json.fmt(source_session.id, .{}),
+    });
+    defer std.testing.allocator.free(first_request);
+    const first_response = (try processRequest(&server, first_request)).?;
+    defer std.testing.allocator.free(first_response);
+    try std.testing.expect(std.mem.indexOf(u8, first_response, "\"error\"") == null);
+
+    const first_events = try store.readEvents(std.testing.allocator, workspace_root, source_session.id);
+    defer types.deinitSessionEvents(std.testing.allocator, first_events);
+    var first_rerun_completions: usize = 0;
+    var first_rollback_completions: usize = 0;
+    for (first_events) |event| {
+        if (std.mem.eql(u8, event.event_type, evaluation_events.repair_rerun_completed_event_type)) {
+            first_rerun_completions += 1;
+            try std.testing.expect(std.mem.indexOf(u8, event.message, "\"outcome\":\"abandoned\"") != null);
+        }
+        if (std.mem.eql(u8, event.event_type, evaluation_events.repair_rollback_completed_event_type)) {
+            first_rollback_completions += 1;
+            try std.testing.expect(std.mem.indexOf(u8, event.message, "\"status\":\"recovery_required\"") != null);
+            try std.testing.expect(std.mem.indexOf(u8, event.message, "\"baseline_restored\":false") != null);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), first_rerun_completions);
+    try std.testing.expectEqual(@as(usize, 1), first_rollback_completions);
+
+    const second_request = try std.fmt.allocPrint(std.testing.allocator, "{{\"jsonrpc\":\"2.0\",\"id\":\"repair-recovery-2\",\"method\":\"session/get\",\"params\":{{\"session_id\":{f}}}}}", .{
+        std.json.fmt(source_session.id, .{}),
+    });
+    defer std.testing.allocator.free(second_request);
+    const second_response = (try processRequest(&server, second_request)).?;
+    defer std.testing.allocator.free(second_response);
+    try std.testing.expect(std.mem.indexOf(u8, second_response, "\"error\"") == null);
+
+    const second_events = try store.readEvents(std.testing.allocator, workspace_root, source_session.id);
+    defer types.deinitSessionEvents(std.testing.allocator, second_events);
+    var second_rerun_completions: usize = 0;
+    var second_rollback_completions: usize = 0;
+    for (second_events) |event| {
+        if (std.mem.eql(u8, event.event_type, evaluation_events.repair_rerun_completed_event_type)) second_rerun_completions += 1;
+        if (std.mem.eql(u8, event.event_type, evaluation_events.repair_rollback_completed_event_type)) second_rollback_completions += 1;
+    }
+    try std.testing.expectEqual(first_rerun_completions, second_rerun_completions);
+    try std.testing.expectEqual(first_rollback_completions, second_rollback_completions);
+
+    const contents = try fsutil.readTextAlloc(std.testing.allocator, target_path);
+    defer std.testing.allocator.free(contents);
+    try std.testing.expectEqualStrings("unrelated\n", contents);
 }
 
 test "session/send rejects unknown prompt modes before session execution" {

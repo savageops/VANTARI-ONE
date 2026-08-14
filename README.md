@@ -333,6 +333,19 @@ ReleaseFast is `9/9` at SHA-256
 Installed promotion remains deferred; Move 80 owns promotion and cold-start
 reconciliation.
 
+Move 80 closes the self-repair loop without adding a worker or second ledger.
+A passing treatment over a failed or cancelled baseline appends one idempotent
+`var1.repair_regression.v1` receipt to the existing source event spine. On
+cold start, `session/get` and `session/list` reconcile orphaned rerun and
+rollback starts exactly once: completed children are evaluated, missing or
+initialized treatments are closed as abandoned, and rollback bytes are
+classified as recovered, abandoned, or `recovery_required`. Recovery never
+replays provider I/O or file mutation. Debug and ReleaseFast are `19/19` with
+`2,196/2,196` tests; source ReleaseFast is `9/9` at SHA-256
+`E9E6BBBED7F7A52D3A5B48EAB78D63D4AA38E10FA548F468608771551067D4B8`.
+Installed promotion remains deferred; the preserved installed owner remains
+on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+
 ```text
 session/create ─► session/send ─► [executor loop] ─► session/get
                                                     ─► session/compact

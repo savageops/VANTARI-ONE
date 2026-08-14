@@ -9,6 +9,7 @@ pub const Error = error{
     CandidateNotFound,
     CandidateMismatch,
     CandidateBaselineConflict,
+    RegressionNotPromotable,
 };
 
 pub const repair_receipt_event_type = "repair_receipt";
@@ -24,6 +25,8 @@ pub const repair_rerun_completed_event_type = "repair_rerun_completed";
 pub const repair_rerun_schema = "var1.repair_rerun.v1";
 pub const repair_evaluation_event_type = "repair_evaluation";
 pub const repair_evaluation_schema = "var1.repair_evaluation.v1";
+pub const repair_regression_event_type = "repair_regression";
+pub const repair_regression_schema = "var1.repair_regression.v1";
 pub const repair_rollback_started_event_type = "repair_rollback_started";
 pub const repair_rollback_completed_event_type = "repair_rollback_completed";
 pub const repair_rollback_schema = "var1.repair_rollback.v1";
@@ -314,7 +317,29 @@ pub const RepairEvaluationPayload = struct {
     evaluation_id: []const u8 = "",
     baseline_session_id: []const u8 = "",
     treatment_session_id: []const u8 = "",
+    baseline_outcome: []const u8 = "",
+    treatment_outcome: []const u8 = "",
+    provider_dispatched: bool = false,
+    treatment_completed: bool = false,
     passed: bool = false,
+};
+
+pub const RepairRegressionPayload = struct {
+    schema: []const u8 = "",
+    regression_id: []const u8 = "",
+    evaluation_id: []const u8 = "",
+    baseline_session_id: []const u8 = "",
+    treatment_session_id: []const u8 = "",
+    candidate_event_seq: u64 = 0,
+    approval_event_seq: u64 = 0,
+    applied_event_seq: u64 = 0,
+    evaluation_event_seq: u64 = 0,
+    baseline_outcome: []const u8 = "",
+    treatment_outcome: []const u8 = "",
+    source_baseline: []const u8 = "",
+    old_baseline_failed: bool = false,
+    new_treatment_passed: bool = false,
+    executor_mutation: []const u8 = "",
 };
 
 pub const RepairCandidatePayload = struct {
@@ -689,6 +714,87 @@ pub fn appendRepairEvaluationEvent(
     });
     message.deinit();
     return .{ .event_seq = event_seq, .passed = passed };
+}
+
+/// Promote one passing repair evaluation into the existing source event
+/// ledger. This is the regression case: the recorded baseline did not
+/// complete, the exact treatment completed, and the promotion itself is a
+/// non-mutating receipt. Repeating the same deterministic identity returns the
+/// original sequence.
+pub fn appendRepairRegressionEvent(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    regression_id: []const u8,
+    evaluation_id: []const u8,
+    baseline_session_id: []const u8,
+    treatment_session_id: []const u8,
+    candidate_event_seq: u64,
+    approval_event_seq: u64,
+    applied_event_seq: u64,
+    evaluation_event_seq: u64,
+    baseline_outcome: []const u8,
+    treatment_outcome: []const u8,
+    source_baseline: []const u8,
+) !u64 {
+    if (candidate_event_seq == 0 or approval_event_seq == 0 or applied_event_seq == 0 or evaluation_event_seq == 0) return Error.EmptyEvidence;
+    const required = [_][]const u8{
+        session_id,
+        regression_id,
+        evaluation_id,
+        baseline_session_id,
+        treatment_session_id,
+        baseline_outcome,
+        treatment_outcome,
+        source_baseline,
+    };
+    for (required) |value| {
+        if (std.mem.trim(u8, value, " \t\r\n").len == 0) return Error.EmptyEvidence;
+    }
+    if (std.mem.eql(u8, baseline_outcome, "completed") or !std.mem.eql(u8, treatment_outcome, "completed")) {
+        return Error.RegressionNotPromotable;
+    }
+
+    const events = try store.readEvents(allocator, workspace_root, session_id);
+    defer types.deinitSessionEvents(allocator, events);
+    for (events) |*event| {
+        if (!std.mem.eql(u8, event.event_type, repair_regression_event_type)) continue;
+        var stored = std.json.parseFromSlice(RepairRegressionPayload, allocator, event.message, .{
+            .ignore_unknown_fields = true,
+        }) catch continue;
+        defer stored.deinit();
+        if (std.mem.eql(u8, stored.value.schema, repair_regression_schema) and
+            std.mem.eql(u8, stored.value.regression_id, regression_id))
+        {
+            return event.seq;
+        }
+    }
+
+    const message = try std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"{s}\",\"regression_id\":{f},\"evaluation_id\":{f},\"baseline_session_id\":{f},\"treatment_session_id\":{f},\"candidate_event_seq\":{d},\"approval_event_seq\":{d},\"applied_event_seq\":{d},\"evaluation_event_seq\":{d},\"baseline_outcome\":{f},\"treatment_outcome\":{f},\"source_baseline\":{f},\"old_baseline_failed\":true,\"new_treatment_passed\":true,\"executor_mutation\":\"forbidden\"}}",
+        .{
+            repair_regression_schema,
+            std.json.fmt(regression_id, .{}),
+            std.json.fmt(evaluation_id, .{}),
+            std.json.fmt(baseline_session_id, .{}),
+            std.json.fmt(treatment_session_id, .{}),
+            candidate_event_seq,
+            approval_event_seq,
+            applied_event_seq,
+            evaluation_event_seq,
+            std.json.fmt(baseline_outcome, .{}),
+            std.json.fmt(treatment_outcome, .{}),
+            std.json.fmt(source_baseline, .{}),
+        },
+    );
+    defer allocator.free(message);
+
+    return store.appendEventWithSeq(allocator, workspace_root, session_id, .{
+        .event_type = repair_regression_event_type,
+        .message = message,
+        .timestamp_ms = std.time.milliTimestamp(),
+    });
 }
 
 /// Persist a proposal-only repair candidate. The candidate carries hashes and

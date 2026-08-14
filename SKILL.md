@@ -169,8 +169,12 @@ requires source/installed SHA-256 equality and the installed consumer path.
   evaluation to the candidate/approval/applied edge, require current source and
   full-file hashes, route an exact inverse payload through reviewed
   `replace_in_file`, and record completion only after the candidate pre-apply
-  hash is restored. Move 80 owns regression promotion and cold-start repair
-  reconciliation. Do not add a patcher, worker, git reset, or second ledger.
+  hash is restored. Move 80 now owns regression promotion and cold-start repair
+  reconciliation: a passing treatment over a failed/cancelled baseline emits
+  one idempotent `var1.repair_regression.v1` receipt, while orphaned rerun and
+  rollback starts close exactly once from the existing event spine without
+  repeating provider or file mutation. Do not add a patcher, worker, git reset,
+  or second ledger.
 - Browser routes are redacted prototypes. Owner routes are loopback-only and
   token/generation gated.
 - Scheduler leadership is source-proven with one crash-released lock and
