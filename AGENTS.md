@@ -138,6 +138,7 @@ Typed events are the runtime's nervous system. String breadcrumbs may exist only
 ### Directives
 
 - Provider streaming is a kernel contract. If a provider supports SSE deltas, deltas must persist before the final assistant response.
+- `core/providers/capability.zig::probe` is the sole adapter capability owner. `dispatch.zig` must resolve `wire_api`, materialize the fixed capability snapshot, and fail before provider I/O when streaming, native tool serialization, or context-overflow handling is unknown; `.responses` alone proves `responses_api`. Do not add a network preflight, model registry, fallback chain, or second cache; dynamic remote model metadata remains a separate provider-parity boundary.
 - TTSR stream matches use one `StreamHooks.shouldAbortFn` through the existing provider reader. Check before reads and after delta callbacks; a match must stop terminal settlement, persist the correction plus `rule_injected` evidence, and retry through `loop.zig`. Do not add a provider-specific stream manager or prompt-only retry.
 - Interactive `session/cancel` carries `expected_run_seq` equal to the exact observed `session_started.seq`. Missing, unobserved, or stale generations are typed no-ops; shutdown may cancel without a generation only after it fences new admission.
 - TUI progress is a read model over `events.jsonl`, not a separate speculative status bus.

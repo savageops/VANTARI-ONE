@@ -3,6 +3,7 @@ const provider = @import("openai_compatible.zig");
 const openai_codex = @import("openai_codex.zig");
 const responses = @import("responses.zig");
 const anthropic = @import("anthropic.zig");
+const capability = @import("capability.zig");
 const provider_profile = @import("profile.zig");
 const types = @import("../../shared/types.zig");
 
@@ -14,7 +15,6 @@ const types = @import("../../shared/types.zig");
 /// Harvested from Codex's `wire_api` config switch and pi-mono's `Api` enum
 /// dispatch table. One transport, three wire-protocol shapes, one canonical
 /// CompletionResponse at the call site.
-
 pub const Error = provider.Error;
 pub const Transport = provider.Transport;
 pub const StreamHooks = provider.StreamHooks;
@@ -34,6 +34,7 @@ pub fn completeWithTransportAndHooks(
     if (config.auth_type == .oauth) {
         const provider_id = config.auth_provider orelse return openai_codex.Error.UnsupportedProviderAuth;
         if (!std.mem.eql(u8, provider_id, "openai-codex")) return openai_codex.Error.UnsupportedProviderAuth;
+        try verifyCapabilities(.responses, request, stream_hooks);
         return openai_codex.completeWithTransportAndHooks(allocator, config, request, transport, stream_hooks);
     }
 
@@ -46,12 +47,27 @@ pub fn completeWithTransportAndHooks(
         provider_profile.effectiveWireApi(provider_id, config.openai_base_url, config.wire_api)
     else
         config.wire_api;
+    try verifyCapabilities(wire_api, request, stream_hooks);
     return switch (wire_api) {
         .chat_completions => provider.completeWithTransportAndHooks(allocator, config, request, transport, stream_hooks),
         .responses => responses.completeWithTransportAndHooks(allocator, config, request, transport, stream_hooks),
         .anthropic_messages => anthropic.completeWithTransportAndHooks(allocator, config, request, transport, stream_hooks),
         .auto => unreachable, // resolved above
     };
+}
+
+fn verifyCapabilities(
+    wire_api: types.WireApi,
+    request: types.CompletionRequest,
+    stream_hooks: StreamHooks,
+) !void {
+    const capabilities = try capability.probe(wire_api);
+    // Provider adapter capability is a pre-dispatch contract. Do not send a
+    // tool-bearing or overflow-recoverable request through an unresolved
+    // adapter; future adapters must opt into these fields explicitly.
+    if (stream_hooks.hasHandlers() and !capabilities.requireCapability(.streaming)) return capability.Error.UnsupportedCapability;
+    if (request.tool_definitions.len > 0 and !capabilities.requireCapability(.tool_calling)) return capability.Error.UnsupportedCapability;
+    if (!capabilities.requireCapability(.context_overflow_detection)) return capability.Error.UnsupportedCapability;
 }
 
 const CodexDispatchCapture = struct {

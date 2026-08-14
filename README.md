@@ -456,6 +456,12 @@ Provider records select a wire contract rather than relying on brand-name heuris
 
 Model discovery normalizes the common LM Studio, vLLM, and llama.cpp response shapes. For local endpoints, a discovered model context window may replace the default only when the operator has not configured one explicitly.
 
+Before any provider request, `core/providers/dispatch.zig` resolves the wire
+adapter and asks `core/providers/capability.zig` for its fixed capability
+snapshot. Streaming, native tool serialization, and context-overflow handling
+must be proven by the adapter; unresolved wire selection fails closed. This is
+an allocation-free adapter contract, not a network preflight or model catalog.
+
 ### Recovery and Process Supervision
 
 Recovery is derived from persisted evidence. One LF-framed JSONL reader retains the same valid prefix across BOMs, invalid UTF-8, malformed or torn rows, invalid typed schemas, and duplicate or regressing sequence IDs. Append validates the bounded current tail and refuses to write behind poison without truncating evidence. Session reads reconcile stale `running` state when no execution owner remains. Provider overflow writes a checkpoint and rebuilds context from storage before one bounded retry. Command execution owns process spawn, pipe draining, output ceilings, timeout, cancellation, and termination as one state machine.

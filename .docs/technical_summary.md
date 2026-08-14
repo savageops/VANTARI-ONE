@@ -115,6 +115,26 @@ Installed promotion remains deferred. Research and receipt:
 `.docs/research/2026-08-14-ticket-quota-scheduler-policy.md` and
 `.docs/todo/changelog/054-ticket-quota-scheduler-policy.md`.
 
+## Current provider capability boundary — Move 61
+
+`core/providers/capability.zig` now has one live consumer. After
+`dispatch.zig` resolves the configured or profile-derived wire adapter, it
+materializes a fixed capability snapshot before provider I/O. Current adapters
+prove streaming, native tool serialization, and bounded context-overflow
+classification; only the Responses-shaped adapter reports `responses_api`.
+Unresolved `.auto` capability input fails with `UnknownWireApi`.
+
+This is an adapter contract, not a network preflight. No model catalog, fallback
+chain, provider registry, or second cache was added; dynamic remote model
+metadata remains a separate provider-parity boundary.
+
+Debug and ReleaseFast are `19/19` steps and `2,190/2,190` tests. The source
+ReleaseFast build is `9/9` at SHA-256
+`9C54A17D903D4B51ACEE8AE4806C460F1B6AC59D04810185AD9C02A6F256DB89`.
+Installed promotion remains deferred. Research and receipt:
+`.docs/research/2026-08-14-provider-capability-dispatch-move61.md` and
+`.docs/todo/changelog/070-provider-capability-dispatch.md`.
+
 ## Current frontier — Move 55a source closure, Moves 56-57, 57a, and Moves 62-63
 
 Move 34 closes the Codex subscription transport slice. `core/auth/store.zig`

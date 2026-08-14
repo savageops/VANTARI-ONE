@@ -1,9 +1,14 @@
 const std = @import("std");
+const types = @import("../../shared/types.zig");
 
-/// Provider capability probe cache (roadmap P1-08). Each adapter caches
-/// verified capabilities so the runtime can make informed decisions without
-/// re-probing every turn. Unknown capabilities fail closed — the adapter
-/// must not assume support for an unprobed capability.
+/// Provider capability probe snapshot (roadmap Move 61). Dispatch materializes
+/// this fixed contract from the selected adapter instead of guessing from a
+/// model name or issuing a network preflight on every turn. Unknown protocol
+/// selection fails before provider I/O.
+pub const Error = error{
+    UnknownWireApi,
+    UnsupportedCapability,
+};
 
 pub const Capability = enum {
     /// Provider supports SSE streaming deltas.
@@ -74,6 +79,22 @@ pub const CapabilityCache = struct {
     }
 };
 
+/// Probe the capabilities owned by one concrete wire adapter. This is the
+/// smallest durable boundary: the adapters all implement streaming, native
+/// tool serialization, and bounded overflow classification; Responses is only
+/// supported by the Responses-shaped adapters. Dynamic remote model metadata
+/// remains a separate provider-catalog concern.
+pub fn probe(wire_api: types.WireApi) !CapabilityCache {
+    if (wire_api == .auto) return Error.UnknownWireApi;
+
+    var cache = CapabilityCache{};
+    cache.record(.streaming, .supported);
+    cache.record(.tool_calling, .supported);
+    cache.record(.context_overflow_detection, .supported);
+    cache.record(.responses_api, if (wire_api == .responses) .supported else .unsupported);
+    return cache;
+}
+
 test "CapabilityCache defaults to unknown (fail-closed)" {
     const cache = CapabilityCache{};
     try std.testing.expectEqual(ProbeStatus.unknown, cache.check(.streaming));
@@ -109,4 +130,19 @@ test "CapabilityCache records max token limits" {
 
     try std.testing.expectEqual(@as(?u64, 128_000), cache.max_context_tokens);
     try std.testing.expectEqual(@as(?u64, 4_096), cache.max_output_tokens);
+}
+
+test "provider probe materializes known adapter capabilities" {
+    const chat = try probe(.chat_completions);
+    try std.testing.expect(chat.requireCapability(.streaming));
+    try std.testing.expect(chat.requireCapability(.tool_calling));
+    try std.testing.expect(chat.requireCapability(.context_overflow_detection));
+    try std.testing.expectEqual(ProbeStatus.unsupported, chat.check(.responses_api));
+
+    const responses = try probe(.responses);
+    try std.testing.expect(responses.requireCapability(.responses_api));
+}
+
+test "provider probe rejects unresolved wire protocol" {
+    try std.testing.expectError(Error.UnknownWireApi, probe(.auto));
 }

@@ -1,5 +1,22 @@
 # Execution Log
 
+## 2026-08-14 - Provider capability dispatch (Move 61)
+
+**Outcome:** Wired the existing fixed provider capability cache into the live
+wire dispatch boundary.
+
+- `capability.zig::probe` materializes the selected adapter contract before
+  provider I/O; streaming, native tool serialization, and context-overflow
+  classification are explicit, while Responses is only marked for the
+  Responses route.
+- Unresolved `.auto` capability input fails closed. No network preflight,
+  model catalog, fallback, provider registry, or second cache was added.
+- Debug and ReleaseFast pass `19/19` steps and `2,190/2,190` tests. Source
+  ReleaseFast passes `9/9`; source SHA-256 is
+  `9C54A17D903D4B51ACEE8AE4806C460F1B6AC59D04810185AD9C02A6F256DB89`.
+- Installed promotion remains deferred. Receipt:
+  `.docs/todo/changelog/070-provider-capability-dispatch.md`.
+
 ## 2026-08-14 - Operator-bound repair approval (Move 75)
 
 **Outcome:** Added one operator-only approval socket for source-anchored repair
