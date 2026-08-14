@@ -1,5 +1,23 @@
 # Execution Log
 
+## 2026-08-14 - Immutable replay receipts (Move 72)
+
+**Outcome:** Added one immutable per-turn replay receipt to the existing event
+spine before context compilation and provider dispatch.
+
+- The receipt retains the exact original input and selected model, records
+  `replay_input_immutable: true`, and hashes transient effective config, native
+  tool catalog, tracked environment, and the source baseline.
+- The source baseline is recorded as `git:<commit>` when available or
+  `unavailable` when it cannot be verified. Raw config, tool, and environment
+  snapshots never enter `events.jsonl`; a secret-like config regression proves
+  that boundary.
+- Full Debug and ReleaseFast pass `19/19` steps and `2,180/2,180` tests.
+  Source ReleaseFast passes `9/9`; source SHA-256 is
+  `8E15F5ED22631B232EFF2F5FE2FF1E6B336250D22C61E0313645A6BEAB256639`.
+- Installed promotion remains deferred. Receipt:
+  `.docs/todo/changelog/066-repair-receipts-move72.md`.
+
 ## 2026-08-14 - Failure receipts (Move 71)
 
 **Outcome:** Normalized failed and timed-out terminal turns into one bounded

@@ -3,6 +3,7 @@ const config_file = @import("../config/file.zig");
 const context_builder = @import("../context/index.zig");
 const context_stream_rules = @import("../context/stream_rules.zig");
 const agent_mailbox = @import("../agents/mailbox.zig");
+const evaluation_events = @import("../evaluation/events.zig");
 const prompts = @import("../prompts/index.zig");
 const draft = @import("draft.zig");
 const turn_payload = @import("turn_payload.zig");
@@ -236,6 +237,36 @@ pub fn runPromptWithOptions(
     if (!execution_context.workspace_state_enabled and tools.workspaceStateRelevant(session.prompt)) {
         execution_context.workspace_state_enabled = true;
     }
+
+    // Persist one immutable replay boundary before context compilation or the
+    // first provider dispatch. The raw config/catalog snapshots are transient;
+    // the evaluation owner stores only their hashes and the exact accepted
+    // input, so later repair work cannot silently substitute a new prompt or
+    // runtime surface.
+    const config_snapshot = try std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(config, .{})});
+    defer allocator.free(config_snapshot);
+    const tool_catalog_snapshot = try std.fmt.allocPrint(
+        allocator,
+        "{f}",
+        .{std.json.fmt(tools.builtinDefinitionsForContext(execution_context), .{})},
+    );
+    defer allocator.free(tool_catalog_snapshot);
+    const source_baseline = try evaluation_events.sourceBaseline(allocator);
+    defer allocator.free(source_baseline);
+    const environment_snapshot = try evaluation_events.environmentSnapshot(allocator);
+    defer allocator.free(environment_snapshot);
+    try evaluation_events.appendRepairReceiptEvent(
+        allocator,
+        config.workspace_root,
+        session.id,
+        run_seq,
+        session.prompt,
+        config.openai_model,
+        config_snapshot,
+        tool_catalog_snapshot,
+        source_baseline,
+        environment_snapshot,
+    );
 
     // A resumed parent rebuilds its child-group index from receipts before the
     // first provider dispatch. Any recovered group is parked/converged through

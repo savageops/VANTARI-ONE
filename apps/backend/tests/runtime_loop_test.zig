@@ -1163,18 +1163,19 @@ test "loop retries once after provider-declared context overflow" {
 
     const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, result.session_id);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
-    // Event spine: session_started, turn_started (step 0), context compaction,
-    // assistant_response, then one typed terminal row.
-    try std.testing.expect(events.len >= 5);
+    // Event spine: session_started, immutable repair receipt, turn_started
+    // (step 0), context compaction, assistant_response, then one terminal row.
+    try std.testing.expect(events.len >= 6);
     try std.testing.expectEqualStrings("session_started", events[0].event_type);
-    try std.testing.expectEqualStrings("turn_started", events[1].event_type);
-    try std.testing.expectEqualStrings("context_compaction_started", events[2].event_type);
-    try std.testing.expectEqualStrings("context_compaction_completed", events[3].event_type);
+    try std.testing.expectEqualStrings("repair_receipt", events[1].event_type);
+    try std.testing.expectEqualStrings("turn_started", events[2].event_type);
+    try std.testing.expectEqualStrings("context_compaction_started", events[3].event_type);
+    try std.testing.expectEqualStrings("context_compaction_completed", events[4].event_type);
     try std.testing.expectEqualStrings("turn_terminal", events[events.len - 1].event_type);
     try expectOneTurnTerminal(events, "completed");
-    try std.testing.expect(std.mem.indexOf(u8, events[2].message, "provider_overflow") != null);
-    try std.testing.expect(std.mem.indexOf(u8, events[3].message, "source_seq=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, events[3].message, "first_kept_seq=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[3].message, "provider_overflow") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[4].message, "source_seq=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[4].message, "first_kept_seq=") != null);
 }
 
 test "loop records a failed session when provider transport fails" {
@@ -1212,12 +1213,14 @@ test "loop records a failed session when provider transport fails" {
 
     const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, sessions[0].id);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
-    // Event spine: session_started, turn_started, then one failed terminal.
-    try std.testing.expectEqual(@as(usize, 3), events.len);
+    // Event spine: session_started, immutable repair receipt, turn_started,
+    // then one failed terminal.
+    try std.testing.expectEqual(@as(usize, 4), events.len);
     try std.testing.expectEqualStrings("session_started", events[0].event_type);
-    try std.testing.expectEqualStrings("turn_started", events[1].event_type);
-    try std.testing.expectEqualStrings("turn_terminal", events[2].event_type);
-    try std.testing.expect(std.mem.indexOf(u8, events[2].message, "ConnectionRefused") != null);
+    try std.testing.expectEqualStrings("repair_receipt", events[1].event_type);
+    try std.testing.expectEqualStrings("turn_started", events[2].event_type);
+    try std.testing.expectEqualStrings("turn_terminal", events[3].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[3].message, "ConnectionRefused") != null);
     try expectOneTurnTerminal(events, "failed");
     try std.testing.expectEqualStrings("turn_terminal", capture.last_event_type.?);
     try std.testing.expectEqualStrings("failed", capture.last_status.?);
@@ -1284,9 +1287,10 @@ test "loop marks a session cancelled when hooks request cancellation" {
 
     const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
     defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
-    try std.testing.expectEqual(@as(usize, 2), events.len);
+    try std.testing.expectEqual(@as(usize, 3), events.len);
     try std.testing.expectEqualStrings("session_started", events[0].event_type);
-    try std.testing.expectEqualStrings("turn_terminal", events[1].event_type);
+    try std.testing.expectEqualStrings("repair_receipt", events[1].event_type);
+    try std.testing.expectEqualStrings("turn_terminal", events[2].event_type);
     try expectOneTurnTerminal(events, "cancelled");
 }
 

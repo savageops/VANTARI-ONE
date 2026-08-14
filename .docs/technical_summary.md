@@ -431,6 +431,25 @@ steps and `2,178/2,178` tests; source ReleaseFast is `9/9` at SHA-256
 Installed promotion remains deferred. Receipt:
 `.docs/todo/changelog/064-failure-receipts-move71.md`.
 
+## Current immutable replay receipt boundary — 2026-08-14
+
+Move 72 appends one `var1.repair_receipt.v1` event to the existing
+`events.jsonl` ledger at root-turn admission, before context compilation or
+provider dispatch. It retains the exact original input and selected model,
+records `replay_input_immutable: true`, and hashes the transient effective
+config, canonical tool catalog, tracked environment, and source baseline.
+The source baseline is `git:<commit>` when Git is available and `unavailable`
+otherwise. Raw config, tool, and environment snapshots are not durable. A
+regression embeds an API-key-like value in a config snapshot and proves it is
+absent from the stored receipt.
+
+Full Debug and ReleaseFast are `19/19` steps and `2,180/2,180` tests. The
+source ReleaseFast build is `9/9` at SHA-256
+`8E15F5ED22631B232EFF2F5FE2FF1E6B336250D22C61E0313645A6BEAB256639`.
+Installed promotion remains deferred; the preserved installed owner remains
+on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+Receipt: `.docs/todo/changelog/066-repair-receipts-move72.md`.
+
 ## Current task-branch context boundary — 2026-08-14
 
 Move 70 keeps the existing execution receipt, context compiler, session ledger,

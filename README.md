@@ -272,6 +272,12 @@ Each admitted run closes with exactly one `turn_terminal` event. Its
 and records `completed`, `failed`, `timed_out`, or `cancelled`; the session JSON
 status is a recoverable projection of that ledger fact.
 
+Before context compilation and provider dispatch, the loop appends one
+`var1.repair_receipt.v1` row to the same event ledger. It retains the exact
+original input and selected model while hashing transient effective config,
+canonical tool catalog, tracked environment, and source baseline; raw
+snapshots do not become session state.
+
 ```text
 session/create ─► session/send ─► [executor loop] ─► session/get
                                                     ─► session/compact
@@ -1034,7 +1040,7 @@ vantari auth status|login|use|logout <provider> identity and provider auth
 
 ## Validation
 
-The pinned Debug and ReleaseFast graphs currently pass 2,178 test cases across `apps/backend/src/`
+The pinned Debug and ReleaseFast graphs currently pass 2,180 test cases across `apps/backend/src/`
 and `apps/backend/tests/`. They target state transitions, protocol edges, and
 failure pressure rather than line coverage:
 
@@ -1046,6 +1052,7 @@ failure pressure rather than line coverage:
 - 100-way same-session admission with one turn owner and retained steer messages
 - Active-request shutdown with cancellation before join and one terminal event
 - Deterministic failure receipts projected from failed/timed-out terminal rows into sessions and tickets
+- Immutable replay receipts with exact input/model retention, secret-free config/tool/environment hashes, and source-baseline evidence
 - Bridge token verification, origin guard, payload redaction
 - Delegation scope zero-value rejection and profile expansion validation
 - Direct/group/parent agent mail, replay, provider-failure unread retention,
