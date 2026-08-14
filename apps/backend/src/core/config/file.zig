@@ -314,7 +314,6 @@ pub fn loadPromptModeOverride(
 }
 
 fn loadAgentRouteOverrideValue(allocator: std.mem.Allocator, role: std.json.ObjectMap) !AgentRouteOverride {
-
     var result = AgentRouteOverride{};
     errdefer result.deinit(allocator);
     result.provider_id = try optionalStringClone(allocator, role, "provider_id");
@@ -870,11 +869,18 @@ test "default config documents every persistent value" {
 
 test "ticket execution policy is not a config surface" {
     const document =
-        \\{"version":1,"tickets":{"auto_assign":true,"proactive_workpool":true}}
+        \\{"version":1,"tickets":{"auto_assign":true,"proactive_workpool":true,"close_authority":"kernel","reopen_with_reasoning":true}}
     ;
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
     defer parsed.deinit();
     try std.testing.expectError(Error.InvalidConfig, validateDocumentShape(parsed.value.object));
+
+    const capacity_document =
+        \\{"version":1,"agent_routes":{"max_concurrency":3}}
+    ;
+    var capacity_parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, capacity_document, .{});
+    defer capacity_parsed.deinit();
+    try validateDocumentShape(capacity_parsed.value.object);
 }
 
 test "config file is created beside runtime state and loads typed defaults" {
