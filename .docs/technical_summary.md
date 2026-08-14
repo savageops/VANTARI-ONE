@@ -404,14 +404,32 @@ a long batch or a cramped viewport cannot collide with the normal footer.
 broker path. Multi-select Enter/Space toggles in place until review; deselecting
 `Other` clears its custom text. The existing idle/streaming
 `ChatState.handleQuestionKey` boundary remains the only input error boundary.
-Focused TUI Debug and ReleaseFast are both `136/136`, including 14/4/1-row
-modal rendering. Full Debug is `19/19` steps and `2,168/2,168` tests; source
-ReleaseFast is `9/9` at SHA-256
-`EDE276134231600AE8978B0C88BCBA6C26F7F303A5336025D5B0E371852EC8F8`.
+Focused TUI Debug and ReleaseFast are both `137/137`, including 14/4/1-row
+modal rendering and the maximum 60-question batch at 1/2/4/20 rows. Full
+Debug is `19/19` steps and `2,178/2,178` tests; source ReleaseFast is `9/9`
+at SHA-256
+`27BBEB05623899CB5D35A33EF523250A26C469644372C809C130A536DBAD7BAF`.
 Installed promotion and provider-driven live response remain deferred; the
 preserved installed owner remains on
 `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
-Receipt: `.docs/todo/changelog/063-question-modal-frame.md`.
+The request envelope rejects empty, wrong-schema, wrong-kind, and oversized
+payloads before rendering; prompt and option display truncation uses terminal
+cell width. Receipt: `.docs/todo/changelog/065-question-modal-batch-boundary.md`.
+
+## Current failure receipt boundary — 2026-08-14
+
+Move 71 embeds one bounded `var1.failure_receipt.v1` payload in the existing
+failed or timed-out `turn_terminal` event. The receipt normalizes class, phase,
+and detail, derives a deterministic `failure-<sha256>` ID, and stays absent on
+completed or cancelled turns. Session cold projection and scheduler terminal
+reconciliation preserve the same ID in the existing ticket receipt; expired
+requeue uses the same normalization owner and idempotency boundary.
+
+Focused TUI Debug and ReleaseFast remain `137/137`; full Debug is `19/19`
+steps and `2,178/2,178` tests; source ReleaseFast is `9/9` at SHA-256
+`27BBEB05623899CB5D35A33EF523250A26C469644372C809C130A536DBAD7BAF`.
+Installed promotion remains deferred. Receipt:
+`.docs/todo/changelog/064-failure-receipts-move71.md`.
 
 ## Current task-branch context boundary — 2026-08-14
 
@@ -774,14 +792,14 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 2,150/2,150 tests with zero skips.
+- The complete graph passes 19/19 steps and 2,176/2,176 tests with zero skips.
   The reduced total is intentional: one registry loop executes all 53 declared
   cases and replaces 45 one-case wrappers that left ten cases undiscovered.
   Its host lane executes the stdio child, owner state/client, shared process
   lock, bridge, and process-tree contracts; the integration lane includes
   exact owner route, lease, stalled-loopback deadline, and explicit-workspace
   precedence probes. The backend
-  TUI lane passes 77/77.
+  TUI lane passes 137/137.
 - A barrier-synchronized leadership race returns one guard and one
   `LeaseUnavailable`. Native proof root
   `.zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1` starts two

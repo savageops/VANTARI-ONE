@@ -79,11 +79,19 @@ pub const State = struct {
     confirm_error: bool = false,
 
     pub fn initFromJson(allocator: std.mem.Allocator, request_json: []const u8) !State {
+        // The kernel emits this bounded envelope, and replayed event data is
+        // still untrusted at the client boundary. Reject an oversized payload
+        // before the JSON parser can turn it into an unbounded UI allocation.
+        if (request_json.len == 0 or request_json.len > input_protocol.max_serialized_bytes) {
+            return error.InvalidInputRequest;
+        }
         var parsed = try std.json.parseFromSlice(input_protocol.Request, allocator, request_json, .{
             .ignore_unknown_fields = true,
         });
         defer parsed.deinit();
-        if (parsed.value.request_id.len == 0 or parsed.value.questions.len == 0 or
+        if (!std.mem.eql(u8, parsed.value.schema, input_protocol.request_schema) or
+            !std.mem.eql(u8, parsed.value.kind, "question") or
+            parsed.value.request_id.len == 0 or parsed.value.questions.len == 0 or
             parsed.value.questions.len > input_protocol.max_questions) return error.InvalidInputRequest;
 
         var state = State{
@@ -408,7 +416,7 @@ pub const State = struct {
         if (row >= win.height or win.width == 0) return;
         const prompt_width = @min(@as(usize, 28), @max(@as(usize, 10), @as(usize, win.width) / 3));
         const prompt_limit = prompt_width -| 2;
-        const prompt = truncate(safeDisplayText(frame_allocator, question.prompt), prompt_limit);
+        const prompt = truncateToWidth(win, safeDisplayText(frame_allocator, question.prompt), prompt_limit);
         const prompt_style = if (active) styles.selected else styles.prompt;
         _ = win.print(
             &.{
@@ -430,9 +438,11 @@ pub const State = struct {
             else
                 styles.option;
             const key = optionKey(option_index);
-            const prefix_width = marker.len + key.len + 2;
+            const prefix_width: usize = @intCast(
+                win.gwidth(marker) + win.gwidth(key) + win.gwidth(") "),
+            );
             const label_width = available -| prefix_width;
-            const visible_label = truncate(safeDisplayText(frame_allocator, option.label), label_width);
+            const visible_label = truncateToWidth(win, safeDisplayText(frame_allocator, option.label), label_width);
             if (visible_label.len == 0) break;
             _ = win.print(
                 &.{
@@ -443,7 +453,10 @@ pub const State = struct {
                 },
                 .{ .row_offset = @intCast(row), .col_offset = @intCast(col), .wrap = .none },
             );
-            col += @min(available, marker.len + key.len + 2 + visible_label.len + 2);
+            const option_width: usize = @intCast(
+                win.gwidth(marker) + win.gwidth(key) + win.gwidth(") ") + win.gwidth(visible_label),
+            );
+            col += @min(available, option_width + @as(usize, win.gwidth("  ")));
         }
     }
 };
@@ -535,15 +548,17 @@ fn safeDisplayText(allocator: std.mem.Allocator, value: []const u8) []const u8 {
     return normalized.toOwnedSlice() catch invalid_display_text;
 }
 
-fn truncate(value: []const u8, width: usize) []const u8 {
+fn truncateToWidth(win: tui.Window, value: []const u8, width: usize) []const u8 {
     if (width == 0 or value.len == 0) return value[0..0];
     var byte_index: usize = 0;
-    var codepoints: usize = 0;
-    while (byte_index < value.len and codepoints < width) {
-        const sequence_len = std.unicode.utf8ByteSequenceLength(value[byte_index]) catch 1;
-        if (byte_index + sequence_len > value.len) break;
-        byte_index += sequence_len;
-        codepoints += 1;
+    var cells: usize = 0;
+    var iterator = win.unicode.graphemeIterator(value);
+    while (iterator.next()) |grapheme| {
+        const bytes = grapheme.bytes(value);
+        const grapheme_width: usize = @intCast(win.gwidth(bytes));
+        if (grapheme_width > 0 and cells + grapheme_width > width) break;
+        byte_index += bytes.len;
+        cells += grapheme_width;
     }
     return value[0..byte_index];
 }
@@ -841,4 +856,73 @@ test "question panel sanitizes untrusted text and survives clipped viewports" {
     const response = try state.responseJson(allocator, false);
     defer allocator.free(response);
     try std.testing.expect(std.mem.indexOf(u8, response, "server-choice") != null);
+}
+
+test "question panel bounds and renders the maximum batch at the viewport edges" {
+    const allocator = std.testing.allocator;
+    var request = std.array_list.Managed(u8).init(allocator);
+    defer request.deinit();
+    try request.appendSlice(
+        "{\"schema\":\"var1.input_requested.v1\",\"kind\":\"question\",\"request_id\":\"call-max\",\"questions\":[",
+    );
+    for (0..input_protocol.max_questions) |index| {
+        if (index > 0) try request.append(',');
+        const question = try std.fmt.allocPrint(
+            allocator,
+            "{{\"id\":\"q{d}\",\"prompt\":\"Preference {d}\",\"options\":[{{\"id\":\"a\",\"label\":\"Fast {d}\"}},{{\"id\":\"b\",\"label\":\"Careful {d}\"}},{{\"id\":\"c\",\"label\":\"Thorough {d}\"}},{{\"id\":\"d\",\"label\":\"Minimal {d}\"}},{{\"id\":\"e\",\"label\":\"Other path {d}\"}}]}}",
+            .{ index + 1, index + 1, index, index, index, index, index },
+        );
+        defer allocator.free(question);
+        try request.appendSlice(question);
+    }
+    try request.appendSlice("]}");
+
+    var state = try State.initFromJson(allocator, request.items);
+    defer state.deinit();
+    try std.testing.expectEqual(input_protocol.max_questions, state.questions.items.len);
+
+    var unicode = try tui.Unicode.init(allocator);
+    defer unicode.deinit(allocator);
+    var input = TextInput.init(allocator, &unicode);
+    defer input.deinit();
+    const styles = DrawStyles{
+        .panel = .{},
+        .title = .{},
+        .prompt = .{},
+        .option = .{},
+        .selected = .{},
+        .hint = .{},
+        .input = .{},
+        .confirm = .{},
+    };
+
+    for ([_]u16{ 1, 2, 4, 20 }) |rows| {
+        var screen = try tui.Screen.init(allocator, .{ .rows = rows, .cols = 80, .x_pixel = 0, .y_pixel = 0 });
+        defer screen.deinit(allocator);
+        const win = tui.Window{
+            .x_off = 0,
+            .y_off = 0,
+            .parent_x_off = 0,
+            .parent_y_off = 0,
+            .width = screen.width,
+            .height = screen.height,
+            .screen = &screen,
+            .unicode = &unicode,
+        };
+        var frame_storage: [4096]u8 = undefined;
+        var frame_allocator = std.heap.FixedBufferAllocator.init(&frame_storage);
+        state.confirming = false;
+        state.question_index = 0;
+        state.option_cursor = 0;
+        state.draw(win, &input, styles, frame_allocator.allocator());
+
+        // The active row must remain renderable when the question window has
+        // scrolled to the final item in a large align-style batch.
+        state.question_index = state.questions.items.len - 1;
+        state.option_cursor = state.questions.items[state.question_index].options.items.len - 1;
+        state.draw(win, &input, styles, frame_allocator.allocator());
+
+        state.confirming = true;
+        state.draw(win, &input, styles, frame_allocator.allocator());
+    }
 }

@@ -136,7 +136,7 @@ test "completed input serializes through the canonical terminal schema" {
         .cached_tokens = 2,
         .total_tokens = 16,
     }, 3);
-    const payload = try protocol_events.serializeTurnTerminal(std.testing.allocator, 11, input);
+    const payload = try protocol_events.serializeTurnTerminal(std.testing.allocator, "session-terminal", 11, input);
     defer std.testing.allocator.free(payload);
 
     const Parsed = struct {

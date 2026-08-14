@@ -6213,6 +6213,26 @@ test "tui question panel survives the Vaxis render boundary in every prompt mode
             try draw(&vx, &writer.writer, &state, &input);
             try std.testing.expect(writer.written().len > 0);
         }
+
+        // The first implementation only exercised the live question rows.
+        // The final Enter changes the renderer to the review frame, which is
+        // the other borrowed-text/render boundary and must be exercised while
+        // the turn is still owned by the same prompt mode.
+        const enter_key: tui.Key = .{ .codepoint = tui.Key.enter };
+        state.handleQuestionKey(enter_key, &input);
+        state.handleQuestionKey(enter_key, &input);
+        try std.testing.expect(state.input_state != null);
+        try std.testing.expect(state.input_state.?.confirming);
+        for ([_]u16{ 14, 4, 1 }) |rows| {
+            try vx.resize(allocator, &writer.writer, .{
+                .rows = rows,
+                .cols = 120,
+                .x_pixel = 0,
+                .y_pixel = 0,
+            });
+            try draw(&vx, &writer.writer, &state, &input);
+            try std.testing.expect(writer.written().len > 0);
+        }
         state.clearInputRequest();
     }
 }

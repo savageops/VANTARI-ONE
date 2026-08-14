@@ -1,5 +1,39 @@
 # Execution Log
 
+## 2026-08-14 - Failure receipts (Move 71)
+
+**Outcome:** Normalized failed and timed-out terminal turns into one bounded
+`var1.failure_receipt.v1` receipt and projected its deterministic ID through
+the existing session and ticket owners.
+
+- The receipt carries normalized class, phase, bounded detail, and a stable
+  `failure-<sha256>` ID. Completed and cancelled turns remain receipt-free.
+- Session cold projection, scheduler terminal reconciliation, and stale-lease
+  requeue reuse the same ID owner and idempotency boundary.
+- Full Debug passes `19/19` steps and `2,178/2,178` tests. Focused TUI Debug
+  and ReleaseFast pass `9/9` steps and `137/137` tests.
+- Source ReleaseFast passes `9/9`; source SHA-256 is
+  `27BBEB05623899CB5D35A33EF523250A26C469644372C809C130A536DBAD7BAF`.
+- Installed promotion remains deferred. Research and receipt:
+  `.docs/research/2026-08-14-failure-receipts-move71.md` and
+  `.docs/todo/changelog/064-failure-receipts-move71.md`.
+
+## 2026-08-14 - Question modal batch boundary
+
+**Outcome:** Hardened the shared settings-style question modal against invalid
+or oversized request envelopes and maximum-batch rendering pressure.
+
+- Empty, wrong-schema, wrong-kind, and over-limit requests fail before drawing.
+- Prompt and option truncation uses terminal-cell width; response IDs remain
+  unchanged. A 60-question batch survives 1/2/4/20-row live and review frames.
+- Full Debug passes `19/19` steps and `2,178/2,178` tests. Focused TUI Debug
+  and ReleaseFast pass `9/9` steps and `137/137` tests.
+- Source ReleaseFast passes `9/9`; source SHA-256 is
+  `27BBEB05623899CB5D35A33EF523250A26C469644372C809C130A536DBAD7BAF`.
+- Installed promotion remains deferred. Research and receipt:
+  `.docs/research/2026-08-14-question-modal-batch-boundary.md` and
+  `.docs/todo/changelog/065-question-modal-batch-boundary.md`.
+
 ## 2026-08-14 - Question panel event-loop recovery
 
 **Outcome:** Contained recoverable question-controller and `input/respond`

@@ -286,11 +286,15 @@ pub const Service = struct {
             const output = sessions.readOutput(self.allocator, self.config.workspace_root, session.id) catch null;
             defer if (output) |value| self.allocator.free(value);
             const failure = boundedText(session.failure_reason orelse "", 1024);
-            const terminal_receipt = try std.fmt.allocPrint(self.allocator, "session={s};status={s};output_bytes={d};failure={s}", .{
+            const terminal = sessions.readCurrentTurnTerminal(self.allocator, self.config.workspace_root, session.id) catch null;
+            defer if (terminal) |value| value.deinit(self.allocator);
+            const failure_id = if (terminal) |value| value.failure_id orelse "" else "";
+            const terminal_receipt = try std.fmt.allocPrint(self.allocator, "session={s};status={s};output_bytes={d};failure={s};failure_id={s}", .{
                 session.id,
                 types.statusLabel(session.status),
                 if (output) |value| value.len else 0,
                 failure,
+                failure_id,
             });
             defer self.allocator.free(terminal_receipt);
             const idempotency_key = try std.fmt.allocPrint(self.allocator, "ticket-complete:{s}:{d}:{d}:{s}", .{ ticket.id, ticket.revision, ticket.attempt, session.id });
@@ -301,6 +305,7 @@ pub const Service = struct {
                 .session_id = session.id,
                 .lease_token = ticket.lease_token,
                 .terminal_receipt = terminal_receipt,
+                .failure_id = failure_id,
                 .repair_required = session.status != .completed,
                 .idempotency_key = idempotency_key,
                 .completed_at_ms = now_ms,
@@ -1139,7 +1144,26 @@ test "scheduler completes terminal child sessions and marks failed or cancelled 
 
     var failed_session = try sessions.initSessionWithOptions(allocator, workspace, "repair", .{ .display_name = "failed child" });
     defer failed_session.deinit(allocator);
-    try sessions.setSessionFailure(allocator, workspace, &failed_session, "provider failed");
+    try sessions.setSessionStatus(allocator, workspace, &failed_session, .running);
+    const failed_run_seq = try sessions.appendEventWithSeq(allocator, workspace, failed_session.id, .{
+        .event_type = "session_started",
+        .message = "repair run",
+        .timestamp_ms = now_ms,
+    });
+    var failed_terminal = try sessions.commitTurnTerminal(
+        allocator,
+        workspace,
+        &failed_session,
+        failed_run_seq,
+        .{
+            .outcome = .failed,
+            .detail = "provider failed",
+            .failure_class = "provider_transport",
+            .failure_phase = "provider",
+        },
+        now_ms + 1,
+    );
+    defer failed_terminal.deinit(allocator);
     try claimTicketForTest(allocator, &store, failed_ticket_id, "worker-failed", failed_session.id, "failed-lease", now_ms + 30_000, 1, 1);
 
     var cancelled_session = try sessions.initSessionWithOptions(allocator, workspace, "cancelled", .{ .display_name = "cancelled child" });
@@ -1168,6 +1192,8 @@ test "scheduler completes terminal child sessions and marks failed or cancelled 
     try std.testing.expect(failed_ticket.repair_required);
     try std.testing.expect(std.mem.indexOf(u8, failed_ticket.terminal_receipt, "status=failed") != null);
     try std.testing.expect(std.mem.indexOf(u8, failed_ticket.terminal_receipt, "failure=provider failed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, failed_ticket.terminal_receipt, "failure_id=failure-") != null);
+    try std.testing.expect(std.mem.startsWith(u8, failed_ticket.failure_id, "failure-"));
     try std.testing.expectEqual(tickets.TicketStatus.completed, cancelled_ticket.status);
     try std.testing.expect(cancelled_ticket.repair_required);
     try std.testing.expect(std.mem.indexOf(u8, cancelled_ticket.terminal_receipt, "status=cancelled") != null);

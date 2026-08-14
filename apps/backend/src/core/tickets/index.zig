@@ -2,6 +2,7 @@ const std = @import("std");
 
 const fsutil = @import("../../shared/fsutil.zig");
 const process_lock = @import("../../shared/process_lock.zig");
+const protocol_events = @import("../../shared/protocol/events.zig");
 
 /// Keep thread and process serialization at the ledger owner. One claim event
 /// commits worker generation, lease, and child-session identity together.
@@ -82,6 +83,7 @@ const RawEvent = struct {
     agent_hint: []const u8 = "",
     capability_hash: []const u8 = "",
     failure_class: []const u8 = "",
+    failure_id: []const u8 = "",
     terminal_receipt: []const u8 = "",
     repair_required: bool = false,
     approval_id: []const u8 = "",
@@ -160,6 +162,7 @@ pub const RequeueInput = struct {
     expected_revision: u64,
     reason: []const u8,
     failure_class: []const u8,
+    failure_phase: []const u8 = "scheduler",
     idempotency_key: []const u8,
     requeued_at_ms: i64,
 };
@@ -170,6 +173,7 @@ pub const CompleteInput = struct {
     session_id: []const u8,
     lease_token: []const u8,
     terminal_receipt: []const u8,
+    failure_id: []const u8 = "",
     repair_required: bool = false,
     idempotency_key: []const u8,
     completed_at_ms: i64,
@@ -202,6 +206,7 @@ pub const Ticket = struct {
     lease_token: []const u8,
     capability_hash: []const u8,
     failure_class: []const u8,
+    failure_id: []const u8,
     terminal_receipt: []const u8,
     approval_id: []const u8,
     rerun_session_id: []const u8,
@@ -593,6 +598,18 @@ pub const TicketStore = struct {
         if (ticket.revision != input.expected_revision) return Error.RevisionConflict;
         if (ticket.lease_expires_at_ms <= 0 or ticket.lease_expires_at_ms > input.requeued_at_ms) return Error.LeaseNotExpired;
 
+        const failure_class = protocol_events.normalizeFailureClass(.failed, input.failure_class, input.reason);
+        const failure_phase = protocol_events.normalizeFailurePhase(input.failure_phase, input.reason);
+        const failure_id = try protocol_events.failureReceiptId(
+            self.allocator,
+            input.ticket_id,
+            ticket.revision + 1,
+            failure_class,
+            failure_phase,
+            input.reason,
+        );
+        defer self.allocator.free(failure_id);
+
         var event = RawEvent{
             .schema = "var1.ticket_event.v2",
             .event_type = "requeue",
@@ -602,7 +619,8 @@ pub const TicketStore = struct {
             .idempotency_key = input.idempotency_key,
             .revision = ticket.revision + 1,
             .session_id = ticket.active_session_id,
-            .failure_class = input.failure_class,
+            .failure_class = failure_class,
+            .failure_id = failure_id,
             .reason = input.reason,
             .transitioned_at_ms = input.requeued_at_ms,
         };
@@ -640,6 +658,7 @@ pub const TicketStore = struct {
             .idempotency_key = input.idempotency_key,
             .revision = ticket.revision + 1,
             .session_id = input.session_id,
+            .failure_id = input.failure_id,
             .terminal_receipt = input.terminal_receipt,
             .repair_required = input.repair_required,
             .transitioned_at_ms = input.completed_at_ms,
@@ -750,6 +769,7 @@ pub const TicketStore = struct {
                 .lease_token = "",
                 .capability_hash = "",
                 .failure_class = "",
+                .failure_id = "",
                 .terminal_receipt = "",
                 .approval_id = "",
                 .rerun_session_id = "",
@@ -780,6 +800,7 @@ pub const TicketStore = struct {
         if (event.attempt > 0) ticket.attempt = event.attempt;
         if (event.capability_hash.len > 0) ticket.capability_hash = try arena.dupe(u8, event.capability_hash);
         if (event.failure_class.len > 0) ticket.failure_class = try arena.dupe(u8, event.failure_class);
+        if (event.failure_id.len > 0) ticket.failure_id = try arena.dupe(u8, event.failure_id);
         if (event.terminal_receipt.len > 0) ticket.terminal_receipt = try arena.dupe(u8, event.terminal_receipt);
         if (event.approval_id.len > 0) ticket.approval_id = try arena.dupe(u8, event.approval_id);
         if (event.rerun_session_id.len > 0) ticket.rerun_session_id = try arena.dupe(u8, event.rerun_session_id);
@@ -1061,6 +1082,7 @@ test "ticket store requeues only expired claims and preserves stale session evid
     try std.testing.expectEqual(TicketStatus.assigned, ticket.status);
     try std.testing.expectEqualStrings("session-stale", ticket.last_session_id);
     try std.testing.expectEqualStrings("stale_lease", ticket.failure_class);
+    try std.testing.expect(std.mem.startsWith(u8, ticket.failure_id, "failure-"));
     try std.testing.expect(!ticket.claim_complete);
 }
 

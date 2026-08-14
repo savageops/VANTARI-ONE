@@ -134,6 +134,11 @@ const ParsedTurnTerminal = struct {
     run_seq: u64,
     outcome: []const u8,
     detail: []const u8 = "",
+    failure: ?ParsedFailureReceipt = null,
+};
+
+const ParsedFailureReceipt = struct {
+    failure_id: []const u8 = "",
 };
 
 pub const TurnTerminalProjection = struct {
@@ -141,9 +146,11 @@ pub const TurnTerminalProjection = struct {
     run_seq: u64,
     outcome: protocol_events.TurnTerminalOutcome,
     detail: []u8,
+    failure_id: ?[]u8 = null,
 
     pub fn deinit(self: TurnTerminalProjection, allocator: std.mem.Allocator) void {
         allocator.free(self.detail);
+        if (self.failure_id) |value| allocator.free(value);
     }
 };
 
@@ -692,7 +699,7 @@ pub fn commitTurnTerminal(
             };
         }
 
-        const payload = try protocol_events.serializeTurnTerminal(allocator, scan.run_seq, input);
+        const payload = try protocol_events.serializeTurnTerminal(allocator, session.id, scan.run_seq, input);
         errdefer allocator.free(payload);
         const seq = try appendEventLocked(allocator, events_path, seq_state, .{
             .event_type = protocol_events.turn_terminal_event_type,
@@ -803,6 +810,7 @@ fn scanCurrentTurnTerminal(
 
         var outcome = legacyTurnTerminalOutcome(parsed.value.event_type);
         var detail = parsed.value.message;
+        var failure_id: ?[]u8 = null;
         if (std.mem.eql(u8, parsed.value.event_type, protocol_events.turn_terminal_event_type)) {
             var terminal = std.json.parseFromSlice(ParsedTurnTerminal, allocator, parsed.value.message, .{
                 .ignore_unknown_fields = true,
@@ -815,14 +823,21 @@ fn scanCurrentTurnTerminal(
             if (terminal.value.run_seq != scan.run_seq) return error.StaleTurnTerminalGeneration;
             outcome = protocol_events.parseTurnTerminalOutcome(terminal.value.outcome) catch return error.InvalidTurnTerminalPayload;
             detail = terminal.value.detail;
+            if (terminal.value.failure) |failure| {
+                if (failure.failure_id.len > 0) failure_id = try allocator.dupe(u8, failure.failure_id);
+            }
         }
         const resolved_outcome = outcome orelse continue;
-        if (scan.terminal != null) return error.DuplicateTurnTerminal;
+        if (scan.terminal != null) {
+            if (failure_id) |value| allocator.free(value);
+            return error.DuplicateTurnTerminal;
+        }
         scan.terminal = .{
             .seq = parsed.value.seq,
             .run_seq = scan.run_seq,
             .outcome = resolved_outcome,
             .detail = try allocator.dupe(u8, detail),
+            .failure_id = failure_id,
         };
     }
     return scan;

@@ -2201,6 +2201,8 @@ test "turn terminal commit is one typed row per durable run generation" {
     try std.testing.expect(current != null);
     try std.testing.expectEqual(second_run_seq, current.?.run_seq);
     try std.testing.expectEqual(VAR1.shared.protocol.events.TurnTerminalOutcome.timed_out, current.?.outcome);
+    try std.testing.expect(current.?.failure_id != null);
+    try std.testing.expect(std.mem.startsWith(u8, current.?.failure_id.?, "failure-"));
     try std.testing.expectEqual(VAR1.shared.types.SessionStatus.failed, session.status);
     try std.testing.expectEqualStrings("ConnectionTimedOut", session.failure_reason.?);
 }
@@ -2232,7 +2234,7 @@ test "cold-start terminal projection rejects malformed and duplicate closure" {
         .message = "start",
         .timestamp_ms = 3,
     });
-    const payload = try VAR1.shared.protocol.events.serializeTurnTerminal(std.testing.allocator, run_seq, .{
+    const payload = try VAR1.shared.protocol.events.serializeTurnTerminal(std.testing.allocator, duplicate.id, run_seq, .{
         .outcome = .completed,
     });
     defer std.testing.allocator.free(payload);
