@@ -1671,6 +1671,15 @@ fn handleRepairRerun(server: *Server, params: ?std.json.Value) ![]u8 {
     const source_receipt_seq = (try optionalU64FromObject(&params_value.object, "source_receipt_seq")) orelse return Error.InvalidParams;
     const applied_event_seq = (try optionalU64FromObject(&params_value.object, "applied_event_seq")) orelse return Error.InvalidParams;
     if (source_receipt_seq == 0 or applied_event_seq == 0 or applied_event_seq <= source_receipt_seq) return Error.InvalidParams;
+    const max_latency_ms = try optionalU64FromObject(&params_value.object, "max_latency_ms");
+    const max_side_effects_delta = try optionalU64FromObject(&params_value.object, "max_side_effects_delta");
+    const max_prompt_tokens = try optionalU64FromObject(&params_value.object, "max_prompt_tokens");
+    const max_completion_tokens = try optionalU64FromObject(&params_value.object, "max_completion_tokens");
+    const max_cost_microusd = try optionalU64FromObject(&params_value.object, "max_cost_microusd");
+    const max_cost_usd: ?f64 = if (max_cost_microusd) |bound|
+        @as(f64, @floatFromInt(bound)) / 1_000_000.0
+    else
+        null;
 
     var source_session = store.readSessionRecord(server.allocator, server.config.workspace_root, parsed.value.session_id) catch {
         return Error.SessionNotFound;
@@ -1881,6 +1890,29 @@ fn handleRepairRerun(server: *Server, params: ?std.json.Value) ![]u8 {
         input_match,
         config_match,
         provider_dispatched,
+    );
+    _ = try evaluation_events.appendRepairEvaluationEvent(
+        server.allocator,
+        server.config.workspace_root,
+        source_session.id,
+        events,
+        .{
+            .evaluation_id = rerun_id,
+            .baseline_session_id = source_session.id,
+            .treatment_session_id = child_session.id,
+            .baseline_events = events,
+            .treatment_events = child_events,
+            .input_match = input_match,
+            .config_match = config_match,
+            .provider_dispatched = provider_dispatched,
+            .bounds = .{
+                .max_latency_ms = max_latency_ms,
+                .max_side_effects_delta = max_side_effects_delta,
+                .max_prompt_tokens = max_prompt_tokens,
+                .max_completion_tokens = max_completion_tokens,
+                .max_cost_usd = max_cost_usd,
+            },
+        },
     );
 
     return renderJsonAlloc(server.allocator, protocol_types.RepairRerunResult{
@@ -3419,9 +3451,11 @@ test "repair/rerun rejects a changed effective config before provider dispatch" 
 
     const source_events = try store.readEvents(std.testing.allocator, workspace_root, session.id);
     defer types.deinitSessionEvents(std.testing.allocator, source_events);
-    try std.testing.expectEqual(@as(usize, 4), source_events.len);
+    try std.testing.expectEqual(@as(usize, 5), source_events.len);
     try std.testing.expectEqualStrings(evaluation_events.repair_rerun_started_event_type, source_events[2].event_type);
     try std.testing.expectEqualStrings(evaluation_events.repair_rerun_completed_event_type, source_events[3].event_type);
+    try std.testing.expectEqualStrings(evaluation_events.repair_evaluation_event_type, source_events[4].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, source_events[4].message, "\"passed\":false") != null);
 }
 
 test "repair/rerun reuses the exact input and config through the normal provider lane" {
@@ -3518,6 +3552,12 @@ test "repair/rerun reuses the exact input and config through the normal provider
     }
     try std.testing.expect(saw_turn_started);
     try std.testing.expect(saw_replayed_output);
+
+    const source_events = try store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer types.deinitSessionEvents(std.testing.allocator, source_events);
+    try std.testing.expectEqualStrings(evaluation_events.repair_evaluation_event_type, source_events[4].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, source_events[4].message, "\"treatment_outcome\":\"completed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source_events[4].message, "\"passed\":true") != null);
 }
 
 test "session/send rejects unknown prompt modes before session execution" {

@@ -399,6 +399,14 @@ completed-request idempotence and an explicit interrupted-state boundary for
 Move 80. The parent transcript is not copied and no replay-specific provider,
 queue, or patcher is permitted.
 
+Move 78 keeps evaluation in that same owner. `repair/rerun` appends one
+idempotent `var1.repair_evaluation.v1` receipt to the source event spine after
+the treatment settles. The receipt compares baseline/treatment outcome, turn
+latency, conservative observable tool-span side effects, token/cost evidence,
+exact identity/provider invariants, and optional bounds. Existing
+`var1.tool_effect.v1` receipts remain the authority for file effects; evaluation
+is evidence-only and does not mutate the executor.
+
 Delegation is validated at one eligibility-first agent boundary. In root orchestrator mode, `agents {}` must precede launch or configuration mutation, but it is not a mandatory first-turn action. `AgentService` hot-loads the registry, resolves every route, reads fixed-pool and current-team projections, and returns one sorted `var1.agent_eligibility.v1` snapshot with a SHA-256 receipt. The active prompt chooses whether to stay quiet, inspect, message, challenge, launch, accept queueing, or wake; no executor branch selects for it. `launch_agent` accepts one `{ context, tasks[] }` batch whose task ids must be route-eligible and revalidates scope, route, depth, contact, and capacity before effects. `core/agents/spec.zig` resolves editable personas over compiled execution-kind and capability-profile floors; custom ids must inherit through `extends`, so config cannot grant arbitrary tools or provider credentials. `configure_agent` validates and atomically replaces `config.json`; the next eligibility or launch read sees the new registry. Child prompts contain only the selected private capsule, explicit shared context, finite task, and output contract. The parent transcript is never copied into a child window.
 
 Derivative memory and evaluator evidence are deliberately non-authoritative. `src/core/memory/derivative.zig` requires `session_id`, `source_seq_start`, and `source_seq_end`, and rejects transcript replay-shaped payloads. `src/core/evaluation/events.zig` appends redacted heartbeat/evaluator events with evaluator mutation forbidden. RecursiveMAS latent transfer, GRASP gradients, dynamic markets, autonomous background evolution, exact tokenizer integration, and plugin auto-discovery remain unsupported behavior until there is a tested contract for cancellation, idempotency, cold-start recovery, and lifecycle ownership.

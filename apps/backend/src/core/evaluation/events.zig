@@ -1,6 +1,7 @@
 const std = @import("std");
 const store = @import("../sessions/store.zig");
 const types = @import("../../shared/types.zig");
+const protocol_events = @import("../../shared/protocol/events.zig");
 
 pub const Error = error{
     EmptyEvaluatorId,
@@ -21,6 +22,8 @@ pub const repair_candidate_applied_schema = "var1.repair_candidate_applied.v1";
 pub const repair_rerun_started_event_type = "repair_rerun_started";
 pub const repair_rerun_completed_event_type = "repair_rerun_completed";
 pub const repair_rerun_schema = "var1.repair_rerun.v1";
+pub const repair_evaluation_event_type = "repair_evaluation";
+pub const repair_evaluation_schema = "var1.repair_evaluation.v1";
 
 const repair_environment_keys = [_][]const u8{
     "VANTARI_HOME",
@@ -250,6 +253,284 @@ pub fn appendRepairRerunEvent(
         .message = message,
         .timestamp_ms = std.time.milliTimestamp(),
     });
+}
+
+/// Bounds are operator evidence, not hidden policy. A null bound means that
+/// metric is recorded but not used as a pass/fail gate. Tool spans are the
+/// conservative observable side-effect proxy here; file-effect certainty stays
+/// with the existing `var1.tool_effect.v1` receipts.
+pub const RepairEvaluationBounds = struct {
+    max_latency_ms: ?u64 = null,
+    max_side_effects_delta: ?u64 = null,
+    max_prompt_tokens: ?u64 = null,
+    max_completion_tokens: ?u64 = null,
+    max_cost_usd: ?f64 = null,
+};
+
+pub const RepairEvaluationInput = struct {
+    evaluation_id: []const u8,
+    baseline_session_id: []const u8,
+    treatment_session_id: []const u8,
+    baseline_events: []const types.SessionEvent,
+    treatment_events: []const types.SessionEvent,
+    input_match: bool,
+    config_match: bool,
+    provider_dispatched: bool,
+    bounds: RepairEvaluationBounds = .{},
+};
+
+pub const RepairEvaluationResult = struct {
+    event_seq: u64,
+    passed: bool,
+};
+
+const RepairEvaluationRunMetrics = struct {
+    outcome: []const u8 = "missing",
+    latency_ms: u64 = 0,
+    tool_spans: u64 = 0,
+    prompt_tokens: u64 = 0,
+    completion_tokens: u64 = 0,
+    cached_tokens: u64 = 0,
+    usage_precision: []const u8 = "unknown",
+    cost_total_usd: ?f64 = null,
+    start_timestamp_ms: ?i64 = null,
+    terminal_timestamp_ms: ?i64 = null,
+};
+
+const ParsedRepairTerminal = struct {
+    outcome: []const u8 = "",
+    prompt_tokens: u64 = 0,
+    completion_tokens: u64 = 0,
+    cached_tokens: u64 = 0,
+    usage_precision: []const u8 = "unknown",
+    cost_total_usd: ?f64 = null,
+};
+
+const StoredRepairEvaluation = struct {
+    schema: []const u8 = "",
+    evaluation_id: []const u8 = "",
+    passed: bool = false,
+};
+
+const RepairTokenCostCheck = struct {
+    evaluable: bool,
+    within_bound: bool,
+};
+
+fn stableRepairOutcome(value: []const u8) []const u8 {
+    if (std.mem.eql(u8, value, "completed")) return "completed";
+    if (std.mem.eql(u8, value, "failed")) return "failed";
+    if (std.mem.eql(u8, value, "timed_out")) return "timed_out";
+    if (std.mem.eql(u8, value, "cancelled")) return "cancelled";
+    return "unknown";
+}
+
+fn collectRepairEvaluationMetrics(
+    allocator: std.mem.Allocator,
+    events: []const types.SessionEvent,
+) !RepairEvaluationRunMetrics {
+    var metrics = RepairEvaluationRunMetrics{};
+
+    for (events) |event| {
+        if (std.mem.eql(u8, event.event_type, "turn_started")) {
+            metrics.start_timestamp_ms = event.timestamp_ms;
+        } else if (std.mem.eql(u8, event.event_type, "session_started") and metrics.start_timestamp_ms == null) {
+            metrics.start_timestamp_ms = event.timestamp_ms;
+        }
+        if (std.mem.eql(u8, event.event_type, "tool_finished")) {
+            metrics.tool_spans +|= 1;
+        }
+        if (!std.mem.eql(u8, event.event_type, protocol_events.turn_terminal_event_type)) continue;
+
+        var parsed = std.json.parseFromSlice(ParsedRepairTerminal, allocator, event.message, .{
+            .ignore_unknown_fields = true,
+        }) catch continue;
+        defer parsed.deinit();
+
+        metrics.outcome = stableRepairOutcome(parsed.value.outcome);
+        metrics.prompt_tokens = parsed.value.prompt_tokens;
+        metrics.completion_tokens = parsed.value.completion_tokens;
+        metrics.cached_tokens = parsed.value.cached_tokens;
+        metrics.usage_precision = if (std.mem.eql(u8, parsed.value.usage_precision, "exact")) "exact" else "unknown";
+        metrics.cost_total_usd = parsed.value.cost_total_usd;
+        metrics.terminal_timestamp_ms = event.timestamp_ms;
+    }
+
+    if (metrics.start_timestamp_ms) |start| {
+        if (metrics.terminal_timestamp_ms) |end| {
+            metrics.latency_ms = if (end > start) @intCast(end - start) else 0;
+        }
+    }
+
+    return metrics;
+}
+
+fn repairTotalTokens(metrics: RepairEvaluationRunMetrics) u64 {
+    return metrics.prompt_tokens +| metrics.completion_tokens +| metrics.cached_tokens;
+}
+
+fn repairSignedDelta(treatment: u64, baseline: u64) i64 {
+    if (treatment >= baseline) return @intCast(treatment - baseline);
+    return -@as(i64, @intCast(baseline - treatment));
+}
+
+fn repairTokenCostCheck(
+    metrics: RepairEvaluationRunMetrics,
+    bounds: RepairEvaluationBounds,
+) RepairTokenCostCheck {
+    var evaluable = true;
+    var within_bound = true;
+    const has_token_bound = bounds.max_prompt_tokens != null or bounds.max_completion_tokens != null;
+
+    if (has_token_bound and !std.mem.eql(u8, metrics.usage_precision, "exact")) {
+        evaluable = false;
+        within_bound = false;
+    }
+    if (bounds.max_prompt_tokens) |bound| {
+        if (metrics.prompt_tokens > bound) within_bound = false;
+    }
+    if (bounds.max_completion_tokens) |bound| {
+        if (metrics.completion_tokens > bound) within_bound = false;
+    }
+    if (bounds.max_cost_usd) |bound| {
+        if (metrics.cost_total_usd) |cost| {
+            if (cost > bound) within_bound = false;
+        } else {
+            evaluable = false;
+            within_bound = false;
+        }
+    }
+
+    return .{ .evaluable = evaluable, .within_bound = within_bound };
+}
+
+fn writeOptionalU64(writer: anytype, value: ?u64) !void {
+    if (value) |number| {
+        try writer.print("{d}", .{number});
+    } else {
+        try writer.writeAll("null");
+    }
+}
+
+fn writeOptionalF64(writer: anytype, value: ?f64) !void {
+    if (value) |number| {
+        try writer.print("{f}", .{std.json.fmt(number, .{})});
+    } else {
+        try writer.writeAll("null");
+    }
+}
+
+/// Compare one source baseline and one fresh treatment from their existing
+/// event ledgers. The receipt is compact, deterministic for the supplied
+/// evidence, and idempotent by evaluation ID. It never mutates executor state.
+pub fn appendRepairEvaluationEvent(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    source_session_id: []const u8,
+    existing_source_events: []const types.SessionEvent,
+    input: RepairEvaluationInput,
+) !RepairEvaluationResult {
+    const required = [_][]const u8{
+        source_session_id,
+        input.evaluation_id,
+        input.baseline_session_id,
+        input.treatment_session_id,
+    };
+    for (required) |value| {
+        if (std.mem.trim(u8, value, " \t\r\n").len == 0) return Error.EmptyEvidence;
+    }
+
+    for (existing_source_events) |event| {
+        if (!std.mem.eql(u8, event.event_type, repair_evaluation_event_type)) continue;
+        var stored = std.json.parseFromSlice(StoredRepairEvaluation, allocator, event.message, .{
+            .ignore_unknown_fields = true,
+        }) catch continue;
+        defer stored.deinit();
+        if (std.mem.eql(u8, stored.value.schema, repair_evaluation_schema) and
+            std.mem.eql(u8, stored.value.evaluation_id, input.evaluation_id))
+        {
+            return .{ .event_seq = event.seq, .passed = stored.value.passed };
+        }
+    }
+
+    const baseline = try collectRepairEvaluationMetrics(allocator, input.baseline_events);
+    const treatment = try collectRepairEvaluationMetrics(allocator, input.treatment_events);
+    const token_cost = repairTokenCostCheck(treatment, input.bounds);
+    const treatment_completed = std.mem.eql(u8, treatment.outcome, "completed");
+    const side_effects_within_bound = if (input.bounds.max_side_effects_delta) |bound|
+        treatment.tool_spans <= baseline.tool_spans +| bound
+    else
+        true;
+    const latency_within_bound = if (input.bounds.max_latency_ms) |bound|
+        treatment.latency_ms <= bound
+    else
+        true;
+    const passed = input.input_match and input.config_match and input.provider_dispatched and
+        treatment_completed and side_effects_within_bound and latency_within_bound and token_cost.within_bound;
+
+    var message = std.array_list.Managed(u8).init(allocator);
+    errdefer message.deinit();
+    const writer = message.writer();
+    try writer.print(
+        "{{\"schema\":\"{s}\",\"evaluation_id\":{f},\"baseline_session_id\":{f},\"treatment_session_id\":{f},\"baseline_outcome\":\"{s}\",\"treatment_outcome\":\"{s}\",\"baseline_latency_ms\":{d},\"treatment_latency_ms\":{d},\"latency_delta_ms\":{d},\"baseline_tool_spans\":{d},\"treatment_tool_spans\":{d},\"tool_span_delta\":{d},\"baseline_prompt_tokens\":{d},\"treatment_prompt_tokens\":{d},\"baseline_completion_tokens\":{d},\"treatment_completion_tokens\":{d},\"baseline_cached_tokens\":{d},\"treatment_cached_tokens\":{d},\"baseline_total_tokens\":{d},\"treatment_total_tokens\":{d},\"baseline_cost_usd\":",
+        .{
+            repair_evaluation_schema,
+            std.json.fmt(input.evaluation_id, .{}),
+            std.json.fmt(input.baseline_session_id, .{}),
+            std.json.fmt(input.treatment_session_id, .{}),
+            baseline.outcome,
+            treatment.outcome,
+            baseline.latency_ms,
+            treatment.latency_ms,
+            repairSignedDelta(treatment.latency_ms, baseline.latency_ms),
+            baseline.tool_spans,
+            treatment.tool_spans,
+            repairSignedDelta(treatment.tool_spans, baseline.tool_spans),
+            baseline.prompt_tokens,
+            treatment.prompt_tokens,
+            baseline.completion_tokens,
+            treatment.completion_tokens,
+            baseline.cached_tokens,
+            treatment.cached_tokens,
+            repairTotalTokens(baseline),
+            repairTotalTokens(treatment),
+        },
+    );
+    try writeOptionalF64(writer, baseline.cost_total_usd);
+    try writer.writeAll(",\"treatment_cost_usd\":");
+    try writeOptionalF64(writer, treatment.cost_total_usd);
+    try writer.print(
+        ",\"input_identity\":{},\"config_identity\":{},\"provider_dispatched\":{},\"treatment_completed\":{},\"side_effects_within_bound\":{},\"latency_within_bound\":{},\"token_cost_evaluable\":{},\"token_cost_within_bound\":{},\"passed\":{},\"max_latency_ms\":",
+        .{
+            input.input_match,
+            input.config_match,
+            input.provider_dispatched,
+            treatment_completed,
+            side_effects_within_bound,
+            latency_within_bound,
+            token_cost.evaluable,
+            token_cost.within_bound,
+            passed,
+        },
+    );
+    try writeOptionalU64(writer, input.bounds.max_latency_ms);
+    try writer.writeAll(",\"max_side_effects_delta\":");
+    try writeOptionalU64(writer, input.bounds.max_side_effects_delta);
+    try writer.writeAll(",\"max_prompt_tokens\":");
+    try writeOptionalU64(writer, input.bounds.max_prompt_tokens);
+    try writer.writeAll(",\"max_completion_tokens\":");
+    try writeOptionalU64(writer, input.bounds.max_completion_tokens);
+    try writer.writeAll(",\"max_cost_usd\":");
+    try writeOptionalF64(writer, input.bounds.max_cost_usd);
+    try writer.writeAll(",\"executor_mutation\":\"forbidden\"}");
+
+    const event_seq = try store.appendEventWithSeq(allocator, workspace_root, source_session_id, .{
+        .event_type = repair_evaluation_event_type,
+        .message = message.items,
+        .timestamp_ms = std.time.milliTimestamp(),
+    });
+    message.deinit();
+    return .{ .event_seq = event_seq, .passed = passed };
 }
 
 /// Persist a proposal-only repair candidate. The candidate carries hashes and
@@ -953,4 +1234,115 @@ test "repair candidate approval binds the exact proposal and is idempotent" {
     try std.testing.expect(std.mem.indexOf(u8, events[1].message, "\"status\":\"approved\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, events[1].message, "\"mutation_allowed\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, events[1].message, "\"approved_by\":\"operator\"") != null);
+}
+
+test "repair evaluator compares bounded baseline and treatment evidence idempotently" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var baseline_session = try store.initSession(std.testing.allocator, workspace_root, "baseline run");
+    defer baseline_session.deinit(std.testing.allocator);
+    var treatment_session = try store.initSession(std.testing.allocator, workspace_root, "treatment run");
+    defer treatment_session.deinit(std.testing.allocator);
+
+    _ = try store.appendEventWithSeq(std.testing.allocator, workspace_root, baseline_session.id, .{
+        .event_type = "session_started",
+        .message = "{}",
+        .timestamp_ms = 100,
+    });
+    _ = try store.appendEventWithSeq(std.testing.allocator, workspace_root, baseline_session.id, .{
+        .event_type = "turn_started",
+        .message = "{}",
+        .timestamp_ms = 110,
+    });
+    _ = try store.appendEventWithSeq(std.testing.allocator, workspace_root, baseline_session.id, .{
+        .event_type = "tool_finished",
+        .message = "{\"tool\":\"read_file\",\"ok\":true}",
+        .timestamp_ms = 120,
+    });
+    _ = try store.appendEventWithSeq(std.testing.allocator, workspace_root, baseline_session.id, .{
+        .event_type = protocol_events.turn_terminal_event_type,
+        .message = "{\"outcome\":\"failed\",\"prompt_tokens\":10,\"completion_tokens\":3,\"cached_tokens\":1,\"usage_precision\":\"exact\",\"cost_total_usd\":0.01}",
+        .timestamp_ms = 150,
+    });
+
+    _ = try store.appendEventWithSeq(std.testing.allocator, workspace_root, treatment_session.id, .{
+        .event_type = "session_started",
+        .message = "{}",
+        .timestamp_ms = 200,
+    });
+    _ = try store.appendEventWithSeq(std.testing.allocator, workspace_root, treatment_session.id, .{
+        .event_type = "turn_started",
+        .message = "{}",
+        .timestamp_ms = 210,
+    });
+    _ = try store.appendEventWithSeq(std.testing.allocator, workspace_root, treatment_session.id, .{
+        .event_type = protocol_events.turn_terminal_event_type,
+        .message = "{\"outcome\":\"completed\",\"prompt_tokens\":11,\"completion_tokens\":4,\"cached_tokens\":1,\"usage_precision\":\"exact\",\"cost_total_usd\":0.02}",
+        .timestamp_ms = 260,
+    });
+
+    const baseline_events = try store.readEvents(std.testing.allocator, workspace_root, baseline_session.id);
+    defer types.deinitSessionEvents(std.testing.allocator, baseline_events);
+    const treatment_events = try store.readEvents(std.testing.allocator, workspace_root, treatment_session.id);
+    defer types.deinitSessionEvents(std.testing.allocator, treatment_events);
+
+    const first = try appendRepairEvaluationEvent(
+        std.testing.allocator,
+        workspace_root,
+        baseline_session.id,
+        baseline_events,
+        .{
+            .evaluation_id = "evaluation-1",
+            .baseline_session_id = baseline_session.id,
+            .treatment_session_id = treatment_session.id,
+            .baseline_events = baseline_events,
+            .treatment_events = treatment_events,
+            .input_match = true,
+            .config_match = true,
+            .provider_dispatched = true,
+            .bounds = .{
+                .max_latency_ms = 100,
+                .max_side_effects_delta = 0,
+                .max_prompt_tokens = 20,
+                .max_completion_tokens = 20,
+                .max_cost_usd = 0.1,
+            },
+        },
+    );
+    try std.testing.expect(first.passed);
+
+    const persisted = try store.readEvents(std.testing.allocator, workspace_root, baseline_session.id);
+    defer types.deinitSessionEvents(std.testing.allocator, persisted);
+    try std.testing.expectEqual(@as(usize, 5), persisted.len);
+    try std.testing.expectEqualStrings(repair_evaluation_event_type, persisted[4].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, persisted[4].message, "\"schema\":\"var1.repair_evaluation.v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, persisted[4].message, "\"baseline_outcome\":\"failed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, persisted[4].message, "\"treatment_outcome\":\"completed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, persisted[4].message, "\"treatment_latency_ms\":50") != null);
+    try std.testing.expect(std.mem.indexOf(u8, persisted[4].message, "\"side_effects_within_bound\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, persisted[4].message, "\"token_cost_evaluable\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, persisted[4].message, "\"passed\":true") != null);
+
+    const repeated = try appendRepairEvaluationEvent(
+        std.testing.allocator,
+        workspace_root,
+        baseline_session.id,
+        persisted,
+        .{
+            .evaluation_id = "evaluation-1",
+            .baseline_session_id = baseline_session.id,
+            .treatment_session_id = treatment_session.id,
+            .baseline_events = baseline_events,
+            .treatment_events = treatment_events,
+            .input_match = true,
+            .config_match = true,
+            .provider_dispatched = true,
+        },
+    );
+    try std.testing.expectEqual(first.event_seq, repeated.event_seq);
+    try std.testing.expect(repeated.passed);
 }

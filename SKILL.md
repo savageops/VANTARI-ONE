@@ -158,8 +158,14 @@ requires source/installed SHA-256 equality and the installed consumer path.
   receipt and later applied receipt, create a fresh linked treatment child, and
   send the recorded input/model/provider/mode through `session/send`. Gate
   input/config hashes before provider I/O; changed identity must not emit
-  `turn_started`. Keep relationship receipts in the existing event spine and
+ `turn_started`. Keep relationship receipts in the existing event spine and
   leave interrupted starts for Move 80 reconciliation.
+- Move 78 now appends one idempotent `var1.repair_evaluation.v1` receipt to the
+  source event spine. Compare baseline/treatment outcomes, turn latency,
+  conservative observable tool-span side effects, token/cost evidence, exact
+  identity/provider invariants, and optional bounds. Keep file-effect certainty
+  in `var1.tool_effect.v1`; do not add an evaluator worker, ledger, or mutation
+  path. Moves 79–80 own rollback and regression promotion.
 - Browser routes are redacted prototypes. Owner routes are loopback-only and
   token/generation gated.
 - Scheduler leadership is source-proven with one crash-released lock and

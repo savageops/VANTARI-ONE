@@ -308,8 +308,17 @@ input/model/provider/mode through the normal executor/provider lane. The child
 receipt gates input and effective configuration hashes before provider I/O;
 changed identity fails without `turn_started`, while a matching treatment
 records normal provider output. Debug and ReleaseFast are `19/19` with
-`2,193/2,193` tests; installed promotion remains deferred. Moves 78–80 still
-own invariant comparison, rollback, and regression promotion.
+`2,193/2,193` tests; installed promotion remains deferred.
+
+Move 78 adds one idempotent `var1.repair_evaluation.v1` receipt to the existing
+source event spine. It compares baseline/treatment outcomes, turn latency,
+observable tool-span side effects, token/cost evidence, exact identity/provider
+invariants, and optional `repair/rerun` bounds; `var1.tool_effect.v1` remains the
+source of file-effect certainty. Debug and ReleaseFast are `19/19` with
+`2,194/2,194` tests; source ReleaseFast is `9/9` at SHA-256
+`67BF8D1BABCDA39ECC9C4F1E29EF3A9F778EEBAC5DD52A8461EAFA2ED46F3E00`.
+Installed promotion remains deferred. Moves 79–80 still own rollback and
+regression promotion.
 
 ```text
 session/create ─► session/send ─► [executor loop] ─► session/get

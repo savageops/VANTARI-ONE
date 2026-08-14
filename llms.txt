@@ -111,6 +111,12 @@ Rules:
   treatment uses the normal provider lane. Started/completed relationship
   receipts remain in the existing event spine; interrupted work is not retried
   implicitly.
+- Move 78 appends one idempotent `var1.repair_evaluation.v1` receipt to the
+  source event spine. It compares baseline/treatment outcome, turn latency,
+  observable tool-span side effects, token/cost evidence, exact identity and
+  provider dispatch, and optional repair/rerun bounds. File-effect certainty
+  remains `var1.tool_effect.v1`; no evaluator worker, second ledger, or executor
+  mutation exists.
 - runtime.full_access_mode is false by default; resolved child routes carry it
   into the shared file/search/LSP/shell execution context, and it never relocates
   .var.
