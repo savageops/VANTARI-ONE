@@ -819,6 +819,92 @@ test "store seeds and appends canonical session messages on the same session" {
     try std.testing.expectEqualStrings("Follow-up answer", messages[3].content);
 }
 
+test "message IDs and compaction ranges survive cold replay" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "Initial prompt");
+    defer session.deinit(std.testing.allocator);
+
+    try VAR1.core.session_store.upsertAssistantSessionMessage(std.testing.allocator, workspace_root, session.id, "Initial answer", 200);
+    try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, session.id, .user, "Follow-up prompt", 300);
+    try VAR1.core.session_store.upsertAssistantSessionMessage(std.testing.allocator, workspace_root, session.id, "Follow-up answer", 400);
+    try std.testing.expect(try VAR1.core.session_store.appendSessionMessageOnce(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "delivery-message-1",
+        .user,
+        "Final prompt",
+        500,
+    ));
+    try std.testing.expect(!try VAR1.core.session_store.appendSessionMessageOnce(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "delivery-message-1",
+        .user,
+        "Duplicate final prompt",
+        600,
+    ));
+
+    const messages_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{
+        workspace_root,
+        ".var",
+        "sessions",
+        session.id,
+        "messages.jsonl",
+    });
+    defer std.testing.allocator.free(messages_path);
+    const before_compaction = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, messages_path);
+    defer std.testing.allocator.free(before_compaction);
+
+    const result = try VAR1.core.context.compactor.compactSession(std.testing.allocator, workspace_root, session.id, .{
+        .keep_recent_messages = 1,
+        .trigger = "identity-replay-test",
+    });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(result.checkpoint != null);
+    try std.testing.expectEqual(@as(u64, 1), result.checkpoint.?.source_seq_start);
+    try std.testing.expectEqual(@as(u64, 4), result.checkpoint.?.source_seq_end);
+    try std.testing.expectEqual(@as(u64, 5), result.checkpoint.?.first_kept_seq);
+
+    const after_compaction = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, messages_path);
+    defer std.testing.allocator.free(after_compaction);
+    try std.testing.expectEqualSlices(u8, before_compaction, after_compaction);
+
+    const replayed = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, session.id);
+    defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, replayed);
+    try std.testing.expectEqual(@as(usize, 5), replayed.len);
+    try std.testing.expectEqualStrings("msg-1", replayed[0].id);
+    try std.testing.expectEqualStrings("msg-2", replayed[1].id);
+    try std.testing.expectEqualStrings("msg-3", replayed[2].id);
+    try std.testing.expectEqualStrings("msg-4", replayed[3].id);
+    try std.testing.expectEqualStrings("delivery-message-1", replayed[4].id);
+
+    const latest = try VAR1.core.session_store.readLatestContextCheckpoint(std.testing.allocator, workspace_root, session.id);
+    defer if (latest) |checkpoint| checkpoint.deinit(std.testing.allocator);
+    try std.testing.expect(latest != null);
+    try std.testing.expectEqualStrings(result.checkpoint.?.id, latest.?.id);
+    try std.testing.expectEqual(@as(u64, 1), latest.?.source_seq_start);
+    try std.testing.expectEqual(@as(u64, 4), latest.?.source_seq_end);
+    try std.testing.expectEqual(@as(u64, 5), latest.?.first_kept_seq);
+
+    var provider_messages = std.array_list.Managed(VAR1.shared.types.ChatMessage).init(std.testing.allocator);
+    defer {
+        for (provider_messages.items) |message| message.deinit(std.testing.allocator);
+        provider_messages.deinit();
+    }
+    try VAR1.core.context.appendProviderMessages(std.testing.allocator, workspace_root, &provider_messages, session);
+    try std.testing.expectEqual(@as(usize, 2), provider_messages.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, provider_messages.items[0].content.?, "source_range: 1..4") != null);
+    try std.testing.expectEqualStrings("Final prompt", provider_messages.items[1].content.?);
+}
+
 test "store preserves message prefix and rejects append behind poison" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
