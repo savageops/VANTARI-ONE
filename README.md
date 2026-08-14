@@ -317,8 +317,21 @@ invariants, and optional `repair/rerun` bounds; `var1.tool_effect.v1` remains th
 source of file-effect certainty. Debug and ReleaseFast are `19/19` with
 `2,194/2,194` tests; source ReleaseFast is `9/9` at SHA-256
 `67BF8D1BABCDA39ECC9C4F1E29EF3A9F778EEBAC5DD52A8461EAFA2ED46F3E00`.
-Installed promotion remains deferred. Moves 79–80 still own rollback and
-regression promotion.
+Installed promotion remains deferred. Move 79 owns rollback; Move 80 owns
+regression promotion and cold-start reconciliation.
+
+Move 79 closes the rollback half of that loop. Operator-only `repair/rollback`
+binds a failed evaluation to the candidate, approval, and applied event
+sequences; a required full current-file hash and source baseline reject stale
+requests before mutation. The exact inverse payload reuses the reviewed
+`replace_in_file` writer, and `var1.repair_rollback.v1` is completed only when
+the target hash equals the candidate pre-apply hash. Failed treatment,
+evaluation, and rollback traces remain; deterministic identity makes retries
+no-op. Debug and ReleaseFast are `19/19` with `2,195/2,195` tests; source
+ReleaseFast is `9/9` at SHA-256
+`C7B493E757130ED11AF93ED56FCCB1248C5A1E3C980D94D4D61D2BF33201B36C`.
+Installed promotion remains deferred; Move 80 owns promotion and cold-start
+reconciliation.
 
 ```text
 session/create ─► session/send ─► [executor loop] ─► session/get

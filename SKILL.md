@@ -165,7 +165,12 @@ requires source/installed SHA-256 equality and the installed consumer path.
   conservative observable tool-span side effects, token/cost evidence, exact
   identity/provider invariants, and optional bounds. Keep file-effect certainty
   in `var1.tool_effect.v1`; do not add an evaluator worker, ledger, or mutation
-  path. Moves 79–80 own rollback and regression promotion.
+  path. Move 79 now owns operator-only `repair/rollback`: bind a failed
+  evaluation to the candidate/approval/applied edge, require current source and
+  full-file hashes, route an exact inverse payload through reviewed
+  `replace_in_file`, and record completion only after the candidate pre-apply
+  hash is restored. Move 80 owns regression promotion and cold-start repair
+  reconciliation. Do not add a patcher, worker, git reset, or second ledger.
 - Browser routes are redacted prototypes. Owner routes are loopback-only and
   token/generation gated.
 - Scheduler leadership is source-proven with one crash-released lock and

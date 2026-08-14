@@ -117,6 +117,14 @@ Rules:
   provider dispatch, and optional repair/rerun bounds. File-effect certainty
   remains `var1.tool_effect.v1`; no evaluator worker, second ledger, or executor
   mutation exists.
+- Move 79 adds operator-only `repair/rollback` on the same event spine. It
+  binds a failed evaluation to candidate/approval/applied sequences, rejects
+  stale source or full-file hashes before mutation, and routes an exact inverse
+  `replace_in_file` payload through the reviewed writer. A completed
+  `var1.repair_rollback.v1` receipt requires the candidate pre-apply hash;
+  started/completed rows retain the failed hypothesis and deterministic retry
+  identity makes repeats no-op. Move 80 still owns promotion and cold-start
+  reconciliation. No patcher, worker, git reset, or second ledger exists.
 - runtime.full_access_mode is false by default; resolved child routes carry it
   into the shared file/search/LSP/shell execution context, and it never relocates
   .var.

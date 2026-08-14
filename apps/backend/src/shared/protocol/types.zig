@@ -16,6 +16,7 @@ pub const methods = struct {
     pub const repair_candidate_approve = "repair/approve";
     pub const repair_candidate_apply = "repair/apply";
     pub const repair_rerun = "repair/rerun";
+    pub const repair_rollback = "repair/rollback";
     pub const session_get = "session/get";
     pub const session_list = "session/list";
     pub const schedule_get = "schedule/get";
@@ -38,6 +39,7 @@ pub const Capabilities = struct {
     repair_candidate_approval: bool = true,
     repair_candidate_apply: bool = true,
     repair_rerun: bool = true,
+    repair_rollback: bool = true,
     session_get: bool = true,
     session_list: bool = true,
     schedule_get: bool = true,
@@ -165,6 +167,21 @@ pub const RepairRerunResult = struct {
     input_match: bool,
     config_match: bool,
     provider_dispatched: bool,
+};
+
+pub const RepairRollbackResult = struct {
+    session_id: []const u8,
+    rollback_id: []const u8,
+    evaluation_id: []const u8,
+    candidate_event_seq: u64,
+    approval_event_seq: u64,
+    applied_event_seq: u64,
+    rollback_event_seq: u64,
+    target_path: []const u8,
+    rolled_back: bool,
+    already_rolled_back: bool,
+    baseline_restored: bool,
+    restored_sha256: []const u8,
 };
 
 pub const ScheduleSummary = struct {

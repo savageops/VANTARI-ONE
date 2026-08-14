@@ -24,6 +24,9 @@ pub const repair_rerun_completed_event_type = "repair_rerun_completed";
 pub const repair_rerun_schema = "var1.repair_rerun.v1";
 pub const repair_evaluation_event_type = "repair_evaluation";
 pub const repair_evaluation_schema = "var1.repair_evaluation.v1";
+pub const repair_rollback_started_event_type = "repair_rollback_started";
+pub const repair_rollback_completed_event_type = "repair_rollback_completed";
+pub const repair_rollback_schema = "var1.repair_rollback.v1";
 
 const repair_environment_keys = [_][]const u8{
     "VANTARI_HOME",
@@ -306,10 +309,165 @@ const ParsedRepairTerminal = struct {
     cost_total_usd: ?f64 = null,
 };
 
-const StoredRepairEvaluation = struct {
+pub const RepairEvaluationPayload = struct {
     schema: []const u8 = "",
     evaluation_id: []const u8 = "",
+    baseline_session_id: []const u8 = "",
+    treatment_session_id: []const u8 = "",
     passed: bool = false,
+};
+
+pub const RepairCandidatePayload = struct {
+    schema: []const u8 = "",
+    candidate_id: []const u8 = "",
+    failure_id: []const u8 = "",
+    operation: []const u8 = "",
+    target_path: []const u8 = "",
+    before_sha256: []const u8 = "",
+    patch_sha256: []const u8 = "",
+    expected_source_baseline: []const u8 = "",
+    current_source_baseline: []const u8 = "",
+    baseline_match: bool = false,
+    status: []const u8 = "",
+};
+
+pub const RepairCandidateApprovalPayload = struct {
+    schema: []const u8 = "",
+    candidate_id: []const u8 = "",
+    candidate_event_seq: u64 = 0,
+    failure_id: []const u8 = "",
+    approval_id: []const u8 = "",
+    approved_by: []const u8 = "",
+    patch_sha256: []const u8 = "",
+    expected_source_baseline: []const u8 = "",
+};
+
+pub const RepairCandidateAppliedPayload = struct {
+    schema: []const u8 = "",
+    candidate_id: []const u8 = "",
+    candidate_event_seq: u64 = 0,
+    approval_id: []const u8 = "",
+    approval_event_seq: u64 = 0,
+    tool_call_id: []const u8 = "",
+    operation: []const u8 = "",
+    target_path: []const u8 = "",
+    patch_sha256: []const u8 = "",
+    effect_sha256: []const u8 = "",
+    status: []const u8 = "",
+    mutation_allowed: bool = false,
+};
+
+pub const RepairRollbackState = enum {
+    started,
+    completed,
+
+    pub fn label(self: RepairRollbackState) []const u8 {
+        return switch (self) {
+            .started => "started",
+            .completed => "completed",
+        };
+    }
+};
+
+/// A rollback is a control-plane receipt, not a second patch language. The
+/// source event spine retains the failed treatment and inverse effect while
+/// `baseline_restored` proves whether the reviewed writer returned the target
+/// bytes to the candidate's pre-apply hash.
+pub fn appendRepairRollbackEvent(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    state: RepairRollbackState,
+    rollback_id: []const u8,
+    evaluation_id: []const u8,
+    candidate_event_seq: u64,
+    approval_event_seq: u64,
+    applied_event_seq: u64,
+    target_path: []const u8,
+    expected_current_sha256: []const u8,
+    restored_sha256: []const u8,
+    inverse_patch_sha256: []const u8,
+    source_baseline: []const u8,
+    status: []const u8,
+    baseline_restored: bool,
+) !u64 {
+    if (candidate_event_seq == 0 or approval_event_seq == 0 or applied_event_seq == 0) return Error.EmptyEvidence;
+    const required = [_][]const u8{
+        session_id,
+        rollback_id,
+        evaluation_id,
+        target_path,
+        expected_current_sha256,
+        restored_sha256,
+        inverse_patch_sha256,
+        source_baseline,
+        status,
+    };
+    for (required) |value| {
+        if (std.mem.trim(u8, value, " \t\r\n").len == 0) return Error.EmptyEvidence;
+    }
+
+    const event_type = if (state == .started) repair_rollback_started_event_type else repair_rollback_completed_event_type;
+    const events = try store.readEvents(allocator, workspace_root, session_id);
+    defer types.deinitSessionEvents(allocator, events);
+    for (events) |*event| {
+        if (!std.mem.eql(u8, event.event_type, event_type)) continue;
+        var stored = std.json.parseFromSlice(RepairRollbackPayload, allocator, event.message, .{
+            .ignore_unknown_fields = true,
+        }) catch continue;
+        defer stored.deinit();
+        if (std.mem.eql(u8, stored.value.schema, repair_rollback_schema) and
+            std.mem.eql(u8, stored.value.rollback_id, rollback_id))
+        {
+            return event.seq;
+        }
+    }
+
+    const message = try std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"{s}\",\"rollback_id\":{f},\"evaluation_id\":{f},\"candidate_event_seq\":{d},\"approval_event_seq\":{d},\"applied_event_seq\":{d},\"target_path\":{f},\"expected_current_sha256\":{f},\"restored_sha256\":{f},\"inverse_patch_sha256\":{f},\"source_baseline\":{f},\"state\":\"{s}\",\"status\":{f},\"baseline_restored\":{},\"mutation_allowed\":true}}",
+        .{
+            repair_rollback_schema,
+            std.json.fmt(rollback_id, .{}),
+            std.json.fmt(evaluation_id, .{}),
+            candidate_event_seq,
+            approval_event_seq,
+            applied_event_seq,
+            std.json.fmt(target_path, .{}),
+            std.json.fmt(expected_current_sha256, .{}),
+            std.json.fmt(restored_sha256, .{}),
+            std.json.fmt(inverse_patch_sha256, .{}),
+            std.json.fmt(source_baseline, .{}),
+            state.label(),
+            std.json.fmt(status, .{}),
+            baseline_restored,
+        },
+    );
+    defer allocator.free(message);
+
+    return store.appendEventWithSeq(allocator, workspace_root, session_id, .{
+        .event_type = event_type,
+        .message = message,
+        .timestamp_ms = std.time.milliTimestamp(),
+    });
+}
+
+pub const RepairRollbackPayload = struct {
+    schema: []const u8 = "",
+    rollback_id: []const u8 = "",
+    evaluation_id: []const u8 = "",
+    candidate_event_seq: u64 = 0,
+    approval_event_seq: u64 = 0,
+    applied_event_seq: u64 = 0,
+    target_path: []const u8 = "",
+    expected_current_sha256: []const u8 = "",
+    restored_sha256: []const u8 = "",
+    inverse_patch_sha256: []const u8 = "",
+    source_baseline: []const u8 = "",
+    state: []const u8 = "",
+    status: []const u8 = "",
+    baseline_restored: bool = false,
+    mutation_allowed: bool = false,
 };
 
 const RepairTokenCostCheck = struct {
@@ -442,7 +600,7 @@ pub fn appendRepairEvaluationEvent(
 
     for (existing_source_events) |event| {
         if (!std.mem.eql(u8, event.event_type, repair_evaluation_event_type)) continue;
-        var stored = std.json.parseFromSlice(StoredRepairEvaluation, allocator, event.message, .{
+        var stored = std.json.parseFromSlice(RepairEvaluationPayload, allocator, event.message, .{
             .ignore_unknown_fields = true,
         }) catch continue;
         defer stored.deinit();
@@ -594,44 +752,6 @@ pub fn appendRepairCandidateEvent(
         .timestamp_ms = std.time.milliTimestamp(),
     });
 }
-
-const RepairCandidatePayload = struct {
-    schema: []const u8 = "",
-    candidate_id: []const u8 = "",
-    failure_id: []const u8 = "",
-    operation: []const u8 = "",
-    target_path: []const u8 = "",
-    before_sha256: []const u8 = "",
-    patch_sha256: []const u8 = "",
-    expected_source_baseline: []const u8 = "",
-    current_source_baseline: []const u8 = "",
-    baseline_match: bool = false,
-    status: []const u8 = "",
-};
-
-const RepairCandidateApprovalPayload = struct {
-    schema: []const u8 = "",
-    candidate_id: []const u8 = "",
-    candidate_event_seq: u64 = 0,
-    failure_id: []const u8 = "",
-    approval_id: []const u8 = "",
-    approved_by: []const u8 = "",
-    patch_sha256: []const u8 = "",
-    expected_source_baseline: []const u8 = "",
-};
-
-const RepairCandidateAppliedPayload = struct {
-    schema: []const u8 = "",
-    candidate_id: []const u8 = "",
-    candidate_event_seq: u64 = 0,
-    approval_id: []const u8 = "",
-    approval_event_seq: u64 = 0,
-    tool_call_id: []const u8 = "",
-    operation: []const u8 = "",
-    target_path: []const u8 = "",
-    patch_sha256: []const u8 = "",
-    effect_sha256: []const u8 = "",
-};
 
 /// Append one explicit operator approval for an exact candidate event. The
 /// approval is itself immutable evidence; it does not carry patch text and does

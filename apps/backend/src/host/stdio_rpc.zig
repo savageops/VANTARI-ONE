@@ -58,6 +58,11 @@ pub const Error = error{
     RepairRerunNotFound,
     RepairRerunInProgress,
     RepairRerunMismatch,
+    RepairRollbackNotFound,
+    RepairRollbackInProgress,
+    RepairRollbackMismatch,
+    RepairRollbackBaselineConflict,
+    RepairRollbackIncomplete,
     RpcRemoteError,
     ServerShuttingDown,
 };
@@ -810,6 +815,11 @@ fn processRequest(server: *Server, request_payload: []const u8) !?[]u8 {
         Error.RepairRerunNotFound => return errorResponseOrNull(server.allocator, id, -32010, "Repair replay receipt or applied change not found"),
         Error.RepairRerunInProgress => return errorResponseOrNull(server.allocator, id, -32011, "Repair rerun is already in progress"),
         Error.RepairRerunMismatch => return errorResponseOrNull(server.allocator, id, -32012, "Repair rerun identity is not replayable"),
+        Error.RepairRollbackNotFound => return errorResponseOrNull(server.allocator, id, -32013, "Repair rollback evidence not found"),
+        Error.RepairRollbackInProgress => return errorResponseOrNull(server.allocator, id, -32014, "Repair rollback is already in progress"),
+        Error.RepairRollbackMismatch => return errorResponseOrNull(server.allocator, id, -32015, "Repair rollback identity or failed evaluation does not match"),
+        Error.RepairRollbackBaselineConflict => return errorResponseOrNull(server.allocator, id, -32016, "Repair rollback source or file baseline changed"),
+        Error.RepairRollbackIncomplete => return errorResponseOrNull(server.allocator, id, -32017, "Repair rollback did not restore the proven file baseline"),
         Error.ProviderNotFound => return errorResponseOrNull(server.allocator, id, -32006, "Provider not found"),
         Error.ServerShuttingDown => return errorResponseOrNull(server.allocator, id, rpc_server_busy_code, "Server shutting down"),
         Error.ExecutionFailed => return errorResponseOrNull(server.allocator, id, -32000, "Execution failed"),
@@ -856,6 +866,9 @@ fn dispatch(
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.repair_rerun)) {
         return handleRepairRerun(server, params);
+    }
+    if (std.mem.eql(u8, method_name, protocol_types.methods.repair_rollback)) {
+        return handleRepairRollback(server, params);
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.session_get)) {
         return handleSessionGet(server, params);
@@ -1629,15 +1642,355 @@ fn handleRepairCandidateApply(server: *Server, params: ?std.json.Value) ![]u8 {
     return response;
 }
 
-const RepairAppliedPayload = struct {
-    schema: []const u8 = "",
-    candidate_id: []const u8 = "",
-    candidate_event_seq: u64 = 0,
-    approval_id: []const u8 = "",
-    approval_event_seq: u64 = 0,
-    status: []const u8 = "",
-    mutation_allowed: bool = false,
-};
+fn appendRepairRollbackTerminal(
+    server: *Server,
+    session_id: []const u8,
+    rollback_id: []const u8,
+    evaluation_id: []const u8,
+    candidate_event_seq: u64,
+    approval_event_seq: u64,
+    applied_event_seq: u64,
+    target_path: []const u8,
+    expected_current_sha256: []const u8,
+    restored_sha256: []const u8,
+    inverse_patch_sha256: []const u8,
+    source_baseline: []const u8,
+    status: []const u8,
+    baseline_restored: bool,
+) void {
+    _ = evaluation_events.appendRepairRollbackEvent(
+        server.allocator,
+        server.config.workspace_root,
+        session_id,
+        .completed,
+        rollback_id,
+        evaluation_id,
+        candidate_event_seq,
+        approval_event_seq,
+        applied_event_seq,
+        target_path,
+        expected_current_sha256,
+        restored_sha256,
+        inverse_patch_sha256,
+        source_baseline,
+        status,
+        baseline_restored,
+    ) catch {};
+}
+
+/// Roll back one failed repair treatment with an operator-supplied inverse
+/// `replace_in_file` payload. The existing source/treatment/evaluation rows
+/// remain immutable. The normal reviewed writer performs the mutation, and a
+/// full post-write content hash is required to claim the candidate's exact
+/// pre-apply bytes were restored.
+fn handleRepairRollback(server: *Server, params: ?std.json.Value) ![]u8 {
+    const Args = struct {
+        session_id: []const u8,
+        evaluation_id: []const u8,
+        inverse_patch: []const u8,
+        expected_current_sha256: []const u8,
+    };
+
+    var parsed = try parseParams(Args, server.allocator, params);
+    defer parsed.deinit();
+    const params_value = params orelse return Error.InvalidParams;
+    if (params_value != .object) return Error.InvalidParams;
+    const candidate_event_seq = (try optionalU64FromObject(&params_value.object, "candidate_event_seq")) orelse return Error.InvalidParams;
+    const approval_event_seq = (try optionalU64FromObject(&params_value.object, "approval_event_seq")) orelse return Error.InvalidParams;
+    const applied_event_seq = (try optionalU64FromObject(&params_value.object, "applied_event_seq")) orelse return Error.InvalidParams;
+    if (candidate_event_seq == 0 or approval_event_seq <= candidate_event_seq or applied_event_seq <= approval_event_seq or
+        parsed.value.inverse_patch.len == 0 or parsed.value.expected_current_sha256.len == 0)
+    {
+        return Error.InvalidParams;
+    }
+
+    var patch_args = std.json.parseFromSlice(repair_candidate.ReplacePatch, server.allocator, parsed.value.inverse_patch, .{
+        .ignore_unknown_fields = false,
+    }) catch return Error.InvalidParams;
+    defer patch_args.deinit();
+    if (patch_args.value.path.len == 0 or patch_args.value.old_text.len == 0 or patch_args.value.tag.len == 0) {
+        return Error.InvalidParams;
+    }
+
+    var session = store.readSessionRecord(server.allocator, server.config.workspace_root, parsed.value.session_id) catch {
+        return Error.SessionNotFound;
+    };
+    defer session.deinit(server.allocator);
+    if (server.runtime.isRunning(session.id)) return Error.SessionRunning;
+
+    server.repair_apply_mutex.lock();
+    defer server.repair_apply_mutex.unlock();
+
+    const events = try store.readEvents(server.allocator, server.config.workspace_root, session.id);
+    defer types.deinitSessionEvents(server.allocator, events);
+
+    var candidate_event: ?*const types.SessionEvent = null;
+    var approval_event: ?*const types.SessionEvent = null;
+    var applied_event: ?*const types.SessionEvent = null;
+    var evaluation_event: ?*const types.SessionEvent = null;
+    for (events) |*event| {
+        if (event.seq == candidate_event_seq and std.mem.eql(u8, event.event_type, evaluation_events.repair_candidate_event_type)) candidate_event = event;
+        if (event.seq == approval_event_seq and std.mem.eql(u8, event.event_type, evaluation_events.repair_candidate_approval_event_type)) approval_event = event;
+        if (event.seq == applied_event_seq and std.mem.eql(u8, event.event_type, evaluation_events.repair_candidate_applied_event_type)) applied_event = event;
+        if (std.mem.eql(u8, event.event_type, evaluation_events.repair_evaluation_event_type)) {
+            var parsed_evaluation = std.json.parseFromSlice(evaluation_events.RepairEvaluationPayload, server.allocator, event.message, .{
+                .ignore_unknown_fields = true,
+            }) catch continue;
+            defer parsed_evaluation.deinit();
+            if (std.mem.eql(u8, parsed_evaluation.value.schema, evaluation_events.repair_evaluation_schema) and
+                std.mem.eql(u8, parsed_evaluation.value.evaluation_id, parsed.value.evaluation_id))
+            {
+                evaluation_event = event;
+            }
+        }
+    }
+
+    const candidate = candidate_event orelse return Error.RepairRollbackNotFound;
+    const approval = approval_event orelse return Error.RepairRollbackNotFound;
+    const applied = applied_event orelse return Error.RepairRollbackNotFound;
+    const evaluation = evaluation_event orelse return Error.RepairRollbackNotFound;
+    var parsed_candidate = std.json.parseFromSlice(evaluation_events.RepairCandidatePayload, server.allocator, candidate.message, .{
+        .ignore_unknown_fields = true,
+    }) catch return Error.RepairRollbackMismatch;
+    defer parsed_candidate.deinit();
+    var parsed_approval = std.json.parseFromSlice(evaluation_events.RepairCandidateApprovalPayload, server.allocator, approval.message, .{
+        .ignore_unknown_fields = true,
+    }) catch return Error.RepairRollbackMismatch;
+    defer parsed_approval.deinit();
+    var parsed_applied = std.json.parseFromSlice(evaluation_events.RepairCandidateAppliedPayload, server.allocator, applied.message, .{
+        .ignore_unknown_fields = true,
+    }) catch return Error.RepairRollbackMismatch;
+    defer parsed_applied.deinit();
+    var parsed_evaluation = std.json.parseFromSlice(evaluation_events.RepairEvaluationPayload, server.allocator, evaluation.message, .{
+        .ignore_unknown_fields = true,
+    }) catch return Error.RepairRollbackMismatch;
+    defer parsed_evaluation.deinit();
+
+    if (!std.mem.eql(u8, parsed_candidate.value.schema, evaluation_events.repair_candidate_schema) or
+        !parsed_candidate.value.baseline_match or
+        !std.mem.eql(u8, parsed_candidate.value.status, "ready") or
+        !std.mem.eql(u8, parsed_candidate.value.operation, "replace_in_file") or
+        !std.mem.eql(u8, parsed_approval.value.schema, evaluation_events.repair_candidate_approval_schema) or
+        parsed_approval.value.candidate_event_seq != candidate_event_seq or
+        !std.mem.eql(u8, parsed_approval.value.candidate_id, parsed_candidate.value.candidate_id) or
+        !std.mem.eql(u8, parsed_approval.value.expected_source_baseline, parsed_candidate.value.expected_source_baseline) or
+        !std.mem.eql(u8, parsed_applied.value.schema, evaluation_events.repair_candidate_applied_schema) or
+        parsed_applied.value.candidate_event_seq != candidate_event_seq or
+        parsed_applied.value.approval_event_seq != approval_event_seq or
+        !std.mem.eql(u8, parsed_applied.value.candidate_id, parsed_candidate.value.candidate_id) or
+        !std.mem.eql(u8, parsed_applied.value.approval_id, parsed_approval.value.approval_id) or
+        !std.mem.eql(u8, parsed_applied.value.operation, "replace_in_file") or
+        !std.mem.eql(u8, parsed_applied.value.target_path, parsed_candidate.value.target_path) or
+        !std.mem.eql(u8, parsed_applied.value.patch_sha256, parsed_candidate.value.patch_sha256) or
+        !std.mem.eql(u8, parsed_applied.value.status, "applied") or
+        !parsed_applied.value.mutation_allowed or
+        !std.mem.eql(u8, parsed_evaluation.value.schema, evaluation_events.repair_evaluation_schema) or
+        !std.mem.eql(u8, parsed_evaluation.value.evaluation_id, parsed.value.evaluation_id) or
+        !std.mem.eql(u8, parsed_evaluation.value.baseline_session_id, session.id) or
+        parsed_evaluation.value.treatment_session_id.len == 0 or
+        parsed_evaluation.value.passed)
+    {
+        return Error.RepairRollbackMismatch;
+    }
+
+    const current_source_baseline = try evaluation_events.sourceBaseline(server.allocator);
+    defer server.allocator.free(current_source_baseline);
+    if (!std.mem.eql(u8, parsed_candidate.value.expected_source_baseline, current_source_baseline) or
+        !std.mem.eql(u8, parsed_candidate.value.current_source_baseline, current_source_baseline))
+    {
+        return Error.RepairRollbackBaselineConflict;
+    }
+
+    const target_path = fsutil.resolveWithAccessMode(
+        server.allocator,
+        server.config.workspace_root,
+        patch_args.value.path,
+        session.full_access_mode,
+    ) catch return Error.InvalidParams;
+    defer server.allocator.free(target_path);
+    if (!std.mem.eql(u8, target_path, parsed_candidate.value.target_path)) return Error.RepairRollbackMismatch;
+
+    const inverse_descriptor = try std.fmt.allocPrint(server.allocator, "replace_in_file\x00{s}\x00{s}", .{ patch_args.value.path, parsed.value.inverse_patch });
+    defer server.allocator.free(inverse_descriptor);
+    const inverse_digest = evaluation_events.contentHash(inverse_descriptor);
+    const inverse_patch_sha256 = try std.fmt.allocPrint(server.allocator, "sha256:{s}", .{inverse_digest[0..]});
+    defer server.allocator.free(inverse_patch_sha256);
+
+    const identity = try std.fmt.allocPrint(
+        server.allocator,
+        "repair-rollback\x00{s}\x00{d}\x00{d}\x00{d}\x00{s}\x00{s}",
+        .{ session.id, candidate_event_seq, approval_event_seq, applied_event_seq, parsed.value.evaluation_id, inverse_patch_sha256 },
+    );
+    defer server.allocator.free(identity);
+    const identity_digest = evaluation_events.contentHash(identity);
+    const rollback_id = try std.fmt.allocPrint(server.allocator, "repair-rollback-{s}", .{identity_digest[0..]});
+    defer server.allocator.free(rollback_id);
+
+    for (events) |*event| {
+        if (std.mem.eql(u8, event.event_type, evaluation_events.repair_rollback_completed_event_type)) {
+            var completed = std.json.parseFromSlice(evaluation_events.RepairRollbackPayload, server.allocator, event.message, .{
+                .ignore_unknown_fields = true,
+            }) catch continue;
+            defer completed.deinit();
+            if (!std.mem.eql(u8, completed.value.schema, evaluation_events.repair_rollback_schema) or
+                !std.mem.eql(u8, completed.value.rollback_id, rollback_id)) continue;
+            if (!completed.value.baseline_restored) return Error.RepairRollbackIncomplete;
+            return renderJsonAlloc(server.allocator, protocol_types.RepairRollbackResult{
+                .session_id = session.id,
+                .rollback_id = rollback_id,
+                .evaluation_id = parsed.value.evaluation_id,
+                .candidate_event_seq = candidate_event_seq,
+                .approval_event_seq = approval_event_seq,
+                .applied_event_seq = applied_event_seq,
+                .rollback_event_seq = event.seq,
+                .target_path = target_path,
+                .rolled_back = false,
+                .already_rolled_back = true,
+                .baseline_restored = true,
+                .restored_sha256 = completed.value.restored_sha256,
+            });
+        }
+    }
+    for (events) |*event| {
+        if (std.mem.eql(u8, event.event_type, evaluation_events.repair_rollback_started_event_type)) {
+            var started = std.json.parseFromSlice(evaluation_events.RepairRollbackPayload, server.allocator, event.message, .{
+                .ignore_unknown_fields = true,
+            }) catch continue;
+            defer started.deinit();
+            if (std.mem.eql(u8, started.value.schema, evaluation_events.repair_rollback_schema) and
+                std.mem.eql(u8, started.value.rollback_id, rollback_id))
+            {
+                return Error.RepairRollbackInProgress;
+            }
+        }
+    }
+
+    const current_contents = fsutil.readTextAlloc(server.allocator, target_path) catch return Error.RepairRollbackBaselineConflict;
+    defer server.allocator.free(current_contents);
+    const current_digest = evaluation_events.contentHash(current_contents);
+    const current_sha256 = try std.fmt.allocPrint(server.allocator, "sha256:{s}", .{current_digest[0..]});
+    defer server.allocator.free(current_sha256);
+    if (!evaluation_events.contentHashMatches(parsed.value.expected_current_sha256, current_contents)) {
+        return Error.RepairRollbackBaselineConflict;
+    }
+
+    _ = try evaluation_events.appendRepairRollbackEvent(
+        server.allocator,
+        server.config.workspace_root,
+        session.id,
+        .started,
+        rollback_id,
+        parsed.value.evaluation_id,
+        candidate_event_seq,
+        approval_event_seq,
+        applied_event_seq,
+        target_path,
+        current_sha256,
+        "pending",
+        inverse_patch_sha256,
+        current_source_baseline,
+        "running",
+        false,
+    );
+
+    var inspection_ledger = tools.FileInspectionLedger.init(server.allocator);
+    defer inspection_ledger.deinit();
+    const execution_context = tools.ExecutionContext{
+        .workspace_root = server.config.workspace_root,
+        .full_access_mode = session.full_access_mode,
+        .session_id = session.id,
+        .file_inspection_ledger = &inspection_ledger,
+    };
+    const tool_call = types.ToolCall{
+        .id = @constCast(rollback_id),
+        .name = @constCast("replace_in_file"),
+        .arguments_json = @constCast(parsed.value.inverse_patch),
+    };
+    const review_decision = tools.review.reviewToolCall(tool_call, tools.builtinDefinitionsForContext(execution_context));
+    const review_event = try tools.review.renderReviewEvent(server.allocator, tool_call, review_decision);
+    defer server.allocator.free(review_event);
+    try server.recordAndEmitSessionEvent(
+        session.id,
+        "tool_reviewed",
+        review_event,
+        types.statusLabel(session.status),
+        std.time.milliTimestamp(),
+    );
+    if (!review_decision.approved) {
+        appendRepairRollbackTerminal(server, session.id, rollback_id, parsed.value.evaluation_id, candidate_event_seq, approval_event_seq, applied_event_seq, target_path, current_sha256, current_sha256, inverse_patch_sha256, current_source_baseline, "rejected", false);
+        return Error.ExecutionFailed;
+    }
+
+    const read_id = try std.fmt.allocPrint(server.allocator, "{s}-read", .{rollback_id});
+    defer server.allocator.free(read_id);
+    const read_arguments = try std.fmt.allocPrint(server.allocator, "{{\"path\":{f}}}", .{std.json.fmt(patch_args.value.path, .{})});
+    defer server.allocator.free(read_arguments);
+    const read_call = types.ToolCall{
+        .id = @constCast(read_id),
+        .name = @constCast("read_file"),
+        .arguments_json = @constCast(read_arguments),
+    };
+    const read_output = tools.execute(server.allocator, execution_context, read_call) catch {
+        appendRepairRollbackTerminal(server, session.id, rollback_id, parsed.value.evaluation_id, candidate_event_seq, approval_event_seq, applied_event_seq, target_path, current_sha256, current_sha256, inverse_patch_sha256, current_source_baseline, "failed", false);
+        return Error.ExecutionFailed;
+    };
+    server.allocator.free(read_output);
+
+    const tool_output = tools.execute(server.allocator, execution_context, tool_call) catch {
+        appendRepairRollbackTerminal(server, session.id, rollback_id, parsed.value.evaluation_id, candidate_event_seq, approval_event_seq, applied_event_seq, target_path, current_sha256, current_sha256, inverse_patch_sha256, current_source_baseline, "failed", false);
+        return Error.ExecutionFailed;
+    };
+    server.allocator.free(tool_output);
+
+    const restored_contents = fsutil.readTextAlloc(server.allocator, target_path) catch {
+        appendRepairRollbackTerminal(server, session.id, rollback_id, parsed.value.evaluation_id, candidate_event_seq, approval_event_seq, applied_event_seq, target_path, current_sha256, current_sha256, inverse_patch_sha256, current_source_baseline, "verification_failed", false);
+        return Error.RepairRollbackIncomplete;
+    };
+    defer server.allocator.free(restored_contents);
+    const restored_digest = evaluation_events.contentHash(restored_contents);
+    const restored_sha256 = try std.fmt.allocPrint(server.allocator, "sha256:{s}", .{restored_digest[0..]});
+    defer server.allocator.free(restored_sha256);
+    if (!evaluation_events.contentHashMatches(parsed_candidate.value.before_sha256, restored_contents)) {
+        appendRepairRollbackTerminal(server, session.id, rollback_id, parsed.value.evaluation_id, candidate_event_seq, approval_event_seq, applied_event_seq, target_path, current_sha256, restored_sha256, inverse_patch_sha256, current_source_baseline, "verification_failed", false);
+        return Error.RepairRollbackIncomplete;
+    }
+
+    const rollback_event_seq = try evaluation_events.appendRepairRollbackEvent(
+        server.allocator,
+        server.config.workspace_root,
+        session.id,
+        .completed,
+        rollback_id,
+        parsed.value.evaluation_id,
+        candidate_event_seq,
+        approval_event_seq,
+        applied_event_seq,
+        target_path,
+        current_sha256,
+        restored_sha256,
+        inverse_patch_sha256,
+        current_source_baseline,
+        "rolled_back",
+        true,
+    );
+
+    return renderJsonAlloc(server.allocator, protocol_types.RepairRollbackResult{
+        .session_id = session.id,
+        .rollback_id = rollback_id,
+        .evaluation_id = parsed.value.evaluation_id,
+        .candidate_event_seq = candidate_event_seq,
+        .approval_event_seq = approval_event_seq,
+        .applied_event_seq = applied_event_seq,
+        .rollback_event_seq = rollback_event_seq,
+        .target_path = target_path,
+        .rolled_back = true,
+        .already_rolled_back = false,
+        .baseline_restored = true,
+        .restored_sha256 = restored_sha256,
+    });
+}
+
+const RepairAppliedPayload = evaluation_events.RepairCandidateAppliedPayload;
 
 const RepairRerunPayload = struct {
     schema: []const u8 = "",
@@ -3374,6 +3727,192 @@ test "repair/apply uses the reviewed write tool and is retry-idempotent" {
     try std.testing.expectEqual(@as(usize, 4), events.len);
     try std.testing.expectEqualStrings(evaluation_events.repair_candidate_applied_event_type, events[3].event_type);
     try std.testing.expect(std.mem.indexOf(u8, events[3].message, "\"mutation_allowed\":true") != null);
+}
+
+test "repair/rollback restores the candidate baseline after a failed treatment" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    const stdout_file = try attachTestStdout(&tmp, &server, "repair-rollback-output.bin");
+    defer stdout_file.close();
+
+    var session = try store.initSession(std.testing.allocator, workspace_root, "rollback failed repair");
+    defer session.deinit(std.testing.allocator);
+    const target_path = try fsutil.resolveWithAccessMode(std.testing.allocator, workspace_root, "notes/rollback.txt", false);
+    defer std.testing.allocator.free(target_path);
+    try fsutil.writeText(target_path, "before\n");
+
+    const initial_read = types.ToolCall{
+        .id = @constCast("rollback-test-read-before"),
+        .name = @constCast("read_file"),
+        .arguments_json = @constCast("{\"path\":\"notes/rollback.txt\"}"),
+    };
+    const initial_output = try tools.execute(std.testing.allocator, .{
+        .workspace_root = workspace_root,
+        .session_id = session.id,
+    }, initial_read);
+    defer std.testing.allocator.free(initial_output);
+    const initial_tag_start = (std.mem.indexOf(u8, initial_output, "#") orelse return error.TestExpectedEqual) + 1;
+    const initial_tag_end = std.mem.indexOfScalarPos(u8, initial_output, initial_tag_start, ']') orelse return error.TestExpectedEqual;
+    const initial_tag = initial_output[initial_tag_start..initial_tag_end];
+    const patch = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"path\":\"notes/rollback.txt\",\"old_text\":\"before\",\"new_text\":\"after\",\"tag\":\"{s}\"}}",
+        .{initial_tag},
+    );
+    defer std.testing.allocator.free(patch);
+    const patch_descriptor = try std.fmt.allocPrint(std.testing.allocator, "replace_in_file\x00notes/rollback.txt\x00{s}", .{patch});
+    defer std.testing.allocator.free(patch_descriptor);
+    const patch_digest = evaluation_events.contentHash(patch_descriptor);
+    const patch_sha256 = try std.fmt.allocPrint(std.testing.allocator, "sha256:{s}", .{patch_digest[0..]});
+    defer std.testing.allocator.free(patch_sha256);
+    const baseline = try evaluation_events.sourceBaseline(std.testing.allocator);
+    defer std.testing.allocator.free(baseline);
+    const before_digest = evaluation_events.contentHash("before\n");
+    const candidate_seq = try evaluation_events.appendRepairCandidateEvent(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "candidate-rollback",
+        "failure-rollback",
+        "replace_in_file",
+        target_path,
+        before_digest[0..],
+        patch_digest[0..],
+        baseline,
+        baseline,
+        true,
+    );
+
+    const approval_request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"rollback-approve\",\"method\":\"repair/approve\",\"params\":{{\"session_id\":{f},\"candidate_id\":\"candidate-rollback\",\"candidate_event_seq\":{d},\"approval_id\":\"approval-rollback\",\"approved_by\":\"operator\",\"patch_sha256\":{f},\"expected_source_baseline\":{f}}}}}",
+        .{ std.json.fmt(session.id, .{}), candidate_seq, std.json.fmt(patch_sha256, .{}), std.json.fmt(baseline, .{}) },
+    );
+    defer std.testing.allocator.free(approval_request);
+    const approval_response = (try processRequest(&server, approval_request)).?;
+    defer std.testing.allocator.free(approval_response);
+    try std.testing.expect(std.mem.indexOf(u8, approval_response, "\"approved\":true") != null);
+
+    const apply_request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"rollback-apply\",\"method\":\"repair/apply\",\"params\":{{\"session_id\":{f},\"candidate_id\":\"candidate-rollback\",\"candidate_event_seq\":{d},\"approval_id\":\"approval-rollback\",\"approval_event_seq\":2,\"patch\":{f},\"expected_source_baseline\":{f}}}}}",
+        .{ std.json.fmt(session.id, .{}), candidate_seq, std.json.fmt(patch, .{}), std.json.fmt(baseline, .{}) },
+    );
+    defer std.testing.allocator.free(apply_request);
+    const apply_response = (try processRequest(&server, apply_request)).?;
+    defer std.testing.allocator.free(apply_response);
+    try std.testing.expect(std.mem.indexOf(u8, apply_response, "\"applied\":true") != null);
+
+    const changed = try fsutil.readTextAlloc(std.testing.allocator, target_path);
+    defer std.testing.allocator.free(changed);
+    try std.testing.expectEqualStrings("after\n", changed);
+    const changed_digest = evaluation_events.contentHash(changed);
+    const changed_sha256 = try std.fmt.allocPrint(std.testing.allocator, "sha256:{s}", .{changed_digest[0..]});
+    defer std.testing.allocator.free(changed_sha256);
+
+    const baseline_events = [_]types.SessionEvent{
+        .{ .event_type = "turn_started", .message = "{}", .timestamp_ms = 100 },
+        .{ .event_type = protocol_events.turn_terminal_event_type, .message = "{\"outcome\":\"completed\"}", .timestamp_ms = 110 },
+    };
+    const failed_treatment_events = [_]types.SessionEvent{
+        .{ .event_type = "turn_started", .message = "{}", .timestamp_ms = 100 },
+        .{ .event_type = protocol_events.turn_terminal_event_type, .message = "{\"outcome\":\"failed\"}", .timestamp_ms = 120 },
+    };
+    const no_existing_evaluation = [_]types.SessionEvent{};
+    const evaluation_result = try evaluation_events.appendRepairEvaluationEvent(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        &no_existing_evaluation,
+        .{
+            .evaluation_id = "evaluation-rollback",
+            .baseline_session_id = session.id,
+            .treatment_session_id = "treatment-rollback",
+            .baseline_events = &baseline_events,
+            .treatment_events = &failed_treatment_events,
+            .input_match = true,
+            .config_match = true,
+            .provider_dispatched = true,
+        },
+    );
+    try std.testing.expect(!evaluation_result.passed);
+
+    const rollback_read = types.ToolCall{
+        .id = @constCast("rollback-test-read-after"),
+        .name = @constCast("read_file"),
+        .arguments_json = @constCast("{\"path\":\"notes/rollback.txt\"}"),
+    };
+    const rollback_read_output = try tools.execute(std.testing.allocator, .{
+        .workspace_root = workspace_root,
+        .session_id = session.id,
+    }, rollback_read);
+    defer std.testing.allocator.free(rollback_read_output);
+    const rollback_tag_start = (std.mem.indexOf(u8, rollback_read_output, "#") orelse return error.TestExpectedEqual) + 1;
+    const rollback_tag_end = std.mem.indexOfScalarPos(u8, rollback_read_output, rollback_tag_start, ']') orelse return error.TestExpectedEqual;
+    const rollback_tag = rollback_read_output[rollback_tag_start..rollback_tag_end];
+    const inverse_patch = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"path\":\"notes/rollback.txt\",\"old_text\":\"after\",\"new_text\":\"before\",\"tag\":\"{s}\"}}",
+        .{rollback_tag},
+    );
+    defer std.testing.allocator.free(inverse_patch);
+
+    const conflict_request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"rollback-conflict\",\"method\":\"repair/rollback\",\"params\":{{\"session_id\":{f},\"evaluation_id\":\"evaluation-rollback\",\"candidate_event_seq\":{d},\"approval_event_seq\":2,\"applied_event_seq\":4,\"inverse_patch\":{f},\"expected_current_sha256\":{f}}}}}",
+        .{ std.json.fmt(session.id, .{}), candidate_seq, std.json.fmt(inverse_patch, .{}), std.json.fmt("sha256:stale", .{}) },
+    );
+    defer std.testing.allocator.free(conflict_request);
+    const conflict_response = (try processRequest(&server, conflict_request)).?;
+    defer std.testing.allocator.free(conflict_response);
+    try std.testing.expect(std.mem.indexOf(u8, conflict_response, "\"code\":-32016") != null);
+    const conflict_contents = try fsutil.readTextAlloc(std.testing.allocator, target_path);
+    defer std.testing.allocator.free(conflict_contents);
+    try std.testing.expectEqualStrings("after\n", conflict_contents);
+
+    const rollback_request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"rollback-1\",\"method\":\"repair/rollback\",\"params\":{{\"session_id\":{f},\"evaluation_id\":\"evaluation-rollback\",\"candidate_event_seq\":{d},\"approval_event_seq\":2,\"applied_event_seq\":4,\"inverse_patch\":{f},\"expected_current_sha256\":{f}}}}}",
+        .{ std.json.fmt(session.id, .{}), candidate_seq, std.json.fmt(inverse_patch, .{}), std.json.fmt(changed_sha256, .{}) },
+    );
+    defer std.testing.allocator.free(rollback_request);
+    const rollback_response = (try processRequest(&server, rollback_request)).?;
+    defer std.testing.allocator.free(rollback_response);
+    try std.testing.expect(std.mem.indexOf(u8, rollback_response, "\"rolled_back\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rollback_response, "\"baseline_restored\":true") != null);
+
+    const restored = try fsutil.readTextAlloc(std.testing.allocator, target_path);
+    defer std.testing.allocator.free(restored);
+    try std.testing.expectEqualStrings("before\n", restored);
+
+    const retry_response = (try processRequest(&server, rollback_request)).?;
+    defer std.testing.allocator.free(retry_response);
+    try std.testing.expect(std.mem.indexOf(u8, retry_response, "\"rolled_back\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, retry_response, "\"already_rolled_back\":true") != null);
+
+    const intents = try store.readWriteIntents(std.testing.allocator, workspace_root, session.id);
+    defer {
+        for (intents) |entry| entry.deinit(std.testing.allocator);
+        std.testing.allocator.free(intents);
+    }
+    try std.testing.expectEqual(@as(usize, 4), intents.len);
+    try std.testing.expectEqualStrings("committed", intents[3].status);
+
+    const events = try store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer types.deinitSessionEvents(std.testing.allocator, events);
+    try std.testing.expectEqual(@as(usize, 8), events.len);
+    try std.testing.expectEqualStrings(evaluation_events.repair_rollback_started_event_type, events[5].event_type);
+    try std.testing.expectEqualStrings(evaluation_events.repair_rollback_completed_event_type, events[7].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[7].message, "\"status\":\"rolled_back\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[7].message, "\"baseline_restored\":true") != null);
 }
 
 test "repair/rerun rejects a changed effective config before provider dispatch" {
