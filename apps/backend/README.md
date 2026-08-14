@@ -173,6 +173,18 @@ This is non-interrupting (never cancels the current step), non-destructive (noth
 
 Synthesized from 8 competitor patterns (oh-my-pi, Eve, Scion, nullclaw, OpenClaw, Claude Code, Cursor, pi-mono). Simpler, more durable, more responsive than all of them.
 
+### Bounded branch context
+
+The canonical child launch stores the parent checkpoint identity in the
+immutable execution receipt. `core/context/builder.zig` projects that summary
+and a bounded recent parent suffix into the child provider window; it never
+copies parent rows into the child `messages.jsonl` ledger. `core/sessions/store.zig`
+keeps shard lifecycle rows out of compiler checkpoint selection and preserves
+parent range/token metadata on bounded terminal results. `Supervisor` remains
+the one convergence owner and returns the result through the existing mailbox.
+No shard registry, transcript copier, polling loop, or second worker pool was
+added. Move 70 is source-complete; installed promotion remains deferred.
+
 ### Root interactive questions
 
 The root model may call `ask_user` when an operator choice changes the result. It accepts a bounded batch of related questions, normalizes options to `a`–`e` plus `f / Other`, and persists the exact `var1.input_requested.v1` request in the session event spine. Root normal, root-agent, and orchestrator-only catalogs retain this capability; the orchestrator allow-list still denies artifact and command tools. The TUI renders a settings-style panel with one horizontal row per visible question, Up/Down question focus, Left/Right option focus, Enter select, Space check, inline Other text, and an explicit review/submit state. `orchestrate`, `build`, `align`, and `plan` use the same controller. Question text stays borrowed from State-owned, static, or frame-owned storage until `vx.render`; the display projection rejects invalid UTF-8/control text, uses static option keys while preserving original response ids, and guards clipped viewports. Malformed requests are reported and cancel the waiting run without unwinding the TUI. Both idle and streaming key paths now share one recovery boundary for controller and `input/respond` errors, keeping the panel available for retry or explicit cancellation. `input/respond` is the only resolution method. Cancellation and owner shutdown wake the same broker wait. Child profiles are headless and fail closed with `InputUnavailable`, so a background agent cannot hang waiting for a terminal that it does not own.
@@ -554,7 +566,7 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Agent eligibility | **Source proven** | One hot-loaded `AgentService` snapshot advertises only route-resolvable specialists with capacity/team/communication state and an exact SHA-256 receipt. Quiet and hive prompt profiles choose different actions through the same executor; the dedicated installed snapshot probe has not run. |
 | Write-intent ledger | **Frontier scaffold** | Reserve/commit helpers and tests exist; write-capable tools do not call them on the canonical mutation path. |
 | Byte-level session integrity | **Source and installed proven** | One LF-only reader owns BOM, invalid-UTF-8, JSON/schema, duplicate, and non-monotonic boundaries across event/message/context/intent/summary projections. Append refuses a poisoned current tail without rewriting it; operator-facing corruption events remain a later diagnostics decision. |
-| Context compiler | **Source-complete; installed promotion pending** | One builder compiles transcript plus checkpoint state, reports bounded synthesized/skipped tool-row repairs through `var1.context_compile_diagnostic.v1`, and rebuilds provider-overflow retries from the checkpoint plus durable suffix without duplicate tool context; cold replay uses the checkpoint's exact first-kept sequence. Debug `19/19` / `2,163/2,163`; source ReleaseFast `9/9`; installed promotion deferred. |
+| Context compiler | **Source-complete; installed promotion pending** | One builder compiles transcript plus checkpoint state, reports bounded synthesized/skipped tool-row repairs through `var1.context_compile_diagnostic.v1`, rebuilds provider-overflow retries from the checkpoint plus durable suffix without duplicate tool context, and projects receipt-addressed parent checkpoint context into child windows without transcript duplication. Debug `19/19` / `2,166/2,166`; source ReleaseFast `9/9`; installed promotion deferred. |
 | Compaction | **Manual writer shipped** | Entry-aware checkpoints retain stable message identity plus explicit source/kept ranges; autonomous/background compaction remains gated. |
 | TTSR stream rules | **Source-complete; installed promotion pending** | One provider abort hook stops SSE reads before terminal completion, persists correction plus `rule_injected` evidence, and retries through the existing executor. Debug `2,151/2,151`; installed provider proof remains deferred. |
 | Hash-anchored edits | **Shipped source path** | read_file hashes and edit preconditions reject stale content before mutation. |

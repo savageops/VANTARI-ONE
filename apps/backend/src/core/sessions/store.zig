@@ -13,6 +13,7 @@ const types = @import("../../shared/types.zig");
 /// deltas — the valid-prefix reader recovers the intact prefix and the turn
 /// is retried, so the durability tradeoff is bounded and recoverable.
 const ledger_sync_batch_window_ms: i64 = 100;
+const max_shard_summary_bytes: usize = 16 * 1024;
 var last_ledger_sync_ms: i64 = 0;
 var ledger_sync_mutex: std.Thread.Mutex = .{};
 var last_session_touch_ms: i64 = 0;
@@ -1193,6 +1194,57 @@ pub fn appendShardCheckpoint(
     branch_status: types.ShardStatus,
     branch_summary: []const u8,
 ) !void {
+    var parent_checkpoint: ?types.ContextCheckpoint = null;
+    if (!std.mem.eql(u8, parent_checkpoint_id, "parent-root")) {
+        parent_checkpoint = try readContextCheckpointById(
+            allocator,
+            workspace_root,
+            session_id,
+            parent_checkpoint_id,
+        );
+    }
+    defer if (parent_checkpoint) |checkpoint| checkpoint.deinit(allocator);
+
+    try appendShardCheckpointWithRanges(
+        allocator,
+        workspace_root,
+        session_id,
+        parent_checkpoint_id,
+        branch_seq,
+        branch_status,
+        branch_summary,
+        if (parent_checkpoint) |checkpoint| .{
+            .source_seq_start = checkpoint.source_seq_start,
+            .source_seq_end = checkpoint.source_seq_end,
+            .first_kept_seq = checkpoint.first_kept_seq,
+            .tokens_before_estimate = checkpoint.tokens_before_estimate,
+            .tokens_after_estimate = checkpoint.tokens_after_estimate,
+            .aggressiveness_milli = checkpoint.aggressiveness_milli,
+            .compacted_entry_count = checkpoint.compacted_entry_count,
+        } else .{},
+    );
+}
+
+const ShardCheckpointRanges = struct {
+    source_seq_start: u64 = 0,
+    source_seq_end: u64 = 0,
+    first_kept_seq: u64 = 0,
+    tokens_before_estimate: u64 = 0,
+    tokens_after_estimate: u64 = 0,
+    aggressiveness_milli: u16 = 0,
+    compacted_entry_count: u32 = 0,
+};
+
+fn appendShardCheckpointWithRanges(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    parent_checkpoint_id: []const u8,
+    branch_seq: u64,
+    branch_status: types.ShardStatus,
+    branch_summary: []const u8,
+    ranges: ShardCheckpointRanges,
+) !void {
     const context_path = try contextFilePath(allocator, workspace_root, session_id);
     defer allocator.free(context_path);
 
@@ -1206,14 +1258,22 @@ pub fn appendShardCheckpoint(
     var output = std.array_list.Managed(u8).init(allocator);
     errdefer output.deinit();
     const writer = output.writer();
+    const bounded_summary = branch_summary[0..boundedUtf8PrefixLen(branch_summary, max_shard_summary_bytes)];
 
     try writer.print(
-        "{{\"id\":{f},\"type\":\"shard_checkpoint\",\"created_at_ms\":{d},\"source_seq_start\":0,\"source_seq_end\":0,\"first_kept_seq\":0,\"tokens_before_estimate\":0,\"tokens_after_estimate\":0,\"aggressiveness_milli\":0,\"compacted_entry_count\":0,\"trigger\":{f},\"summary\":{f},\"parent_checkpoint_id\":{f},\"branch_seq\":{d},\"branch_status\":{f}}}\n",
+        "{{\"id\":{f},\"type\":\"shard_checkpoint\",\"created_at_ms\":{d},\"source_seq_start\":{d},\"source_seq_end\":{d},\"first_kept_seq\":{d},\"tokens_before_estimate\":{d},\"tokens_after_estimate\":{d},\"aggressiveness_milli\":{d},\"compacted_entry_count\":{d},\"trigger\":{f},\"summary\":{f},\"parent_checkpoint_id\":{f},\"branch_seq\":{d},\"branch_status\":{f}}}\n",
         .{
             std.json.fmt(checkpoint_id, .{}),
             std.time.milliTimestamp(),
+            ranges.source_seq_start,
+            ranges.source_seq_end,
+            ranges.first_kept_seq,
+            ranges.tokens_before_estimate,
+            ranges.tokens_after_estimate,
+            ranges.aggressiveness_milli,
+            ranges.compacted_entry_count,
             std.json.fmt(trigger, .{}),
-            std.json.fmt(branch_summary, .{}),
+            std.json.fmt(bounded_summary, .{}),
             std.json.fmt(parent_checkpoint_id, .{}),
             branch_seq,
             std.json.fmt(branch_status.label(), .{}),
@@ -1222,6 +1282,13 @@ pub fn appendShardCheckpoint(
 
     try appendJsonlRecord(context_path, output.items);
     output.deinit();
+}
+
+fn boundedUtf8PrefixLen(value: []const u8, max_bytes: usize) usize {
+    if (value.len <= max_bytes) return value.len;
+    var end = max_bytes;
+    while (end > 0 and value[end] & 0xc0 == 0x80) end -= 1;
+    return end;
 }
 
 fn checkpointIdAlloc(allocator: std.mem.Allocator) ![]u8 {
@@ -1296,6 +1363,62 @@ pub fn readLatestContextCheckpoint(
         latest = next;
     }
     return latest;
+}
+
+/// Read the latest context checkpoint that can seed a provider window. Shard
+/// lifecycle rows remain in the ledger for graph/recovery projections, but are
+/// not transcript checkpoints and must never replace the parent summary used by
+/// the context compiler.
+pub fn readLatestContextCompileCheckpoint(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+) !?types.ContextCheckpoint {
+    const checkpoints = try readAllContextCheckpoints(allocator, workspace_root, session_id);
+    var match_index: ?usize = null;
+    for (checkpoints, 0..) |checkpoint, index| {
+        if (!std.mem.eql(u8, checkpoint.entry_type, "shard_checkpoint")) match_index = index;
+    }
+
+    if (match_index) |index| {
+        const matched = checkpoints[index];
+        for (checkpoints, 0..) |checkpoint, other_index| {
+            if (other_index != index) checkpoint.deinit(allocator);
+        }
+        allocator.free(checkpoints);
+        return matched;
+    }
+
+    types.deinitContextCheckpoints(allocator, checkpoints);
+    return null;
+}
+
+/// Resolve one exact checkpoint identity from the append-only context ledger.
+/// Branch receipts use this to compile from a parent checkpoint without
+/// copying the parent's transcript into the child session.
+pub fn readContextCheckpointById(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    checkpoint_id: []const u8,
+) !?types.ContextCheckpoint {
+    const checkpoints = try readAllContextCheckpoints(allocator, workspace_root, session_id);
+    var match_index: ?usize = null;
+    for (checkpoints, 0..) |checkpoint, index| {
+        if (std.mem.eql(u8, checkpoint.id, checkpoint_id)) match_index = index;
+    }
+
+    if (match_index) |index| {
+        const matched = checkpoints[index];
+        for (checkpoints, 0..) |checkpoint, other_index| {
+            if (other_index != index) checkpoint.deinit(allocator);
+        }
+        allocator.free(checkpoints);
+        return matched;
+    }
+
+    types.deinitContextCheckpoints(allocator, checkpoints);
+    return null;
 }
 
 /// Read all context checkpoints from context.jsonl in forward order.

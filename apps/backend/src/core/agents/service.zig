@@ -354,7 +354,7 @@ fn convergeLegacyChildren(
 
     // Determine the parent checkpoint ID for the convergence shard checkpoint.
     const parent_cp_id = blk: {
-        const maybe_cp = store.readLatestContextCheckpoint(allocator, service.config.workspace_root, parent_session_id) catch null;
+        const maybe_cp = store.readLatestContextCompileCheckpoint(allocator, service.config.workspace_root, parent_session_id) catch null;
         if (maybe_cp) |cp| {
             defer cp.deinit(allocator);
             break :blk try allocator.dupe(u8, cp.id);
@@ -593,7 +593,7 @@ fn launchTicket(
     defer if (owns_synthetic_parent) allocator.free(parent_session_id);
 
     const parent_checkpoint_id = blk: {
-        const maybe_checkpoint = store.readLatestContextCheckpoint(allocator, service.config.workspace_root, parent_session_id) catch null;
+        const maybe_checkpoint = store.readLatestContextCompileCheckpoint(allocator, service.config.workspace_root, parent_session_id) catch null;
         if (maybe_checkpoint) |checkpoint| {
             defer checkpoint.deinit(allocator);
             break :blk try allocator.dupe(u8, checkpoint.id);
@@ -970,7 +970,7 @@ fn launchBatch(
     const group_id = try newGroupId(allocator);
     defer allocator.free(group_id);
     const parent_checkpoint_id = blk: {
-        const maybe_checkpoint = store.readLatestContextCheckpoint(allocator, service.config.workspace_root, parent_session_id) catch null;
+        const maybe_checkpoint = store.readLatestContextCompileCheckpoint(allocator, service.config.workspace_root, parent_session_id) catch null;
         if (maybe_checkpoint) |checkpoint| {
             defer checkpoint.deinit(allocator);
             break :blk try allocator.dupe(u8, checkpoint.id);

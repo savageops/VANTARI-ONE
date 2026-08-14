@@ -206,6 +206,94 @@ fn verifyToolTranscriptRoundTrip(workspace_root: []const u8, index: usize) !void
     try expectProviderMessageContains(provider_messages.items, 3, .assistant, "final answer");
 }
 
+test "checkpoint-addressed child context stays bounded and ledger-backed" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    var parent = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "parent root prompt");
+    defer parent.deinit(std.testing.allocator);
+    try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, parent.id, .assistant, "old parent transcript", 2);
+
+    var checkpoint = try makeCheckpoint(std.testing.allocator, "parent-cp", 3, "parent checkpoint evidence");
+    defer checkpoint.deinit(std.testing.allocator);
+    try VAR1.core.session_store.appendContextCheckpoint(std.testing.allocator, workspace_root, parent.id, checkpoint);
+    try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, parent.id, .user, "kept parent evidence", 3);
+
+    var filler: [4096]u8 = undefined;
+    @memset(&filler, 'x');
+    for (0..24) |index| {
+        const payload = try std.fmt.allocPrint(std.testing.allocator, "post-parent-{d}: {s}", .{ index, filler[0..] });
+        defer std.testing.allocator.free(payload);
+        try VAR1.core.session_store.appendSessionMessage(std.testing.allocator, workspace_root, parent.id, .user, payload, 4 + @as(i64, @intCast(index)));
+    }
+
+    try VAR1.core.session_store.appendShardCheckpoint(
+        std.testing.allocator,
+        workspace_root,
+        parent.id,
+        "parent-cp",
+        1,
+        .open,
+        "branch lifecycle row",
+    );
+
+    const receipt = VAR1.shared.types.ExecutionReceiptView{
+        .execution_kind = "agent_session",
+        .agent_spec_id = "general",
+        .route_role = "build",
+        .provider_id = "test-provider",
+        .model = "test-model",
+        .wire_api = "chat_completions",
+        .thinking_mode = "high",
+        .capability_profile_id = "subagent",
+        .capability_hash = "capability-hash",
+        .parent_session_id = parent.id,
+        .parent_checkpoint_id = "parent-cp",
+        .group_id = "group-test",
+        .task_id = "task-test",
+        .branch_seq = 1,
+        .budget = .{ .max_steps = 4, .max_tool_calls = 8, .max_children = 0 },
+        .output_schema_hash = "{}",
+        .created_at_ms = 1,
+    };
+    var child = try VAR1.core.session_store.initSessionWithExecutionReceipt(std.testing.allocator, workspace_root, "branch prompt", .{
+        .parent_session_id = parent.id,
+        .display_name = "branch-test",
+        .agent_profile = "subagent",
+    }, &receipt);
+    defer child.deinit(std.testing.allocator);
+
+    var provider_messages = std.array_list.Managed(VAR1.shared.types.ChatMessage).init(std.testing.allocator);
+    defer deinitChatMessages(std.testing.allocator, &provider_messages);
+    try VAR1.core.context.appendProviderMessages(std.testing.allocator, workspace_root, &provider_messages, child);
+
+    try expectProviderMessageContains(provider_messages.items, 0, .user, "parent checkpoint evidence");
+    try std.testing.expect(std.mem.indexOf(u8, provider_messages.items[0].content.?, "old parent transcript") == null);
+    try std.testing.expect(std.mem.indexOf(u8, provider_messages.items[provider_messages.items.len - 1].content.?, "branch prompt") != null);
+    var found_latest = false;
+    var found_old_suffix = false;
+    for (provider_messages.items) |message| {
+        const content = message.content orelse continue;
+        if (std.mem.indexOf(u8, content, "post-parent-23") != null) found_latest = true;
+        if (std.mem.indexOf(u8, content, "post-parent-0") != null) found_old_suffix = true;
+    }
+    try std.testing.expect(found_latest);
+    try std.testing.expect(!found_old_suffix);
+
+    const child_messages = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, child.id);
+    defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, child_messages);
+    try std.testing.expectEqual(@as(usize, 1), child_messages.len);
+    try std.testing.expectEqualStrings("branch prompt", child_messages[0].content);
+
+    const latest_compile_checkpoint = try VAR1.core.session_store.readLatestContextCompileCheckpoint(std.testing.allocator, workspace_root, parent.id);
+    defer if (latest_compile_checkpoint) |value| value.deinit(std.testing.allocator);
+    try std.testing.expect(latest_compile_checkpoint != null);
+    try std.testing.expectEqualStrings("parent-cp", latest_compile_checkpoint.?.id);
+}
+
 fn verifyUnresolvedToolTranscriptFails(workspace_root: []const u8, index: usize) !void {
     const prompt = try std.fmt.allocPrint(std.testing.allocator, "deep pipeline unresolved tool case {d}", .{index});
     defer std.testing.allocator.free(prompt);

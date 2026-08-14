@@ -297,6 +297,18 @@ stateDiagram-v2
 
 Compaction never splits an assistant tool-call batch from its results. If the proposed suffix boundary falls inside a tool-call sequence, the compactor retracts to keep the batch intact. Manual and automatic compaction share the same primitive — the executor triggers it on budget threshold or provider overflow; operators trigger it via `session/compact` with configurable aggressiveness.
 
+### Bounded Branch Context
+
+Child sessions are normal VAR1 sessions with an immutable execution receipt,
+not a second transcript system. The receipt names the parent checkpoint; the
+context compiler projects that checkpoint's summary plus a bounded recent parent
+suffix into the child provider window. The child `messages.jsonl` ledger keeps
+only its own branch prompt, and missing or legacy checkpoint identity falls back
+to the same bounded suffix rule. Terminal branch output returns through the
+existing Supervisor, shard checkpoint ledger, and mailbox path. Shard lifecycle
+rows are graph/recovery evidence, not compiler checkpoints; no shard registry,
+transcript copier, poller, or extra worker pool exists.
+
 ### Scoped Memory
 
 VANTARI keeps memory deliberately smaller than the transcript. `messages.jsonl` remains the complete session record; memory is a compact, source-linked projection of facts, decisions, preferences, invariants, and lessons that are useful later.

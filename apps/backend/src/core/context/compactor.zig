@@ -62,7 +62,7 @@ pub fn compactSession(
         return .{ .reason = "not_enough_messages" };
     }
 
-    const latest = try store.readLatestContextCheckpoint(allocator, workspace_root, session.id);
+    const latest = try store.readLatestContextCompileCheckpoint(allocator, workspace_root, session.id);
     defer if (latest) |checkpoint| checkpoint.deinit(allocator);
 
     const plan = buildPlan(messages, latest, options) orelse return .{ .reason = "checkpoint_already_current" };
@@ -447,10 +447,10 @@ fn wordValueWeight(word: []const u8) u8 {
 
     // Filler words — the lowest tier.
     const filler = [_][]const u8{
-        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-        "to", "of", "in", "for", "on", "at", "by", "with", "from", "as",
-        "and", "or", "but", "not", "so", "if", "then", "else",
-        "this", "that", "these", "those", "it", "its",
+        "the",   "a",     "an",  "is",  "are", "was", "were", "be",   "been", "being",
+        "to",    "of",    "in",  "for", "on",  "at",  "by",   "with", "from", "as",
+        "and",   "or",    "but", "not", "so",  "if",  "then", "else", "this", "that",
+        "these", "those", "it",  "its",
     };
     for (filler) |f| {
         if (std.ascii.eqlIgnoreCase(word, f)) return 100;

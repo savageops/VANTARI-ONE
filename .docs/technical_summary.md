@@ -391,6 +391,35 @@ slots. `orchestrate`, `build`, `align`, and `plan` share the controller. Root
   `.docs/research/2026-08-14-question-panel-input-lifecycle.md`, and
   `.docs/research/2026-08-14-question-panel-event-loop-recovery.md`.
 
+## Current task-branch context boundary — 2026-08-14
+
+Move 70 keeps the existing execution receipt, context compiler, session ledger,
+Supervisor, and mailbox as the complete branch mechanism. `launchBatch` records
+the exact parent compiler checkpoint in the immutable child receipt. The child
+compiler projects that checkpoint's summary plus a recent parent suffix capped
+at 64 KiB into the provider window; it does not copy parent rows into the
+child `messages.jsonl` ledger. Missing or legacy checkpoint identity uses the
+same bounded suffix fallback.
+
+`SessionStore` excludes `shard_checkpoint` lifecycle rows from compiler
+checkpoint selection, resolves receipt-addressed checkpoints by identity, and
+preserves parent source/token ranges on terminal shard rows. Shard summaries
+are capped at a UTF-8-safe 16 KiB. `Supervisor` remains the one terminal
+convergence owner and commits one evidence-bearing result per child through the
+existing mailbox path. No shard registry, child transcript copier, group-level
+synthetic transcript, poller, or worker pool was added.
+
+The adversarial regression proves exact parent checkpoint evidence, exclusion
+of an old transcript, bounded recent-suffix selection, and child-ledger
+independence. Debug passes `19/19` steps and `2,166/2,166` tests; source
+ReleaseFast passes `9/9` with SHA-256
+`1E5AFD64D502514FAFC473FA8DD0B8E7B80C905EC52074AB629B1ACAD0157BFE`.
+Installed promotion and provider-driven live child proof remain deferred; the
+preserved installed owner remains
+`F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+Research and receipt: `.docs/research/2026-08-14-context-shard-projection-move70.md`
+and `.docs/todo/changelog/062-context-shard-projection-move70.md`.
+
 Move 60 is source-complete. The provider stream reader checks one typed abort
 hook before and after SSE/delta processing, adapters forward the hook, and the
 executor persists a correction plus `rule_injected` evidence before retrying

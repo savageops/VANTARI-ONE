@@ -3213,3 +3213,15 @@ Debug passed `19/19` steps and `2,159/2,159` tests; source ReleaseFast passed
 Installed promotion remains deferred and the live owner was not replaced.
 Research and receipt: `.docs/research/2026-08-14-token-accounting-precision-move68.md`
 and `.docs/todo/changelog/059-token-accounting-precision.md`.
+
+**Move 70 source closure receipt (2026-08-14):** The canonical child launch
+path now carries the immutable parent checkpoint identity into the existing
+context compiler. The child receives the checkpoint summary plus a bounded
+recent suffix without copying parent transcript rows; shard lifecycle rows are
+excluded from compiler checkpoint selection; terminal branch summaries retain
+parent range/token metadata and are capped at 16 KiB. Debug passed `19/19`
+steps and `2,166/2,166` tests; source ReleaseFast passed `9/9` with SHA-256
+`1E5AFD64D502514FAFC473FA8DD0B8E7B80C905EC52074AB629B1ACAD0157BFE`.
+Installed promotion remains deferred. Research and receipt:
+`.docs/research/2026-08-14-context-shard-projection-move70.md` and
+`.docs/todo/changelog/062-context-shard-projection-move70.md`.

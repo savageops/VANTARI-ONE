@@ -4,6 +4,9 @@ const types = @import("../../shared/types.zig");
 
 const summary_prefix =
     "The conversation history before this point was compacted into the following summary:\n\n";
+const parent_shard_prefix =
+    "The parent agent supplied the following bounded checkpoint context. Use it as evidence for this branch; do not assume the full parent transcript is present:\n\n";
+const max_parent_suffix_bytes: usize = 64 * 1024;
 
 /// Legacy error type retained for backward compatibility. The builder now
 /// self-heals orphan/unresolved tool-call tails by synthesizing interrupted
@@ -55,7 +58,11 @@ pub fn appendProviderMessagesWithReport(
     report: *CompileReport,
 ) !void {
     report.* = .{};
-    const checkpoint = try store.readLatestContextCheckpoint(allocator, workspace_root, session.id);
+    if (session.execution_receipt) |receipt| {
+        try appendParentShardContext(allocator, workspace_root, messages, receipt.*, report);
+    }
+
+    const checkpoint = try store.readLatestContextCompileCheckpoint(allocator, workspace_root, session.id);
     if (checkpoint) |value| {
         defer value.deinit(allocator);
         try appendCompactedMessages(allocator, workspace_root, messages, session.id, value, report);
@@ -63,6 +70,63 @@ pub fn appendProviderMessagesWithReport(
     }
 
     try appendRawMessages(allocator, workspace_root, messages, session.id, 0, report);
+}
+
+/// Compile a child branch from the immutable parent/checkpoint identity in its
+/// execution receipt. The parent ledger remains the source of truth; only a
+/// bounded provider projection crosses the branch boundary.
+fn appendParentShardContext(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    messages: *std.array_list.Managed(types.ChatMessage),
+    receipt: types.ExecutionReceipt,
+    report: *CompileReport,
+) !void {
+    var checkpoint: ?types.ContextCheckpoint = null;
+    if (!std.mem.eql(u8, receipt.parent_checkpoint_id, "parent-root")) {
+        checkpoint = try store.readContextCheckpointById(
+            allocator,
+            workspace_root,
+            receipt.parent_session_id,
+            receipt.parent_checkpoint_id,
+        );
+    }
+    defer if (checkpoint) |value| value.deinit(allocator);
+
+    if (checkpoint) |value| {
+        if (!std.mem.eql(u8, value.entry_type, "shard_checkpoint")) {
+            const summary = try std.fmt.allocPrint(
+                allocator,
+                "{s}checkpoint={s}\n{s}",
+                .{ parent_shard_prefix, value.id, value.summary },
+            );
+            defer allocator.free(summary);
+            try messages.append(try types.initTextMessage(allocator, .user, summary));
+            try appendRawMessagesBounded(
+                allocator,
+                workspace_root,
+                messages,
+                receipt.parent_session_id,
+                value.first_kept_seq,
+                max_parent_suffix_bytes,
+                report,
+            );
+            return;
+        }
+    }
+
+    // Legacy receipts and parent-root branches have no addressable summary.
+    // Preserve the branch invariant with a bounded recent suffix instead of
+    // replaying the parent's full transcript.
+    try appendRawMessagesBounded(
+        allocator,
+        workspace_root,
+        messages,
+        receipt.parent_session_id,
+        0,
+        max_parent_suffix_bytes,
+        report,
+    );
 }
 
 fn appendCompactedMessages(
@@ -88,13 +152,60 @@ fn appendRawMessages(
     first_kept_seq: u64,
     report: *CompileReport,
 ) !void {
+    try appendRawMessagesWithLimit(allocator, workspace_root, messages, session_id, first_kept_seq, 0, report);
+}
+
+fn appendRawMessagesBounded(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    messages: *std.array_list.Managed(types.ChatMessage),
+    session_id: []const u8,
+    first_kept_seq: u64,
+    max_bytes: usize,
+    report: *CompileReport,
+) !void {
+    try appendRawMessagesWithLimit(allocator, workspace_root, messages, session_id, first_kept_seq, max_bytes, report);
+}
+
+fn appendRawMessagesWithLimit(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    messages: *std.array_list.Managed(types.ChatMessage),
+    session_id: []const u8,
+    first_kept_seq: u64,
+    max_bytes: usize,
+    report: *CompileReport,
+) !void {
     const turns = try store.readSessionMessages(allocator, workspace_root, session_id);
     defer types.deinitSessionMessages(allocator, turns);
+
+    var start_index: usize = 0;
+    while (start_index < turns.len and turns[start_index].seq < first_kept_seq) : (start_index += 1) {}
+    var end_index = turns.len;
+    if (max_bytes > 0) {
+        var cursor = end_index;
+        var used_bytes: usize = 0;
+        while (cursor > start_index) {
+            const candidate = turns[cursor - 1];
+            const candidate_bytes = sessionTurnApproxBytes(candidate);
+            if (used_bytes +| candidate_bytes > max_bytes) {
+                if (used_bytes == 0) {
+                    end_index = cursor - 1;
+                    cursor -= 1;
+                    continue;
+                }
+                break;
+            }
+            used_bytes +|= candidate_bytes;
+            cursor -= 1;
+        }
+        start_index = cursor;
+    }
 
     var pending_tool_calls: []const types.ToolCall = &.{};
     var pending_tool_index: usize = 0;
 
-    for (turns) |turn| {
+    for (turns[start_index..end_index]) |turn| {
         if (first_kept_seq > 0 and turn.seq < first_kept_seq) continue;
         switch (turn.role) {
             .user => {
@@ -174,6 +285,19 @@ fn appendRawMessages(
     if (pending_tool_index < pending_tool_calls.len) {
         try synthesizePendingToolResults(allocator, messages, pending_tool_calls, pending_tool_index, report);
     }
+}
+
+fn sessionTurnApproxBytes(turn: types.SessionMessage) usize {
+    var total = turn.content.len +| 64;
+    if (turn.tool_call_id) |tool_call_id| total +|= tool_call_id.len;
+    if (turn.reasoning) |reasoning| total +|= reasoning.len;
+    for (turn.tool_calls) |tool_call| {
+        total +|= tool_call.id.len;
+        total +|= tool_call.name.len;
+        total +|= tool_call.arguments_json.len;
+        total +|= 64;
+    }
+    return total;
 }
 
 /// Append synthetic tool results for tool calls that were never resolved.
