@@ -1,6 +1,5 @@
 const std = @import("std");
 const config_file = @import("../config/file.zig");
-const docs_sync = @import("../docs/sync.zig");
 const executor = @import("../executor/loop.zig");
 const turn_payload = @import("../executor/turn_payload.zig");
 const mailbox = @import("mailbox.zig");
@@ -1096,13 +1095,6 @@ fn runModelTask(supervisor: *Supervisor, task: *Task, route: *routes.ResolvedRou
     );
     defer terminal.deinit(task_allocator);
     store.syncSessionLedgers(task_allocator, route.config.workspace_root, task.session_id) catch {};
-    try docs_sync.completeSession(task_allocator, route.config.workspace_root, .{
-        .session_id = task.session_id,
-        .status = types.statusLabel(session.status),
-        .prompt = session.prompt,
-        .output = content,
-        .updated_at_ms = session.updated_at_ms,
-    });
 }
 
 fn onModelTaskAssistantDelta(ctx: ?*anyopaque, delta: []const u8) anyerror!void {

@@ -927,7 +927,7 @@ test "agent tools use the agent service contract and surface agent tool catalog"
     try std.testing.expect(std.mem.indexOf(u8, list_output, "AGENT_NAME berry-child") != null);
 }
 
-test "workspace-state tools scaffold and manage canonical root artifacts" {
+test "workspace-state tools scaffold canonical ticket-linked artifacts" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -944,39 +944,9 @@ test "workspace-state tools scaffold and manage canonical root artifacts" {
     defer std.testing.allocator.free(workspace_state_readme);
     try std.testing.expect(VAR1.shared.fsutil.fileExists(workspace_state_readme));
 
-    var session_call = try makeToolCall(
-        std.testing.allocator,
-        "session_record",
-        "{\"action\":\"upsert\",\"session_name\":\"demo-session\",\"status\":\"in_progress\",\"objective\":\"Finalize the workspace-state runtime.\",\"scope\":[\"add missing tools\"],\"evidence_roots\":[\"src\",\"tests\"]}",
-    );
-    defer session_call.deinit(std.testing.allocator);
-    const session_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), session_call);
-    defer std.testing.allocator.free(session_output);
-    try std.testing.expect(std.mem.indexOf(u8, session_output, "demo-session") != null);
-
-    var todo_call = try makeToolCall(
-        std.testing.allocator,
-        "todo_slice",
-        "{\"action\":\"upsert\",\"category\":\"feature\",\"todo_name\":\"demo-todo\",\"status\":\"done\",\"objective\":\"Ship the workspace-state tools.\",\"dependencies\":[\"none\"],\"steps_taken\":[\"wired the runtime\"],\"blockers\":[],\"evidence\":[\"tests green\"]}",
-    );
-    defer todo_call.deinit(std.testing.allocator);
-    const todo_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), todo_call);
-    defer std.testing.allocator.free(todo_output);
-    try std.testing.expect(std.mem.indexOf(u8, todo_output, "todo-slice1.md") != null);
-
-    var changelog_call = try makeToolCall(
-        std.testing.allocator,
-        "changelog_ledger",
-        "{\"action\":\"archive_todo\",\"category\":\"feature\",\"todo_name\":\"demo-todo\",\"slice_name\":\"todo-slice1.md\",\"log_entry\":\"- Completed demo-todo tool finalization.\"}",
-    );
-    defer changelog_call.deinit(std.testing.allocator);
-    const changelog_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, execCtx(workspace_root), changelog_call);
-    defer std.testing.allocator.free(changelog_output);
-    try std.testing.expect(std.mem.indexOf(u8, changelog_output, "ARCHIVED_TO") != null);
-
-    const archived_todo = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "changelog", "demo-todo", "todo-slice1.md" });
-    defer std.testing.allocator.free(archived_todo);
-    try std.testing.expect(VAR1.shared.fsutil.fileExists(archived_todo));
+    const legacy_todos = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, ".var", "todos" });
+    defer std.testing.allocator.free(legacy_todos);
+    try std.testing.expect(!VAR1.shared.fsutil.fileExists(legacy_todos));
 
     var memories_append = try makeToolCall(
         std.testing.allocator,
@@ -1163,20 +1133,6 @@ test "backup and worktree workspace-state tools use the command runner contract"
 
     try std.testing.expect(std.mem.indexOf(u8, worktree_context.last_command.?, "rev-parse") != null);
     try std.testing.expect(std.mem.indexOf(u8, worktree_output, "WORKTREE_STATUS disabled") != null);
-}
-
-test "tool execution errors include schema guidance for todo slice calls" {
-    const error_payload = try VAR1.core.tool_runtime.renderExecutionError(
-        std.testing.allocator,
-        "todo_slice",
-        "InvalidArguments",
-        "{\"action\":\"upsert\"}",
-    );
-    defer std.testing.allocator.free(error_payload);
-
-    try std.testing.expect(std.mem.indexOf(u8, error_payload, "\"arguments_json\":\"{\\\"action\\\":\\\"upsert\\\"}\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, error_payload, "\"parameters_schema\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, error_payload, "runtime-managed todo slice") != null);
 }
 
 test "tool execution errors include search_files contract details for file-not-found loops" {
@@ -1399,6 +1355,7 @@ test "catalog keeps workspace-state tools out of normal coding contexts" {
     try std.testing.expect(std.mem.indexOf(u8, catalog, "read_file") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "skill_info") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "todo_slice") == null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "session_record") == null);
 }
 
 test "skill_info exposes native skill capsules without workspace path escape" {
@@ -1443,7 +1400,8 @@ test "catalog enables workspace-state tools only for workspace-state contexts" {
     });
     defer std.testing.allocator.free(catalog);
 
-    try std.testing.expect(std.mem.indexOf(u8, catalog, "todo_slice") != null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "todo_slice") == null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "session_record") == null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "init_workspace") != null);
 }
 
@@ -1463,6 +1421,7 @@ test "catalog json exposes schema and example objects for default coding tools" 
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"usage_hint\":\"Pass a file path, not a directory.") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"availability\":{\"status\":") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"todo_slice\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "\"name\":\"session_record\"") == null);
 }
 
 test "catalog json exposes shell_exec command-shape and Windows query guidance" {

@@ -343,14 +343,6 @@ pub const SessionRecord = struct {
     }
 };
 
-pub const ProgressSnapshot = struct {
-    session_id: []const u8,
-    status: []const u8,
-    prompt: []const u8,
-    output: []const u8,
-    updated_at_ms: i64,
-};
-
 pub const SessionEvent = struct {
     event_type: []const u8,
     message: []const u8,

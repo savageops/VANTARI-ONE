@@ -1,6 +1,5 @@
 const std = @import("std");
 const config_file = @import("../config/file.zig");
-const docs_sync = @import("../docs/sync.zig");
 const context_builder = @import("../context/index.zig");
 const context_stream_rules = @import("../context/stream_rules.zig");
 const agent_mailbox = @import("../agents/mailbox.zig");
@@ -139,7 +138,6 @@ pub fn runPromptWithOptions(
     options: RunOptions,
 ) !types.SessionRunResult {
     try store.ensureStoreReady(allocator, config.workspace_root);
-    try docs_sync.ensureRunStart(allocator, config.workspace_root);
 
     var session = if (options.session_id) |existing_session_id|
         try store.readSessionRecord(allocator, config.workspace_root, existing_session_id)
@@ -195,15 +193,6 @@ pub fn runPromptWithOptions(
             session.status,
         );
     }
-    try docs_sync.writePending(allocator, config.workspace_root, .{
-        .session_id = session.id,
-        .status = types.statusLabel(session.status),
-        .prompt = session.prompt,
-        .output = "",
-        .updated_at_ms = session.updated_at_ms,
-    });
-    try docs_sync.appendLog(allocator, config.workspace_root, "session started");
-
     var messages = std.array_list.Managed(types.ChatMessage).init(allocator);
     defer {
         for (messages.items) |message| message.deinit(allocator);
@@ -562,7 +551,6 @@ pub fn runPromptWithOptions(
                     budget_message,
                     session.status,
                 );
-                try docs_sync.appendLog(allocator, config.workspace_root, budget_message);
                 try failSession(allocator, config.workspace_root, options.hooks, &session, run_seq, .failed, @errorName(Error.ToolBudgetExceeded), run_start_ms);
                 return Error.ToolBudgetExceeded;
             }
@@ -583,7 +571,6 @@ pub fn runPromptWithOptions(
                 request_log,
                 session.status,
             );
-            try docs_sync.appendLog(allocator, config.workspace_root, request_log);
 
             const tool_request_timestamp = std.time.milliTimestamp();
             try messages.append(try types.initAssistantToolCallMessage(allocator, completion.content, completion.tool_calls));
@@ -607,8 +594,6 @@ pub fn runPromptWithOptions(
                 const review_decision = tools.review.reviewToolCall(tool_call, active_tool_definitions);
                 const review_event = try tools.review.renderReviewEvent(allocator, tool_call, review_decision);
                 defer allocator.free(review_event);
-                const review_log = try tools.review.renderReviewLog(allocator, tool_call, review_decision);
-                defer allocator.free(review_log);
                 try recordSessionEvent(
                     allocator,
                     config.workspace_root,
@@ -618,16 +603,10 @@ pub fn runPromptWithOptions(
                     review_event,
                     session.status,
                 );
-                try docs_sync.appendLog(allocator, config.workspace_root, review_log);
 
                 if (!review_decision.approved) {
                     const blocked_output = try tools.review.renderBlockedToolResult(allocator, tool_call, review_decision);
                     defer allocator.free(blocked_output);
-                    const blocked_log = try std.fmt.allocPrint(allocator, "tool blocked: {s} risk={s}", .{
-                        tool_call.name,
-                        tools.review.riskLabel(review_decision.risk),
-                    });
-                    defer allocator.free(blocked_log);
                     try recordSessionEvent(
                         allocator,
                         config.workspace_root,
@@ -637,7 +616,6 @@ pub fn runPromptWithOptions(
                         review_event,
                         session.status,
                     );
-                    try docs_sync.appendLog(allocator, config.workspace_root, blocked_log);
                     try messages.append(try types.initToolMessage(allocator, tool_call.id, blocked_output));
                     try store.appendToolSessionMessage(
                         allocator,
@@ -697,7 +675,6 @@ pub fn runPromptWithOptions(
                     tool_result.log_line,
                     session.status,
                 );
-                try docs_sync.appendLog(allocator, config.workspace_root, tool_result.log_line);
                 try messages.append(try types.initToolMessage(allocator, tool_call.id, tool_result.output));
                 try store.appendToolSessionMessage(
                     allocator,
@@ -881,15 +858,6 @@ pub fn runPromptWithOptions(
             // speed; the terminal assistant response must be durable before
             // the RPC returns (AGENTS.md §II durability gate at boundaries).
             store.syncSessionLedgers(allocator, config.workspace_root, session.id) catch {};
-            try docs_sync.completeSession(allocator, config.workspace_root, .{
-                .session_id = session.id,
-                .status = types.statusLabel(session.status),
-                .prompt = session.prompt,
-                .output = final_output,
-                .updated_at_ms = session.updated_at_ms,
-            });
-            try docs_sync.appendLog(allocator, config.workspace_root, "session completed");
-
             return .{
                 .session_id = try allocator.dupe(u8, session.id),
                 .output = try allocator.dupe(u8, final_output),
@@ -954,15 +922,6 @@ pub fn runPromptWithOptions(
             turn_payload.completedTerminalInput(step, messages.items, completion.model, completion.usage, final_output.len),
         );
         store.syncSessionLedgers(allocator, config.workspace_root, session.id) catch {};
-        try docs_sync.completeSession(allocator, config.workspace_root, .{
-            .session_id = session.id,
-            .status = types.statusLabel(session.status),
-            .prompt = session.prompt,
-            .output = final_output,
-            .updated_at_ms = session.updated_at_ms,
-        });
-        try docs_sync.appendLog(allocator, config.workspace_root, "session completed");
-
         return .{
             .session_id = try allocator.dupe(u8, session.id),
             .output = try allocator.dupe(u8, final_output),
@@ -1060,7 +1019,6 @@ fn awaitChildGroups(
             "{\"schema\":\"var1.parent_wait.v1\",\"state\":\"waiting_first_child\"}",
             session.status,
         );
-        try docs_sync.appendLog(allocator, workspace_root, "parent parked on first-ready child condition");
     }
 
     while (!snapshot.ready and !snapshot.terminal) {
@@ -1784,14 +1742,6 @@ fn cancelSession(
         .detail = reason,
     });
     store.syncSessionLedgers(allocator, workspace_root, session.id) catch {};
-    try docs_sync.writePending(allocator, workspace_root, .{
-        .session_id = session.id,
-        .status = types.statusLabel(session.status),
-        .prompt = session.prompt,
-        .output = reason,
-        .updated_at_ms = session.updated_at_ms,
-    });
-    try docs_sync.appendLog(allocator, workspace_root, "session cancelled");
 }
 
 fn failSession(
@@ -1822,17 +1772,6 @@ fn failSession(
         run_start_ms,
     );
     store.syncSessionLedgers(allocator, workspace_root, session.id) catch {};
-    try docs_sync.writePending(allocator, workspace_root, .{
-        .session_id = session.id,
-        .status = types.statusLabel(session.status),
-        .prompt = session.prompt,
-        .output = failure_reason,
-        .updated_at_ms = session.updated_at_ms,
-    });
-
-    const log_line = try std.fmt.allocPrint(allocator, "session failed: {s}", .{failure_reason});
-    defer allocator.free(log_line);
-    try docs_sync.appendLog(allocator, workspace_root, log_line);
 }
 
 fn recordSessionEvent(

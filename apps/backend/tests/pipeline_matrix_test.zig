@@ -71,7 +71,6 @@ const valid_tool_names = [_][]const u8{
     "wait_agent",
     "list_agents",
     "init_workspace",
-    "todo_slice",
     "changelog_ledger",
     "memory_read",
     "memory_write",
@@ -325,9 +324,8 @@ fn verifyToolRuntimeCase(index: usize) !void {
             try std.testing.expect(available.approved);
         },
         4 => {
-            const hint = VAR1.core.tool_runtime.toolErrorHint("todo_slice", "InvalidArguments").?;
-            try expectContains(hint, "todo_slice");
-            try expectContains(hint, "category");
+            const hint = VAR1.core.tool_runtime.toolErrorHint("log_ticket", "InvalidArguments").?;
+            try expectContains(hint, "tool schema");
         },
         5 => {
             const hint = VAR1.core.tool_runtime.toolErrorHint("read_file", "FileNotFound").?;

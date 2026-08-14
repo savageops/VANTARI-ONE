@@ -22,73 +22,20 @@ pub const definitions = [_]types.ToolDefinition{
     },
     .{
         .name = "changelog_ledger",
-        .description = "Read or append the canonical .var changelog log, or archive a completed todo slice into .var/changelog/<todo-name>/.",
+        .description = "Read or append the canonical .var changelog log for ticket-linked completion evidence.",
         .review_risk = .write_capable,
         .parameters_json =
         \\{
         \\  "type": "object",
         \\  "properties": {
-        \\    "action": { "type": "string", "enum": ["read", "append", "archive_todo"] },
+        \\    "action": { "type": "string", "enum": ["read", "append"] },
         \\    "content": { "type": "string", "description": "Markdown to append when action is append." },
-        \\    "category": { "type": "string", "description": "Todo category when action is archive_todo." },
-        \\    "todo_name": { "type": "string", "description": "Todo slug when action is archive_todo." },
-        \\    "slice_name": { "type": "string", "description": "Todo filename when action is archive_todo. Defaults to todo-slice1.md." },
-        \\    "log_entry": { "type": "string", "description": "Optional changelog bullet to append after archive_todo succeeds." }
         \\  },
         \\  "required": ["action"],
         \\  "additionalProperties": false
         \\}
         ,
         .example_json = "{\"action\":\"append\",\"content\":\"- Completed prompt-layer validation.\\n\"}",
-        .usage_hint = "Use append for durable changelog bullets. archive_todo requires category and todo_name and moves a completed .var todo slice.",
-    },
-    .{
-        .name = "todo_slice",
-        .description = "Read or upsert a canonical .var todo slice under .var/todos/<category>/<todo-name>/. The runtime already manages the current run's own todo slice, so use this only for explicit repo-level execution slices.",
-        .review_risk = .write_capable,
-        .parameters_json =
-        \\{
-        \\  "type": "object",
-        \\  "properties": {
-        \\    "action": { "type": "string", "enum": ["read", "upsert"] },
-        \\    "category": { "type": "string" },
-        \\    "todo_name": { "type": "string" },
-        \\    "slice_name": { "type": "string", "description": "Todo filename. Defaults to todo-slice1.md." },
-        \\    "status": { "type": "string" },
-        \\    "objective": { "type": "string" },
-        \\    "dependencies": { "type": "array", "items": { "type": "string" } },
-        \\    "steps_taken": { "type": "array", "items": { "type": "string" } },
-        \\    "blockers": { "type": "array", "items": { "type": "string" } },
-        \\    "evidence": { "type": "array", "items": { "type": "string" } }
-        \\  },
-        \\  "required": ["action", "category", "todo_name"],
-        \\  "additionalProperties": false
-        \\}
-        ,
-        .example_json = "{\"action\":\"read\",\"category\":\"prompting\",\"todo_name\":\"model-presentation\"}",
-        .usage_hint = "Use read for existing repo-level todo slices. Upsert requires category, todo_name, status, and objective; do not mirror the current runtime step here.",
-    },
-    .{
-        .name = "session_record",
-        .description = "Read or upsert a canonical .var session record under .var/sessions/<session-name>/session.md.",
-        .review_risk = .write_capable,
-        .parameters_json =
-        \\{
-        \\  "type": "object",
-        \\  "properties": {
-        \\    "action": { "type": "string", "enum": ["read", "upsert"] },
-        \\    "session_name": { "type": "string" },
-        \\    "status": { "type": "string" },
-        \\    "objective": { "type": "string" },
-        \\    "scope": { "type": "array", "items": { "type": "string" } },
-        \\    "evidence_roots": { "type": "array", "items": { "type": "string" } }
-        \\  },
-        \\  "required": ["action", "session_name"],
-        \\  "additionalProperties": false
-        \\}
-        ,
-        .example_json = "{\"action\":\"read\",\"session_name\":\"prompt-layer-work\"}",
-        .usage_hint = "Use read for a named session record. Upsert requires session_name, status, and objective and should describe durable session state.",
     },
     .{
         .name = "docs_artifact",
@@ -207,12 +154,6 @@ pub fn execute(
     if (std.mem.eql(u8, tool_name, "changelog_ledger")) {
         return executeChangelogLedger(allocator, workspace_root, arguments_json);
     }
-    if (std.mem.eql(u8, tool_name, "todo_slice")) {
-        return executeTodoSlice(allocator, workspace_root, arguments_json);
-    }
-    if (std.mem.eql(u8, tool_name, "session_record")) {
-        return executeSessionRecord(allocator, workspace_root, arguments_json);
-    }
     if (std.mem.eql(u8, tool_name, "docs_artifact")) {
         return executeDocsArtifact(allocator, workspace_root, arguments_json);
     }
@@ -254,29 +195,6 @@ fn docsToolContractsPath(allocator: std.mem.Allocator, workspace_root: []const u
 
 fn readmePath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
     return fsutil.join(allocator, &.{ workspace_root, ".var", "README.md" });
-}
-
-fn todoPath(
-    allocator: std.mem.Allocator,
-    workspace_root: []const u8,
-    category: []const u8,
-    todo_name: []const u8,
-    slice_name: []const u8,
-) ![]u8 {
-    return fsutil.join(allocator, &.{ workspace_root, ".var", "todos", category, todo_name, slice_name });
-}
-
-fn changelogSlicePath(
-    allocator: std.mem.Allocator,
-    workspace_root: []const u8,
-    todo_name: []const u8,
-    slice_name: []const u8,
-) ![]u8 {
-    return fsutil.join(allocator, &.{ workspace_root, ".var", "changelog", todo_name, slice_name });
-}
-
-fn sessionDocPath(allocator: std.mem.Allocator, workspace_root: []const u8, session_name: []const u8) ![]u8 {
-    return fsutil.join(allocator, &.{ workspace_root, ".var", "sessions", session_name, "session.md" });
 }
 
 fn docsPath(allocator: std.mem.Allocator, workspace_root: []const u8, relative_path: []const u8) ![]u8 {
@@ -374,7 +292,9 @@ fn defaultWorkspaceReadme() []const u8 {
         \\
         \\## Ownership
         \\
-        \\- `.var/` owns workspace-local todo, changelog, research, plans, advice, roadmap, docs, backup, and worktree state for VAR1. Agent memory is owned by the runtime memory store, not this scaffold.
+        \\- `.var/` owns the ticket ledger, session ledgers, summaries, changelog, research, plans, advice, roadmap, docs, backup, and worktree state for VAR1. Agent memory is owned by the runtime memory store, not this scaffold.
+        \\- Tickets are the only work lifecycle. Summaries are handoff projections; research, plans, advice, roadmap, changelog, and docs are ticket-linked artifacts.
+        \\- Legacy `.var/todos/` slices and per-session `session.md` records are not created or read by the runtime.
         \\- `.docs/` remains readable repo documentation or preserved historical material when present.
         \\- `init_workspace` owns the default scaffold. Other workspace-state tools operate inside that canonical tree and do not create a parallel system.
     ;
@@ -418,17 +338,17 @@ fn defaultDocsArchitecture() []const u8 {
         \\```text
         \\<project-root>/
         \\  .var/
+        \\    tickets/
+        \\      tickets.jsonl
         \\    changelog/
         \\      _log.md
-        \\      <todo-name>/
-        \\        todo-slice*.md
-        \\    todos/
-        \\      <category>/
-        \\        <todo-name>/
-        \\          todo-slice*.md
         \\    sessions/
-        \\      <session-name>/
-        \\        session.md
+        \\      <session-id>/
+        \\        session.json
+        \\        messages.jsonl
+        \\        context.jsonl
+        \\        events.jsonl
+        \\        output.txt
         \\    research/
         \\    plans/
         \\    advice/
@@ -462,9 +382,9 @@ fn defaultToolContracts() []const u8 {
         \\
         \\## Required Domain Tools
         \\
-        \\- `changelog_ledger`
-        \\- `todo_slice`
-        \\- `session_record`
+        \\- `log_ticket` owns work lifecycle and terminal state
+        \\- `update_session_summary` owns bounded handoff state
+        \\- `changelog_ledger` appends ticket-linked completion evidence
         \\- `docs_artifact`
         \\- `knowledge_artifact`
         \\- `git_worktree`
@@ -474,7 +394,7 @@ fn defaultToolContracts() []const u8 {
         \\Rule:
         \\- every workspace-state tool operates inside `.var/`
         \\- tools may be used only when relevant to the request
-        \\- no tool may create a parallel state system
+        \\- no tool may create a parallel work lifecycle
     ;
     return content;
 }
@@ -548,12 +468,6 @@ fn scaffoldWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8, f
         try fsutil.join(allocator, &.{ workspace_root, ".var", "roadmap" }),
         try fsutil.join(allocator, &.{ workspace_root, ".var", "worktrees" }),
         try fsutil.join(allocator, &.{ workspace_root, ".var", "backup" }),
-        try fsutil.join(allocator, &.{ workspace_root, ".var", "todos" }),
-        try fsutil.join(allocator, &.{ workspace_root, ".var", "todos", "feature" }),
-        try fsutil.join(allocator, &.{ workspace_root, ".var", "todos", "chore" }),
-        try fsutil.join(allocator, &.{ workspace_root, ".var", "todos", "fix" }),
-        try fsutil.join(allocator, &.{ workspace_root, ".var", "todos", "refactor" }),
-        try fsutil.join(allocator, &.{ workspace_root, ".var", "todos", "general" }),
     };
     defer for (directories) |path| allocator.free(path);
 
@@ -598,111 +512,6 @@ fn scaffoldWorkspace(allocator: std.mem.Allocator, workspace_root: []const u8, f
     return stats;
 }
 
-fn renderMarkdownList(
-    allocator: std.mem.Allocator,
-    items: []const []const u8,
-    empty_line: []const u8,
-) ![]u8 {
-    if (items.len == 0) return allocator.dupe(u8, empty_line);
-
-    var output = std.array_list.Managed(u8).init(allocator);
-    errdefer output.deinit();
-    for (items) |item| {
-        try output.writer().print("- {s}\n", .{item});
-    }
-    return output.toOwnedSlice();
-}
-
-fn renderSessionRecord(
-    allocator: std.mem.Allocator,
-    session_name: []const u8,
-    status: []const u8,
-    objective: []const u8,
-    scope: []const []const u8,
-    evidence_roots: []const []const u8,
-) ![]u8 {
-    const scope_text = try renderMarkdownList(allocator, scope, "- none\n");
-    defer allocator.free(scope_text);
-    const evidence_text = try renderMarkdownList(allocator, evidence_roots, "- none\n");
-    defer allocator.free(evidence_text);
-
-    return std.fmt.allocPrint(
-        allocator,
-        \\# {s}
-        \\
-        \\## Status
-        \\
-        \\`{s}`
-        \\
-        \\## Objective
-        \\
-        \\{s}
-        \\
-        \\## Scope
-        \\
-        \\{s}
-        \\## Evidence Roots
-        \\
-        \\{s}
-    ,
-        .{
-            session_name,
-            status,
-            objective,
-            scope_text,
-            evidence_text,
-        },
-    );
-}
-
-fn renderTodoSlice(
-    allocator: std.mem.Allocator,
-    status: []const u8,
-    category: []const u8,
-    objective: []const u8,
-    dependencies: []const []const u8,
-    steps_taken: []const []const u8,
-    blockers: []const []const u8,
-    evidence: []const []const u8,
-) ![]u8 {
-    const dependencies_text = try renderMarkdownList(allocator, dependencies, "none\n");
-    defer allocator.free(dependencies_text);
-    const steps_text = try renderMarkdownList(allocator, steps_taken, "- none\n");
-    defer allocator.free(steps_text);
-    const blockers_text = try renderMarkdownList(allocator, blockers, "none\n");
-    defer allocator.free(blockers_text);
-    const evidence_text = try renderMarkdownList(allocator, evidence, "- none\n");
-    defer allocator.free(evidence_text);
-
-    return std.fmt.allocPrint(
-        allocator,
-        \\# Todo Slice 1
-        \\
-        \\- Status: `{s}`
-        \\- Category: `{s}`
-        \\- Objective: {s}
-        \\- Dependencies: {s}
-        \\- Steps Taken:
-        \\{s}
-        \\## Evidence
-        \\
-        \\{s}
-        \\## Blockers
-        \\
-        \\{s}
-    ,
-        .{
-            status,
-            category,
-            objective,
-            std.mem.trimRight(u8, dependencies_text, "\n"),
-            steps_text,
-            evidence_text,
-            blockers_text,
-        },
-    );
-}
-
 fn executeInitWorkspace(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
@@ -736,10 +545,6 @@ fn executeChangelogLedger(
     const Args = struct {
         action: []const u8,
         content: ?[]const u8 = null,
-        category: ?[]const u8 = null,
-        todo_name: ?[]const u8 = null,
-        slice_name: ?[]const u8 = "todo-slice1.md",
-        log_entry: ?[]const u8 = null,
     };
 
     var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
@@ -766,145 +571,6 @@ fn executeChangelogLedger(
         const payload = try std.fmt.allocPrint(allocator, "PATH {s}\nAPPENDED_BYTES {d}", .{ file_path, content.len });
         defer allocator.free(payload);
         return okEnvelope(allocator, "changelog_ledger", payload);
-    }
-
-    if (std.mem.eql(u8, parsed.value.action, "archive_todo")) {
-        const category = parsed.value.category orelse return error.InvalidArguments;
-        const todo_name = parsed.value.todo_name orelse return error.InvalidArguments;
-        const slice_name = parsed.value.slice_name orelse "todo-slice1.md";
-        if (!isSafeSegment(category) or !isSafeSegment(todo_name) or !isSafeSegment(slice_name)) return error.InvalidArguments;
-
-        const source_path = try todoPath(allocator, workspace_root, category, todo_name, slice_name);
-        defer allocator.free(source_path);
-        const destination_path = try changelogSlicePath(allocator, workspace_root, todo_name, slice_name);
-        defer allocator.free(destination_path);
-
-        const todo_contents = try fsutil.readTextAlloc(allocator, source_path);
-        defer allocator.free(todo_contents);
-        if (std.mem.indexOf(u8, todo_contents, "PLACEHOLDER") != null) return error.InvalidArguments;
-
-        try fsutil.moveFile(source_path, destination_path);
-        if (parsed.value.log_entry) |line| try appendMarkdownBlock(allocator, file_path, line);
-
-        const payload = try std.fmt.allocPrint(
-            allocator,
-            "ARCHIVED_FROM {s}\nARCHIVED_TO {s}",
-            .{ source_path, destination_path },
-        );
-        defer allocator.free(payload);
-        return okEnvelope(allocator, "changelog_ledger", payload);
-    }
-
-    return error.InvalidArguments;
-}
-
-fn executeTodoSlice(
-    allocator: std.mem.Allocator,
-    workspace_root: []const u8,
-    arguments_json: []const u8,
-) ![]u8 {
-    const Args = struct {
-        action: []const u8,
-        category: []const u8,
-        todo_name: []const u8,
-        slice_name: []const u8 = "todo-slice1.md",
-        status: ?[]const u8 = null,
-        objective: ?[]const u8 = null,
-        dependencies: []const []const u8 = &.{},
-        steps_taken: []const []const u8 = &.{},
-        blockers: []const []const u8 = &.{},
-        evidence: []const []const u8 = &.{},
-    };
-
-    var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
-        .ignore_unknown_fields = false,
-    });
-    defer parsed.deinit();
-
-    if (!isSafeSegment(parsed.value.category) or !isSafeSegment(parsed.value.todo_name) or !isSafeSegment(parsed.value.slice_name)) {
-        return error.InvalidArguments;
-    }
-
-    const file_path = try todoPath(allocator, workspace_root, parsed.value.category, parsed.value.todo_name, parsed.value.slice_name);
-    defer allocator.free(file_path);
-
-    if (std.mem.eql(u8, parsed.value.action, "read")) {
-        const content = try fsutil.readTextAlloc(allocator, file_path);
-        defer allocator.free(content);
-        const payload = try std.fmt.allocPrint(allocator, "PATH {s}\n{s}", .{ file_path, content });
-        defer allocator.free(payload);
-        return okEnvelope(allocator, "todo_slice", payload);
-    }
-
-    if (std.mem.eql(u8, parsed.value.action, "upsert")) {
-        const rendered = try renderTodoSlice(
-            allocator,
-            parsed.value.status orelse return error.InvalidArguments,
-            parsed.value.category,
-            parsed.value.objective orelse return error.InvalidArguments,
-            parsed.value.dependencies,
-            parsed.value.steps_taken,
-            parsed.value.blockers,
-            parsed.value.evidence,
-        );
-        defer allocator.free(rendered);
-
-        try fsutil.writeText(file_path, rendered);
-        const payload = try std.fmt.allocPrint(allocator, "PATH {s}\nBYTES {d}", .{ file_path, rendered.len });
-        defer allocator.free(payload);
-        return okEnvelope(allocator, "todo_slice", payload);
-    }
-
-    return error.InvalidArguments;
-}
-
-fn executeSessionRecord(
-    allocator: std.mem.Allocator,
-    workspace_root: []const u8,
-    arguments_json: []const u8,
-) ![]u8 {
-    const Args = struct {
-        action: []const u8,
-        session_name: []const u8,
-        status: ?[]const u8 = null,
-        objective: ?[]const u8 = null,
-        scope: []const []const u8 = &.{},
-        evidence_roots: []const []const u8 = &.{},
-    };
-
-    var parsed = try std.json.parseFromSlice(Args, allocator, arguments_json, .{
-        .ignore_unknown_fields = false,
-    });
-    defer parsed.deinit();
-
-    if (!isSafeSegment(parsed.value.session_name)) return error.InvalidArguments;
-
-    const file_path = try sessionDocPath(allocator, workspace_root, parsed.value.session_name);
-    defer allocator.free(file_path);
-
-    if (std.mem.eql(u8, parsed.value.action, "read")) {
-        const content = try fsutil.readTextAlloc(allocator, file_path);
-        defer allocator.free(content);
-        const payload = try std.fmt.allocPrint(allocator, "PATH {s}\n{s}", .{ file_path, content });
-        defer allocator.free(payload);
-        return okEnvelope(allocator, "session_record", payload);
-    }
-
-    if (std.mem.eql(u8, parsed.value.action, "upsert")) {
-        const rendered = try renderSessionRecord(
-            allocator,
-            parsed.value.session_name,
-            parsed.value.status orelse return error.InvalidArguments,
-            parsed.value.objective orelse return error.InvalidArguments,
-            parsed.value.scope,
-            parsed.value.evidence_roots,
-        );
-        defer allocator.free(rendered);
-
-        try fsutil.writeText(file_path, rendered);
-        const payload = try std.fmt.allocPrint(allocator, "PATH {s}\nBYTES {d}", .{ file_path, rendered.len });
-        defer allocator.free(payload);
-        return okEnvelope(allocator, "session_record", payload);
     }
 
     return error.InvalidArguments;

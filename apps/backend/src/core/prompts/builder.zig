@@ -156,7 +156,7 @@ pub fn buildAgentSystemPromptWithMemoryAndMode(
     defer allocator.free(memory_context);
 
     const workspace_state_note = if (execution_context.workspace_state_enabled)
-        "Workspace-state tools are enabled because this request is explicitly .var-state-related. Use init_workspace only when the canonical structure is missing or incomplete. Do not call todo_slice just to track the current run. If you call session_record with action:\"upsert\", provide session_name, status, and objective. If you call todo_slice with action:\"upsert\", provide category, todo_name, status, and objective."
+        "Workspace-state tools are enabled because this request is explicitly .var-state-related. Use init_workspace only when the canonical structure is missing or incomplete. Tickets own work lifecycle and terminal state; use log_ticket for work identity, update_session_summary for bounded handoff, and knowledge/changelog tools for ticket-linked artifacts."
     else
         "Workspace-state tools are absent from the current catalog because this request is not explicitly .var-state-related. For normal coding work, use file tools and agent tools only; do not invent extra workspace-state bookkeeping.";
     const agent_mode_note = if (execution_context.orchestrator_only)

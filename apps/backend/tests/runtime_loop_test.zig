@@ -794,10 +794,6 @@ test "loop writes runtime state and archives docs on success" {
     try std.testing.expectEqual(events[events.len - 1].seq, capture.last_seq);
     try std.testing.expectEqualStrings(events[events.len - 1].event_type, capture.last_event_type.?);
     try expectOneTurnTerminal(events, "completed");
-
-    const changelog_path = try VAR1.core.docs_sync.changelogSlicePath(std.testing.allocator, workspace_root, result.session_id);
-    defer std.testing.allocator.free(changelog_path);
-    try std.testing.expect(VAR1.shared.fsutil.fileExists(changelog_path));
 }
 
 test "loop can resume a precreated child session and preserve delegation metadata" {

@@ -14,7 +14,6 @@ pub const config = @import("config/resolver.zig");
 pub const config_file = @import("config/file.zig");
 pub const workspace = @import("config/workspace.zig");
 pub const context = @import("context/index.zig");
-pub const docs_sync = @import("docs/sync.zig");
 pub const evaluation = @import("evaluation/index.zig");
 pub const executor = @import("executor/loop.zig");
 pub const turn_payload = @import("executor/turn_payload.zig");

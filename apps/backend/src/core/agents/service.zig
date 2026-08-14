@@ -1,5 +1,4 @@
 const std = @import("std");
-const docs_sync = @import("../docs/sync.zig");
 const config_file = @import("../config/file.zig");
 const fsutil = @import("../../shared/fsutil.zig");
 const mailbox = @import("mailbox.zig");
@@ -695,14 +694,6 @@ fn launchTicket(
         },
     });
     claim_notice.deinit(allocator);
-    try docs_sync.writePending(allocator, service.config.workspace_root, .{
-        .session_id = child_session.id,
-        .status = types.statusLabel(child_session.status),
-        .prompt = child_session.prompt,
-        .output = "",
-        .updated_at_ms = child_session.updated_at_ms,
-    });
-
     const prepared_task = try service.supervisor.createTask(.{
         .parent_session_id = parent_session_id,
         .parent_checkpoint_id = parent_checkpoint_id,
@@ -913,7 +904,6 @@ fn launchBatch(
     if (tasks_to_launch.len == 0 or tasks_to_launch.len > 100) return Error.InvalidBatch;
     if (shared_context.len > 128 * 1024) return Error.InvalidBatch;
     if (delegation_scope.contact_budget < tasks_to_launch.len) return Error.InvalidBatch;
-    try docs_sync.ensureRunStart(allocator, service.config.workspace_root);
     var registry = try agent_spec.loadRegistry(allocator, service.config.workspace_root);
     defer registry.deinit();
 
@@ -976,7 +966,7 @@ fn launchBatch(
         };
     }
 
-    const max_concurrency = try ensureSupervisorStarted(service, allocator);
+    _ = try ensureSupervisorStarted(service, allocator);
     const group_id = try newGroupId(allocator);
     defer allocator.free(group_id);
     const parent_checkpoint_id = blk: {
@@ -1077,14 +1067,6 @@ fn launchBatch(
             .message = delegation_event,
             .timestamp_ms = created_at_ms,
         });
-        try docs_sync.writePending(allocator, service.config.workspace_root, .{
-            .session_id = child_session.id,
-            .status = types.statusLabel(child_session.status),
-            .prompt = child_session.prompt,
-            .output = "",
-            .updated_at_ms = child_session.updated_at_ms,
-        });
-
         const prepared_task = try service.supervisor.createTask(.{
             .parent_session_id = parent_session_id,
             .parent_checkpoint_id = parent_checkpoint_id,
@@ -1116,9 +1098,6 @@ fn launchBatch(
     }, prepared.items);
     submitted = true;
     const result = try service.supervisor.renderGroup(allocator, group_id);
-    const log_line = try std.fmt.allocPrint(allocator, "child group admitted: {s} tasks={d} concurrency={d}", .{ group_id, tasks_to_launch.len, max_concurrency });
-    defer allocator.free(log_line);
-    docs_sync.appendLog(allocator, service.config.workspace_root, log_line) catch {};
     return result;
 }
 
@@ -1338,13 +1317,6 @@ fn recoverReceiptGroups(
                 );
                 terminal.deinit(allocator);
                 try appendRecoveredTaskFinishedEvent(service, allocator, parent_session_id, member.*, stale_reason);
-                docs_sync.completeSession(allocator, service.config.workspace_root, .{
-                    .session_id = member.id,
-                    .status = types.statusLabel(member.status),
-                    .prompt = member.prompt,
-                    .output = stale_reason,
-                    .updated_at_ms = member.updated_at_ms,
-                }) catch {};
                 lifecycle = .failed;
                 failure_class = stale_reason;
                 stale_count += 1;

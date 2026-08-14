@@ -98,8 +98,6 @@ pub fn workspaceStateRelevant(prompt: []const u8) bool {
         ".var",
         "init_workspace",
         "workspace state",
-        "todo slice",
-        "session record",
         "changelog",
         "worktree",
         "backup",
@@ -236,14 +234,6 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
         std.mem.eql(u8, error_name, "UnexpectedToken");
 
     if (is_schema_error) {
-        if (std.mem.eql(u8, tool_name, "todo_slice")) {
-            return "Use valid JSON. todo_slice upsert requires category, todo_name, status, and objective. The current run already has a runtime-managed todo slice, so skip todo_slice unless you need a separate repo-level execution slice.";
-        }
-
-        if (std.mem.eql(u8, tool_name, "session_record")) {
-            return "Use valid JSON. session_record upsert requires session_name, status, and objective.";
-        }
-
         if (std.mem.eql(u8, tool_name, "shell_exec")) {
             return "Use mode=argv with argv only, or mode=powershell/shell/bash with command only. On Windows, use PowerShell-native commands such as Select-String and Get-ChildItem for compound queries; do not pipe cmd find/findstr patterns through PowerShell.";
         }
@@ -579,6 +569,7 @@ test "tool catalog includes the built-in coding tools" {
     try std.testing.expect(std.mem.indexOf(u8, catalog, "dap_detach") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "Example JSON: {\"pattern\":\"read_file\",\"path\":\"src\",\"glob\":\"*.zig\",\"max_results\":20}") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "todo_slice") == null);
+    try std.testing.expect(std.mem.indexOf(u8, catalog, "session_record") == null);
 }
 
 test "root catalogs and orchestrator policy retain bounded operator questions" {

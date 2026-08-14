@@ -1,5 +1,4 @@
 const std = @import("std");
-const docs_sync = @import("../docs/sync.zig");
 const store = @import("../sessions/store.zig");
 const tools = @import("../tools/runtime.zig");
 const types = @import("../../shared/types.zig");
@@ -9,7 +8,6 @@ const loop = @import("loop.zig");
 /// The parallel path runs all-parallel batches concurrently on worker threads;
 /// the sequential path is handled inline in loop.zig. Both preserve source-order
 /// append to messages.jsonl (single-threaded).
-
 pub fn toolDefinitionSignalsCompletion(definitions: []const types.ToolDefinition, tool_name: []const u8) bool {
     for (definitions) |def| {
         if (std.mem.eql(u8, def.name, tool_name)) return def.signals_completion;
@@ -113,10 +111,7 @@ pub fn runParallel(
         const review_decision = tools.review.reviewToolCall(tool_call, active_tool_definitions);
         const review_event = try tools.review.renderReviewEvent(allocator, tool_call, review_decision);
         defer allocator.free(review_event);
-        const review_log = try tools.review.renderReviewLog(allocator, tool_call, review_decision);
-        defer allocator.free(review_log);
         try loop.recordSessionEvent(allocator, config.workspace_root, hooks, session.id, "tool_reviewed", review_event, session.status);
-        try docs_sync.appendLog(allocator, config.workspace_root, review_log);
 
         started_times[i] = std.time.milliTimestamp();
         const started_event = try loop.renderToolStartedEvent(allocator, tool_call, started_times[i]);
@@ -177,7 +172,6 @@ pub fn runParallel(
         try loop.recordSessionEvent(allocator, config.workspace_root, hooks, session.id, "tool_finished", finished_event, session.status);
 
         try loop.recordSessionEvent(allocator, config.workspace_root, hooks, session.id, "tool_completed", r.log_line, session.status);
-        try docs_sync.appendLog(allocator, config.workspace_root, r.log_line);
         try messages.append(try types.initToolMessage(allocator, tool_call.id, r.output));
         try store.appendToolSessionMessage(
             allocator,

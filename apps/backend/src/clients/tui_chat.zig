@@ -2747,9 +2747,6 @@ fn activityTitle(tool_name: []const u8) []const u8 {
         std.ascii.eqlIgnoreCase(tool_name, "explore")) return "Explore";
     if (std.ascii.eqlIgnoreCase(tool_name, "agents") or
         std.ascii.eqlIgnoreCase(tool_name, "configure_agent")) return "Agents";
-    if (std.ascii.eqlIgnoreCase(tool_name, "todo_slice") or
-        std.ascii.eqlIgnoreCase(tool_name, "todo_write") or
-        std.ascii.eqlIgnoreCase(tool_name, "update_plan")) return "To-dos";
     return tool_name;
 }
 
@@ -6109,7 +6106,6 @@ test "tui activity families share nested checkbox grammar" {
     try std.testing.expectEqualStrings("Search", activityTitle("web_search"));
     try std.testing.expectEqualStrings("Explore", activityTitle("read_file"));
     try std.testing.expectEqualStrings("Agents", activityTitle("agents"));
-    try std.testing.expectEqualStrings("To-dos", activityTitle("todo_slice"));
 
     try std.testing.expectEqualStrings("○ ", activityMarker(.pending));
     try std.testing.expectEqualStrings("○ ", activityMarker(.running));
