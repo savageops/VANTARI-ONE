@@ -5,6 +5,9 @@ const input_protocol = VAR1.shared.protocol.input;
 
 const TextInput = tui.widgets.TextInput;
 
+const option_keys = [_][]const u8{ "a", "b", "c", "d", "e", "f" };
+const invalid_display_text = "(invalid text)";
+
 pub const Action = enum {
     consumed,
     submit,
@@ -310,13 +313,19 @@ pub const State = struct {
         win.fill(.{ .style = styles.panel });
         if (win.width == 0 or win.height == 0 or self.questions.items.len == 0) return;
         if (self.confirming) {
-            _ = win.print(&.{.{ .text = " Confirm answers", .style = styles.title }}, .{ .row_offset = 0, .wrap = .none });
-            _ = win.print(&.{.{ .text = "Enter submit · Esc back", .style = styles.hint }}, .{ .row_offset = 1, .wrap = .none });
-            _ = win.print(&.{.{ .text = "────────────────────────────────────────────────────────────────", .style = styles.hint }}, .{ .row_offset = 2, .wrap = .none });
+            if (win.height > 0) {
+                _ = win.print(&.{.{ .text = " Confirm answers", .style = styles.title }}, .{ .row_offset = 0, .wrap = .none });
+            }
+            if (win.height > 1) {
+                _ = win.print(&.{.{ .text = "Enter submit · Esc back", .style = styles.hint }}, .{ .row_offset = 1, .wrap = .none });
+            }
+            if (win.height > 2) {
+                _ = win.print(&.{.{ .text = "────────────────────────────────────────────────────────────────", .style = styles.hint }}, .{ .row_offset = 2, .wrap = .none });
+            }
             var row: usize = 3;
             for (self.questions.items) |question| {
                 if (row >= win.height) break;
-                drawAnswerSummary(win, question, row, styles.confirm);
+                drawAnswerSummary(win, question, row, styles.confirm, frame_allocator);
                 row += 1;
             }
             if (self.confirm_error and row < win.height) {
@@ -334,8 +343,12 @@ pub const State = struct {
             " Questions {d}/{d} · ↑/↓ question · ←/→ option · Tab next",
             .{ active_index + 1, self.questions.items.len },
         ) catch " Questions";
-        _ = win.print(&.{.{ .text = header, .style = styles.title }}, .{ .row_offset = 0, .wrap = .none });
-        _ = win.print(&.{.{ .text = "────────────────────────────────────────────────────────────────", .style = styles.hint }}, .{ .row_offset = 1, .wrap = .none });
+        if (win.height > 0) {
+            _ = win.print(&.{.{ .text = header, .style = styles.title }}, .{ .row_offset = 0, .wrap = .none });
+        }
+        if (win.height > 1) {
+            _ = win.print(&.{.{ .text = "────────────────────────────────────────────────────────────────", .style = styles.hint }}, .{ .row_offset = 1, .wrap = .none });
+        }
 
         const row_start: usize = 2;
         const reserved_rows: usize = 1 + @as(usize, if (self.editing_other) 1 else 0);
@@ -348,7 +361,7 @@ pub const State = struct {
             0;
         var row = row_start;
         for (self.questions.items[first_question .. first_question + visible_questions], first_question..) |question, question_index| {
-            self.drawQuestionRow(win, question, question_index == active_index, row, styles);
+            self.drawQuestionRow(win, question, question_index == active_index, row, styles, frame_allocator);
             row += 1;
         }
 
@@ -369,11 +382,12 @@ pub const State = struct {
         active: bool,
         row: usize,
         styles: DrawStyles,
+        frame_allocator: std.mem.Allocator,
     ) void {
         if (row >= win.height or win.width == 0) return;
         const prompt_width = @min(@as(usize, 28), @max(@as(usize, 10), @as(usize, win.width) / 3));
         const prompt_limit = prompt_width -| 2;
-        const prompt = truncate(question.prompt, prompt_limit);
+        const prompt = truncate(safeDisplayText(frame_allocator, question.prompt), prompt_limit);
         const prompt_style = if (active) styles.selected else styles.prompt;
         _ = win.print(
             &.{
@@ -394,20 +408,21 @@ pub const State = struct {
                 styles.confirm
             else
                 styles.option;
-            const prefix_width = marker.len + option.id.len + 2;
+            const key = optionKey(option_index);
+            const prefix_width = marker.len + key.len + 2;
             const label_width = available -| prefix_width;
-            const visible_label = truncate(option.label, label_width);
+            const visible_label = truncate(safeDisplayText(frame_allocator, option.label), label_width);
             if (visible_label.len == 0) break;
             _ = win.print(
                 &.{
                     .{ .text = marker, .style = option_style },
-                    .{ .text = option.id, .style = option_style },
+                    .{ .text = key, .style = option_style },
                     .{ .text = ") ", .style = option_style },
                     .{ .text = visible_label, .style = option_style },
                 },
                 .{ .row_offset = @intCast(row), .col_offset = @intCast(col), .wrap = .none },
             );
-            col += @min(available, prefix_width + visible_label.len + 2);
+            col += @min(available, marker.len + key.len + 2 + visible_label.len + 2);
         }
     }
 };
@@ -423,7 +438,13 @@ fn appendSegment(
     count.* += 1;
 }
 
-fn drawAnswerSummary(win: tui.Window, question: Question, row: usize, style: tui.Cell.Style) void {
+fn drawAnswerSummary(
+    win: tui.Window,
+    question: Question,
+    row: usize,
+    style: tui.Cell.Style,
+    frame_allocator: std.mem.Allocator,
+) void {
     if (row >= win.height) return;
 
     // Every segment points to static text or storage owned by State. Do not
@@ -431,18 +452,18 @@ fn drawAnswerSummary(win: tui.Window, question: Question, row: usize, style: tui
     // segment text borrowed through that boundary.
     var segments: [32]tui.Cell.Segment = undefined;
     var count: usize = 0;
-    appendSegment(segments[0..], &count, question.prompt, style);
+    appendSegment(segments[0..], &count, safeDisplayText(frame_allocator, question.prompt), style);
     appendSegment(segments[0..], &count, ": ", style);
 
     var selected_count: usize = 0;
     for (question.options.items) |option| {
         if (!option.selected) continue;
         if (selected_count > 0) appendSegment(segments[0..], &count, ", ", style);
-        appendSegment(segments[0..], &count, option.label, style);
+        appendSegment(segments[0..], &count, safeDisplayText(frame_allocator, option.label), style);
         if (std.mem.eql(u8, option.id, "f")) {
             if (question.other_text) |value| {
                 appendSegment(segments[0..], &count, " = ", style);
-                appendSegment(segments[0..], &count, value, style);
+                appendSegment(segments[0..], &count, safeDisplayText(frame_allocator, value), style);
             }
         }
         selected_count += 1;
@@ -450,6 +471,47 @@ fn drawAnswerSummary(win: tui.Window, question: Question, row: usize, style: tui
     if (selected_count == 0) appendSegment(segments[0..], &count, "(none)", style);
 
     _ = win.print(segments[0..count], .{ .row_offset = @intCast(row), .col_offset = 1, .wrap = .none });
+}
+
+fn optionKey(index: usize) []const u8 {
+    return if (index < option_keys.len) option_keys[index] else "?";
+}
+
+/// Keep model- and operator-provided text single-line and UTF-8-safe before it
+/// reaches Vaxis. The question state keeps the original id/label for the
+/// response contract; only the borrowed display projection is normalized.
+fn safeDisplayText(allocator: std.mem.Allocator, value: []const u8) []const u8 {
+    if (value.len == 0) return value;
+    if (!std.unicode.utf8ValidateSlice(value)) return invalid_display_text;
+
+    var needs_copy = false;
+    for (value) |byte| {
+        if (byte < 0x20 or byte == 0x7f) {
+            needs_copy = true;
+            break;
+        }
+    }
+    if (!needs_copy) return value;
+
+    var normalized = std.array_list.Managed(u8).init(allocator);
+    defer normalized.deinit();
+    var pending_space = false;
+    for (value) |byte| {
+        if (byte < 0x20 or byte == 0x7f) {
+            pending_space = true;
+            continue;
+        }
+        if (pending_space and normalized.items.len > 0 and normalized.items[normalized.items.len - 1] != ' ') {
+            normalized.append(' ') catch return invalid_display_text;
+        }
+        normalized.append(byte) catch return invalid_display_text;
+        pending_space = false;
+    }
+    while (normalized.items.len > 0 and normalized.items[normalized.items.len - 1] == ' ') {
+        _ = normalized.pop();
+    }
+    if (normalized.items.len == 0) return invalid_display_text;
+    return normalized.toOwnedSlice() catch invalid_display_text;
 }
 
 fn truncate(value: []const u8, width: usize) []const u8 {
@@ -498,6 +560,13 @@ fn sliceBorrowedFromQuestionStatic(slice: []const u8) bool {
         " Questions",
         "› ",
         "✓ ",
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "?",
         ") ",
         " Other: ",
         " Review and submit · Tab from the last question",
@@ -654,4 +723,58 @@ test "question panel render cells keep state or frame-owned text through the fra
     state.confirming = true;
     state.draw(win, &input, styles, frame_allocator.allocator());
     try expectQuestionScreenTextOwnership(screen, &state, frame_storage[0..]);
+}
+
+test "question panel sanitizes untrusted text and survives clipped viewports" {
+    const allocator = std.testing.allocator;
+    var unicode = try tui.Unicode.init(allocator);
+    defer unicode.deinit(allocator);
+    var state = try State.initFromJson(allocator,
+        "{\"request_id\":\"call-safe\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Choose\\n a\\tpath\",\"options\":[{\"id\":\"server-choice\",\"label\":\"Fast\\r\\npath\"},{\"id\":\"safe-choice\",\"label\":\"Careful\"}]}]}",
+    );
+    defer state.deinit();
+    var input = TextInput.init(allocator, &unicode);
+    defer input.deinit();
+    const styles = DrawStyles{
+        .panel = .{},
+        .title = .{},
+        .prompt = .{},
+        .option = .{},
+        .selected = .{},
+        .hint = .{},
+        .input = .{},
+        .confirm = .{},
+    };
+
+    for ([_]u16{ 1, 2, 3 }) |rows| {
+        var screen = try tui.Screen.init(allocator, .{ .rows = rows, .cols = 64, .x_pixel = 0, .y_pixel = 0 });
+        defer screen.deinit(allocator);
+        const win = tui.Window{
+            .x_off = 0,
+            .y_off = 0,
+            .parent_x_off = 0,
+            .parent_y_off = 0,
+            .width = screen.width,
+            .height = screen.height,
+            .screen = &screen,
+            .unicode = &unicode,
+        };
+        var frame_storage: [4096]u8 = undefined;
+        var frame_allocator = std.heap.FixedBufferAllocator.init(&frame_storage);
+        state.draw(win, &input, styles, frame_allocator.allocator());
+        for (screen.buf) |cell| {
+            try std.testing.expect(std.unicode.utf8ValidateSlice(cell.char.grapheme));
+            try std.testing.expect(std.mem.indexOfAny(u8, cell.char.grapheme, "\r\n\t") == null);
+        }
+
+        state.confirming = true;
+        var confirm_storage: [4096]u8 = undefined;
+        var confirm_allocator = std.heap.FixedBufferAllocator.init(&confirm_storage);
+        state.draw(win, &input, styles, confirm_allocator.allocator());
+    }
+
+    state.questions.items[0].options.items[0].selected = true;
+    const response = try state.responseJson(allocator, false);
+    defer allocator.free(response);
+    try std.testing.expect(std.mem.indexOf(u8, response, "server-choice") != null);
 }
