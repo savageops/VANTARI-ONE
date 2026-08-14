@@ -1547,19 +1547,19 @@ test "agent system prompt teaches schema repair and file-tool roles" {
 
     try std.testing.expect(std.mem.indexOf(u8, prompt, "# Internal Runtime Guardrails") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "list_files discovers paths") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Example JSON: {\"pattern\":\"read_file\",\"path\":\"src\",\"glob\":\"*.zig\",\"max_results\":20}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "native provider tool schemas are the authoritative executable API") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "VAR1 built-in tools") == null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "search_files locates symbols or text") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "IX expression engine") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Do not invent rg flags") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "native IX expressions such as lit:needle") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "branchable tasks") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "required SITREP") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "one canonical parent-owned conclusion") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "messages.jsonl remains transcript truth") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Keep hidden runtime mechanics private") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "wait_agent accepts timeout_ms") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Use mode=argv with argv only") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "mode=powershell/shell/bash with command only") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "Select-String/Get-ChildItem") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Tool Protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "If execution returns a typed error") != null);
 }
 
 test "orchestrator prompt exposes model-selected collaboration and signal-driven continuation" {

@@ -139,8 +139,6 @@ pub fn buildAgentSystemPromptWithMemoryAndMode(
     );
     defer allocator.free(developer_prompt);
 
-    const catalog = try tools.renderCatalog(allocator, execution_context);
-    defer allocator.free(catalog);
     const memory_context = if (memory_policy.enabled)
         try memory.renderContext(
             allocator,
@@ -235,8 +233,8 @@ pub fn buildAgentSystemPromptWithMemoryAndMode(
         \\Five consolidated protocols. Each owns its concern; none restates another.
         \\
         \\## Evidence Protocol
-        \\Treat the catalog below as the authoritative executable API. It names the tools you have, their JSON schema, examples, usage hints, review risk, and availability. Each call must be a valid JSON object matching the declared schema exactly. Use only documented keys.
-        \\Capability protocol: if a catalog entry is unavailable, fail closed or choose another available tool; never invent hidden readers, search binaries, memory writers, shell fallbacks, or provider-visible tool names. Backend-only capability exists only behind an advertised tool or module-owned availability contract.
+        \\The native provider tool schemas are the authoritative executable API. They declare the available tool names and JSON fields for this turn. Each call must be a valid JSON object matching its schema exactly; use only declared keys.
+        \\Capability protocol: if a tool result reports unavailable, fail closed or choose another declared tool; never invent hidden readers, search binaries, memory writers, shell fallbacks, or provider-visible tool names. Backend-only capability exists only behind an advertised tool or module-owned availability contract.
         \\Never assert without evidence. Any claim you cannot source from a tool result, a file, or a child SITREP must be sourced before you assert it. Route a recon or research child to source it and wait on the SITREP instead of guessing or extrapolating.
         \\
         \\## Delegation Protocol
@@ -274,9 +272,9 @@ pub fn buildAgentSystemPromptWithMemoryAndMode(
         \\VANTARI tunes its own configuration for stability, quality, and performance. When you observe a recurring instability, adjust the relevant config knob: prompts.persona for voice, agent_routes.roles for per-agent thinking_mode, context for compaction thresholds, memory for recall budgets. The config is hot-loaded on the next turn — changes take effect immediately, no recompilation needed.
         \\When you identify a gap in your own capability, build the tool, agent, or plugin if you can prove the addition is correct. If ownership or proof is not yet yours, log a durable ticket via log_ticket with category, severity, evidence paths, and a proposed owner. Self-improvement evidence lives under .var/tickets/ and is never silently dropped.
         \\All work items are tracked as tickets with a full lifecycle — unassigned -> assigned -> in_progress -> completed -> closed. Create a ticket for any non-trivial task before starting. Transition tickets as work progresses. Use log_ticket with action:transition to update state with a reason. Long tasks must have ticket tracking for accuracy, recovery, and audit. Never start substantial work without a ticket; never leave a ticket in_progress when the work is done.
-        \\Workspace scaffold protocol: at session start, review .var/ for the canonical knowledge surfaces — research, plans, advice, roadmap, todos, changelog, docs, sessions. If the workspace is a project that warrants tracking and .var/ does not exist or is incomplete, scaffold it with init_workspace before doing substantive work. A missing knowledge surface is a drift signal, not permission to skip logging. Do not scaffold non-project directories — use judgment.
+        \\Workspace scaffold protocol: at session start, review .var/ for the canonical knowledge surfaces — research, plans, advice, roadmap, changelog, docs, tickets, sessions. If the workspace is a project that warrants tracking and .var/ does not exist or is incomplete, scaffold it with init_workspace before doing substantive work. A missing knowledge surface is a drift signal, not permission to skip logging. Do not scaffold non-project directories — use judgment.
         \\Knowledge logging protocol: every subagent that discovers findings, performs research, extracts data, or produces a plan MUST persist its results to the appropriate .var/ surface before returning its SITREP. Research -> .var/research/. Plans -> .var/plans/. Advice -> .var/advice/. Roadmap -> .var/roadmap/. Use knowledge_artifact with the matching surface. The orchestrator holds only the artifact index, never the full payloads.
-        \\Scheduling protocol: durable jobs live under .var/schedules/. Use schedule_job for recurring prompts, one-time delayed prompts, or shell commands. Use changelog_ledger to archive completed work. Prefer schedule_job over shell-based cron or sleep loops.
+        \\Scheduling protocol: durable jobs live under .var/schedules/. Use schedule_job for recurring prompts, one-time delayed prompts, or shell commands. Use changelog_ledger for ticket-linked completion evidence. Prefer schedule_job over shell-based cron or sleep loops.
         \\
         \\
     , .{
@@ -292,14 +290,14 @@ pub fn buildAgentSystemPromptWithMemoryAndMode(
     });
     try tools.skills.renderPromptCapsulesBudgeted(writer);
     if (memory_context.len > 0) try writer.print("\n{s}\n", .{memory_context});
-    try writer.print(
+    try writer.writeAll(
+        \\
+        \\# Tool Protocol
+        \\The provider request carries the native tool schemas for this turn. Treat those schemas as the single API surface: use the exact tool name and declared JSON fields, and do not reconstruct a second text catalog in the prompt.
+        \\Tool examples, dependency detail, and availability diagnostics are demand-loaded at the owning tool or operator surface. If execution returns a typed error or unavailable result, follow its bounded hint or choose another declared capability; do not guess.
         \\
         \\When the work is done, return a direct final answer. Never invent tool output, validation results, or file changes.
-        \\
-        \\{s}
-    , .{
-        catalog,
-    });
+    );
 
     return output.toOwnedSlice();
 }

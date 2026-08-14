@@ -79,9 +79,11 @@ test "prompt builder emits ordered guardrails and tool contract" {
     try std.testing.expect(std.mem.indexOf(u8, prompt, "paths are relative to the displayed workspace root") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "write_file may write the complete file") != null);
 
-    // Tool catalog + capsules.
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "- list_files:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, prompt, "- skill_info:") != null);
+    // Native provider tool schemas + demand-loaded capsules.
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "native provider tool schemas are the authoritative executable API") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "single API surface") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "VAR1 built-in tools") == null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "- list_files:") == null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "- planning-spec:") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "- insect:") != null);
     try std.testing.expect(std.mem.indexOf(u8, prompt, "Skills are reusable operating protocols") != null);
@@ -212,6 +214,6 @@ test "prompt profiles choose collaboration posture without executor branches" {
     try std.testing.expect(std.mem.indexOf(u8, hive, "Delegate the moment work is branchable") == null);
     try std.testing.expect(std.mem.indexOf(u8, quiet, "quiet, inspect, message, challenge, launch, queue, or wake") != null);
     try std.testing.expect(std.mem.indexOf(u8, hive, "quiet, inspect, message, challenge, launch, queue, or wake") != null);
-    try std.testing.expect(std.mem.indexOf(u8, quiet, "- send_agent_message:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, hive, "- send_agent_message:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, quiet, "# Tool Protocol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hive, "# Tool Protocol") != null);
 }
