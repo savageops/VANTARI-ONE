@@ -341,8 +341,14 @@ const ChatState = struct {
     }
 
     fn respondInput(self: *ChatState, cancelled: bool) !void {
-        const session_id = self.session_id orelse return;
         const active = self.input_state orelse return;
+        const session_id = self.session_id orelse {
+            // A replayed or failed turn can leave a request projection without
+            // a live session owner. It is not answerable; keeping the panel
+            // would trap the TUI in a dead input state.
+            self.clearInputRequest();
+            return;
+        };
         const request_id = active.request_id;
         const response_json = try active.responseJson(self.allocator, cancelled);
         defer self.allocator.free(response_json);
@@ -616,6 +622,7 @@ const ChatState = struct {
 
         const turn = self.executePromptTurn(prompt, vx, tty, loop, writer, input) catch |err| {
             self.status = "RPC_ERROR";
+            self.clearInputRequest();
             self.removeAssistantPlaceholder();
             const text = try std.fmt.allocPrint(self.allocator, "Transport failure: {s}", .{@errorName(err)});
             defer self.allocator.free(text);
@@ -627,6 +634,7 @@ const ChatState = struct {
 
         if (turn.failure_reason) |reason| {
             self.status = "FAILED";
+            self.clearInputRequest();
             self.removeAssistantPlaceholder();
             const text = try std.fmt.allocPrint(self.allocator, "Session {s} failed: {s}", .{ turn.session_id, reason });
             defer self.allocator.free(text);
@@ -634,6 +642,10 @@ const ChatState = struct {
             return;
         }
 
+        // A successful RPC can still race the final event notification. The
+        // returned session projection is the terminal boundary, so never leave
+        // an answer panel owned by a completed turn.
+        self.clearInputRequest();
         self.status = "READY";
         if (turn.output) |output| {
             if (!self.received_assistant_delta) {
@@ -1490,10 +1502,6 @@ const ChatState = struct {
             changed = true;
             switch (event) {
                 .key_press => |key| {
-                    if (key.matches('c', .{ .ctrl = true })) {
-                        try self.requestCancel(session_id);
-                        continue;
-                    }
                     if (self.input_state != null) {
                         const action = try self.input_state.?.handleKey(key, input);
                         switch (action) {
@@ -1501,6 +1509,10 @@ const ChatState = struct {
                             .cancel => try self.respondInput(true),
                             .consumed => {},
                         }
+                        continue;
+                    }
+                    if (key.matches('c', .{ .ctrl = true })) {
+                        try self.requestCancel(session_id);
                         continue;
                     }
                     if (key.matches(tui.Key.escape, .{})) {
@@ -2158,14 +2170,6 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                 }
 
                 if (state.input_state != null) {
-                    if (key.matches('c', .{ .ctrl = true })) {
-                        if (state.session_id) |session_id| {
-                            try state.requestCancel(session_id);
-                        } else {
-                            break;
-                        }
-                        continue;
-                    }
                     const action = try state.input_state.?.handleKey(key, &input);
                     switch (action) {
                         .submit => try state.respondInput(false),
@@ -5963,7 +5967,7 @@ test "tui log posture filters internal chat detail without dropping durable sequ
     try std.testing.expect(std.mem.indexOf(u8, full.messages.items[0].text, "search_files") != null);
 }
 
-test "tui question requests share one crash-safe panel in orchestrate and align" {
+test "tui question requests share one crash-safe panel in every prompt mode" {
     var state = ChatState{
         .allocator = std.testing.allocator,
         .client = undefined,
@@ -5977,7 +5981,7 @@ test "tui question requests share one crash-safe panel in orchestrate and align"
     defer state.deinit();
 
     const request = "{\"request_id\":\"call-panel\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Direction\",\"options\":[{\"id\":\"a\",\"label\":\"Fast\"},{\"id\":\"b\",\"label\":\"Careful\"}]},{\"id\":\"q2\",\"prompt\":\"Scope\",\"options\":[{\"id\":\"a\",\"label\":\"Local\"},{\"id\":\"b\",\"label\":\"Full\"}]}]}";
-    const modes = [_]prompt_modes.PromptMode{ .orchestrate, .@"align" };
+    const modes = [_]prompt_modes.PromptMode{ .orchestrate, .build, .@"align", .plan };
     for (modes) |mode| {
         state.prompt_mode = mode;
         state.last_event_seq = 0;
@@ -5994,6 +5998,32 @@ test "tui question requests share one crash-safe panel in orchestrate and align"
     try std.testing.expect(state.input_state == null);
     try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
     try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "invalid question") != null);
+}
+
+test "tui question panel cannot survive an orphaned or terminal turn" {
+    var state = ChatState{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .workspace_root = "workspace",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    const request = "{\"request_id\":\"call-orphan\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Choose\",\"options\":[{\"id\":\"a\",\"label\":\"One\"},{\"id\":\"b\",\"label\":\"Two\"}]}]}";
+    try state.beginInputRequest(request);
+    try std.testing.expect(state.input_state != null);
+    try state.respondInput(true);
+    try std.testing.expect(state.input_state == null);
+
+    state.session_id = try std.testing.allocator.dupe(u8, "session-question");
+    _ = try state.recordProgressEvent(1, "input_requested", request);
+    try std.testing.expect(state.input_state != null);
+    _ = try state.recordProgressEvent(2, protocol_events.turn_terminal_event_type, "{\"outcome\":\"failed\"}");
+    try std.testing.expect(state.input_state == null);
 }
 
 test "tui question panel survives the Vaxis render boundary in every prompt mode" {
