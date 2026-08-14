@@ -45,7 +45,7 @@ The explicit footer campaign is separate and small: `clients/footer_effects.zig`
 animates only the `orchestrate` token every three seconds, requests timed wakes
 only during its bounded sweep, and leaves the other prompt modes static.
 
-## Current question input lifecycle correction — 2026-08-14
+## Current question input lifecycle and event-loop correction — 2026-08-14
 
 The question panel now has a terminal ownership boundary in `ChatState`. A
 missing session owner clears an orphaned panel, `session/send` transport or
@@ -55,13 +55,20 @@ Ctrl-C routes through the existing `input/respond` cancellation path; it does no
 fall into the run-cancel path and cannot leave the TUI trapped behind a stale
 question.
 
+Both key ingress paths now call one `ChatState.handleQuestionKey` boundary.
+Controller, allocation, serialization, and `input/respond` failures stay inside
+the TUI loop, add one bounded recovery message when possible, and leave the
+question panel available for retry or explicit cancellation. The controller is
+still the one settings-style horizontal-row owner; no question poller or second
+input loop was added.
+
 The settings-style batch surface remains one controller: one horizontal row per
 question, horizontal options, and one review/submit boundary. `orchestrate`,
 `build`, `align`, and `plan` share it; root normal is the catalog/profile name,
-not a fifth `PromptMode`. Focused TUI Debug and ReleaseFast both pass `133/133`;
-full Debug passes `19/19` steps and `2,153/2,153` tests; source ReleaseFast
+not a fifth `PromptMode`. Focused TUI Debug and ReleaseFast both pass `135/135`;
+full Debug passes `19/19` steps and `2,165/2,165` tests; source ReleaseFast
 build passes `9/9`. The current source binary SHA-256 is
-`C53933B5259D5DE88447B431B01F5F2B123A3935DDBFB13F51A2A739CAFEE573`.
+`D22A6E617DEF01BDF323F4F4500C1F53AD54C1221CFE6A8A6413FCA6D7D1EDFE`.
 Installed promotion and provider-driven live question proof remain deferred;
 the preserved installed owner remains on
 `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
@@ -371,14 +378,18 @@ stays in State, static literals, or one frame arena until `vx.render`; the
 display projection also rejects invalid UTF-8/control text, preserves original
 response ids behind static `a`–`f` labels, and guards clipped header/divider/row
 slots. `orchestrate`, `build`, `align`, and `plan` share the controller. Root
-normal, root-agent, and orchestrator-only catalogs all retain `ask_user`; child
-profiles remain headless. Focused TUI is `132/132`, full Debug is
-`2,151/2,151`, and source ReleaseFast exits `0` at SHA-256
-`521FE17CC941C0CA34605FFEAADD27BA9B3DC5001847022A308AFFE45BA26DE7`;
-installed promotion remains intentionally deferred. Research:
-`.docs/research/2026-08-14-root-question-review-panel.md`,
-`.docs/research/2026-08-14-question-panel-consumer-hardening.md`, and
-`.docs/research/2026-08-14-question-panel-runtime-contract.md`.
+  normal, root-agent, and orchestrator-only catalogs all retain `ask_user`; child
+  profiles remain headless. Both idle and streaming key paths now use one
+  `ChatState.handleQuestionKey` recovery boundary for controller and
+  `input/respond` errors. Focused TUI is `135/135`, full Debug is
+  `2,165/2,165`, and source ReleaseFast exits `0` at SHA-256
+  `D22A6E617DEF01BDF323F4F4500C1F53AD54C1221CFE6A8A6413FCA6D7D1EDFE`;
+  installed promotion remains intentionally deferred. Research:
+  `.docs/research/2026-08-14-root-question-review-panel.md`,
+  `.docs/research/2026-08-14-question-panel-consumer-hardening.md`, and
+  `.docs/research/2026-08-14-question-panel-runtime-contract.md`,
+  `.docs/research/2026-08-14-question-panel-input-lifecycle.md`, and
+  `.docs/research/2026-08-14-question-panel-event-loop-recovery.md`.
 
 Move 60 is source-complete. The provider stream reader checks one typed abort
 hook before and after SSE/delta processing, adapters forward the hook, and the

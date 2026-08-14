@@ -384,6 +384,29 @@ const ChatState = struct {
         self.clearInputRequest();
     }
 
+    /// Keep an interactive question inside the TUI event loop. A question is
+    /// model-generated input, and its response transport is allowed to fail;
+    /// neither failure may unwind the client and turn a recoverable prompt
+    /// into a process crash. The panel remains active so the operator can
+    /// retry a response or cancel it explicitly.
+    fn handleQuestionKey(self: *ChatState, key: tui.Key, input: *TextInput) void {
+        if (self.input_state) |*active| {
+            const action = active.handleKey(key, input) catch {
+                self.add(.system, "Question input could not be applied; the panel remains active.") catch {};
+                return;
+            };
+            switch (action) {
+                .submit => self.respondInput(false) catch {
+                    self.add(.system, "Question response could not be sent; the panel remains active.") catch {};
+                },
+                .cancel => self.respondInput(true) catch {
+                    self.add(.system, "Question cancellation could not be sent; the panel remains active.") catch {};
+                },
+                .consumed => {},
+            }
+        }
+    }
+
     fn appendHistory(self: *ChatState, prompt: []const u8) !void {
         if (prompt.len == 0) return;
         const max_history = 1000;
@@ -1530,12 +1553,7 @@ const ChatState = struct {
             switch (event) {
                 .key_press => |key| {
                     if (self.input_state != null) {
-                        const action = try self.input_state.?.handleKey(key, input);
-                        switch (action) {
-                            .submit => try self.respondInput(false),
-                            .cancel => try self.respondInput(true),
-                            .consumed => {},
-                        }
+                        self.handleQuestionKey(key, input);
                         continue;
                     }
                     if (key.matches('c', .{ .ctrl = true })) {
@@ -2198,12 +2216,7 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                 }
 
                 if (state.input_state != null) {
-                    const action = try state.input_state.?.handleKey(key, &input);
-                    switch (action) {
-                        .submit => try state.respondInput(false),
-                        .cancel => try state.respondInput(true),
-                        .consumed => {},
-                    }
+                    state.handleQuestionKey(key, &input);
                     continue;
                 }
 
@@ -6184,6 +6197,38 @@ test "tui question panel survives the Vaxis render boundary in every prompt mode
         try draw(&vx, &writer.writer, &state, &input);
         try std.testing.expect(writer.written().len > 0);
         state.clearInputRequest();
+    }
+}
+
+test "tui question key routing stays inside the panel in every prompt mode" {
+    var state = ChatState{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .workspace_root = "workspace",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    var input = TextInput.init(std.testing.allocator, undefined);
+    defer input.deinit();
+    const request = "{\"request_id\":\"call-key-routing\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Direction\",\"options\":[{\"id\":\"a\",\"label\":\"Fast\"},{\"id\":\"b\",\"label\":\"Careful\"}]},{\"id\":\"q2\",\"prompt\":\"Scope\",\"options\":[{\"id\":\"a\",\"label\":\"Local\"},{\"id\":\"b\",\"label\":\"Full\"}]}]}";
+    const modes = [_]prompt_modes.PromptMode{ .orchestrate, .build, .@"align", .plan };
+    const down_key: tui.Key = .{ .codepoint = tui.Key.down };
+    const escape_key: tui.Key = .{ .codepoint = tui.Key.escape };
+
+    for (modes) |mode| {
+        state.prompt_mode = mode;
+        state.last_event_seq = 0;
+        try std.testing.expect(try state.recordProgressEvent(1, "input_requested", request));
+        state.handleQuestionKey(down_key, &input);
+        try std.testing.expect(state.input_state != null);
+        try std.testing.expectEqual(@as(usize, 1), state.input_state.?.question_index);
+        state.handleQuestionKey(escape_key, &input);
+        try std.testing.expect(state.input_state == null);
     }
 }
 

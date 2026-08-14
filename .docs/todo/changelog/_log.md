@@ -1,5 +1,21 @@
 # Execution Log
 
+## 2026-08-14 - Question panel event-loop recovery
+
+**Outcome:** Contained recoverable question-controller and `input/respond`
+failures at one `ChatState.handleQuestionKey` boundary shared by the idle and
+streaming TUI loops. The settings-style horizontal question panel, review/submit
+state, and single broker resolution path remain the only owners.
+
+- Focused TUI Debug and ReleaseFast pass `9/9` steps and `135/135` tests.
+- Full Debug passes `19/19` steps and `2,165/2,165` tests.
+- Source ReleaseFast passes `9/9`; source SHA-256 is
+  `D22A6E617DEF01BDF323F4F4500C1F53AD54C1221CFE6A8A6413FCA6D7D1EDFE`.
+- Installed promotion remains deferred; the preserved installed owner remains
+  on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+- Research and receipt: `.docs/research/2026-08-14-question-panel-event-loop-recovery.md`
+  and `.docs/todo/changelog/061-question-panel-event-loop-recovery.md`.
+
 ## 2026-08-14 - Typed context-compile diagnostics (Move 69)
 
 **Outcome:** Kept provider-context reconstruction in one compiler and made

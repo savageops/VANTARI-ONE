@@ -35,6 +35,10 @@ options stay horizontal, and submission is an explicit review boundary.
 - Treat malformed `input_requested` data as recoverable client input. Show one
   bounded system message and cancel the waiting run through a direct RPC helper;
   do not propagate the parse error through event replay.
+- Route both idle-loop and streaming-turn key events through one
+  `ChatState.handleQuestionKey` boundary. Contain controller and
+  `input/respond` failures so a recoverable question error cannot unwind the
+  TUI process; keep the panel available for retry or explicit cancellation.
 - Keep prompt modes behavioral only. `orchestrate` and `align` use the same
   question controller and broker path.
 
