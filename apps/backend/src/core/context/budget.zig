@@ -6,6 +6,10 @@ pub fn estimateText(text: []const u8) u64 {
     return (@as(u64, @intCast(text.len)) + 3) / 4;
 }
 
+pub fn promptWithinBudget(prompt: []const u8, budget_tokens: u64) bool {
+    return budget_tokens > 0 and estimateText(prompt) <= budget_tokens;
+}
+
 pub fn estimateChatMessages(messages: []const types.ChatMessage) u64 {
     var total: u64 = 0;
     for (messages) |message| {
@@ -88,6 +92,14 @@ test "context budget threshold respects ratio and reserve" {
     try std.testing.expectEqual(@as(u64, 750), thresholdTokens(policy));
     try std.testing.expect(!shouldCompact(749, policy));
     try std.testing.expect(shouldCompact(750, policy));
+}
+
+test "prompt budget uses the shared estimated token rule" {
+    const prompt = "12345678";
+    try std.testing.expectEqual(@as(u64, 2), estimateText(prompt));
+    try std.testing.expect(promptWithinBudget(prompt, 2));
+    try std.testing.expect(!promptWithinBudget(prompt, 1));
+    try std.testing.expect(!promptWithinBudget(prompt, 0));
 }
 
 test "windowBudget proves checkpoint + suffix is cheaper than full transcript" {

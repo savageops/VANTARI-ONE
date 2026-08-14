@@ -217,3 +217,69 @@ test "prompt profiles choose collaboration posture without executor branches" {
     try std.testing.expect(std.mem.indexOf(u8, quiet, "# Tool Protocol") != null);
     try std.testing.expect(std.mem.indexOf(u8, hive, "# Tool Protocol") != null);
 }
+
+fn hasTool(definitions: []const VAR1.shared.types.ToolDefinition, name: []const u8) bool {
+    for (definitions) |definition| {
+        if (std.mem.eql(u8, definition.name, name)) return true;
+    }
+    return false;
+}
+
+test "behavior matrix stays prompt-controlled across modes, tool routes, and budget" {
+    const allocator = std.testing.allocator;
+    const profiles = [_][]const u8{
+        "PROFILE terse: answer in compact useful bursts.",
+        "PROFILE detailed: explain decisions and evidence when it helps the operator.",
+        "PROFILE solo: stay inline unless independent work has clear leverage.",
+        "PROFILE orchestrated: delegate branchable work and converge the results.",
+        "PROFILE conservative: preserve context and prefer reversible evidence.",
+        "PROFILE aggressive: pursue the shortest proven path and compact stale detail.",
+        "PROFILE low-cadence: speak only at meaningful checkpoints.",
+        "PROFILE high-cadence: keep the operator updated at each meaningful milestone.",
+    };
+    const modes = [_]VAR1.core.prompts.PromptMode{ .orchestrate, .build, .@"align", .plan };
+    const routes = [_]VAR1.core.tool_runtime.ExecutionContext{
+        .{ .workspace_root = ".", .capability_profile_id = "root" },
+        .{ .workspace_root = ".", .capability_profile_id = "recon" },
+        .{ .workspace_root = ".", .orchestrator_only = true },
+    };
+
+    const root_tools = VAR1.core.tool_runtime.builtinDefinitionsForContext(routes[0]);
+    const recon_tools = VAR1.core.tool_runtime.builtinDefinitionsForContext(routes[1]);
+    const orchestrator_tools = VAR1.core.tool_runtime.builtinDefinitionsForContext(routes[2]);
+    try std.testing.expect(root_tools.len > recon_tools.len);
+    try std.testing.expect(hasTool(root_tools, "write_file"));
+    try std.testing.expect(!hasTool(recon_tools, "write_file"));
+    try std.testing.expect(hasTool(recon_tools, "skill_info"));
+    try std.testing.expect(hasTool(orchestrator_tools, "ask_user"));
+    try std.testing.expect(!hasTool(orchestrator_tools, "write_file"));
+
+    for (routes) |execution_context| {
+        for (profiles) |profile| {
+            var policy = VAR1.shared.types.PromptPolicy{
+                .persona = try allocator.dupe(u8, profile),
+            };
+            defer policy.deinit(allocator);
+
+            for (modes) |mode| {
+                const prompt = try VAR1.core.prompts.buildAgentSystemPromptWithOptions(
+                    allocator,
+                    execution_context,
+                    policy,
+                    .{ .enabled = false },
+                    "behavior matrix",
+                    mode,
+                    .{ .prompt_budget_tokens = VAR1.shared.types.default_prompt_budget_tokens },
+                );
+                defer allocator.free(prompt);
+
+                try std.testing.expect(std.mem.indexOf(u8, prompt, profile) != null);
+                try std.testing.expect(std.mem.indexOf(u8, prompt, "# Prompt Mode:") != null);
+                try std.testing.expect(std.mem.indexOf(u8, prompt, "# Skill Routing Decision Tree") != null);
+                try std.testing.expect(std.mem.indexOf(u8, prompt, "# Tool Protocol") != null);
+                try std.testing.expect(std.mem.indexOf(u8, prompt, "native provider tool schemas") != null);
+                try std.testing.expect(VAR1.core.context.budget.promptWithinBudget(prompt, VAR1.shared.types.default_prompt_budget_tokens));
+            }
+        }
+    }
+}

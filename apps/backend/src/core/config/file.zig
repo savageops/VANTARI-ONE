@@ -345,6 +345,7 @@ pub fn loadContextPolicy(
     policy.auto_compaction = try optionalBool(context, "auto_compaction", policy.auto_compaction);
     policy.manual_compaction = try optionalBool(context, "manual_compaction", policy.manual_compaction);
     policy.context_window_tokens = try optionalU64(context, "context_window_tokens", policy.context_window_tokens);
+    policy.prompt_budget_tokens = try optionalU64(context, "prompt_budget_tokens", policy.prompt_budget_tokens);
     policy.compact_at_ratio_milli = try optionalU16(context, "compact_at_ratio_milli", policy.compact_at_ratio_milli);
     policy.reserve_output_tokens = try optionalU64(context, "reserve_output_tokens", policy.reserve_output_tokens);
     policy.keep_recent_messages = try optionalUsize(context, "keep_recent_messages", policy.keep_recent_messages);
@@ -353,6 +354,7 @@ pub fn loadContextPolicy(
     policy.retry_on_provider_overflow = try optionalBool(context, "retry_on_provider_overflow", policy.retry_on_provider_overflow);
 
     if (policy.context_window_tokens == 0 or
+        policy.prompt_budget_tokens == 0 or
         policy.compact_at_ratio_milli == 0 or
         policy.compact_at_ratio_milli > 1000 or
         policy.reserve_output_tokens >= policy.context_window_tokens or
@@ -579,6 +581,7 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
             "auto_compaction",
             "manual_compaction",
             "context_window_tokens",
+            "prompt_budget_tokens",
             "compact_at_ratio_milli",
             "reserve_output_tokens",
             "keep_recent_messages",
@@ -591,6 +594,7 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
             "auto_compaction",
             "manual_compaction",
             "context_window_tokens",
+            "prompt_budget_tokens",
             "compact_at_ratio_milli",
             "reserve_output_tokens",
             "keep_recent_messages",

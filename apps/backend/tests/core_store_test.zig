@@ -202,7 +202,7 @@ test "canonical config overlays non-secret context policy" {
     defer std.testing.allocator.free(config_path);
 
     try VAR1.shared.fsutil.writeText(config_path,
-        \\{"version":1,"context":{"auto_compaction":false,"manual_compaction":true,"context_window_tokens":128000,"compact_at_ratio_milli":750,"reserve_output_tokens":4096,"keep_recent_messages":6,"max_entries_per_checkpoint":3,"aggressiveness_milli":500,"retry_on_provider_overflow":false}}
+        \\{"version":1,"context":{"auto_compaction":false,"manual_compaction":true,"context_window_tokens":128000,"prompt_budget_tokens":4096,"compact_at_ratio_milli":750,"reserve_output_tokens":4096,"keep_recent_messages":6,"max_entries_per_checkpoint":3,"aggressiveness_milli":500,"retry_on_provider_overflow":false}}
     );
 
     const policy = try VAR1.core.config_file.loadContextPolicy(std.testing.allocator, workspace_root, .{});
@@ -210,6 +210,7 @@ test "canonical config overlays non-secret context policy" {
     try std.testing.expect(!policy.auto_compaction);
     try std.testing.expect(policy.manual_compaction);
     try std.testing.expectEqual(@as(u64, 128_000), policy.context_window_tokens);
+    try std.testing.expectEqual(@as(u64, 4_096), policy.prompt_budget_tokens);
     try std.testing.expectEqual(@as(u16, 750), policy.compact_at_ratio_milli);
     try std.testing.expectEqual(@as(u64, 4_096), policy.reserve_output_tokens);
     try std.testing.expectEqual(@as(usize, 6), policy.keep_recent_messages);

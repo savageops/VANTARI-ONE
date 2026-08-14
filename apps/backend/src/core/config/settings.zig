@@ -52,6 +52,8 @@ pub fn parseContextPolicy(content: []const u8, defaults: types.ContextPolicy) !t
             policy.manual_compaction = try parseBool(value);
         } else if (std.mem.eql(u8, key, "context_window_tokens")) {
             policy.context_window_tokens = try parseUnsigned(u64, value);
+        } else if (std.mem.eql(u8, key, "prompt_budget_tokens")) {
+            policy.prompt_budget_tokens = try parseUnsigned(u64, value);
         } else if (std.mem.eql(u8, key, "compact_at_ratio_milli")) {
             policy.compact_at_ratio_milli = try parseRatioMilli(value);
         } else if (std.mem.eql(u8, key, "compact_at_ratio")) {
@@ -205,6 +207,7 @@ fn parseTomlStringScalar(allocator: std.mem.Allocator, value: []const u8) ![]u8 
 
 fn validate(policy: types.ContextPolicy) !void {
     if (policy.context_window_tokens == 0) return Error.InvalidValue;
+    if (policy.prompt_budget_tokens == 0) return Error.InvalidValue;
     if (policy.compact_at_ratio_milli == 0 or policy.compact_at_ratio_milli > 1000) return Error.InvalidValue;
     if (policy.reserve_output_tokens >= policy.context_window_tokens) return Error.InvalidValue;
     if (policy.keep_recent_messages == 0) return Error.InvalidValue;
@@ -232,6 +235,7 @@ test "settings parse context policy TOML" {
         \\auto_compaction = false
         \\manual_compaction = true
         \\context_window_tokens = 128000
+        \\prompt_budget_tokens = 4096
         \\compact_at_ratio = 0.75
         \\reserve_output_tokens = 4096
         \\keep_recent_messages = 6
@@ -244,6 +248,7 @@ test "settings parse context policy TOML" {
     try std.testing.expect(!policy.auto_compaction);
     try std.testing.expect(policy.manual_compaction);
     try std.testing.expectEqual(@as(u64, 128_000), policy.context_window_tokens);
+    try std.testing.expectEqual(@as(u64, 4_096), policy.prompt_budget_tokens);
     try std.testing.expectEqual(@as(u16, 750), policy.compact_at_ratio_milli);
     try std.testing.expectEqual(@as(u64, 4_096), policy.reserve_output_tokens);
     try std.testing.expectEqual(@as(usize, 6), policy.keep_recent_messages);

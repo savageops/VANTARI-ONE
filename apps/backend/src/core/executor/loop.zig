@@ -1081,13 +1081,14 @@ fn rebuildProviderBaseMessages(
     const hot_prompt_policy = config_file.loadPromptPolicy(allocator, config.workspace_root, config.prompt_policy) catch config.prompt_policy;
     defer hot_prompt_policy.deinit(allocator);
 
-    const system_prompt = try prompts.buildAgentSystemPromptWithMemoryAndMode(
+    const system_prompt = try prompts.buildAgentSystemPromptWithOptions(
         allocator,
         execution_context,
         hot_prompt_policy,
         config.memory_policy,
         session.prompt,
         prompt_mode,
+        .{ .prompt_budget_tokens = config.context_policy.prompt_budget_tokens },
     );
     defer allocator.free(system_prompt);
 

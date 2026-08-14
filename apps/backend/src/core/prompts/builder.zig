@@ -1,6 +1,7 @@
 const std = @import("std");
 const fsutil = @import("../../shared/fsutil.zig");
 const tools = @import("../tools/runtime.zig");
+const context_budget = @import("../context/budget.zig");
 const memory = @import("../memory/store.zig");
 const types = @import("../../shared/types.zig");
 
@@ -49,6 +50,13 @@ const default_developer_prompt =
 pub const Error = error{
     EmptyPromptLayer,
     PromptLayerUnavailable,
+    PromptBudgetExceeded,
+};
+
+pub const PromptBuildOptions = struct {
+    /// Estimated system-prompt budget. Native provider schemas are outside
+    /// this string and remain governed by the full context-window budget.
+    prompt_budget_tokens: u64 = types.default_prompt_budget_tokens,
 };
 
 /// Session-scoped behavioral lens. A mode changes the prompt layer only; it
@@ -120,6 +128,26 @@ pub fn buildAgentSystemPromptWithMemoryAndMode(
     memory_policy: types.MemoryPolicy,
     query: []const u8,
     prompt_mode: PromptMode,
+) ![]u8 {
+    return buildAgentSystemPromptWithOptions(
+        allocator,
+        execution_context,
+        prompt_policy,
+        memory_policy,
+        query,
+        prompt_mode,
+        .{},
+    );
+}
+
+pub fn buildAgentSystemPromptWithOptions(
+    allocator: std.mem.Allocator,
+    execution_context: tools.ExecutionContext,
+    prompt_policy: types.PromptPolicy,
+    memory_policy: types.MemoryPolicy,
+    query: []const u8,
+    prompt_mode: PromptMode,
+    options: PromptBuildOptions,
 ) ![]u8 {
     const system_prompt = try readPromptLayer(
         allocator,
@@ -205,9 +233,8 @@ pub fn buildAgentSystemPromptWithMemoryAndMode(
 
     // Envelope order: header -> current mode -> prompt mode -> identity -> persona -> guardrails
     // -> developer -> operator context -> operating core (5 consolidated protocols)
-    // -> capsules -> memory -> closing -> catalog.
-    // Identity-first ordering anchors the model before constraints. Catalog is
-    // last for high recency at the action boundary.
+    // -> capsules -> memory -> closing. Native provider schemas travel outside
+    // this string, so the prompt budget does not duplicate them.
     try writer.print(
         \\# VAR1 Prompt Envelope
         \\Workspace root: `{s}`
@@ -299,6 +326,10 @@ pub fn buildAgentSystemPromptWithMemoryAndMode(
         \\When the work is done, return a direct final answer. Never invent tool output, validation results, or file changes.
     );
 
+    if (!context_budget.promptWithinBudget(output.items, options.prompt_budget_tokens)) {
+        return Error.PromptBudgetExceeded;
+    }
+
     return output.toOwnedSlice();
 }
 
@@ -372,4 +403,31 @@ test "prompt envelope carries the selected operator log posture" {
     defer std.testing.allocator.free(system_prompt);
     try std.testing.expect(std.mem.indexOf(u8, system_prompt, "# Operator Log Level: silent") != null);
     try std.testing.expect(std.mem.indexOf(u8, system_prompt, "Do not narrate internal tools") != null);
+}
+
+test "prompt builder enforces the estimated system prompt budget" {
+    const allocator = std.testing.allocator;
+    const prompt = try buildAgentSystemPromptWithOptions(
+        allocator,
+        .{ .workspace_root = "." },
+        .{},
+        .{ .enabled = false },
+        "budget proof",
+        .orchestrate,
+        .{ .prompt_budget_tokens = types.default_prompt_budget_tokens },
+    );
+    defer allocator.free(prompt);
+    try std.testing.expect(context_budget.promptWithinBudget(prompt, types.default_prompt_budget_tokens));
+    try std.testing.expectError(
+        Error.PromptBudgetExceeded,
+        buildAgentSystemPromptWithOptions(
+            allocator,
+            .{ .workspace_root = "." },
+            .{},
+            .{ .enabled = false },
+            "budget pressure",
+            .orchestrate,
+            .{ .prompt_budget_tokens = 64 },
+        ),
+    );
 }

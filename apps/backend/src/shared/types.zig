@@ -122,10 +122,16 @@ pub const Config = struct {
     }
 };
 
+pub const default_prompt_budget_tokens: u64 = 8_192;
+
 pub const ContextPolicy = struct {
     auto_compaction: bool = true,
     manual_compaction: bool = true,
     context_window_tokens: u64 = 128_000,
+    /// Estimated token ceiling for the assembled provider-facing system
+    /// prompt. Native provider tool schemas are sent separately and are not
+    /// counted here; the full message-window budget still owns them.
+    prompt_budget_tokens: u64 = default_prompt_budget_tokens,
     compact_at_ratio_milli: u16 = 850,
     reserve_output_tokens: u64 = 8_192,
     keep_recent_messages: usize = 8,
