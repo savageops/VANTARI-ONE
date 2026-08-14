@@ -3649,6 +3649,24 @@ test "abandoned write intent (reserved without commit) is detected at cold start
         session.id,
     );
     try std.testing.expectEqual(@as(usize, 2), abandoned);
+
+    const second_pass = try VAR1.core.session_store.reconcileAbandonedIntents(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+    );
+    try std.testing.expectEqual(@as(usize, 0), second_pass);
+
+    const intents = try VAR1.core.session_store.readWriteIntents(std.testing.allocator, workspace_root, session.id);
+    defer {
+        for (intents) |e| e.deinit(std.testing.allocator);
+        std.testing.allocator.free(intents);
+    }
+    var abandoned_rows: usize = 0;
+    for (intents) |entry| {
+        if (std.mem.eql(u8, entry.status, "abandoned")) abandoned_rows += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), abandoned_rows);
 }
 
 test "write intent ledger is append-only and survives cold start" {

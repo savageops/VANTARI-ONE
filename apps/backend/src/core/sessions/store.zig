@@ -1628,6 +1628,28 @@ pub fn commitWriteIntent(
     output.deinit();
 }
 
+/// Close a reserved intent that had no commit when a new owner inspected the
+/// session. The ledger stays append-only: the abandoned row is the terminal
+/// reconciliation evidence and does not pretend the mutation was rolled back.
+pub fn abandonWriteIntent(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    intent_id: []const u8,
+) !void {
+    const path = try intentsFilePath(allocator, workspace_root, session_id);
+    defer allocator.free(path);
+
+    var output = std.array_list.Managed(u8).init(allocator);
+    errdefer output.deinit();
+    try output.writer().print(
+        "{{\"id\":{f},\"status\":\"abandoned\",\"reason\":\"cold_start\",\"abandoned_at_ms\":{d}}}\n",
+        .{ std.json.fmt(intent_id, .{}), std.time.milliTimestamp() },
+    );
+    try appendJsonlRecord(path, output.items);
+    output.deinit();
+}
+
 /// A parsed write-intent entry from the ledger.
 pub const IntentEntry = struct {
     id: []u8,
@@ -1718,21 +1740,37 @@ pub fn reconcileAbandonedIntents(
     }
 
     var abandoned: usize = 0;
-    for (intents) |entry| {
+    for (intents, 0..) |entry, index| {
         if (!std.mem.eql(u8, entry.status, "reserved")) continue;
 
-        // Check if a later "committed" entry with the same id exists.
-        var committed = false;
+        // A committed or previously reconciled abandoned entry closes the
+        // reservation. Repeated cold starts must be idempotent.
+        var terminal = false;
         for (intents) |other| {
             if (std.mem.eql(u8, other.id, entry.id) and
-                std.mem.eql(u8, other.status, "committed"))
+                (std.mem.eql(u8, other.status, "committed") or
+                    std.mem.eql(u8, other.status, "abandoned")))
             {
-                committed = true;
+                terminal = true;
                 break;
             }
         }
 
-        if (!committed) abandoned += 1;
+        if (terminal) continue;
+
+        // Duplicate reserved rows for one provider call do not produce
+        // duplicate terminal evidence. The first reservation owns the close.
+        var duplicate = false;
+        for (intents[0..index]) |prior| {
+            if (std.mem.eql(u8, prior.id, entry.id) and std.mem.eql(u8, prior.status, "reserved")) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) continue;
+
+        try abandonWriteIntent(allocator, workspace_root, session_id, entry.id);
+        abandoned += 1;
     }
 
     return abandoned;
@@ -1865,7 +1903,8 @@ test "session access scope survives cold read and legacy records stay contained"
     defer legacy_session.deinit(allocator);
     const legacy_path = try sessionFilePath(allocator, workspace, legacy_session.id);
     defer allocator.free(legacy_path);
-    try fsutil.writeText(legacy_path,
+    try fsutil.writeText(
+        legacy_path,
         "{\"id\":\"session-legacy-scope-0123456789abcdef\",\"prompt\":\"legacy scope\",\"status\":\"initialized\",\"created_at_ms\":1,\"updated_at_ms\":1}\n",
     );
 

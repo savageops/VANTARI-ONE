@@ -1435,23 +1435,28 @@ fn handleSessionGet(server: *Server, params: ?std.json.Value) ![]u8 {
 }
 
 fn reconcileStaleRunningSession(server: *Server, session: *types.SessionRecord) !void {
-    if (session.status != .running) return;
-    const persisted_terminal = try store.readCurrentTurnTerminal(server.allocator, server.config.workspace_root, session.id);
-    defer if (persisted_terminal) |terminal| terminal.deinit(server.allocator);
-    if (persisted_terminal) |terminal| {
-        try commitAndEmitTurnTerminal(server, session, terminal.run_seq, .{
-            .outcome = terminal.outcome,
-            .detail = terminal.detail,
-        });
-        return;
-    }
-    if (!(try isStaleUnownedRunningSession(server, session))) return;
+    if (session.status == .running) {
+        const persisted_terminal = try store.readCurrentTurnTerminal(server.allocator, server.config.workspace_root, session.id);
+        defer if (persisted_terminal) |terminal| terminal.deinit(server.allocator);
+        if (persisted_terminal) |terminal| {
+            try commitAndEmitTurnTerminal(server, session, terminal.run_seq, .{
+                .outcome = terminal.outcome,
+                .detail = terminal.detail,
+            });
+        } else {
+            if (!(try isStaleUnownedRunningSession(server, session))) return;
 
-    const failure_reason = "Session was marked running but no active kernel execution owns it.";
-    try commitAndEmitTurnTerminal(server, session, null, .{
-        .outcome = .failed,
-        .detail = failure_reason,
-    });
+            const failure_reason = "Session was marked running but no active kernel execution owns it.";
+            try commitAndEmitTurnTerminal(server, session, null, .{
+                .outcome = .failed,
+                .detail = failure_reason,
+            });
+        }
+    }
+
+    // Only non-running or proven-stale sessions are safe to reconcile. An
+    // active owner may still be between reservation and commit.
+    _ = try store.reconcileAbandonedIntents(server.allocator, server.config.workspace_root, session.id);
 }
 
 fn commitAndEmitTurnTerminal(

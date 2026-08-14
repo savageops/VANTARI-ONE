@@ -434,67 +434,69 @@ pub fn executeWithRunner(
     tool_call: types.ToolCall,
     runner: CommandRunner,
 ) ![]u8 {
-    try ensureToolAllowed(execution_context, tool_call.name);
+    var tool_execution_context = execution_context;
+    tool_execution_context.tool_call_id = tool_call.id;
+    try ensureToolAllowed(tool_execution_context, tool_call.name);
 
     if (std.mem.eql(u8, tool_call.name, "list_files")) {
-        return list_files.execute(allocator, execution_context, tool_call.arguments_json, runner);
+        return list_files.execute(allocator, tool_execution_context, tool_call.arguments_json, runner);
     }
     if (std.mem.eql(u8, tool_call.name, "search_files")) {
-        return search_files.execute(allocator, execution_context, tool_call.arguments_json, runner);
+        return search_files.execute(allocator, tool_execution_context, tool_call.arguments_json, runner);
     }
     if (std.mem.eql(u8, tool_call.name, "read_file")) {
-        return read_file.execute(allocator, execution_context, tool_call.arguments_json, runner);
+        return read_file.execute(allocator, tool_execution_context, tool_call.arguments_json, runner);
     }
     if (std.mem.eql(u8, tool_call.name, "write_file")) {
-        return write_file.execute(allocator, execution_context, tool_call.arguments_json, runner);
+        return write_file.execute(allocator, tool_execution_context, tool_call.arguments_json, runner);
     }
     if (std.mem.eql(u8, tool_call.name, "append_file")) {
-        return append_file.execute(allocator, execution_context, tool_call.arguments_json, runner);
+        return append_file.execute(allocator, tool_execution_context, tool_call.arguments_json, runner);
     }
     if (std.mem.eql(u8, tool_call.name, "replace_in_file")) {
-        return replace_in_file.execute(allocator, execution_context, tool_call.arguments_json, runner);
+        return replace_in_file.execute(allocator, tool_execution_context, tool_call.arguments_json, runner);
     }
     if (std.mem.eql(u8, tool_call.name, "shell_exec")) {
-        return shell_exec.executeToolCall(allocator, execution_context, tool_call.arguments_json, runner, tool_call.id);
+        return shell_exec.executeToolCall(allocator, tool_execution_context, tool_call.arguments_json, runner, tool_call.id);
     }
     if (std.mem.eql(u8, tool_call.name, "eval")) {
-        return eval_tool.execute(allocator, execution_context, tool_call.arguments_json, runner);
+        return eval_tool.execute(allocator, tool_execution_context, tool_call.arguments_json, runner);
     }
     if (std.mem.eql(u8, tool_call.name, "schedule_job")) {
-        return schedule_job.execute(allocator, execution_context, tool_call.arguments_json);
+        return schedule_job.execute(allocator, tool_execution_context, tool_call.arguments_json);
     }
     if (std.mem.eql(u8, tool_call.name, "log_ticket")) {
-        return log_ticket.execute(allocator, execution_context, tool_call.arguments_json);
+        return log_ticket.execute(allocator, tool_execution_context, tool_call.arguments_json);
     }
     if (std.mem.eql(u8, tool_call.name, "list_processes")) {
-        return list_processes.execute(allocator, execution_context, tool_call.arguments_json);
+        return list_processes.execute(allocator, tool_execution_context, tool_call.arguments_json);
     }
     if (std.mem.eql(u8, tool_call.name, "session_summaries")) {
-        return session_summaries.execute(allocator, execution_context, tool_call.arguments_json);
+        return session_summaries.execute(allocator, tool_execution_context, tool_call.arguments_json);
     }
     if (std.mem.eql(u8, tool_call.name, "update_session_summary")) {
-        return update_session_summary.execute(allocator, execution_context, tool_call.arguments_json);
+        return update_session_summary.execute(allocator, tool_execution_context, tool_call.arguments_json);
     }
     if (std.mem.eql(u8, tool_call.name, "skill_info")) {
         return skills.execute(allocator, tool_call.arguments_json);
     }
     if (memory.handles(tool_call.name)) {
-        return memory.execute(allocator, execution_context, tool_call.name, tool_call.arguments_json);
+        return memory.execute(allocator, tool_execution_context, tool_call.name, tool_call.arguments_json);
     }
     if (agent_message.handles(tool_call.name)) {
-        return agent_message.execute(allocator, execution_context, tool_call.arguments_json, tool_call.id);
+        return agent_message.execute(allocator, tool_execution_context, tool_call.arguments_json, tool_call.id);
     }
     if (ask_user.handles(tool_call.name)) {
-        return ask_user.execute(allocator, execution_context, tool_call.arguments_json, tool_call.id);
+        return ask_user.execute(allocator, tool_execution_context, tool_call.arguments_json, tool_call.id);
     }
     if (dap_tool.handles(tool_call.name)) {
-        return dap_tool.execute(allocator, execution_context, tool_call.name, tool_call.arguments_json, runner);
+        return dap_tool.execute(allocator, tool_execution_context, tool_call.name, tool_call.arguments_json, runner);
     }
     if (workspace_state_tools.handles(tool_call.name)) {
-        return workspace_state_tools.execute(allocator, execution_context.workspace_root, tool_call.name, tool_call.arguments_json, runner);
+        return workspace_state_tools.execute(allocator, tool_execution_context.workspace_root, tool_call.name, tool_call.arguments_json, runner);
     }
     if (agents.handles(tool_call.name)) {
-        return agents.execute(allocator, execution_context, tool_call.name, tool_call.arguments_json);
+        return agents.execute(allocator, tool_execution_context, tool_call.name, tool_call.arguments_json);
     }
 
     return Error.UnknownTool;

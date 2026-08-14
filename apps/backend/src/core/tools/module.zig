@@ -1,5 +1,6 @@
 const std = @import("std");
 const agent_scope = @import("../agents/scope.zig");
+const session_store = @import("../sessions/store.zig");
 const fsutil = @import("../../shared/fsutil.zig");
 const types = @import("../../shared/types.zig");
 
@@ -582,6 +583,9 @@ pub const ExecutionContext = struct {
     /// used by session-scoped tools (update_session_summary) to write into
     /// their own summary ledger row.
     session_id: ?[]const u8 = null,
+    /// Provider tool-call identity for durable mutation evidence. The runtime
+    /// fills this immediately before dispatch; detached tool tests may omit it.
+    tool_call_id: ?[]const u8 = null,
     parent_session_id: ?[]const u8 = null,
     agent_service: ?AgentService = null,
     input_service: InputService = .{},
@@ -715,6 +719,53 @@ pub const FileSnapshot = struct {
         if (self.sha256_hex) |hash| allocator.free(hash);
     }
 };
+
+/// Reserve a write mutation when the call belongs to a durable session. Direct
+/// detached tool calls remain usable for tests and diagnostics; real executor
+/// calls always have both session and provider tool-call identities.
+pub const WriteIntent = struct {
+    session_id: []const u8,
+    id: []const u8,
+};
+
+pub fn reserveFileIntent(
+    allocator: std.mem.Allocator,
+    execution_context: ExecutionContext,
+    tool_name: []const u8,
+    resolved_path: []const u8,
+    before_sha256: ?[]const u8,
+) !?WriteIntent {
+    const session_id = execution_context.session_id orelse return null;
+    const tool_call_id = execution_context.tool_call_id orelse return null;
+    try session_store.reserveWriteIntent(
+        allocator,
+        execution_context.workspace_root,
+        session_id,
+        tool_call_id,
+        tool_name,
+        resolved_path,
+        before_sha256,
+    );
+    return .{ .session_id = session_id, .id = tool_call_id };
+}
+
+pub fn commitFileIntent(
+    allocator: std.mem.Allocator,
+    execution_context: ExecutionContext,
+    intent: ?WriteIntent,
+    after_sha256: ?[]const u8,
+    bytes_written: usize,
+) !void {
+    const reserved = intent orelse return;
+    try session_store.commitWriteIntent(
+        allocator,
+        execution_context.workspace_root,
+        reserved.session_id,
+        reserved.id,
+        after_sha256,
+        bytes_written,
+    );
+}
 
 pub const FileEffectAction = enum {
     write_file,

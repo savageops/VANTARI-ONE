@@ -46,12 +46,20 @@ pub fn execute(
     const before = try module.captureFileSnapshot(allocator, file_path);
     defer before.deinit(allocator);
     try module.requireFileInspection(execution_context, file_path, before.exists);
+    const intent = try module.reserveFileIntent(
+        allocator,
+        execution_context,
+        definition.name,
+        file_path,
+        before.sha256_hex,
+    );
 
     try fsutil.writeText(file_path, parsed.value.content);
-    try module.recordFileInspection(allocator, execution_context, file_path, true);
 
     const after = try module.fileSnapshotFromContents(allocator, true, parsed.value.content);
     defer after.deinit(allocator);
+    try module.commitFileIntent(allocator, execution_context, intent, after.sha256_hex, parsed.value.content.len);
+    try module.recordFileInspection(allocator, execution_context, file_path, true);
 
     const summary = try std.fmt.allocPrint(
         allocator,

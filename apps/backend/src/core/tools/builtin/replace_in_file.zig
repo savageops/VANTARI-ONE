@@ -82,8 +82,14 @@ pub fn execute(
 
     if (replace_result.replacements == 0) return module.Error.PatternNotFound;
 
+    const intent = try module.reserveFileIntent(
+        allocator,
+        execution_context,
+        definition.name,
+        file_path,
+        before.sha256_hex,
+    );
     try fsutil.writeText(file_path, replace_result.contents);
-    try module.recordFileInspection(allocator, execution_context, file_path, true);
 
     // Include the new content hash tag in the response so the model can
     // chain subsequent edits without re-reading.
@@ -92,6 +98,8 @@ pub fn execute(
 
     const after = try module.fileSnapshotFromContents(allocator, true, replace_result.contents);
     defer after.deinit(allocator);
+    try module.commitFileIntent(allocator, execution_context, intent, after.sha256_hex, replace_result.replacements);
+    try module.recordFileInspection(allocator, execution_context, file_path, true);
 
     const summary = try std.fmt.allocPrint(
         allocator,

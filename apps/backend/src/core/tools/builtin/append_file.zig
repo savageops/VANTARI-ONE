@@ -56,9 +56,15 @@ pub fn execute(
     const before = try module.fileSnapshotFromContents(allocator, before_exists, before_contents);
     defer before.deinit(allocator);
     try module.requireFileInspection(execution_context, file_path, before_exists);
+    const intent = try module.reserveFileIntent(
+        allocator,
+        execution_context,
+        definition.name,
+        file_path,
+        before.sha256_hex,
+    );
 
     try fsutil.appendText(file_path, parsed.value.content);
-    try module.recordFileInspection(allocator, execution_context, file_path, true);
 
     const after = try module.fileSnapshotFromParts(
         allocator,
@@ -67,6 +73,8 @@ pub fn execute(
         &.{ before_contents, parsed.value.content },
     );
     defer after.deinit(allocator);
+    try module.commitFileIntent(allocator, execution_context, intent, after.sha256_hex, parsed.value.content.len);
+    try module.recordFileInspection(allocator, execution_context, file_path, true);
 
     const summary = try std.fmt.allocPrint(
         allocator,

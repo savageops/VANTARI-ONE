@@ -147,6 +147,17 @@ pub fn runPromptWithOptions(
         try store.initSession(allocator, config.workspace_root, prompt);
     defer session.deinit(allocator);
 
+    // A prior owner may have died after reserving a file mutation. Close that
+    // nonterminal evidence before this execution becomes the new owner.
+    const abandoned_write_intents = if (session.status == .running)
+        0
+    else
+        try store.reconcileAbandonedIntents(
+            allocator,
+            config.workspace_root,
+            session.id,
+        );
+
     // Turn-end freshness gate anchor: any summary row updated after this
     // instant is evidence the agent satisfied the mandatory pre-turn-end
     // update (AGENTS.md summary discipline). Rows older than this trigger
@@ -167,6 +178,23 @@ pub fn runPromptWithOptions(
         "VAR1 session initialized.",
         session.status,
     );
+    if (abandoned_write_intents > 0) {
+        const reconciliation = try std.fmt.allocPrint(
+            allocator,
+            "Reconciled {d} abandoned write intent{s} at cold start.",
+            .{ abandoned_write_intents, if (abandoned_write_intents == 1) "" else "s" },
+        );
+        defer allocator.free(reconciliation);
+        try recordSessionEvent(
+            allocator,
+            config.workspace_root,
+            options.hooks,
+            session.id,
+            "write_intents_reconciled",
+            reconciliation,
+            session.status,
+        );
+    }
     try docs_sync.writePending(allocator, config.workspace_root, .{
         .session_id = session.id,
         .status = types.statusLabel(session.status),

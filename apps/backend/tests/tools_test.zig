@@ -6,21 +6,37 @@ fn tmpWorkspacePath(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u
     return std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
 }
 
-fn makeToolCall(
+fn makeToolCallWithId(
     allocator: std.mem.Allocator,
+    id: []const u8,
     name: []const u8,
     arguments_json: []const u8,
 ) !VAR1.shared.types.ToolCall {
     return .{
-        .id = try allocator.dupe(u8, "call-1"),
+        .id = try allocator.dupe(u8, id),
         .name = try allocator.dupe(u8, name),
         .arguments_json = try allocator.dupe(u8, arguments_json),
     };
 }
 
+fn makeToolCall(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    arguments_json: []const u8,
+) !VAR1.shared.types.ToolCall {
+    return makeToolCallWithId(allocator, "call-1", name, arguments_json);
+}
+
 fn execCtx(workspace_root: []const u8) VAR1.core.tool_runtime.ExecutionContext {
     return .{
         .workspace_root = workspace_root,
+    };
+}
+
+fn sessionExecCtx(workspace_root: []const u8, session_id: []const u8) VAR1.core.tool_runtime.ExecutionContext {
+    return .{
+        .workspace_root = workspace_root,
+        .session_id = session_id,
     };
 }
 
@@ -406,6 +422,56 @@ test "file tools can create append replace and read within the workspace" {
     try std.testing.expect(std.mem.indexOf(u8, replace_output, "\"replacements\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, read_output, "1: alpha") != null);
     try std.testing.expect(std.mem.indexOf(u8, read_output, "2: gamma") != null);
+}
+
+test "real write tools leave committed intent evidence in the owning session" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "write evidence");
+    defer session.deinit(std.testing.allocator);
+
+    var write_call = try makeToolCallWithId(std.testing.allocator, "call-write", "write_file", "{\"path\":\"notes/evidence.txt\",\"content\":\"alpha\\n\"}");
+    defer write_call.deinit(std.testing.allocator);
+    const write_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, sessionExecCtx(workspace_root, session.id), write_call);
+    defer std.testing.allocator.free(write_output);
+
+    var append_call = try makeToolCallWithId(std.testing.allocator, "call-append", "append_file", "{\"path\":\"notes/evidence.txt\",\"content\":\"beta\\n\"}");
+    defer append_call.deinit(std.testing.allocator);
+    const append_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, sessionExecCtx(workspace_root, session.id), append_call);
+    defer std.testing.allocator.free(append_output);
+
+    var replace_call = try makeToolCallWithId(std.testing.allocator, "call-replace", "replace_in_file", "{\"path\":\"notes/evidence.txt\",\"old_text\":\"beta\",\"new_text\":\"gamma\"}");
+    defer replace_call.deinit(std.testing.allocator);
+    const replace_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, sessionExecCtx(workspace_root, session.id), replace_call);
+    defer std.testing.allocator.free(replace_output);
+
+    const intents = try VAR1.core.session_store.readWriteIntents(std.testing.allocator, workspace_root, session.id);
+    defer {
+        for (intents) |entry| entry.deinit(std.testing.allocator);
+        std.testing.allocator.free(intents);
+    }
+    try std.testing.expectEqual(@as(usize, 6), intents.len);
+    try std.testing.expectEqualStrings("reserved", intents[0].status);
+    try std.testing.expectEqualStrings("committed", intents[1].status);
+    try std.testing.expectEqualStrings("reserved", intents[2].status);
+    try std.testing.expectEqualStrings("committed", intents[3].status);
+    try std.testing.expectEqualStrings("reserved", intents[4].status);
+    try std.testing.expectEqualStrings("committed", intents[5].status);
+    try std.testing.expectEqualStrings(write_call.id, intents[0].id);
+    try std.testing.expectEqualStrings("write_file", intents[0].tool.?);
+    try std.testing.expectEqualStrings(append_call.id, intents[2].id);
+    try std.testing.expectEqualStrings("append_file", intents[2].tool.?);
+    try std.testing.expectEqualStrings(replace_call.id, intents[4].id);
+    try std.testing.expectEqualStrings("replace_in_file", intents[4].tool.?);
+    try std.testing.expect(intents[1].after_sha256 != null);
+    try std.testing.expect(intents[3].after_sha256 != null);
+    try std.testing.expect(intents[5].after_sha256 != null);
+    try std.testing.expect(std.mem.indexOf(u8, write_output, "\"effect\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, append_output, "\"effect\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replace_output, "\"effect\":") != null);
 }
 
 test "append primitive preserves existing file content" {
