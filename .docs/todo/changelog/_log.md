@@ -1,5 +1,127 @@
 # Execution Log
 
+## 2026-08-14 - Stable message IDs and compaction ranges (Move 67)
+
+**Outcome:** Closed the existing session/context identity seam with a cold
+replay regression and kept the append-only owners unchanged.
+
+- The session store retains generated `msg-<seq>` IDs and deterministic explicit
+  delivery IDs through replay; repeated explicit IDs append once.
+- Compaction appends only to `context.jsonl`; `messages.jsonl` stays byte-identical.
+- Checkpoints retain their identity and inclusive `source_seq_start`,
+  `source_seq_end`, and `first_kept_seq` ranges. Provider reconstruction uses
+  the summary plus exactly the first-kept raw suffix.
+- Debug passes `19/19` build steps and `2,155/2,155` tests. Source ReleaseFast
+  passes `9/9`; source SHA-256 remains
+  `CA61A2DD503C0A5A70850AB12A809DE43F471B3ED86FF46DF439A50F8B89BC0D`.
+- Installed promotion remains deferred; automatic compaction remains gated by
+  later token-accounting and cold-start recovery moves.
+- Research and receipt: `.docs/research/2026-08-14-message-identity-compaction-ranges.md`
+  and `.docs/todo/changelog/058-stable-message-ids-compaction-ranges.md`.
+
+## 2026-08-14 - Prompt budget and behavior matrix (Move 66)
+
+**Outcome:** Added one bounded prompt-assembly owner and proved behavior
+personalization through prompt layers across modes, profiles, and tool routes.
+
+- `context.prompt_budget_tokens` defaults to `8192` and is loaded through the
+  existing context policy/config owner.
+- `builder.zig` enforces the shared estimated prompt budget before provider
+  dispatch and returns `PromptBudgetExceeded`; it never silently truncates
+  prompt layers.
+- Prompt tests cover `orchestrate`, `build`, `align`, and `plan`, plus
+  terse/detailed, solo/orchestrated, conservative/aggressive, and low/high
+  cadence profiles across root, recon, and orchestrator tool definitions.
+- Native provider schemas remain the model-facing API; no executor branch,
+  provider-specific prompt path, or prompt-side registry was added.
+- Debug passes `19/19` build steps and `2,154/2,154` tests. Source ReleaseFast
+  passes `9/9`; source SHA-256 is
+  `CA61A2DD503C0A5A70850AB12A809DE43F471B3ED86FF46DF439A50F8B89BC0D`.
+- Installed promotion remains deferred by operator instruction; exact provider
+  token accounting remains a later context-telemetry boundary.
+- Research and receipt: `.docs/research/2026-08-14-prompt-budget-behavior-matrix.md`
+  and `.docs/todo/changelog/057-prompt-budget-behavior-matrix.md`.
+
+## 2026-08-14 - Native tool schema prompt boundary (Move 65)
+
+**Outcome:** Removed the duplicate full tool catalog from the model-facing
+prompt while preserving the native provider schema and explicit diagnostics.
+
+- `builder.zig` no longer calls `tools.renderCatalog`; the provider request's
+  native name/description/parameters schemas are the single tool API.
+- The compact Tool Protocol points to declared schemas and typed execution
+  hints. System/developer/persona/guardrail/user-context/mode layers remain
+  hot-loaded behavior owners; skill bodies remain demand-loaded via `skill_info`.
+- Stale `.var/todos` and generic archive wording is removed from the prompt.
+  `tools` and `tools --json` diagnostic surfaces remain explicit owners.
+- Debug passes `19/19` build steps and `2,150/2,150` tests. Source ReleaseFast
+  passes `9/9`; source SHA-256 is
+  `702DD2CB1A067246E82D8670F0F33FD322FD4178C271AF11E712A110151783D3`.
+- Installed promotion remains deferred by operator instruction; the live owner
+  process pair was preserved.
+- Research and receipt: `.docs/research/2026-08-14-native-tool-schema-prompt-boundary.md`
+  and `.docs/todo/changelog/056-native-tool-schema-prompt-boundary.md`.
+
+## 2026-08-14 - Ticket-only work lifecycle (Move 64)
+
+**Outcome:** Closed the duplicate work-state boundary without adding a new
+  lifecycle owner.
+
+- Tickets now own work identity, queue admission, repair, and terminal state.
+  Session summaries remain bounded handoff projections; plans, research,
+  advice, roadmap, and changelog entries remain ticket-linked artifacts.
+- Removed `todo_slice` and `session_record` schemas/dispatch, `.var/todos`
+  scaffolding, automatic generic `core/docs/sync.zig` writes, the public
+  `ProgressSnapshot` type, and the unused docs-sync module. Existing user data
+  is not deleted.
+- Debug passes `19/19` build steps and `2,150/2,150` tests. Source ReleaseFast
+  passes `9/9`; source SHA-256 is
+  `BD84254B62AF1F4BA2EFEC2609B19BFBB7A69027F20ED1B0F354D9FBCB22CB69`.
+- Installed promotion remains deferred by operator instruction; the live owner
+  process pair was preserved.
+- Research and receipt: `.docs/research/2026-08-14-ticket-only-work-lifecycle.md`
+  and `.docs/todo/changelog/055-ticket-only-work-lifecycle.md`.
+
+## 2026-08-14 - Ticket, quota, and scheduler policy ownership (Move 63)
+
+**Outcome:** Closed the policy-key audit by retaining one capacity owner and
+rejecting decorative ticket execution configuration.
+
+- The four retired `tickets.*` keys remain invalid. Assignment remains
+  queue-only, and `agent_routes.max_concurrency` is the sole configured
+  capacity key flowing through the existing `AgentService`/`Supervisor` pool
+  into scheduler admission.
+- Lease TTL, heartbeat window, and dispatch burst remain private scheduler
+  protocol constants. Agent step/tool/child limits remain specialist execution
+  budgets; token, cost, wall-time, and turn quotas stay in the later usage-ledger
+  move.
+- Debug passes `19/19` build steps and `2,154/2,154` tests. Source ReleaseFast
+  passes `9/9`; source SHA-256 is
+  `2530D80C6B8129960C131F85B9508896BBA332423EC64FD2506061770E5E042D`.
+- Installed promotion remains deferred by operator instruction; the live owner
+  process pair was preserved.
+- Research and receipt: `.docs/research/2026-08-14-ticket-quota-scheduler-policy.md`
+  and `.docs/todo/changelog/054-ticket-quota-scheduler-policy.md`.
+
+## 2026-08-14 - Question panel input lifecycle correction
+
+**Outcome:** Closed the stale question-panel boundary without adding a second
+transport, overlay, or input owner.
+
+- `ChatState` clears the one `question_view.State` projection when the session
+  owner is missing, `session/send` fails, a terminal event arrives, or the
+  returned turn is already complete. Active Ctrl-C is handled by the existing
+  `input/respond` cancellation route.
+- The all-mode panel regression covers `orchestrate`, `build`, `align`, and
+  `plan`, plus orphan and terminal cleanup. Focused TUI Debug and ReleaseFast
+  pass `133/133`; full Debug passes `19/19` steps and `2,153/2,153` tests;
+  source ReleaseFast build passes `9/9`.
+- Source SHA-256 is
+  `C53933B5259D5DE88447B431B01F5F2B123A3935DDBFB13F51A2A739CAFEE573`.
+  Installed promotion remains explicitly deferred.
+- Research and receipt: `.docs/research/2026-08-14-question-panel-input-lifecycle.md`
+  and `.docs/todo/changelog/052-question-panel-input-lifecycle.md`.
+
 ## 2026-08-14 - Question panel runtime contract
 
 **Outcome:** Closed the root catalog/dispatch seam and proved the existing
@@ -63,6 +185,25 @@ definition, dispatch, and bounded process owners.
   promotion remains intentionally deferred.
 - Research and receipt: `.docs/research/2026-08-14-dap-move59.md` and
   `.docs/todo/changelog/048-dap-move59.md`.
+
+## 2026-08-14 - Real write-tool intent lifecycle (Move 62)
+
+**Outcome:** Wired the existing session write-intent ledger through the three
+real file mutation tools without adding a mutation manager or rollback worker.
+
+- `write_file`, `append_file`, and `replace_in_file` now reserve the provider
+  tool-call ID, resolved path, and before-hash before mutation, then commit the
+  measured after-hash and operation metric after mutation.
+- Executor and host cold-start paths reconcile only non-running or proven-stale
+  sessions. A reservation without a commit receives one append-only
+  `abandoned` row with `reason=cold_start`; repeated reconciliation is inert.
+- Debug and ReleaseFast both pass `19/19` with `2,154/2,154` tests. Source
+  ReleaseFast build passes `9/9`; source SHA-256 is
+  `8F58E3D50904D67A90FA0CE4F8E3D0A1E6634D1AE1E00C887F42983112F2C18F`.
+- Installed promotion remains deferred by operator instruction; the live owner
+  process pair was preserved.
+- Research and receipt: `.docs/research/2026-08-14-write-intents-real-tools.md`
+  and `.docs/todo/changelog/053-write-intent-real-tools.md`.
 
 ## 2026-08-14 - Root question panel resilience
 
@@ -3025,3 +3166,15 @@ reported no whitespace errors. Installed promotion is intentionally deferred;
 no installed hash or live-binary claim is made. Research and receipt:
 `.docs/research/2026-08-13-mode-routing-ui-oauth.md` and
 `.docs/todo/changelog/043-chat-log-level-and-mode-routing.md`.
+
+**Move 68 source closure receipt (2026-08-14):** `TokenPrecision` now carries
+exact provider usage, estimated compiler context, or unknown accounting through
+the existing `turn_started` and `turn_terminal` rows. The TUI footer marks
+estimated context with `~`, refuses numeric used/remaining values when unknown,
+and `/status` suppresses cumulative totals after an unaccounted completed turn.
+Debug passed `19/19` steps and `2,159/2,159` tests; source ReleaseFast passed
+`9/9`; source SHA-256 is
+`41C90C2BDF0CB6350E9056EC361E8280FB8EF423AC941A8F4015B88B71695E15`.
+Installed promotion remains deferred and the live owner was not replaced.
+Research and receipt: `.docs/research/2026-08-14-token-accounting-precision-move68.md`
+and `.docs/todo/changelog/059-token-accounting-precision.md`.

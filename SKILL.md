@@ -32,12 +32,20 @@ second runtime owner.
   separate bridge, pool, scheduler, or `kernel-stdio` process.
 - `.var/sessions/<id>/` is source truth. Read `messages.jsonl`, `context.jsonl`,
   `events.jsonl`, `session.json`, and `output.txt` as separate owners.
+- `messages.jsonl` is append-only and every row has a durable generated or
+  explicit deterministic ID. `context.jsonl` checkpoints retain inclusive
+  source ranges and `first_kept_seq`; compaction must rebuild from those
+  ledgers and never rewrite transcript rows.
 - Assignment admits ticket work to the queue. It does not launch an agent.
 - `agent_routes.max_concurrency` is the sole ticket execution capacity knob.
   `running` is active, `idle = max - running`, `queued` is admitted backlog, and
   `available = idle - queued` saturated at zero. Config changes apply to the same
   physical pool at its next idle boundary. Do not invent a second pool, pending
   capacity ledger, or restore a `tickets` execution-policy section.
+- Tickets own work identity and terminal state. Use `update_session_summary` for
+  bounded handoff and knowledge/changelog tools for ticket-linked artifacts; do
+  not create parallel `todo_slice`/`session_record` lifecycle records or a
+  `.var/todos/` tree.
 - Treat `resume` as the sole expired ticket-owner transition. It preserves the
   active session, attempt, receipt, transcript, and mailbox cursor under a new
   worker generation. Requeue only when the claimed session is absent. Heartbeat
@@ -52,6 +60,12 @@ second runtime owner.
   next safe boundary of a live run. A message never assigns or launches work.
 - Change behavior through prompt layers. Keep kernel logic for capability truth,
   durability, budgets, evidence, recovery, and irreversible-action gates.
+- `context.prompt_budget_tokens` is the single estimated system-prompt ceiling;
+  the builder fails before provider dispatch when it is exceeded. Native tool
+  schemas stay on the provider API path. `TokenPrecision` distinguishes exact
+  provider usage, estimated compiler context, and unknown accounting; never
+  report a partial cumulative total as exact. Prompt tests must prove named
+  modes and behavior profiles through one builder, not executor branches.
 - Use the root-only `ask_user` tool when an operator choice materially changes
   the result. Batch related multiple-choice questions; the TUI renders one
   settings-style horizontal row per visible question, uses Up/Down for question
@@ -59,7 +73,8 @@ second runtime owner.
   `f / Other` for inline text, then presents one review state before one
   `input/respond` call. The frame projection must sanitize invalid UTF-8/control
   text and guard clipped rows. Malformed requests must cancel safely, not crash
-  the renderer. Child profiles are headless and must continue or report
+  the renderer; terminal/error boundaries clear any stale panel, and active
+  Ctrl-C uses the same input cancellation route. Child profiles are headless and must continue or report
   `InputUnavailable`; never create a polling question loop.
 - `ask_user` must appear in the root normal, root-agent, and orchestrator-only
   catalogs and pass the same dispatch allow-list. Child profiles must not gain
@@ -70,11 +85,11 @@ second runtime owner.
   tools, access, model, capacity, or executor behavior.
 - The single TUI footer row projects `status · prompt mode · model · effort ·
   context used/capacity/percent · remaining` without wrapping; unknown context
-  stays `ctx —`, and narrow fitting drops lower-signal detail before
-  codepoint-safe truncation. Active/max agents and queue pressure appear only
-  when nonzero or unhealthy; priced session cost appears only for finite,
-  nonnegative terminal telemetry. Keep it a read model, not a settings registry,
-  cost poller, or status bus.
+  stays `ctx — / capacity`, estimated context carries `~`, and narrow fitting
+  drops lower-signal detail before codepoint-safe truncation. Active/max agents
+  and queue pressure appear only when nonzero or unhealthy; priced session cost
+  appears only for finite, nonnegative exact terminal telemetry. Keep it a read
+  model, not a settings registry, cost poller, or status bus.
 - Agent activity reuses the keyed `group_id + task_id` row and canonical child
   summary boundary: groups show `Agents completed/total`, `○` means
   queued/running, `◉` means complete, and the child row keeps a bounded quoted
@@ -117,11 +132,16 @@ requires source/installed SHA-256 equality and the installed consumer path.
   intended cross-directory work. Resolved child routes carry the flag into the
   shared execution context used by file, search, LSP, and shell tools. It never
   relocates `.var`.
-- `search_files` requires `iex`. Do not hide an `rg`, `grep`, or `sed` fallback.
+- `search_files` requires `ix`. Do not hide an `rg`, `grep`, or `sed` fallback.
 - TTSR matches use the provider reader's typed abort hook. Source proof requires
   the read to stop before terminal completion, durable correction plus
   `rule_injected` evidence, and retry through the existing executor; installed
   provider proof remains a separate promotion gate.
+- Real file tools reserve a session/tool-call write intent before mutation and
+  commit the measured effect afterward. Cold-start reconciliation appends one
+  `abandoned` terminal row for unresolved reservations; it never claims a
+  rollback that was not observed. Move 62 remains source-only until installed
+  promotion is explicitly scheduled.
 - Browser routes are redacted prototypes. Owner routes are loopback-only and
   token/generation gated.
 - Scheduler leadership is source-proven with one crash-released lock and

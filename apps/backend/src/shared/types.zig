@@ -561,10 +561,33 @@ pub const CompletionRequest = struct {
     tool_definitions: []const ToolDefinition = &.{},
 };
 
-/// Provider-reported token accounting (measured, not estimated). All integer
-/// value type — no allocation, no deinit. Mirrors prime-agent's `Usage`
-/// (packages/ai/src/types.ts:201-214) flattened to the buckets VANTARI prices:
-/// prompt, completion, and cached (prompt cache read) tokens.
+/// Precision carried with token quantities. `exact` is provider-reported
+/// usage, `estimated` is a bounded compiler/UI estimate, and `unknown` means
+/// the quantity is not safe to display as a number.
+pub const TokenPrecision = enum {
+    exact,
+    estimated,
+    unknown,
+
+    pub fn label(self: TokenPrecision) []const u8 {
+        return switch (self) {
+            .exact => "exact",
+            .estimated => "estimated",
+            .unknown => "unknown",
+        };
+    }
+
+    pub fn fromLabel(value: []const u8) TokenPrecision {
+        if (std.mem.eql(u8, value, "exact")) return .exact;
+        if (std.mem.eql(u8, value, "estimated")) return .estimated;
+        return .unknown;
+    }
+};
+
+/// Provider-reported token accounting. All integer value type — no allocation,
+/// no deinit. Mirrors prime-agent's `Usage` (packages/ai/src/types.ts:201-214)
+/// flattened to the buckets VANTARI prices: prompt, completion, and cached
+/// (prompt cache read) tokens.
 /// Why: the event spine's token telemetry must come from the provider's usage
 /// block, not a compile-time estimate. Preserves: per-turn measured evidence.
 /// Evidence: filled by all three provider adapters (035a/035c); priced by
@@ -574,13 +597,21 @@ pub const Usage = struct {
     completion_tokens: u64 = 0,
     cached_tokens: u64 = 0,
     total_tokens: u64 = 0,
+    precision: TokenPrecision = .unknown,
 
     /// Recompute total from the measured buckets when the provider omits
     /// total_tokens (some OpenAI-compat endpoints do on stream tails).
-    /// Keeps the provider total when present.
+    /// Keeps the provider total when present. Non-zero provider evidence is
+    /// exact; an all-zero response stays unknown because omission and a real
+    /// zero cannot be distinguished on the wire.
     pub fn reconcile(self: *Usage) void {
         if (self.total_tokens == 0) {
             self.total_tokens = self.prompt_tokens + self.completion_tokens + self.cached_tokens;
+        }
+        if (self.precision == .unknown and
+            (self.prompt_tokens > 0 or self.completion_tokens > 0 or self.cached_tokens > 0 or self.total_tokens > 0))
+        {
+            self.precision = .exact;
         }
     }
 };
@@ -591,8 +622,9 @@ pub const CompletionResponse = struct {
     tool_calls: []ToolCall = &.{},
     /// Model reasoning trace captured from the provider response.
     reasoning: ?[]u8 = null,
-    /// Provider-reported token accounting; zeros when the endpoint omits
-    /// usage (never an error — token evidence is best-effort per wire protocol).
+    /// Provider-reported token accounting; precision is unknown when the
+    /// endpoint omits usage (never an error — token evidence is best-effort per
+    /// wire protocol).
     usage: Usage = .{},
 
     pub fn deinit(self: CompletionResponse, allocator: std.mem.Allocator) void {

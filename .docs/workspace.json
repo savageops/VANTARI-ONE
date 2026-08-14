@@ -42,6 +42,18 @@
     "current_question_panel_changelog": ".docs/todo/changelog/046-root-question-panel-resilience.md",
     "current_question_panel_runtime_research": ".docs/research/2026-08-14-question-panel-runtime-contract.md",
     "current_question_panel_runtime_changelog": ".docs/todo/changelog/051-question-panel-runtime-contract.md",
+    "current_ticket_policy_research": ".docs/research/2026-08-14-ticket-quota-scheduler-policy.md",
+    "current_ticket_policy_changelog": ".docs/todo/changelog/054-ticket-quota-scheduler-policy.md",
+    "current_ticket_lifecycle_consolidation_research": ".docs/research/2026-08-14-ticket-only-work-lifecycle.md",
+    "current_ticket_lifecycle_consolidation_changelog": ".docs/todo/changelog/055-ticket-only-work-lifecycle.md",
+    "current_native_tool_schema_prompt_research": ".docs/research/2026-08-14-native-tool-schema-prompt-boundary.md",
+    "current_native_tool_schema_prompt_changelog": ".docs/todo/changelog/056-native-tool-schema-prompt-boundary.md",
+    "current_prompt_budget_behavior_research": ".docs/research/2026-08-14-prompt-budget-behavior-matrix.md",
+    "current_prompt_budget_behavior_changelog": ".docs/todo/changelog/057-prompt-budget-behavior-matrix.md",
+    "current_message_identity_research": ".docs/research/2026-08-14-message-identity-compaction-ranges.md",
+    "current_message_identity_changelog": ".docs/todo/changelog/058-stable-message-ids-compaction-ranges.md",
+    "current_token_accounting_research": ".docs/research/2026-08-14-token-accounting-precision-move68.md",
+    "current_token_accounting_changelog": ".docs/todo/changelog/059-token-accounting-precision.md",
     "current_ttsr_abort_research": ".docs/research/2026-08-14-ttsr-abort-move60.md",
     "current_ttsr_abort_changelog": ".docs/todo/changelog/050-ttsr-abort-move60.md",
     "current_process_supervisor_research": ".docs/research/2026-08-14-process-supervisor-move58.md",
@@ -56,12 +68,17 @@
     "tools": "apps/backend/src/core/tools/",
     "dap": "apps/backend/src/core/tools/builtin/dap.zig + apps/backend/src/core/tools/process.zig",
     "capability_manifest": "apps/backend/src/shared/types.zig:ToolDefinition.availability + apps/backend/src/core/tools/registry.zig + apps/backend/src/core/tools/runtime.zig",
+    "prompt_behavior": "apps/backend/src/core/prompts/builder.zig + apps/backend/src/core/config/file.zig + apps/backend/src/core/config/default.json",
+    "prompt_budget": "apps/backend/src/shared/types.zig:ContextPolicy.prompt_budget_tokens + apps/backend/src/core/context/budget.zig + apps/backend/src/core/prompts/builder.zig",
+    "token_accounting": "apps/backend/src/shared/types.zig:TokenPrecision + Usage; apps/backend/src/shared/protocol/events.zig; apps/backend/src/core/executor/turn_payload.zig; apps/backend/src/clients/{commands,tui_chat}.zig",
     "agents": "apps/backend/src/core/agents/",
     "agent_mailbox": "apps/backend/src/core/agents/mailbox.zig",
     "agent_eligibility": "apps/backend/src/core/agents/service.zig + apps/backend/src/core/agents/spec.zig",
     "agent_capacity": "apps/backend/src/core/tools/module.zig:AgentCapacitySnapshot.fromCounts + apps/backend/src/core/agents/supervisor.zig",
     "ticket_owner_recovery": "apps/backend/src/core/tickets/index.zig:resumeExpired + apps/backend/src/core/scheduler/service.zig:recoverExpiredTickets + apps/backend/src/core/agents/service.zig:resumeTicket",
+    "ticket_policy": "apps/backend/src/core/config/file.zig::loadAgentMaxConcurrency + apps/backend/src/core/agents/service.zig + apps/backend/src/core/scheduler/service.zig",
     "tickets": "apps/backend/src/core/tickets/",
+    "work_lifecycle": "apps/backend/src/core/tickets/; summaries are handoff projections; knowledge/changelog are ticket-linked artifacts",
     "scheduler": "apps/backend/src/core/scheduler/",
     "tui": "apps/backend/src/clients/tui_chat.zig",
     "interactive_input": "apps/backend/src/core/tools/builtin/ask_user.zig + apps/backend/src/shared/protocol/input.zig + apps/backend/src/host/stdio_rpc.zig + apps/backend/src/clients/question_view.zig",
@@ -88,8 +105,10 @@
     "cancellation_affordance": "cancelling only while waiting && cancel_requested; terminal events clear the intent",
     "prompt_mode_cycle": "shipped Move 43: Shift+Tab session-local orchestrate -> build -> align -> plan; next session/send applies provider-visible layer",
     "prompt_mode_routes": "source-complete Move55a: agent_routes.prompt_modes reuses one provider/model route owner for orchestrate/build/align/plan; explicit session/send provider/model fields win",
-    "log_level": "source-complete Move55a: runtime.log_level defaults silent; normal is concise; full permits diagnostics; prompt/TUI projection changes only and durable ledgers remain complete"
-    ,"question_controller": "source-complete Move 52a/57b follow-on: root-only ask_user, root catalog and orchestrator allow-list coverage, bounded input_requested event, one settings-style horizontal-row panel with clamped question/option focus and review/submit, input/respond resolution, Enter/Space, inline f / Other, malformed-request cancellation, frame-owned invalid-UTF8/control-text projection, static display keys, clipped-viewport guards, and the real Vaxis render boundary across orchestrate/build/align/plan; child profiles omit the capability; focused TUI 132/132 and Debug 2,151/2,151; installed promotion deferred",
+    "log_level": "source-complete Move55a: runtime.log_level defaults silent; normal is concise; full permits diagnostics; prompt/TUI projection changes only and durable ledgers remain complete",
+    "prompt_budget": "source-complete Move66: context.prompt_budget_tokens defaults to 8192; the shared char/4 estimate fails before provider dispatch with PromptBudgetExceeded; native provider schemas remain outside the prompt string; mode/profile matrix is prompt-owned and executor-branch free",
+    "token_accounting": "source-complete Move68: TokenPrecision carries exact provider usage, estimated compiler context, or unknown accounting through existing turn events; footer marks estimates with ~, suppresses unknown used/remaining values, and /status suppresses partial cumulative totals; Debug 2,159/2,159; source ReleaseFast 9/9; SHA-256 41C90C2BDF0CB6350E9056EC361E8280FB8EF423AC941A8F4015B88B71695E15; installed promotion deferred",
+    "question_controller": "source-complete Move 52a/57b follow-on: root-only ask_user, root catalog and orchestrator allow-list coverage, bounded input_requested event, one settings-style horizontal-row panel with clamped question/option focus and review/submit, input/respond resolution, Enter/Space, inline f / Other, malformed-request cancellation, frame-owned invalid-UTF8/control-text projection, static display keys, clipped-viewport guards, and the real Vaxis render boundary across orchestrate/build/align/plan; child profiles omit the capability; focused TUI 132/132 and Debug 2,151/2,151; installed promotion deferred",
     "dap_lifecycle": "source-complete Move 59: one workspace+session adapter; exact Content-Length framing; bounded process teardown; seven risk-correct lifecycle sockets; installed promotion deferred",
     "ttsr_abort": "source-complete Move 60: one provider stream abort hook stops reads before terminal completion, adapters forward it, executor correction injection is durable, and retry uses the existing loop; Debug 2,151/2,151; source ReleaseFast SHA-256 521FE17CC941C0CA34605FFEAADD27BA9B3DC5001847022A308AFFE45BA26DE7; installed promotion deferred"
   },
@@ -105,16 +124,16 @@
   "proof": {
     "zig": "C:/Users/Savage/AppData/Local/Programs/zig/0.15.1/zig.exe",
     "release_fast": "9/9 steps succeeded",
-    "focused_tui": "test-tui 9/9 steps; 132/132 tests passed; source question panel covers root catalog policy, all prompt-mode Vaxis render-boundary parity, malformed request recovery, row navigation, review, initialized cleanup, and Vaxis screen-cell ownership; live installed promotion deferred",
+    "focused_tui": "test-tui 9/9 steps; 133/133 tests passed; source question panel covers root catalog policy, all prompt-mode Vaxis render-boundary parity, malformed request recovery, row navigation, review, initialized cleanup, lifecycle cleanup, and Vaxis screen-cell ownership; live installed promotion deferred",
     "host_lifecycle": "245/245 passed; shared crash-released process locks, deterministic ticket-child identity, 100-way atomic admission, session-keyed buffer projection, exact-generation cancellation, single terminal settlement, 100-owner admission-fenced shutdown, deadlines, and Job Object ownership",
-    "isolated_broad": "latest source Debug run 19/19 steps; 2151/2151 passed; 0 skipped; source ReleaseFast build 9/9; one registry loop executes all declared cases; live install intentionally not promoted",
+    "isolated_broad": "latest source Debug run 19/19 steps; 2155/2155 passed; 0 skipped; source ReleaseFast build 9/9; one registry loop executes all declared cases; live install intentionally not promoted",
     "test_runtime_isolation": "six build artifacts plus direct zig test receive generated VANTARI_HOME and VANTARI_TEST_ROOT; direct proof kept 99960 files and 693051144 bytes unchanged",
     "installed_binary": "C:/Users/Savage/AppData/Local/Vantari/bin/vantari.exe",
     "install_script": "apps/backend/scripts/install_windows.ps1",
-    "built_sha256": "521FE17CC941C0CA34605FFEAADD27BA9B3DC5001847022A308AFFE45BA26DE7",
+    "built_sha256": "CA61A2DD503C0A5A70850AB12A809DE43F471B3ED86FF46DF439A50F8B89BC0D",
     "installed_sha256": "F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692",
     "installed_hash_matches": false,
-    "current_source_tests": "source-only Moves55a-61 plus question render/runtime and TTSR abort repairs: Debug 19/19 steps, 2151/2151 tests; focused TUI 9/9 steps, 132/132 tests; ReleaseFast source build 9/9; live installed promotion intentionally deferred",
+    "current_source_tests": "source-only Moves55a-67 plus question render/runtime and TTSR abort repairs: Debug 19/19 steps, 2155/2155 tests; focused TUI 9/9 steps, 133/133 tests; ReleaseFast source build 9/9; live installed promotion intentionally deferred",
     "installed_settings_smoke": "initialize ok; config/set var1.config_set.v1 in 9 ms; full_access_mode=true; isolated runtime removed; live root unchanged; zero processes",
     "installed_input_catalog": "health --json and tools --json exit 0; search_files reports ix available; real TUI smoke typed s then se and rendered the bounded status/settings popup, Enter opened settings, Escape returned, CSI Z changed orchestrate to build, Ctrl+C exited 0; exact owner/kernel processes stopped; final matching process census zero",
     "host_shutdown": "blocked provider request observed cancellation before join, returned cancelled, and passed 20 repeat runs; move 19 now routes the terminal through one turn_terminal commit owner",
@@ -133,6 +152,11 @@
     "scheduler_leadership": "one shared crash-released process lock spans each tick; lease.json carries and verifies a random nonzero generation; synchronized source race yields one winner",
     "ticket_admission": "one shared ticket-ledger lock spans projection, revision validation, and append; claim commits worker generation, lease, attempt, capability, and deterministic child id before materialization; two complete kernel-stdio processes yield one schedule attempt, one ticket claim, one matching child session, and final zero processes; 76-segment GGUF audit has zero candidate/exact pairs; evidence .zig-cache/owner-proofs/fb0c9adc7ae1477cabc5b43d00b793f1",
     "ticket_assignment": "create-as-assigned and transition-to-assigned retain two queued tickets with zero claims, active session ids, or session records; removed four dead tickets execution-policy keys and made agent_routes.max_concurrency the sole capacity setting; 94-segment GGUF audit found one adjacent import/declaration candidate, zero exact pairs, and no second queue or execution owner",
+    "ticket_policy": "Move 63 source-complete: four retired tickets.* execution-policy keys remain rejected; assignment is queue-only; agent_routes.max_concurrency is the sole configured capacity path through AgentService/Supervisor into scheduler admission; lease TTL, heartbeat window, and dispatch burst remain private scheduler constants; Debug 2154/2154, source ReleaseFast 9/9, source SHA-256 2530D80C6B8129960C131F85B9508896BBA332423EC64FD2506061770E5E042D; installed promotion deferred",
+    "ticket_work_lifecycle": "Move 64 source-complete: tickets are the sole work lifecycle; removed todo_slice/session_record schemas and dispatch, .var/todos scaffolding, automatic core/docs/sync.zig projections, ProgressSnapshot, and executor/agent docs-sync writes; summaries are handoff projections and durable artifacts remain ticket-linked; Debug 2150/2150, source ReleaseFast 9/9, source SHA-256 BD84254B62AF1F4BA2EFEC2609B19BFBB7A69027F20ED1B0F354D9FBCB22CB69; installed promotion deferred",
+    "native_tool_schema_prompt": "Move 65 source-complete: builder no longer embeds tools.renderCatalog; native provider name/description/parameters schemas are the model-facing API, while hot-loaded behavior layers and demand-loaded skills remain intact; Debug 2150/2150, source ReleaseFast 9/9, source SHA-256 702DD2CB1A067246E82D8670F0F33FD322FD4178C271AF11E712A110151783D3; installed promotion deferred",
+    "prompt_budget_behavior": "Move 66 source-complete: context.prompt_budget_tokens defaults to 8192; builder enforces the shared estimated system-prompt budget before provider dispatch; native provider schemas remain outside the string; one prompt builder proves all modes and named profiles across root, recon, and orchestrator routes without executor branches; Debug 2154/2154, source ReleaseFast 9/9, source SHA-256 CA61A2DD503C0A5A70850AB12A809DE43F471B3ED86FF46DF439A50F8B89BC0D; installed promotion deferred",
+    "message_identity_compaction_ranges": "Move 67 source-complete: session rows retain generated and explicit deterministic IDs; compaction appends only context.jsonl with source_seq_start/source_seq_end/first_kept_seq; cold replay preserves message bytes, IDs, checkpoint identity, and exact raw suffix; Debug 2155/2155, source ReleaseFast 9/9, source SHA-256 CA61A2DD503C0A5A70850AB12A809DE43F471B3ED86FF46DF439A50F8B89BC0D; installed promotion deferred",
     "agent_mailbox": "source-complete on events.jsonl: direct, parent, current_group; queue/wake; 4 KiB body, 8 bounded references, 64 recipients; idempotent sender receipt, recipient sequence, provider-success cursor, safe-boundary live wake, no transcript mutation; child completion and ticket claim use the same path; 116-segment audit has zero exact pairs",
     "agent_eligibility": "source-complete var1.agent_eligibility.v1: hot-loaded route-resolvable specialists, stable unavailable classes, fixed-pool/team/depth/contact/communication state, exact SHA-256 snapshot receipt; read-only idle projection starts no workers; quiet and hive profiles choose different actions through one executor; final 115-segment audit has one expected import/declaration adjacency candidate, zero exact pairs, no second owner",
     "agent_capacity": "source-complete: AgentCapacitySnapshot.fromCounts solely derives running, idle, queued, and saturated available; submitted closure tails fence idle-boundary replacement of the same physical pool; 20-task pressure reaches 3 active without exceeding max, exposes backlog, drains a live reduction under the prior ceiling, then applies max 1; Debug/ReleaseFast 1947/1947; 256-segment audit has 12 candidates and zero exact duplicates",
@@ -175,6 +199,10 @@
     "Move57b": "source-complete crash-safe root question review panel; initialized ask_user cleanup, clamped horizontal rows, normal/align parity, malformed-request cancellation, and Vaxis frame-lifetime ownership; installed promotion intentionally deferred",
     "Move58": "source-complete shared core/tools/process.zig owner for shell and persistent eval children; timeout/session teardown, post-cap pipe drain, Windows tree receipts, and adversarial framing proof; installed promotion intentionally deferred",
     "Move59": "source-complete session-owned DAP lifecycle over PersistentProcess with exact Content-Length framing, seven risk-correct sockets, real Python adapter proof, and host-join teardown; installed promotion intentionally deferred",
+    "Move64": "source-complete ticket-only work lifecycle; duplicate lifecycle tools and generic docs-sync writer removed; Debug 2150/2150, ReleaseFast 9/9, installed promotion intentionally deferred",
+    "Move65": "source-complete native provider tool-schema prompt boundary; full human catalog removed from provider prompt; Debug 2150/2150, ReleaseFast 9/9, installed promotion intentionally deferred",
+    "Move66": "source-complete prompt budget and behavior matrix; estimated system-prompt overflow fails before provider dispatch; all four modes and named profiles route through one builder; Debug 2154/2154, ReleaseFast 9/9, installed promotion intentionally deferred",
+    "Move67": "source-complete stable message identity and explicit compaction ranges; cold replay preserves byte-identical transcript and exact raw suffix; Debug 2155/2155, ReleaseFast 9/9, installed promotion intentionally deferred",
     "OAuth": "Codex OAuth is closed; Anthropic and OpenCode OAuth remain provider-parity gaps owned by the auth/provider slice"
   },
   "residuals": [
@@ -190,5 +218,8 @@
     ,"OAuth parity is partial: Codex OAuth is proven, while Anthropic and OpenCode login/refresh flows remain unimplemented and must reuse the existing auth/provider owners."
     ,"Move57b is source-only: the root question panel and malformed-request recovery pass Debug, focused TUI, and source ReleaseFast; provider-driven installed response and visual terminal capture remain open."
     ,"Move59 is source-only: the session-owned DAP lifecycle, exact frame reader, risk-correct sockets, and shared process teardown pass Debug, focused TUI, source ReleaseFast, and real Python adapter cleanup; installed promotion is deferred."
+    ,"Move65 is source-only: the provider request carries native tool schemas as the model API, while the operator catalog and demand-loaded guidance remain explicit; Debug 2150/2150 and source ReleaseFast 9/9 pass; installed promotion is deferred."
+    ,"Move66 is source-only: context.prompt_budget_tokens and the prompt-owned behavior matrix pass Debug 2154/2154 and source ReleaseFast 9/9; the shared char/4 estimate is not exact provider token accounting, and installed promotion is deferred."
+    ,"Move67 is source-only: stable message IDs and explicit compaction ranges pass Debug 2155/2155 and source ReleaseFast 9/9; installed promotion is deferred and automatic compaction remains gated."
   ]
 }

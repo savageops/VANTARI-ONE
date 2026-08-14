@@ -77,7 +77,6 @@ flowchart TB
   tools --> workspaceState["src/core/tools/workspace_runtime.zig"]
   tools --> review
   toolModules --> ix["ix executable"]
-  executor --> docs["src/core/docs/sync.zig"]
   executor --> config["src/core/config/file.zig"]
   kernel --> memory["src/core/memory/derivative.zig"]
 
@@ -89,7 +88,7 @@ flowchart TB
   store --> sessionRoot[".var/sessions/<id>/session.json + messages.jsonl + memories.jsonl + context.jsonl + events.jsonl + output.txt"]
   tickets --> ticketRoot[".var/tickets/tickets.jsonl"]
   scheduler --> scheduleRoot[".var/schedules/"]
-  docs --> processRoot[".var/todos + .var/changelog + .var/research + .var/docs"]
+  docs --> processRoot[".var/tickets + .var/changelog + .var/research + .var/docs"]
 ```
 
 ## Host request lifecycle
@@ -215,7 +214,9 @@ root provider turn -> ask_user -> input_requested event -> TUI question controll
 The TUI controller reuses the existing input surface and one RPC method. Enter
 selects, Space toggles multi-select, and Other opens inline text followed by
 confirmation. Session cancel and owner shutdown broadcast to pending waits;
-terminal replay clears an unanswered controller. Child profiles do not receive
+terminal replay, transport failure, missing session ownership, and a settled
+turn clear an unanswered controller; active Ctrl-C resolves through the same
+`input/respond` cancellation path. Child profiles do not receive
 `ask_user` and return `InputUnavailable` instead of blocking without an operator
 surface. Question-panel strings remain State-owned, static, or frame-owned until
 the outer `vx.render` call; the display projection rejects invalid UTF-8/control
@@ -256,7 +257,15 @@ sequenceDiagram
   X->>S: later reads latest checkpoint plus raw suffix
 ```
 
-Manual and automatic compaction share the same primitive. The manual RPC path is gated by `context.manual_compaction`; the executor path is gated by `context.auto_compaction`, `context.context_window_tokens`, `context.compact_at_ratio`, and `context.reserve_output_tokens`. Provider overflow recovery is separately gated by `context.retry_on_provider_overflow` and retries one provider call after a real checkpoint is written. Checkpoint planning does not split assistant tool-call batches; if the proposed raw suffix would start at a tool-result row, the compacted segment is moved back so the assistant tool-call message and its tool results remain together in model-visible history.
+Manual and automatic compaction share the same primitive. The manual RPC path is gated by `context.manual_compaction`; the executor path is gated by `context.auto_compaction`, `context.context_window_tokens`, `context.compact_at_ratio`, and `context.reserve_output_tokens`. `context.prompt_budget_tokens` bounds the assembled provider-facing system prompt with the shared estimated token rule and fails before dispatch; native provider tool schemas remain outside that string. Provider overflow recovery is separately gated by `context.retry_on_provider_overflow` and retries one provider call after a real checkpoint is written. Checkpoint planning does not split assistant tool-call batches; if the proposed raw suffix would start at a tool-result row, the compacted segment is moved back so the assistant tool-call message and its tool results remain together in model-visible history.
+
+Token quantities retain their evidence class through the existing turn boundary:
+`exact` is provider-reported `Usage`, `estimated` is compiler window arithmetic,
+and `unknown` is omitted or insufficient wire evidence. The TUI footer marks
+estimated context with `~` and does not derive used/remaining values from an
+unknown row. `/status` suppresses cumulative totals after an unaccounted
+completed turn. No provider-specific telemetry registry or second ledger owns
+this projection.
 
 The context builder also validates OpenAI-compatible tool-call adjacency before any provider dispatch. An assistant message with tool calls must be followed by matching tool-result rows in assistant source order; orphan tool rows and unresolved assistant tool-call tails fail closed as transcript integrity errors. This keeps `.var/sessions/<id>/messages.jsonl` append-only while preventing corrupt or crash-interrupted ledgers from becoming malformed model-visible context.
 
@@ -298,7 +307,7 @@ sequenceDiagram
   T->>R: resolve capability availability
   R->>I: probe executable dependency when required
   R-->>T: availability metadata
-  T-->>H: ToolDefinition catalog plus availability
+  T-->>H: ToolDefinition operator catalog plus availability
   L->>T: builtinDefinitionsForContext(execution_context)
   T-->>L: context-filtered tool definitions
   L->>P: provider request with function schemas
@@ -320,7 +329,7 @@ sequenceDiagram
   end
 ```
 
-Tool definitions are schema-first. The shared shape lives in `shared/types.zig` as `ToolDefinition { name, description, parameters_json, review_risk, example_json, usage_hint }`. Per-tool modules under `core/tools/builtin/` own their definition, review risk, availability contract, and execute path. The registry resolves availability from module-owned names/specs instead of duplicating string branches. Provider request construction, CLI catalog export, RPC catalog export, review classification, prompt guidance, and failure repair hints derive from those module-owned metadata surfaces. Backend primitives are not agent tools until this metadata-and-dispatch path exists.
+Tool definitions are schema-first. The shared shape lives in `shared/types.zig` as `ToolDefinition { name, description, parameters_json, review_risk, example_json, usage_hint }`. Per-tool modules under `core/tools/builtin/` own their definition, review risk, availability contract, and execute path. The registry resolves availability from module-owned names/specs instead of duplicating string branches. Provider request construction uses the native name/description/parameters schema; CLI and RPC catalog export, review classification, operator guidance, and failure repair hints derive from the same module-owned metadata without embedding a second human catalog in the provider prompt. Backend primitives are not agent tools until this metadata-and-dispatch path exists.
 
 `search_files` is the content-search tool. It declares an `external_command("ix")` dependency, resolves the workspace path in Zig, then invokes `ix search --json --max-hits ...` through the command-runner boundary. The advertised pattern contract is native IX expression syntax (`lit:needle`, `re:TODO|FIXME`, `lit:a || lit:b`), not rg/grep flag emulation. `list_files` is the native Zig path-discovery tool and does not shell to `ix`. Installing `VAR1` therefore requires a real `ix` executable for content search; when it is absent, catalog availability reports `search_files` as unavailable and execution fails early with `ToolUnavailable`.
 
@@ -352,6 +361,13 @@ sequenceDiagram
 ```
 
 The review gate is a kernel state transition, not a copied reviewer-agent architecture. Read-only tools receive review evidence and continue through the existing dispatch. Write-capable, workspace-state, and delegation tools are classified from active `ToolDefinition.review_risk` metadata before execution. Tool names absent from the active catalog, including context-unavailable tools, are denied before dispatch and returned to the provider as `ToolReviewBlocked`, preserving the OpenAI-compatible tool-call protocol.
+
+The three file mutation tools reuse the session write-intent ledger. The runtime
+binds the provider tool-call ID to `ExecutionContext`, each tool appends a
+`reserved` row before the filesystem effect and a `committed` row after its
+measured snapshot, and host/executor cold-start paths append one `abandoned`
+terminal row for unresolved reservations on non-running or proven-stale
+sessions. This is durable effect evidence, not an unproven rollback claim.
 
 Delegation is validated at one eligibility-first agent boundary. In root orchestrator mode, `agents {}` must precede launch or configuration mutation, but it is not a mandatory first-turn action. `AgentService` hot-loads the registry, resolves every route, reads fixed-pool and current-team projections, and returns one sorted `var1.agent_eligibility.v1` snapshot with a SHA-256 receipt. The active prompt chooses whether to stay quiet, inspect, message, challenge, launch, accept queueing, or wake; no executor branch selects for it. `launch_agent` accepts one `{ context, tasks[] }` batch whose task ids must be route-eligible and revalidates scope, route, depth, contact, and capacity before effects. `core/agents/spec.zig` resolves editable personas over compiled execution-kind and capability-profile floors; custom ids must inherit through `extends`, so config cannot grant arbitrary tools or provider credentials. `configure_agent` validates and atomically replaces `config.json`; the next eligibility or launch read sees the new registry. Child prompts contain only the selected private capsule, explicit shared context, finite task, and output contract. The parent transcript is never copied into a child window.
 
@@ -411,7 +427,7 @@ Every session directory contains:
 - `events.jsonl`
 - `output.txt`
 
-`messages.jsonl` is the complete append-only transcript. One execution-owner-local per-session ledger state serializes user, assistant, assistant-tool-call, tool-result, and idempotent convergence appends. It initializes sequence from the last valid bounded tail row instead of reparsing transcript history; append failure invalidates the cached cursor before retry. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested. `events.jsonl` assigns the sole durable render identity. Live notifications carry that stored sequence after append; the tracked TUI requests `session/get { after_seq, events_only }` only when it detects a gap and once after turn completion. `shared/jsonl.zig:PrefixReader` is the one LF-framed read boundary for events, messages, context, intents, and summaries. It accepts a leading BOM, rejects invalid UTF-8/JSON/typed schema and non-increasing sequence rows, and ends every projection at the same valid prefix. `fsutil.appendJsonlRecord` validates the bounded current tail through that owner and refuses poison without truncating or appending behind it.
+`messages.jsonl` is the complete append-only transcript. One execution-owner-local per-session ledger state serializes user, assistant, assistant-tool-call, tool-result, and idempotent convergence appends. Every row carries a durable generated `msg-<seq>` ID or an explicit deterministic delivery ID; repeated explicit IDs are suppressed before append. It initializes sequence from the last valid bounded tail row instead of reparsing transcript history; append failure invalidates the cached cursor before retry. `memories.jsonl` is the session-only append ledger for compact source-linked facts, decisions, preferences, invariants, and lessons; repeated topics supersede earlier values and forget operations append tombstones. `context.jsonl` is compact checkpoint history written by the context compactor and used by the context builder to create model-visible history without rewriting transcript history. Each checkpoint marks the inclusive covered source sequence range, the next raw `first_kept_seq`, `compacted_entry_count`, and `aggressiveness_milli`, so compaction can advance one JSONL entry at a time or recompact an existing range when a stronger slider value is requested. `events.jsonl` assigns the sole durable render identity. Live notifications carry that stored sequence after append; the tracked TUI requests `session/get { after_seq, events_only }` only when it detects a gap and once after turn completion. `shared/jsonl.zig:PrefixReader` is the one LF-framed read boundary for events, messages, context, intents, and summaries. It accepts a leading BOM, rejects invalid UTF-8/JSON/typed schema and non-increasing sequence rows, and ends every projection at the same valid prefix. `fsutil.appendJsonlRecord` validates the bounded current tail through that owner and refuses poison without truncating or appending behind it.
 
 `$VANTARI_HOME/config.json` is the canonical non-secret policy file. Its typed sections own runtime limits, wire API selection, role routing, prompt-mode routes, editable agent definitions, context policy, prompt paths, and supported environment-style overrides. Built-in agent rows may tune persona/condition/route/budgets or be disabled; custom ids must inherit a compiled capability floor. `$VANTARI_HOME/auth.json` is the sibling credential/provider ledger; workspace-local auth is `.var/auth.json`. API keys, OAuth tokens, account identity, and active-provider state never move into config output. Nested/AppData auth paths are one-time migration inputs; `settings.toml` is no longer a runtime reader. `auth status --json` projects provider, model, account, plan, expiry, and verification metadata without secrets. `auth login openai-codex` owns browser PKCE callback collection at `127.0.0.1:1455/auth/callback` plus manual redirect fallback; `auth logout <provider-id>` removes one provider while preserving unrelated records. `core/providers/dispatch.zig` routes typed OAuth `openai-codex` records to `core/providers/openai_codex.zig`, which builds `POST /codex/responses`, carries account/originator metadata, maps Responses/SSE into the canonical completion result, and never falls back to `/v1/chat/completions`; API-key records remain on the existing `wire_api` route. Anthropic has a canonical Messages transport but not a shipped OAuth login, and OpenCode OAuth remains an explicit provider-parity gap. The Windows installer preserves valid config byte-for-byte and backs up plus materializes the current schema only when the retained file fails validation.
 
@@ -852,16 +868,18 @@ The same module owns the request thinking shape (`detectThinkingFormat`): z.ai e
 
 ### Per-turn cost and token telemetry
 
-All three wire adapters fill `CompletionResponse.usage` with the provider-reported token buckets (prompt / completion / cached), including the streaming paths (chat_completions terminal `{"choices":[],"usage":...}` chunk, Anthropic `message_start` + `message_delta`, Responses `response.completed`). `core/providers/pricing.zig` owns the compiled per-model price table (harvested from prime-agent `models.generated.ts` plus published rates; provenance comments per row) and derives `Cost` with the prime formula `($/1M) × tokens`. Unknown models yield no price — cost is never fabricated; token accounting still flows.
+All three wire adapters fill `CompletionResponse.usage` with the provider-reported token buckets (prompt / completion / cached), including the streaming paths (chat_completions terminal `{"choices":[],"usage":...}` chunk, Anthropic `message_start` + `message_delta`, Responses `response.completed`). `Usage.reconcile()` marks non-zero provider evidence `exact`; an omitted/all-zero block remains `unknown`. `core/providers/pricing.zig` owns the compiled per-model price table (harvested from prime-agent `models.generated.ts` plus published rates; provenance comments per row) and derives `Cost` with the prime formula `($/1M) × tokens`. Unknown models yield no price — cost is never fabricated; token accounting still flows.
 
 The typed event spine closes every run through
 `core/sessions/store.zig::commitTurnTerminal`. The canonical serializer in
 `shared/protocol/events.zig` emits `var1.turn_terminal.v1` with `run_seq`,
 `outcome`, `detail`, `step`, `prompt_tokens`, `completion_tokens`,
-`cached_tokens`, `cost_total_usd`, estimated `window_tokens`, and
-`output_bytes`. `core/executor/turn_payload.zig` builds completed-run telemetry;
+`cached_tokens`, `cost_total_usd`, `window_tokens` plus its
+`window_precision`, `usage_precision`, and `output_bytes` fields.
+`core/executor/turn_payload.zig` builds completed-run telemetry;
 failure, timeout, and cancellation use the same settlement owner. The TUI
-renders accumulated session cost in `/status`.
+marks compiler window estimates with `~` and renders accumulated session cost in
+`/status` only while cumulative provider usage remains exact.
 
 ### Knowledge scaffolding
 
@@ -873,9 +891,8 @@ The workspace knowledge surface under `.var/` provides structured persistence fo
 | Plans | `.var/plans/` | `knowledge_artifact` | Implementation plans, execution chains |
 | Advice | `.var/advice/` | `knowledge_artifact` | Advisor SITREPs, coaching, verification |
 | Roadmap | `.var/roadmap/` | `knowledge_artifact` | Roadmap with owner + exit criteria |
-| Todos | `.var/todos/` | `todo_slice` | Bounded execution tracking |
-| Changelog | `.var/changelog/` | `changelog_ledger` | Completed work archive |
-| Tickets | `.var/tickets/` | `log_ticket` | Self-evolution issue ledger |
+| Work lifecycle | `.var/tickets/` | `log_ticket` | Canonical work identity, queue, and terminal state |
+| Changelog | `.var/changelog/` | `changelog_ledger` | Ticket-linked completion evidence |
 | Processes | `.var/processes/` | (automatic) | shell_exec execution audit |
 
 `init_workspace` scaffolds all surfaces with purpose-stating READMEs. The `knowledge_artifact` tool (read/write/list) is the unified primitive for the first four surfaces. Every subagent that discovers findings must persist them before returning its SITREP.
@@ -918,10 +935,12 @@ Two tools expose the ledger:
 | `update_session_summary` | write_capable | MANDATORY pre-turn-end update. Rejects >100-word summaries; mirrors the live session status into the row; returns an effect receipt (session_id, seq, words, turn_count, ledger_path, schema). |
 
 The buffer speculation service consumes the active session's summary row as
-handoff context on every tick, never a raw transcript tail. Tickets remain the
-intended work-lifecycle owner; summary rows are handoff projections, not ticket
-state. The current todo_slice/session_record surfaces still violate that
-intended separation and are tracked for consolidation.
+handoff context on every tick, never a raw transcript tail. Tickets are the sole
+work-lifecycle owner; summary rows are handoff projections, not ticket state.
+Plans, research, advice, roadmap, and changelog entries remain durable
+ticket-linked artifacts. The retired `todo_slice` and `session_record` tools,
+`.var/todos/` tree, and per-session `session.md` projection are not created or
+read by the runtime.
 
 ### Prompt doctrine
 
@@ -929,8 +948,12 @@ The system prompt is the steering surface of the harness. VAR1 is capable of any
 
 The accepted prompt-mode layer names `orchestrate`, `build`, `align`, and `plan`.
 Move 43 ships the session-local Shift+Tab cycle and provider-visible layer;
-later behavior-profile matrix work remains separate. It must change method
-without changing executor or tool capability.
+Move 66 closes the source behavior-profile matrix and estimated system-prompt
+budget. It changes method through prompt layers without changing executor or
+tool capability. Move 68 closes the token-accounting boundary: provider usage is
+exact only when reported, compiler window arithmetic is estimated, and omitted
+usage is unknown. The existing TUI footer and `/status` projection preserve
+those labels without a telemetry registry.
 
 The prompt embodies behavior; it does not reveal strategy. Internal mechanics (causal chain, context compiler, event spine, kernel architecture) live in this documentation, never in the prompt the model sees. The prompt plays the card; it does not reveal the card.
 
@@ -961,7 +984,7 @@ skill capsules (budgeted, demand-loaded via skill_info)
   ↓
 memory context (if enabled)
   ↓
-tool catalog (last for high recency at the action boundary)
+native provider tool schemas (request API; operator catalog remains explicit)
 ```
 
 The operating core consolidates 17 legacy protocols into 5 dense, non-overlapping blocks: **Evidence** (never assert without proof, catalog is the API, fail closed), **Delegation** (fan out, never delegate understanding, four-move synthesis, read-parallel/write-serial), **Edit** (surgical slices, file inspection, path protocol, budget awareness), **Continuity** (checkpoint continuation, session summary, interjection, memory), **Evolution** (self-tuning, ticket lifecycle, knowledge logging, scheduling, workspace scaffold). This reduces ~1,000 tokens of duplicates and improves recall: fewer denser rules outperform many overlapping ones.

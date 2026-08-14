@@ -17,12 +17,23 @@ defaults to `orchestrate`, and unknown labels fail before execution. Prompt mode
 changes provider guidance only; it does not change the executor, tools, access,
 model, or capacity.
 
+The assembled provider-facing system prompt is bounded by
+`context.prompt_budget_tokens` (default `8192`) through the existing context
+policy. The builder returns `PromptBudgetExceeded` before provider dispatch
+instead of truncating prompt layers. Native provider tool schemas remain a
+separate API surface inside the full context-window budget. Behavior profiles
+are prompt-owned and source-tested across all four modes and root/recon/
+orchestrator tool routes without executor branches. `TokenPrecision` carries
+exact provider usage, estimated compiler context, or unknown accounting through
+the existing turn events; exactness is never inferred from `chars / 4`.
+
 The TUI footer is one non-wrapping read model: status, prompt mode, model,
 effort, context used/capacity/percent, and remaining context. Active/max agents
 and queue pressure are signal-gated; finite priced session cost may share the
-lower-signal segment, while unknown accounting is `ctx —` and unknown pricing
-is omitted. No footer registry, cost poller, progress gauge, second row, or
-status bus exists.
+lower-signal segment only for exact telemetry. Estimated context carries `~`;
+unknown used/remaining context is `ctx — / capacity`. `/status` suppresses
+partial cumulative totals. No footer registry, cost poller, progress gauge,
+second row, or status bus exists.
 
 Agent activity uses the same keyed parent-event projection and child
 `sessions/summaries.jsonl` boundary: groups show `Agents completed/total`, `○`
@@ -62,13 +73,23 @@ Rules:
 - Client exit does not stop the owner. Foreground serve and automatic owner start
   share one lease.
 - Tickets own work lifecycle. Assignment is queue admission, not execution.
+- Tickets are the only work-lifecycle owner; summaries are bounded handoff
+  projections and plans/research/advice/roadmap/changelog are ticket-linked
+  artifacts. The runtime does not create or read `todo_slice`, `session_record`,
+  `.var/todos/`, or per-session `session.md` records.
 - agent_routes.max_concurrency is the sole ticket execution capacity setting;
   running is active, idle=max-running, queued is admitted backlog, and
   available=idle-queued saturated at zero. A changed value replaces the same
   pool at its next idle boundary; there is no tickets execution-policy branch.
-- messages.jsonl remains complete and append-only. context.jsonl is a model-visible
-  checkpoint ledger, not a transcript.
-- Use typed tools and advertised availability. search_files requires iex.
+- messages.jsonl remains complete and append-only; every row has a durable
+  generated or explicit deterministic ID. context.jsonl is a model-visible
+  checkpoint ledger, not a transcript, and records inclusive source ranges plus
+  first_kept_seq for cold replay.
+- Use typed tools and advertised availability. search_files requires ix.
+- Session-owned file mutations reserve a provider tool-call intent before
+  `write_file`/`append_file`/`replace_in_file`, commit measured effect evidence
+  after mutation, and close unresolved reservations as `abandoned` at safe cold
+  start. No rollback is claimed without byte evidence.
 - runtime.full_access_mode is false by default; resolved child routes carry it
   into the shared file/search/LSP/shell execution context, and it never relocates
   .var.
@@ -105,7 +126,8 @@ Rules:
   Enter select, Space check, `f / Other` inline text, and an explicit review
   state. Display text is frame-sanitized, static option keys preserve original
   response ids, and clipped viewports are guarded. Malformed requests become one bounded message plus run cancellation;
-  the session cancel/shutdown path wakes the same broker wait. Child profiles omit the tool and fail closed
+  terminal/error boundaries clear stale panel state, active Ctrl-C uses the same
+  input cancellation route, and the session cancel/shutdown path wakes the same broker wait. Child profiles omit the tool and fail closed
   with `InputUnavailable`; do not add a question poller or second status bus.
 - Root normal, root-agent, and orchestrator-only catalogs retain `ask_user`,
   while the orchestrator allow-list continues to deny artifact and command

@@ -18,7 +18,7 @@ eval, DAP, TTSR, provider probing, write intents, quota scopes, and search are s
 - [eval.zig:286](../../../apps/backend/src/core/tools/builtin/eval.zig#L286) advertises persistent Python/Bun; [eval.zig:330](../../../apps/backend/src/core/tools/builtin/eval.zig#L330) creates a kernel per call and Bun ignores timeout.
 - [dap.zig:295](../../../apps/backend/src/core/tools/builtin/dap.zig#L295) destroys attach state on return; [dap.zig:339](../../../apps/backend/src/core/tools/builtin/dap.zig#L339) admits stacktrace starts a fresh adapter.
 - [loop.zig:1124](../../../apps/backend/src/core/executor/loop.zig#L1124) records a stream-rule abort request without aborting the provider read.
-- Provider capability cache and write-intent paths have tests but no canonical runtime caller.
+- Provider capability cache still lacks a canonical dispatch caller (Move 61 remains provider-owned). The write-intent path is now canonical: the three real file mutation tools reserve/commit through `sessions/store.zig`, and cold-start reconciliation closes unresolved reservations (Move 62).
 - Installed tools reports search_files unavailable because iex is absent while ix.exe exists.
 
 ## Required mechanism

@@ -177,12 +177,14 @@ const ChatState = struct {
     agent_pool_available: usize = 0,
     agent_pool_healthy: bool = false,
     agent_pool_known: bool = false,
-    // Session cost read model accumulated from completed turn_terminal events
-    // (measured provider tokens + priced cost; cost stays zero-flag unless a
-    // turn reported a priced quantity).
+    // Session usage read model accumulated from completed turn_terminal
+    // events. One missing-usage turn invalidates the cumulative projection so
+    // /status never presents a partial total as complete.
     session_prompt_tokens: u64 = 0,
     session_completion_tokens: u64 = 0,
     session_cached_tokens: u64 = 0,
+    session_usage_precision: shared_types.TokenPrecision = .unknown,
+    session_usage_invalidated: bool = false,
     session_cost_usd: f64 = 0,
     has_session_cost: bool = false,
     tickets_assigned: usize = 0,
@@ -193,6 +195,7 @@ const ChatState = struct {
     /// Null is intentional before the first provider turn or after a cold
     /// start with no replayable turn telemetry.
     context_used_tokens: ?u64 = null,
+    context_used_precision: shared_types.TokenPrecision = .unknown,
     session_id: ?[]u8 = null,
     status: []const u8 = "READY",
     messages: std.ArrayList(Message) = .{},
@@ -940,9 +943,11 @@ const ChatState = struct {
 
         const TurnTelemetry = struct {
             window_tokens: u64 = 0,
+            window_precision: []const u8 = "unknown",
             prompt_tokens: u64 = 0,
             completion_tokens: u64 = 0,
             cached_tokens: u64 = 0,
+            usage_precision: []const u8 = "unknown",
             cost_total_usd: ?f64 = null,
             outcome: []const u8 = "completed",
         };
@@ -952,20 +957,42 @@ const ChatState = struct {
         defer parsed.deinit();
 
         if (parsed.value.window_tokens > 0 or std.mem.eql(u8, event_type, "turn_started")) {
-            self.context_used_tokens = parsed.value.window_tokens;
+            self.context_used_precision = shared_types.TokenPrecision.fromLabel(parsed.value.window_precision);
+            self.context_used_tokens = if (self.context_used_precision == .unknown)
+                null
+            else
+                parsed.value.window_tokens;
         }
-        // Current completed terminal rows and read-only legacy turn_finished
-        // rows carry measured provider tokens and priced cost.
-        if (std.mem.eql(u8, event_type, "turn_finished") or
-            (std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type) and
-                std.mem.eql(u8, parsed.value.outcome, "completed")))
-        {
-            self.session_prompt_tokens += parsed.value.prompt_tokens;
-            self.session_completion_tokens += parsed.value.completion_tokens;
-            self.session_cached_tokens += parsed.value.cached_tokens;
-            if (parsed.value.cost_total_usd) |cost| {
-                self.session_cost_usd += cost;
-                self.has_session_cost = true;
+        // Current completed terminal rows carry provider usage precision. A
+        // legacy turn_finished row is accepted only when it labels its own
+        // evidence; an unlabelled legacy row with token data invalidates the
+        // aggregate, while an empty compatibility row is ignored.
+        const is_terminal = std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type) and
+            std.mem.eql(u8, parsed.value.outcome, "completed");
+        const has_legacy_usage = parsed.value.prompt_tokens > 0 or
+            parsed.value.completion_tokens > 0 or
+            parsed.value.cached_tokens > 0 or
+            parsed.value.cost_total_usd != null;
+        const is_legacy_finished = std.mem.eql(u8, event_type, "turn_finished");
+        if (is_terminal or (is_legacy_finished and has_legacy_usage)) {
+            const usage_precision = shared_types.TokenPrecision.fromLabel(parsed.value.usage_precision);
+            if (usage_precision == .exact and !self.session_usage_invalidated) {
+                self.session_usage_precision = .exact;
+                self.session_prompt_tokens += parsed.value.prompt_tokens;
+                self.session_completion_tokens += parsed.value.completion_tokens;
+                self.session_cached_tokens += parsed.value.cached_tokens;
+                if (parsed.value.cost_total_usd) |cost| {
+                    self.session_cost_usd += cost;
+                    self.has_session_cost = true;
+                }
+            } else if (usage_precision != .exact) {
+                self.session_usage_precision = .unknown;
+                self.session_usage_invalidated = true;
+                self.session_prompt_tokens = 0;
+                self.session_completion_tokens = 0;
+                self.session_cached_tokens = 0;
+                self.session_cost_usd = 0;
+                self.has_session_cost = false;
             }
         }
         return true;
@@ -1674,6 +1701,7 @@ fn cmdStatus(state: *ChatState, _: []const u8) anyerror!commands.CommandResult {
         .prompt_tokens = state.session_prompt_tokens,
         .completion_tokens = state.session_completion_tokens,
         .cached_tokens = state.session_cached_tokens,
+        .usage_precision = state.session_usage_precision,
         .cost_total_usd = if (state.has_session_cost) state.session_cost_usd else null,
     });
     defer state.allocator.free(status_text);
@@ -2586,7 +2614,7 @@ fn drawStatusBar(
     row: u16,
 ) ![]u8 {
     const agent_counts = state.agentCounts();
-    const meta = try formatFooterMetaWithScope(
+    const meta = try formatFooterMetaWithScopePrecision(
         state.allocator,
         state.model,
         state.effort,
@@ -2595,6 +2623,7 @@ fn drawStatusBar(
         state.status,
         state.full_access_mode,
         state.context_used_tokens,
+        state.context_used_precision,
         state.context_window_tokens,
         agent_counts.running,
         agent_counts.total,
@@ -3615,12 +3644,54 @@ fn formatFooterMetaWithScope(
     session_cost_usd: ?f64,
     width: usize,
 ) ![]u8 {
+    return formatFooterMetaWithScopePrecision(
+        allocator,
+        model,
+        effort,
+        thinking_mode,
+        prompt_mode,
+        runtime_status,
+        full_access_mode,
+        context_used_tokens,
+        .estimated,
+        context_window_tokens,
+        running_agents,
+        total_agents,
+        waiting,
+        cancel_requested,
+        scroll_offset,
+        pool,
+        session_cost_usd,
+        width,
+    );
+}
+
+fn formatFooterMetaWithScopePrecision(
+    allocator: std.mem.Allocator,
+    model: []const u8,
+    effort: []const u8,
+    thinking_mode: []const u8,
+    prompt_mode: prompt_modes.PromptMode,
+    runtime_status: []const u8,
+    full_access_mode: ?bool,
+    context_used_tokens: ?u64,
+    context_used_precision: shared_types.TokenPrecision,
+    context_window_tokens: u64,
+    running_agents: usize,
+    total_agents: usize,
+    waiting: bool,
+    cancel_requested: bool,
+    scroll_offset: usize,
+    pool: FooterPool,
+    session_cost_usd: ?f64,
+    width: usize,
+) ![]u8 {
     if (width == 0) return allocator.dupe(u8, "");
 
     const effort_label = footerEffortLabel(effort, thinking_mode);
-    const context_full = try formatContextMeta(allocator, context_used_tokens, context_window_tokens, true);
+    const context_full = try formatContextMetaWithPrecision(allocator, context_used_tokens, context_window_tokens, context_used_precision, true);
     defer allocator.free(context_full);
-    const context_compact = try formatContextMeta(allocator, context_used_tokens, context_window_tokens, false);
+    const context_compact = try formatContextMetaWithPrecision(allocator, context_used_tokens, context_window_tokens, context_used_precision, false);
     defer allocator.free(context_compact);
 
     var agents = std.array_list.Managed(u8).init(allocator);
@@ -3689,11 +3760,21 @@ fn formatContextMeta(
     context_window_tokens: u64,
     include_remaining: bool,
 ) ![]u8 {
+    return formatContextMetaWithPrecision(allocator, context_used_tokens, context_window_tokens, .estimated, include_remaining);
+}
+
+fn formatContextMetaWithPrecision(
+    allocator: std.mem.Allocator,
+    context_used_tokens: ?u64,
+    context_window_tokens: u64,
+    precision: shared_types.TokenPrecision,
+    include_remaining: bool,
+) ![]u8 {
     if (context_window_tokens == 0) return allocator.dupe(u8, "ctx —");
 
     const capacity = try compactTokenCount(allocator, context_window_tokens);
     defer allocator.free(capacity);
-    if (context_used_tokens == null) {
+    if (context_used_tokens == null or precision == .unknown) {
         return std.fmt.allocPrint(allocator, "ctx — / {s}", .{capacity});
     }
 
@@ -3701,13 +3782,14 @@ fn formatContextMeta(
     const used = try compactTokenCount(allocator, used_value);
     defer allocator.free(used);
     const percent: u64 = @intCast(((@as(u128, used_value) * 100) + (@as(u128, context_window_tokens) / 2)) / @as(u128, context_window_tokens));
+    const marker = if (precision == .estimated) "~" else "";
     if (!include_remaining) {
-        return std.fmt.allocPrint(allocator, "ctx {s} / {s} ({d}%)", .{ used, capacity, percent });
+        return std.fmt.allocPrint(allocator, "ctx {s}{s} / {s} ({s}{d}%)", .{ marker, used, capacity, marker, percent });
     }
 
     const remaining = try compactTokenCount(allocator, context_window_tokens - used_value);
     defer allocator.free(remaining);
-    return std.fmt.allocPrint(allocator, "ctx {s} / {s} ({d}%) · {s} left", .{ used, capacity, percent, remaining });
+    return std.fmt.allocPrint(allocator, "ctx {s}{s} / {s} ({s}{d}%) · {s}{s} left", .{ marker, used, capacity, marker, percent, marker, remaining });
 }
 
 fn compactTokenCount(allocator: std.mem.Allocator, value: u64) ![]u8 {
@@ -5397,7 +5479,7 @@ test "tui footer metadata preserves high-value fields inside narrow terminals" {
     );
     defer allocator.free(wide);
     try std.testing.expectEqualStrings(
-        "ready · orchestrate · glm-5.1 · high · ctx 5k / 200k (3%) · 195k left",
+        "ready · orchestrate · glm-5.1 · high · ctx ~5k / 200k (~3%) · ~195k left",
         wide,
     );
 
@@ -5416,7 +5498,7 @@ test "tui footer metadata preserves high-value fields inside narrow terminals" {
         40,
     );
     defer allocator.free(narrow);
-    try std.testing.expectEqualStrings("ready · orchestrate · glm-5.1 · ctx 5...", narrow);
+    try std.testing.expectEqualStrings("ready · orchestrate · glm-5.1 · ctx ~...", narrow);
 }
 
 test "tui footer maps runtime status and active prompt mode" {
@@ -5442,7 +5524,7 @@ test "tui footer maps runtime status and active prompt mode" {
     );
     defer allocator.free(working);
     try std.testing.expectEqualStrings(
-        "working · build · glm-5.1 · high · ctx 5k / 200k (3%) · 195k left",
+        "working · build · glm-5.1 · high · ctx ~5k / 200k (~3%) · ~195k left",
         working,
     );
 
@@ -5596,7 +5678,7 @@ test "tui footer projects context telemetry and live agent cardinality" {
     try std.testing.expect(try state.recordProgressEvent(
         1,
         "turn_started",
-        "{\"schema\":\"var1.turn_started.v1\",\"window_tokens\":5000}",
+        "{\"schema\":\"var1.turn_started.v1\",\"window_tokens\":5000,\"window_precision\":\"estimated\"}",
     ));
     try state.upsertActivityProgress("agent-1", "recon - running", .item, .running, "group-1");
     try state.upsertActivityProgress("agent-2", "review - queued", .item, .pending, "group-1");
@@ -5623,8 +5705,8 @@ test "tui footer projects context telemetry and live agent cardinality" {
     defer allocator.free(footer);
     try std.testing.expect(std.mem.indexOf(u8, footer, "Qwen3.6 35B-A3B") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "high") != null);
-    try std.testing.expect(std.mem.indexOf(u8, footer, "ctx 5k / 200k (3%)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, footer, "195k left") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "ctx ~5k / 200k (~3%)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "~195k left") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "agents 1/2") != null);
 }
 
@@ -5700,8 +5782,8 @@ test "tui footer projects canonical pool and buffered ticket pressure" {
     defer allocator.free(footer);
     try std.testing.expect(std.mem.indexOf(u8, footer, "Qwen3.6 35B-A3B") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "high") != null);
-    try std.testing.expect(std.mem.indexOf(u8, footer, "ctx 5k / 200k (3%)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, footer, "195k left") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "ctx ~5k / 200k (~3%)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "~195k left") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "agents 1/2") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "pool 1/4") != null);
     try std.testing.expect(std.mem.indexOf(u8, footer, "queue 2") != null);
@@ -5753,6 +5835,14 @@ test "tui footer projects canonical pool and buffered ticket pressure" {
     const compacted = try formatContextMeta(allocator, 5_000, 0, true);
     defer allocator.free(compacted);
     try std.testing.expectEqualStrings("ctx —", compacted);
+
+    const exact = try formatContextMetaWithPrecision(allocator, 5_000, 200_000, .exact, true);
+    defer allocator.free(exact);
+    try std.testing.expectEqualStrings("ctx 5k / 200k (3%) · 195k left", exact);
+
+    const unknown = try formatContextMetaWithPrecision(allocator, 5_000, 200_000, .unknown, true);
+    defer allocator.free(unknown);
+    try std.testing.expectEqualStrings("ctx — / 200k", unknown);
 }
 
 test "tui transcript keeps progress dense and preserves multiline system output" {
@@ -6133,12 +6223,13 @@ test "tui completed terminal telemetry parses tokens and priced cost" {
     };
     defer state.deinit();
 
-    const payload = "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":1,\"outcome\":\"completed\",\"detail\":\"\",\"step\":1,\"window_tokens\":2000,\"output_bytes\":10,\"prompt_tokens\":1234,\"completion_tokens\":567,\"cached_tokens\":89,\"cost_total_usd\":0.001234}";
+    const payload = "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":1,\"outcome\":\"completed\",\"detail\":\"\",\"step\":1,\"window_tokens\":2000,\"window_precision\":\"estimated\",\"output_bytes\":10,\"prompt_tokens\":1234,\"completion_tokens\":567,\"cached_tokens\":89,\"usage_precision\":\"exact\",\"cost_total_usd\":0.001234}";
     try std.testing.expect(try state.recordTurnTelemetry(protocol_events.turn_terminal_event_type, payload));
 
     try std.testing.expectEqual(@as(u64, 1234), state.session_prompt_tokens);
     try std.testing.expectEqual(@as(u64, 567), state.session_completion_tokens);
     try std.testing.expectEqual(@as(u64, 89), state.session_cached_tokens);
+    try std.testing.expectEqual(shared_types.TokenPrecision.exact, state.session_usage_precision);
     try std.testing.expect(state.has_session_cost);
     try std.testing.expectApproxEqAbs(@as(f64, 0.001234), state.session_cost_usd, 1e-9);
 }
@@ -6157,18 +6248,19 @@ test "tui terminal telemetry accumulates session cost across turns" {
     };
     defer state.deinit();
 
-    const first = "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":1,\"outcome\":\"completed\",\"prompt_tokens\":100,\"completion_tokens\":50,\"cached_tokens\":0,\"cost_total_usd\":0.0001}";
-    const second = "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":2,\"outcome\":\"completed\",\"prompt_tokens\":200,\"completion_tokens\":100,\"cached_tokens\":10,\"cost_total_usd\":0.0002}";
+    const first = "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":1,\"outcome\":\"completed\",\"prompt_tokens\":100,\"completion_tokens\":50,\"cached_tokens\":0,\"usage_precision\":\"exact\",\"cost_total_usd\":0.0001}";
+    const second = "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":2,\"outcome\":\"completed\",\"prompt_tokens\":200,\"completion_tokens\":100,\"cached_tokens\":10,\"usage_precision\":\"exact\",\"cost_total_usd\":0.0002}";
     try std.testing.expect(try state.recordTurnTelemetry(protocol_events.turn_terminal_event_type, first));
     try std.testing.expect(try state.recordTurnTelemetry(protocol_events.turn_terminal_event_type, second));
 
     try std.testing.expectEqual(@as(u64, 300), state.session_prompt_tokens);
     try std.testing.expectEqual(@as(u64, 150), state.session_completion_tokens);
     try std.testing.expectEqual(@as(u64, 10), state.session_cached_tokens);
+    try std.testing.expectEqual(shared_types.TokenPrecision.exact, state.session_usage_precision);
     try std.testing.expectApproxEqAbs(@as(f64, 0.0003), state.session_cost_usd, 1e-12);
 }
 
-test "tui terminal null cost leaves has_session_cost false" {
+test "tui unknown terminal usage suppresses cumulative totals" {
     const allocator = std.testing.allocator;
     var state = ChatState{
         .allocator = allocator,
@@ -6185,7 +6277,8 @@ test "tui terminal null cost leaves has_session_cost false" {
     const payload = "{\"schema\":\"var1.turn_terminal.v1\",\"run_seq\":1,\"outcome\":\"completed\",\"prompt_tokens\":42,\"completion_tokens\":7,\"cached_tokens\":0,\"cost_total_usd\":null}";
     try std.testing.expect(try state.recordTurnTelemetry(protocol_events.turn_terminal_event_type, payload));
 
-    try std.testing.expectEqual(@as(u64, 42), state.session_prompt_tokens);
+    try std.testing.expectEqual(@as(u64, 0), state.session_prompt_tokens);
+    try std.testing.expectEqual(shared_types.TokenPrecision.unknown, state.session_usage_precision);
     try std.testing.expect(!state.has_session_cost);
     try std.testing.expectApproxEqAbs(@as(f64, 0), state.session_cost_usd, 1e-12);
 }
@@ -6204,10 +6297,11 @@ test "tui turn_started refreshes window estimate without accumulating cost" {
     };
     defer state.deinit();
 
-    const payload = "{\"schema\":\"var1.turn_started.v1\",\"step\":2,\"window_tokens\":5000}";
+    const payload = "{\"schema\":\"var1.turn_started.v1\",\"step\":2,\"window_tokens\":5000,\"window_precision\":\"estimated\"}";
     try std.testing.expect(try state.recordTurnTelemetry("turn_started", payload));
 
     try std.testing.expectEqual(@as(u64, 5000), state.context_used_tokens);
+    try std.testing.expectEqual(shared_types.TokenPrecision.estimated, state.context_used_precision);
     try std.testing.expectEqual(@as(u64, 0), state.session_prompt_tokens);
     try std.testing.expect(!state.has_session_cost);
 }

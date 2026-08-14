@@ -15,13 +15,13 @@ The compact footer and child-summary direction are correct. Move 50 closed the u
 
 ## Required surface
 
-- Persistent row: status, model, effort, context used/capacity/percent, remaining, active/max agents, nonzero queue, known session cost.
+- Persistent row: status, model, effort, context used/capacity/percent, remaining, active/max agents, nonzero queue, exact session cost; estimated context is marked `~` and unknown used/remaining context is not numeric.
 - Composer: lighter than transcript background and lighter than the metadata row.
 - No persistent Esc cancel copy.
 - Group row: Agents completed/total.
 - Child row: agent name plus bounded canonical turn summary; tool phase is a marker.
 - On-demand detail, if later required: use canonical `session/get` and summary records for model, effort, route, state, elapsed time, tool count, tokens/context/cost, receipt, and latest summary. Do not add a second registry.
-- Unknown context after compaction renders unknown, not fabricated precision.
+- Unknown context after compaction renders unknown, not fabricated precision; exact provider usage and estimated compiler context remain separate.
 
 ## Acceptance
 

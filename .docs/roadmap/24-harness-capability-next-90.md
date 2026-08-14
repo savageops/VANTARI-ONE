@@ -2,7 +2,7 @@
 type: roadmap
 id: roadmap/harness-capability-next-90
 status: active
-updated: 2026-08-13
+updated: 2026-08-14
 owner: .docs/roadmap/24-harness-capability-next-90.md
 source: ../research/2026-08-12-full-harness-sitrep.md
 exit_criteria: All P0 moves are proven through the installed Windows owner path; later moves advance only when their dependency band is green.
@@ -209,7 +209,7 @@ advance the queue until the real installed consumer path proves it.
 | 56 | Give Python eval one persistent, session-owned kernel. | source-complete: `builtin/eval.zig` owns one workspace+session kernel registry; variables survive calls, timeout terminates the worker, and sessions remain isolated. Debug `19/19`, `2,121/2,121`; installed promotion deferred. |
 | 57 | Give Bun eval the same persistent, session-owned lifecycle. | source-complete: the same worker protocol, registry, bounded reader, timeout, and teardown path supports Bun JavaScript; Python-or-Bun availability stays definition-owned, with Windows `bun.exe` resolution. Debug `19/19`, `2,121/2,121`; installed promotion deferred. |
 | 57a | Persist the smallest renderer-backed TUI policy: named theme and status-row placement. | source-complete: `core/config/file.zig::TuiPolicy` validates four named palettes and `bottom`/`top`; settings writes through `config/set`; `tui_chat.zig` applies the palette and reserves one top row while the composer stays bottom. Focused TUI `9/9`, `126/126`; Debug `19/19`, `2,129/2,129`; source ReleaseFast `9/9`; installed promotion deferred. Research: `.docs/research/2026-08-14-tui-theme-status-settings.md`. |
-| 57b | Repair and simplify root multiple-choice interaction across normal and align modes. | source-complete plus consumer hardening: initialized-slice cleanup removes the late-invalid `ask_user` crash; root catalogs and the orchestrator allow-list retain the bounded interaction; `question_view.State` renders bounded settings-style horizontal rows with clamped focus and review/submit; malformed `input_requested` data cancels safely without unwinding replay; frame projection sanitizes hostile text, uses static display keys while preserving response ids, and guards clipped viewports. Focused TUI `132/132`; Debug `19/19`, `2,151/2,151`; source ReleaseFast exit `0`, SHA-256 `521FE17CC941C0CA34605FFEAADD27BA9B3DC5001847022A308AFFE45BA26DE7`; installed promotion deferred. Research: `.docs/research/2026-08-14-root-question-review-panel.md`, `.docs/research/2026-08-14-question-panel-consumer-hardening.md`, and `.docs/research/2026-08-14-question-panel-runtime-contract.md`. |
+| 57b | Repair and simplify root multiple-choice interaction across normal and align modes. | source-complete plus consumer hardening and lifecycle correction: initialized-slice cleanup removes the late-invalid `ask_user` crash; root catalogs and the orchestrator allow-list retain the bounded interaction; `question_view.State` renders bounded settings-style horizontal rows with clamped focus and review/submit; malformed `input_requested` data cancels safely without unwinding replay; frame projection sanitizes hostile text, uses static display keys while preserving response ids, guards clipped viewports, and clears orphaned input at missing-owner, transport-error, terminal, and settled-turn boundaries. Focused TUI `133/133`; Debug `19/19`, `2,153/2,153`; source ReleaseFast build `9/9`, SHA-256 `C53933B5259D5DE88447B431B01F5F2B123A3935DDBFB13F51A2A739CAFEE573`; installed promotion deferred. Research: `.docs/research/2026-08-14-root-question-review-panel.md`, `.docs/research/2026-08-14-question-panel-consumer-hardening.md`, `.docs/research/2026-08-14-question-panel-runtime-contract.md`, and `.docs/research/2026-08-14-question-panel-input-lifecycle.md`. |
 | 58 | consolidate/add-tests | source-complete: `core/tools/process.zig` is the single bounded child owner for `shell_exec` and persistent eval. Timeout/session teardown uses one receipt-bearing path; response readers drain beyond the 64 KiB display cap; Windows uses Job Object teardown plus bounded process/thread waits. Debug `19/19`, `2,137/2,137`; focused TUI `9/9`, `129/129`; source ReleaseFast `9/9`; dupe-audit reports zero duplicate candidates. Installed promotion remains deferred. |
 | 59 | Keep one DAP client from attach through pause, stack, scopes, variables, continue, and detach. | closed source-only: `builtin/dap.zig` is registered through the normal catalog/dispatch path; one workspace+session adapter uses `core/tools/process.zig::PersistentProcess` and exact Content-Length framing; seven risk-correct sockets cover attach/pause/stack/scopes/variables/continue/detach; host teardown runs after request workers join; a real Python stdio adapter proves one process ID across the lifecycle. Debug `19/19`, `2,141/2,141`; focused TUI `9/9`, `130/130`; source ReleaseFast `9/9`; packaged GGUF audit finds 2 semantic candidates and 0 exact duplicate candidates across 89 segments; source SHA-256 `20D9B9001719F891DF984CAD480B0DFCB712E6197FAF27F6907CE8B205F97D8D`; installed promotion remains deferred. Research: `.docs/research/2026-08-14-dap-move59.md`. |
 | 60 | Make a TTSR rule match abort the provider read before terminal completion. | closed source-only: one `StreamHooks.shouldAbortFn` crosses all provider adapters; the reader stops before terminal completion, `loop.zig` persists correction plus `rule_injected` evidence, and the existing turn loop retries. Debug `19/19`, `2,151/2,151`; source ReleaseFast `9/9`; SHA-256 `521FE17CC941C0CA34605FFEAADD27BA9B3DC5001847022A308AFFE45BA26DE7`; installed provider proof deferred. Research: `.docs/research/2026-08-14-ttsr-abort-move60.md`. |
@@ -219,13 +219,13 @@ advance the queue until the real installed consumer path proves it.
 | # | Next move | Owner and terminal proof |
 |---:|---|---|
 | 61 | Wire provider capability probes into dispatch and fail closed on unknown streaming/tool/context behavior. | provider cache/dispatch; no late unsupported crash. |
-| 62 | Complete write-intent reserve, effect commit, and abandoned-intent reconciliation through real write tools. | tool runtime; cold start resolves every nonterminal intent. |
-| 63 | Wire ticket, quota, and scheduler policy keys into the one state machine or delete the dead keys and docs. | config/tickets/scheduler; no decorative control. |
-| 64 | Make tickets the only work lifecycle; keep summaries, plans, research, and changelog as ticket-linked artifacts. | prompts/tools/work state; remove `todo_slice` and `session_record` lifecycle duplication. |
-| 65 | Keep behavior in hot-loaded system/developer/persona/guardrail/context/profile layers and native tool schemas as API truth; define `orchestrate`, `build`, `align`, and `plan` there, including collaboration cadence, challenge/wake posture, nesting, question method, and ticket-planning posture; demand-load examples, availability detail, and skills. | prompt builder/registry; no duplicate behavioral policy, executor mode branch, or full catalog. |
-| 66 | Add prompt-token budgets and behavior-profile tests by provider, tool set, skill route, and active mode. | context compiler tests; named modes plus terse/detailed, solo/orchestrated, conservative/aggressive, and update-cadence profiles change behavior without executor branches. |
-| 67 | Add stable message IDs and explicit compaction source/kept sequence ranges before automatic compaction. | sessions/context ledgers; checkpoint identity survives edits and replay. |
-| 68 | Separate exact, estimated, and unknown token accounting; expose capacity and remaining only at the proven precision. | provider usage/context telemetry; no false number. |
+| 62 | Complete write-intent reserve, effect commit, and abandoned-intent reconciliation through real write tools. | source-complete: `write_file`, `append_file`, and `replace_in_file` reserve the provider tool-call ID plus resolved path/before-hash before mutation and commit the measured after-hash/bytes after mutation; detached calls remain usable without a session ledger. Executor and host cold-start paths reconcile only non-running or proven-stale sessions, append one `abandoned` terminal row for each unresolved reservation, and emit `write_intents_reconciled` when a live run closes prior evidence. Debug/ReleaseFast `19/19`, `2,154/2,154`; source ReleaseFast `9/9`; source SHA-256 `8F58E3D50904D67A90FA0CE4F8E3D0A1E6634D1AE1E00C887F42983112F2C18F`; installed promotion deferred. Research: `.docs/research/2026-08-14-write-intents-real-tools.md`. |
+| 63 | Wire ticket, quota, and scheduler policy keys into the one state machine or delete the dead keys and docs. | source-complete: the four retired `tickets.*` keys (`auto_assign`, `proactive_workpool`, `close_authority`, `reopen_with_reasoning`) remain rejected; assignment is queue-only; `agent_routes.max_concurrency` is the sole configured capacity key flowing through `AgentService`/`Supervisor` into scheduler admission; lease TTL, heartbeat window, and dispatch limit remain private scheduler protocol constants; agent execution budgets remain specialist-owned. Debug `19/19`, `2,154/2,154`; source ReleaseFast `9/9`; source SHA-256 `2530D80C6B8129960C131F85B9508896BBA332423EC64FD2506061770E5E042D`; installed promotion deferred. Research: `.docs/research/2026-08-14-ticket-quota-scheduler-policy.md`. |
+| 64 | Make tickets the only work lifecycle; keep summaries, plans, research, and changelog as ticket-linked artifacts. | source-complete: removed `todo_slice` and `session_record` schemas/dispatch, `.var/todos` scaffolding, automatic `core/docs/sync.zig` projections, `ProgressSnapshot`, and all executor/agent docs-sync writes. Tickets own work identity/terminal state; summaries are handoff projections; durable artifacts remain ticket-linked. Debug `19/19`, `2,150/2,150`; source ReleaseFast `9/9`; source SHA-256 `BD84254B62AF1F4BA2EFEC2609B19BFBB7A69027F20ED1B0F354D9FBCB22CB69`; installed promotion deferred. Research: `.docs/research/2026-08-14-ticket-only-work-lifecycle.md`. |
+| 65 | Keep behavior in hot-loaded system/developer/persona/guardrail/context/profile layers and native tool schemas as API truth; define `orchestrate`, `build`, `align`, and `plan` there, including collaboration cadence, challenge/wake posture, nesting, question method, and ticket-planning posture; demand-load examples, availability detail, and skills. | source-complete: `builder.zig` no longer embeds `tools.renderCatalog`; native provider schemas remain the sole model-facing tool API, the compact Tool Protocol points to typed errors, hot-loaded behavior layers and prompt modes remain intact, stale `.var/todos`/archive wording is removed, and explicit catalog diagnostics remain available. Debug `19/19`, `2,150/2,150`; source ReleaseFast `9/9`; source SHA-256 `702DD2CB1A067246E82D8670F0F33FD322FD4178C271AF11E712A110151783D3`; installed promotion deferred. Research: `.docs/research/2026-08-14-native-tool-schema-prompt-boundary.md`. |
+| 66 | Add prompt-token budgets and behavior-profile tests by provider, tool set, skill route, and active mode. | source-complete: `context.prompt_budget_tokens` defaults to `8,192`; `builder.zig` enforces the shared estimated system-prompt budget with `PromptBudgetExceeded` before provider dispatch, while native provider schemas remain outside the string budget. One matrix covers `orchestrate`, `build`, `align`, `plan`, terse/detailed, solo/orchestrated, conservative/aggressive, and low/high-cadence profiles across root, recon, and orchestrator tool routes without executor branches. Debug `19/19`, `2,154/2,154`; source ReleaseFast `9/9`; source SHA-256 `CA61A2DD503C0A5A70850AB12A809DE43F471B3ED86FF46DF439A50F8B89BC0D`; installed promotion deferred. Research: `.docs/research/2026-08-14-prompt-budget-behavior-matrix.md`. |
+| 67 | Add stable message IDs and explicit compaction source/kept sequence ranges before automatic compaction. | source-complete: the existing session owner retains generated `msg-<seq>` and explicit deterministic IDs, and compaction records inclusive `source_seq_start`, `source_seq_end`, and `first_kept_seq` ranges. The regression proves byte-identical `messages.jsonl`, explicit-ID deduplication, checkpoint identity, and summary-plus-exact-suffix cold replay. Debug `19/19`, `2,155/2,155`; source ReleaseFast `9/9`; source SHA-256 `CA61A2DD503C0A5A70850AB12A809DE43F471B3ED86FF46DF439A50F8B89BC0D`; installed promotion deferred. Research: `.docs/research/2026-08-14-message-identity-compaction-ranges.md`. |
+| 68 | Separate exact, estimated, and unknown token accounting; expose capacity and remaining only at the proven precision. | source-complete: `TokenPrecision` now distinguishes provider-reported usage, compiler-estimated context, and unknown accounting through the existing turn events. The footer marks estimates with `~`, suppresses unknown used/remaining values, and `/status` invalidates cumulative totals after an unaccounted completed turn. Debug `19/19`, `2,159/2,159`; source ReleaseFast `9/9`; source SHA-256 `41C90C2BDF0CB6350E9056EC361E8280FB8EF423AC941A8F4015B88B71695E15`; installed promotion deferred. Research: `.docs/research/2026-08-14-token-accounting-precision-move68.md`. |
 | 69 | Emit typed context-compile diagnostics and rebuild overflow recovery only through the compiler. | `core/context`; no in-memory duplicate tool batches. |
 | 70 | Implement task-branch context shards with bounded suffixes and one evidence-bearing merge checkpoint back into the parent. | context plus agent sessions; branch isolation without transcript duplication. |
 
@@ -279,17 +279,66 @@ and top/bottom status placement persist through the existing settings/config
   slices, the TUI renders a bounded settings-style review panel, question text
   remains valid through `vx.render`, hostile display text is sanitized, static
   display keys preserve original response ids, clipped viewports are guarded,
-  and malformed input requests cancel without unwinding replay. Move 58 is now
+  and malformed input requests cancel without unwinding replay. The follow-on
+  lifecycle correction clears stale panels at missing-owner, transport-error,
+  terminal, and settled-turn boundaries and routes active Ctrl-C through
+  `input/respond`. Focused TUI is `133/133`; the current source graph is Debug
+  `19/19`, `2,153/2,153`; source ReleaseFast build is `9/9` at SHA-256
+  `C53933B5259D5DE88447B431B01F5F2B123A3935DDBFB13F51A2A739CAFEE573`.
+  Move 58 is now
   source-complete:
   `core/tools/process.zig` owns bounded one-shot commands and persistent worker
-  teardown, with timeout, post-cap drain, and Windows tree receipts. The current
-  source graph is Debug `19/19`, `2,151/2,151`; focused TUI is `132/132`; source
-  ReleaseFast exits `0` at source SHA-256
-  `521FE17CC941C0CA34605FFEAADD27BA9B3DC5001847022A308AFFE45BA26DE7`. Move 59
+  teardown, with timeout, post-cap drain, and Windows tree receipts. Move 59
   is now source-complete. Move 60 is also source-complete: TTSR aborts the
   provider read before terminal completion, persists the correction, and retries
   through the existing executor. The
-  provider-driven installed question response remains an explicit residual for
+  Move 62 is source-complete: the three real file mutation tools use the
+  existing write-intent ledger, and cold-start reconciliation closes unresolved
+  reservations exactly once without claiming rollback. Move 63 is also
+  source-complete: the retired ticket-policy keys remain rejected, one
+  `agent_routes.max_concurrency` path owns capacity, and scheduler timing/burst
+  limits remain private protocol constants. Debug is `19/19`, `2,154/2,154`;
+  source ReleaseFast is `9/9` at SHA-256
+  `2530D80C6B8129960C131F85B9508896BBA332423EC64FD2506061770E5E042D`.
+  Move 64 is now source-complete: tickets are the only work lifecycle;
+  `todo_slice`, `session_record`, `.var/todos`, `session.md`, and automatic
+  generic docs-sync projections are removed while summaries and durable
+  knowledge/changelog artifacts remain ticket-linked. Debug is `19/19`,
+  `2,150/2,150`; source ReleaseFast is `9/9` at SHA-256
+  `BD84254B62AF1F4BA2EFEC2609B19BFBB7A69027F20ED1B0F354D9FBCB22CB69`.
+  Move 65 is now source-complete: `builder.zig` keeps behavior in the
+  hot-loaded prompt layers and sends native provider tool schemas as the sole
+  model-facing API; the full human catalog is removed from the provider prompt
+  while operator diagnostics and demand-loaded skill detail remain explicit.
+  Debug is `19/19`, `2,150/2,150`; source ReleaseFast is `9/9` at SHA-256
+  `702DD2CB1A067246E82D8670F0F33FD322FD4178C271AF11E712A110151783D3`.
+  Move 66 is now source-complete: `ContextPolicy.prompt_budget_tokens` defaults
+  to `8,192`, the builder fails closed before provider dispatch when the
+  estimated system-prompt budget is exceeded, and native provider schemas stay
+  outside that string. The same builder and definition-owned routes prove all
+  four modes plus terse/detailed, solo/orchestrated, conservative/aggressive,
+  and low/high-cadence profiles without executor branches. Debug is `19/19`,
+  `2,154/2,154`; source ReleaseFast is `9/9` at SHA-256
+  `CA61A2DD503C0A5A70850AB12A809DE43F471B3ED86FF46DF439A50F8B89BC0D`.
+  Installed promotion remains deferred. Move 67 is now source-complete: the
+  existing message and context ledgers preserve stable identity and explicit
+  compaction ranges through cold replay without a transcript rewrite or second
+  identity owner. Debug is `19/19`, `2,155/2,155`; source ReleaseFast remains
+  `9/9` at SHA-256
+  `CA61A2DD503C0A5A70850AB12A809DE43F471B3ED86FF46DF439A50F8B89BC0D`.
+  Move 68 is now source-complete: the shared `TokenPrecision` contract carries
+  exact provider usage, estimated compiler context, and unknown accounting
+  through the existing turn events. The footer marks estimates with `~` and
+  withholds unknown used/remaining values; `/status` suppresses cumulative
+  totals after an unaccounted completed turn. Debug is `19/19`, `2,159/2,159`;
+  source ReleaseFast is `9/9` at SHA-256
+  `41C90C2BDF0CB6350E9056EC361E8280FB8EF423AC941A8F4015B88B71695E15`.
+  Installed promotion remains deferred. Research and receipt are
+  `.docs/research/2026-08-14-token-accounting-precision-move68.md` and
+  `.docs/todo/changelog/059-token-accounting-precision.md`.
+  Move 69 is next: typed context-compile diagnostics and compiler-only
+  overflow recovery.
+  Provider-driven installed question response remains an explicit residual for
   the Move52a consumer path because live promotion is deferred. The TUI input repair
 is installed-proven at `74981E5C9CF956E3F3003FA15FDEB1D94F05A55BE9192FD4EDB1F0DE2FDE62AD`:
 the settings overlay renders through the normal frame boundary, Shift+Tab
@@ -298,6 +347,7 @@ reverses its section navigation, and the bare-prefix palette reuses the
   question controller also has root catalog/allow-list coverage and a real
   Vaxis render-boundary probe across all prompt modes. Research and receipts:
   `.docs/research/2026-08-14-question-panel-runtime-contract.md`,
+  `.docs/research/2026-08-14-question-panel-input-lifecycle.md`,
   `.docs/research/2026-08-14-ttsr-abort-move60.md`,
   `.docs/todo/changelog/050-ttsr-abort-move60.md`, and
   `.docs/todo/changelog/051-question-panel-runtime-contract.md`.

@@ -54,10 +54,12 @@ pub const TurnTerminalInput = struct {
     detail: []const u8 = "",
     step: usize = 0,
     window_tokens: u64 = 0,
+    window_precision: []const u8 = "unknown",
     output_bytes: usize = 0,
     prompt_tokens: u64 = 0,
     completion_tokens: u64 = 0,
     cached_tokens: u64 = 0,
+    usage_precision: []const u8 = "unknown",
     cost_total_usd: ?f64 = null,
 };
 
@@ -68,10 +70,12 @@ pub const TurnTerminal = struct {
     detail: []const u8,
     step: usize,
     window_tokens: u64,
+    window_precision: []const u8,
     output_bytes: usize,
     prompt_tokens: u64,
     completion_tokens: u64,
     cached_tokens: u64,
+    usage_precision: []const u8,
     cost_total_usd: ?f64,
 };
 
@@ -102,10 +106,12 @@ pub fn serializeTurnTerminal(
         .detail = input.detail,
         .step = input.step,
         .window_tokens = input.window_tokens,
+        .window_precision = input.window_precision,
         .output_bytes = input.output_bytes,
         .prompt_tokens = input.prompt_tokens,
         .completion_tokens = input.completion_tokens,
         .cached_tokens = input.cached_tokens,
+        .usage_precision = input.usage_precision,
         .cost_total_usd = input.cost_total_usd,
     });
 }

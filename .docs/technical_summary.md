@@ -45,7 +45,47 @@ The explicit footer campaign is separate and small: `clients/footer_effects.zig`
 animates only the `orchestrate` token every three seconds, requests timed wakes
 only during its bounded sweep, and leaves the other prompt modes static.
 
-## Current frontier — Move 55a source closure, Moves 56-57, and Move 57a
+## Current question input lifecycle correction — 2026-08-14
+
+The question panel now has a terminal ownership boundary in `ChatState`. A
+missing session owner clears an orphaned panel, `session/send` transport or
+terminal failure clears the projection, and a successful returned turn clears it
+even if the final notification races the RPC response. While the panel is active,
+Ctrl-C routes through the existing `input/respond` cancellation path; it does not
+fall into the run-cancel path and cannot leave the TUI trapped behind a stale
+question.
+
+The settings-style batch surface remains one controller: one horizontal row per
+question, horizontal options, and one review/submit boundary. `orchestrate`,
+`build`, `align`, and `plan` share it; root normal is the catalog/profile name,
+not a fifth `PromptMode`. Focused TUI Debug and ReleaseFast both pass `133/133`;
+full Debug passes `19/19` steps and `2,153/2,153` tests; source ReleaseFast
+build passes `9/9`. The current source binary SHA-256 is
+`C53933B5259D5DE88447B431B01F5F2B123A3935DDBFB13F51A2A739CAFEE573`.
+Installed promotion and provider-driven live question proof remain deferred;
+the preserved installed owner remains on
+`F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+
+## Current ticket and scheduler policy boundary — 2026-08-14
+
+Move 63 adds no scheduler registry or quota layer. The four retired
+`tickets.*` execution-policy keys remain rejected, `assigned` remains queue
+admission without launch, and `agent_routes.max_concurrency` is the only
+configured capacity key. `AgentService` applies it to the single fixed
+`Supervisor` pool; scheduler admission observes the resulting capacity. Lease
+TTL, heartbeat window, and dispatch limit remain private scheduler protocol
+constants. Agent `max_steps`, `max_tool_calls`, and `max_children` remain
+specialist execution budgets, while token/cost/wall-time/turn quotas stay in
+the later usage-ledger move.
+
+Debug passes `19/19` build steps and `2,154/2,154` tests; source ReleaseFast
+passes `9/9` with SHA-256
+`2530D80C6B8129960C131F85B9508896BBA332423EC64FD2506061770E5E042D`.
+Installed promotion remains deferred. Research and receipt:
+`.docs/research/2026-08-14-ticket-quota-scheduler-policy.md` and
+`.docs/todo/changelog/054-ticket-quota-scheduler-policy.md`.
+
+## Current frontier — Move 55a source closure, Moves 56-57, 57a, and Moves 62-63
 
 Move 34 closes the Codex subscription transport slice. `core/auth/store.zig`
 remains the single credential owner for workspace `.var/auth.json` and installed
@@ -188,10 +228,11 @@ effort, context used/capacity/percent, and remaining context in one
 non-wrapping row. Existing `ChatState.status` values map to `ready`, `working`,
 `cancelling`, or `failed`; no second state machine or event bus was added.
 Context values remain sourced from typed turn telemetry: unknown or zero
-capacity renders `ctx —`, while known capacity preserves exact used/capacity,
-rounded percent, and remaining tokens. Candidate fitting uses codepoint width,
-keeps status/mode/model ahead of optional agent/queue detail, and ends with a
-bounded codepoint-safe truncation.
+capacity renders `ctx —`; estimated used/capacity/percent/remaining values carry
+`~`, and unknown used values do not produce a numeric remaining value. Exact
+provider usage is separate from the compiler estimate. Candidate fitting uses
+codepoint width, keeps status/mode/model ahead of optional agent/queue detail,
+and ends with a bounded codepoint-safe truncation.
 
 Move 44 proof: Debug passes `19/19` build steps and `1,998/1,998` tests;
 focused TUI passes `9/9` steps and `77/77` tests; ReleaseFast/install passes
@@ -356,12 +397,14 @@ Move 55 closes the capability-manifest drift seam. `ToolDefinition.availability`
 now carries each module-owned dependency declaration. `core/tools/registry.zig`
 probes the selected definition and renders live availability; it no longer owns
 the 15-entry name-keyed `availability_entries` table. The same selected
-definition slice supplies the model-visible catalog, provider schema, review
+definition slice supplies the native provider schema, operator catalog, review
 risk, and dispatch path. The legacy `availabilitySpec(name)` helper remains a
 thin compatibility scan, but runtime catalog and execution paths pass the
 definition directly. An unavailable `ix` probe marks `search_files` unavailable
-while native `list_files` remains available. The installed `tools --json` proof
-reports 25 tools and `search_files -> ix -> available`.
+while native `list_files` remains available. The provider prompt receives the
+native schema only; examples, availability detail, and repair guidance remain
+explicit operator/tool surfaces. The installed `tools --json` proof reports 25
+tools and `search_files -> ix -> available`.
 
 Move 55 proof is Debug `19/19` and `2,102/2,102`, focused TUI `120/120`,
 ReleaseFast/install `9/9`, source/installed SHA-256
@@ -443,12 +486,33 @@ minimum matrix covers terse/detailed, solo/orchestrated,
 conservative/aggressive, and low/high update cadence. Runtime logic is valid
 only when prompting cannot enforce the capability boundary.
 
+The assembled provider-facing system prompt also has one estimated budget:
+`context.prompt_budget_tokens` defaults to `8,192` and fails before provider
+dispatch with `PromptBudgetExceeded` rather than silently dropping prompt
+layers. Native provider tool schemas remain outside that string and inside the
+full context-window accounting. Move 66 proves the four prompt modes and the
+named behavior matrix across root, recon, and orchestrator tool routes through
+the same builder without executor branches. Move 68 now carries
+`TokenPrecision.exact`, `.estimated`, and `.unknown` through the existing turn
+events. Provider usage is exact only when the wire supplies evidence; compiler
+context arithmetic is marked estimated; omitted usage stays unknown. The
+footer marks estimates with `~`, and `/status` suppresses cumulative totals
+after an unaccounted completed turn.
+
 The accepted prompt-mode contract names `orchestrate`, `build`, `align`, and
 `plan`, with `orchestrate` as the default. Shift+Tab cycles the session-local
 selection and the next `session/send` applies one hot-loaded provider-visible
 layer. A mode changes guidance only, not executor, tool capability, access
-policy, or agent capacity. Broader behavior-profile proof remains a later
-roadmap boundary.
+policy, or agent capacity. The source behavior matrix is closed; Move 67 owns
+stable message IDs and explicit compaction ranges, and Move 68 owns
+token-accounting precision.
+
+Move 68 source proof is Debug `19/19`, `2,159/2,159`; source ReleaseFast
+`9/9`; SHA-256
+`41C90C2BDF0CB6350E9056EC361E8280FB8EF423AC941A8F4015B88B71695E15`.
+Installed promotion remains deferred. The research and receipt are
+`.docs/research/2026-08-14-token-accounting-precision-move68.md` and
+`.docs/todo/changelog/059-token-accounting-precision.md`.
 
 ## Durable execution
 
@@ -475,6 +539,15 @@ a leading BOM, validates UTF-8 and JSON before typed schema parsing, rejects
 duplicate or non-monotonic sequences, and stops every projection at the first
 defect. `fsutil.appendJsonlRecord` checks the current bounded tail through the
 same owner and refuses poison without truncating or appending behind it.
+
+Move 62 closes the write-intent path through the real file tools. The runtime
+copies each provider tool-call ID into the session-scoped execution context;
+`write_file`, `append_file`, and `replace_in_file` append `reserved` before the
+filesystem mutation and `committed` after the measured after-hash and byte
+metric. A non-running or proven-stale session appends one `abandoned` terminal
+row for each reservation with no commit at cold start. No rollback simulator or
+second mutation manager is implied: an abandoned row records indeterminate
+effect state for the later repair loop.
 
 ## Persistent execution owner
 
@@ -589,7 +662,7 @@ zero-process cleanup.
 
 ## TUI projection contract
 
-- The footer is one compact metadata row: model, effort, context used/capacity/percentage, remaining capacity, active agents, pool pressure, and assigned queue pressure when non-zero. `Esc cancel` is intentionally omitted from the persistent row.
+- The footer is one compact metadata row: model, effort, context used/capacity/percentage, remaining capacity, active agents, pool pressure, and assigned queue pressure when non-zero. Estimated context carries `~`; unknown used/remaining values stay `ctx — / capacity`. `Esc cancel` is intentionally omitted from the persistent row.
 - The footer background tokens are ordered `styles.surface < styles.meta_surface < styles.composer`; the composer is the focused input row above metadata, and `cancelling` is emitted only while an active run is waiting on cancellation.
 - A child group row is `Agents completed/total`. The old `waiting on N` filler is removed from the visible structure; terminal failure/cancellation evidence may remain as a suffix.
 - A child row is keyed by `group_id + task_id`. Tool lifecycle events update its state marker but do not become the row label.
@@ -616,7 +689,7 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - Six Zig test artifacts receive generated child-process `VANTARI_HOME` values.
   `VANTARI_TEST_ROOT` rejects paths outside `apps/backend/.zig-cache`; 31
   obsolete environment skip guards are removed.
-- The complete graph passes 19/19 steps and 1,998/1,998 tests with zero skips.
+- The complete graph passes 19/19 steps and 2,150/2,150 tests with zero skips.
   The reduced total is intentional: one registry loop executes all 53 declared
   cases and replaces 45 one-case wrappers that left ten cases undiscovered.
   Its host lane executes the stdio child, owner state/client, shared process
@@ -648,6 +721,42 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
 - The broad prompt/tool gate is closed: retired `todo_slice` policy no longer
   leaks into the normal provider payload, duplicate file-inspection prose is
   removed, and tests protect the semantic guardrail instead of capitalization.
+- Move 64 closes the work-state duplication: tickets are the sole work
+  lifecycle; `todo_slice`, `session_record`, `.var/todos`, per-session
+  `session.md`, and automatic generic docs-sync writes are removed. Summaries
+  remain handoff projections and durable knowledge/changelog artifacts remain
+  ticket-linked. Current source proof is Debug `19/19`, `2,150/2,150`, source
+  ReleaseFast `9/9`, SHA-256
+  `BD84254B62AF1F4BA2EFEC2609B19BFBB7A69027F20ED1B0F354D9FBCB22CB69`;
+  installed promotion is deferred.
+- Move 65 closes the prompt/tool duplication: `builder.zig` no longer embeds
+  `tools.renderCatalog`; native provider tool schemas are the model-facing API,
+  while hot-loaded behavior layers and demand-loaded skills remain intact.
+  Prompt tests reject the old catalog markers and provider tests retain native
+  schema coverage. Current source proof is Debug `19/19`, `2,150/2,150`, source
+  ReleaseFast `9/9`, SHA-256
+  `702DD2CB1A067246E82D8670F0F33FD322FD4178C271AF11E712A110151783D3`;
+  installed promotion is deferred.
+- Move 66 closes the prompt-budget and behavior-profile boundary:
+  `context.prompt_budget_tokens` defaults to `8,192`; the builder fails closed
+  before provider dispatch when the estimated system-prompt budget is exceeded,
+  and native provider schemas remain outside the string. A single matrix proves
+  all four modes plus terse/detailed, solo/orchestrated,
+  conservative/aggressive, and low/high-cadence profiles across root, recon,
+  and orchestrator tool routes without executor branches. Current source proof
+  is Debug `19/19`, `2,154/2,154`, source ReleaseFast `9/9`, SHA-256
+  `CA61A2DD503C0A5A70850AB12A809DE43F471B3ED86FF46DF439A50F8B89BC0D`;
+  installed promotion is deferred. Move 68 closes the later context-telemetry
+  boundary by carrying exact, estimated, and unknown precision through the
+  existing turn events and TUI/status projections.
+- Move 67 closes the message identity and compaction-range boundary. The
+  existing session owner preserves generated and explicit deterministic IDs;
+  compaction appends only `context.jsonl` with inclusive source and first-kept
+  ranges, and cold replay rebuilds the summary plus exact raw suffix without
+  rewriting `messages.jsonl`. Debug is `19/19`, `2,155/2,155`; source
+  ReleaseFast is `9/9`, SHA-256 remains
+  `CA61A2DD503C0A5A70850AB12A809DE43F471B3ED86FF46DF439A50F8B89BC0D`;
+  installed promotion is deferred.
 - The invalid first broad run is repaired reversibly: 129 generated sessions,
   16 changelog directories, 18 summary keys, and 64 known test rows are held in
   `C:\Users\Savage\.vantari-quarantine\2026-08-12-test-isolation-incident`

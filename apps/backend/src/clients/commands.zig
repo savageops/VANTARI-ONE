@@ -15,6 +15,7 @@
 /// TUI may invoke a command through the slash-compatible dispatcher or through
 /// the exact bare-name path used by its transient autocomplete palette.
 const std = @import("std");
+const shared_types = @import("VAR1").shared.types;
 
 /// The ChatState type — declared as @Anytype to avoid a circular import
 /// (tui_chat.zig imports commands.zig). Commands access state through this
@@ -189,11 +190,13 @@ pub fn renderHelp(allocator: std.mem.Allocator) ![]u8 {
 }
 
 /// Session token/cost read model rendered by /status. Populated by the TUI
-/// from completed turn_terminal events (measured provider tokens + priced cost).
+/// from completed turn_terminal events. Token quantities are rendered only
+/// when the read model can prove provider-reported precision.
 pub const StatusTelemetry = struct {
     prompt_tokens: u64 = 0,
     completion_tokens: u64 = 0,
     cached_tokens: u64 = 0,
+    usage_precision: shared_types.TokenPrecision = .unknown,
     cost_total_usd: ?f64 = null,
 };
 
@@ -214,16 +217,22 @@ pub fn renderStatus(allocator: std.mem.Allocator, workspace_root: []const u8, mo
         try writer.writeAll("  Session:   (none)\n");
     }
     if (telemetry) |t| {
-        var token_buf: [3][16]u8 = undefined;
-        try writer.print("  Tokens:    {s} in / {s} out / {s} cached\n", .{
-            formatTokens(&token_buf[0], t.prompt_tokens),
-            formatTokens(&token_buf[1], t.completion_tokens),
-            formatTokens(&token_buf[2], t.cached_tokens),
-        });
-        if (t.cost_total_usd) |cost| {
-            try writer.print("  Cost:      ${d:.6}\n", .{cost});
+        if (t.usage_precision == .exact) {
+            var token_buf: [3][16]u8 = undefined;
+            try writer.print("  Tokens:    {s} in / {s} out / {s} cached\n", .{
+                formatTokens(&token_buf[0], t.prompt_tokens),
+                formatTokens(&token_buf[1], t.completion_tokens),
+                formatTokens(&token_buf[2], t.cached_tokens),
+            });
+            if (t.cost_total_usd) |cost| {
+                try writer.print("  Cost:      ${d:.6}\n", .{cost});
+            } else {
+                try writer.writeAll("  Cost:      (unpriced model)\n");
+            }
+        } else if (t.usage_precision == .estimated) {
+            try writer.writeAll("  Tokens:    ~estimated\n");
         } else {
-            try writer.writeAll("  Cost:      (unpriced model)\n");
+            try writer.writeAll("  Tokens:    unknown (provider omitted usage)\n");
         }
     }
 
@@ -302,6 +311,7 @@ test "renderStatus includes tokens and cost line when telemetry priced" {
         .prompt_tokens = 1234,
         .completion_tokens = 5678,
         .cached_tokens = 90,
+        .usage_precision = .exact,
         .cost_total_usd = 0.001234,
     });
     defer allocator.free(status);
@@ -315,6 +325,7 @@ test "renderStatus renders tokens-only line when cost unknown" {
         .prompt_tokens = 500,
         .completion_tokens = 100,
         .cached_tokens = 0,
+        .usage_precision = .exact,
         .cost_total_usd = null,
     });
     defer allocator.free(status);

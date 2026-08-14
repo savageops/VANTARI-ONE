@@ -26,6 +26,13 @@ user input → draft compilation (glm-5-turbo, optional)
            → durable terminal state
 ```
 
+Write-capable file tools use the existing session ledger as a two-phase
+evidence boundary: reserve the provider tool-call ID and before-hash before the
+mutation, commit the measured after-hash/bytes after it, and append one
+`abandoned` row for an unresolved reservation at safe cold start. The ledger
+does not claim rollback; it preserves the exact boundary needed by later repair
+work.
+
 Every retained subsystem reduces ambiguity at the call site while increasing guarantees in the core. A session is correct only when the operator can observe the same causal chain the kernel will replay after cold start.
 
 ### Persistent Execution Owner
@@ -86,9 +93,8 @@ VAR1 maintains a structured workspace knowledge surface under `.var/`:
   plans/        ← implementation plans, execution chains
   advice/       ← advisor SITREPs, coaching records, verification
   roadmap/      ← roadmap artifacts with owner + exit criteria
-  todos/        ← bounded execution tracking (todo_slice)
-  changelog/    ← completed work archive
-  tickets/      ← self-evolution issue ledger (log_ticket)
+  tickets/      ← canonical work lifecycle and queue ledger (log_ticket)
+  changelog/    ← ticket-linked completion evidence
   processes/    ← process execution ledger (shell_exec audit)
   sessions/     ← canonical session storage
   schedules/    ← durable scheduler jobs
@@ -96,6 +102,8 @@ VAR1 maintains a structured workspace knowledge surface under `.var/`:
 ```
 
 Every subagent that discovers findings **must persist them** to the appropriate surface before returning its SITREP. The orchestrator holds only the artifact index — paths, titles, summaries — never the full payloads.
+
+Tickets own work identity and terminal state. Session summaries are bounded handoff projections; plans, research, advice, roadmap, and changelog entries are ticket-linked artifacts. The runtime does not create or read parallel `.var/todos/` slices or per-session `session.md` records.
 
 ### Ticket Lifecycle (Full Work Tracking)
 
@@ -141,9 +149,12 @@ against a source-hash-matched installed binary.
 `ToolDefinition.availability` carries each built-in dependency declaration.
 `core/tools/registry.zig` probes that selected definition and emits live
 availability; it does not maintain a parallel name-keyed table. The same
-definition slice supplies the model catalog, provider schema, review risk, and
-dispatch path. `search_files` declares and probes the installed `ix` executable;
-when `ix` is absent, the catalog reports `unavailable` and dispatch fails closed.
+definition slice supplies the native provider schema, operator catalog, review
+risk, and dispatch path. `search_files` declares and probes the installed `ix`
+executable; when `ix` is absent, the operator catalog reports `unavailable` and
+dispatch fails closed. The provider prompt receives the native schema only;
+examples and dependency detail remain demand-loaded at the operator/tool
+surface.
 `eval` declares Python with the platform-correct Bun executable as an
 alternative; the catalog exposes both names while dispatch selects one
 persistent kernel per workspace and session. `core/tools/process.zig` is the
@@ -248,9 +259,30 @@ exact label and the kernel hot-loads one provider-visible guidance layer.
 does not select tools, change access, alter the executor, or change model/agent
 capacity; prompts remain the behavior control plane.
 
+The assembled provider-facing system prompt has one context-policy guard:
+
+```json
+{
+  "context": {
+    "prompt_budget_tokens": 8192
+  }
+}
+```
+
+The value is an estimated char/4 ceiling. Exceeding it fails before provider
+dispatch instead of silently rewriting prompt layers. Native provider tool
+schemas are sent through the provider API separately and remain governed by the
+full context-window budget. The source matrix proves the four modes and named
+behavior profiles across root, recon, and orchestrator routes through one
+builder; no mode-specific executor branch exists. Move 68 carries
+`exact` provider usage, `estimated` compiler context, and `unknown` omitted
+usage through the existing turn events; the footer marks estimates with `~`
+and `/status` suppresses partial cumulative totals.
+
 The same footer projection displays `status · prompt mode · model · effort ·
-context used/capacity/percent · remaining` in one non-wrapping row. Unknown
-context remains `ctx —`; width fitting is codepoint-safe and drops lower-signal
+context used/capacity/percent · remaining` in one non-wrapping row. Estimated
+context is marked with `~`; unknown used/remaining context remains
+`ctx — / capacity`. Width fitting is codepoint-safe and drops lower-signal
 agent/queue detail before final truncation.
 
 ### Per-Agent Effort & Temperature
@@ -375,8 +407,9 @@ Every `shell_exec` command appends a durable record to `.var/processes/processes
 - **Command discovery** — the composer shows a bounded registry-backed popover for bare first-token prefixes (`s`, `set`, `settings`) and slash-prefixed input; matches disappear for prose or no results, and Up/Down, Tab, Enter, and Escape remain transient input controls
 - **Settings overlay** — `settings` renders through the normal Vaxis frame boundary; Tab/Right advances sections, Shift+Tab/Left reverses them, and unavailable persisted config shows compiled defaults instead of freezing or falling through to the model
 - **Saved TUI controls** — the `tui` config section persists four named palettes (`vantari`, `midnight`, `high_contrast`, `amber`) and `status_bar_position` (`bottom` or `top`). The same renderer consumes them immediately after a successful settings save; arbitrary color maps and a layout registry are intentionally absent
-- **Operator metadata row** — one non-wrapping row for status, prompt mode, model, effort, context used/capacity/remaining, and signal-bearing agent/queue/cost pressure; active/max and queue appear only when useful, finite priced session cost is compact, unknown context stays `ctx —`, and persistent `Esc cancel` text is omitted
+- **Operator metadata row** — one non-wrapping row for status, prompt mode, model, effort, context used/capacity/remaining, and signal-bearing agent/queue/cost pressure; active/max and queue appear only when useful, estimated context carries `~`, unknown used/remaining context stays `ctx — / capacity`, exact priced session cost is compact, and persistent `Esc cancel` text is omitted
 - **Root question controller** — event-backed `ask_user` questions in one settings-style horizontal-row panel with clamped focus, Enter select, Space check, inline `f / Other`, review/submit, and one `input/respond` RPC; root catalogs and the orchestrator allow-list retain the capability while child profiles remain headless; malformed requests cancel safely; the Vaxis render boundary is tested across every prompt mode; no polling overlay or second status bus
+- **Question lifecycle boundary** — an orphaned panel, transport failure, terminal replay, or already-settled turn clears the same controller; Ctrl-C while a question is active resolves through `input/respond` cancellation instead of trapping the TUI in a run-cancel path
 - **Composer hierarchy** — transcript surface < metadata surface < focused input surface; `cancelling` appears only during an active cancellation request and disappears at the terminal boundary
 
 ### Runtime chat posture and mode routes
@@ -521,8 +554,8 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Agent eligibility | **Source proven** | One hot-loaded `AgentService` snapshot advertises only route-resolvable specialists with capacity/team/communication state and an exact SHA-256 receipt. Quiet and hive prompt profiles choose different actions through the same executor; the dedicated installed snapshot probe has not run. |
 | Write-intent ledger | **Frontier scaffold** | Reserve/commit helpers and tests exist; write-capable tools do not call them on the canonical mutation path. |
 | Byte-level session integrity | **Source and installed proven** | One LF-only reader owns BOM, invalid-UTF-8, JSON/schema, duplicate, and non-monotonic boundaries across event/message/context/intent/summary projections. Append refuses a poisoned current tail without rewriting it; operator-facing corruption events remain a later diagnostics decision. |
-| Context compiler | **Shipped source path** | One builder compiles transcript plus checkpoint state and validates tool topology before provider dispatch. |
-| Compaction | **Manual writer shipped** | Entry-aware checkpoints exist; autonomous/background compaction remains gated. |
+| Context compiler | **Shipped source path** | One builder compiles transcript plus checkpoint state and validates tool topology before provider dispatch; cold replay uses the checkpoint's exact first-kept sequence. |
+| Compaction | **Manual writer shipped** | Entry-aware checkpoints retain stable message identity plus explicit source/kept ranges; autonomous/background compaction remains gated. |
 | TTSR stream rules | **Source-complete; installed promotion pending** | One provider abort hook stops SSE reads before terminal completion, persists correction plus `rule_injected` evidence, and retries through the existing executor. Debug `2,151/2,151`; installed provider proof remains deferred. |
 | Hash-anchored edits | **Shipped source path** | read_file hashes and edit preconditions reject stale content before mutation. |
 | Provider capability probing | **Frontier scaffold** | Cache code exists without a runtime adapter consumer. |
