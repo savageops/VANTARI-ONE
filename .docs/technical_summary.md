@@ -476,16 +476,36 @@ hashes the operation/path/patch descriptor, and records expected/current source
 baselines. It never writes, reserves a write intent, stores patch body, or
 allows mutation. A drift mismatch appends `baseline_conflict` evidence and
 returns typed `RepairBaselineConflict`; a matching baseline returns `ready` but
-still reports `mutation_allowed:false`. Moves 75–80 own approval, application,
-exact-input replay, evaluation, rollback, and promotion.
+still reports `mutation_allowed:false`. Move 75 adds the explicit operator
+approval stage; Moves 76–80 own application, exact-input replay, evaluation,
+rollback, and promotion.
 
-Full Debug and ReleaseFast are `19/19` steps and `2,182/2,182` tests. The
+Full Debug and ReleaseFast are `19/19` steps and `2,184/2,184` tests. The
 source ReleaseFast build is `9/9` at SHA-256
-`E92BD7C72EBF06D2D6B43F0ECF85B90AD6E0C34605D72833B96CBD5F0B7BB0FD`.
+`4D348DF8F6E19A7D79F54E6DE2987C7C5369E6630B75E3BB667EFE274E87DFA3`.
 The existing full-frame question modal is source-verified across all prompt
 modes; installed promotion remains deferred and the preserved installed owner
 remains on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
-Receipt: `.docs/todo/changelog/068-repair-candidate-baseline.md`.
+Receipt: `.docs/todo/changelog/069-repair-approval-boundary.md`.
+
+## Current repair-approval boundary — 2026-08-14
+
+The operator-only `repair/approve` RPC binds candidate event sequence/id, the
+exact stored patch hash, and the expected source baseline. The event owner
+rechecks the current source baseline before appending one
+`var1.repair_candidate_approval.v1` receipt. Repeating the same approval
+identity returns its existing sequence; mismatches fail before mutation. The
+receipt reports `mutation_allowed:true` as approval evidence only: it stores no
+patch body, does not write files, and does not reserve a write intent. Move 76
+will apply the approved candidate through existing reviewed tools.
+
+Full Debug and ReleaseFast are `19/19` steps and `2,184/2,184` tests. The
+source ReleaseFast build is `9/9` at SHA-256
+`4D348DF8F6E19A7D79F54E6DE2987C7C5369E6630B75E3BB667EFE274E87DFA3`.
+The full-frame question modal remains source-verified across all prompt modes;
+installed promotion is deferred and the preserved installed owner remains on
+`F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+Receipt: `.docs/todo/changelog/069-repair-approval-boundary.md`.
 
 ## Current task-branch context boundary — 2026-08-14
 

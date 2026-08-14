@@ -1,5 +1,23 @@
 # Execution Log
 
+## 2026-08-14 - Operator-bound repair approval (Move 75)
+
+**Outcome:** Added one operator-only approval socket for source-anchored repair
+candidates. Approval appends evidence only and remains bound to the exact
+candidate and unchanged source baseline.
+
+- `repair/approve` validates candidate event sequence/id, stored patch hash,
+  expected baseline, and the current source baseline before appending
+  `var1.repair_candidate_approval.v1`.
+- The same approval identity is sequentially idempotent; mismatches fail before
+  mutation. `mutation_allowed:true` is approval evidence for Move 76, not a
+  source write. No patch body, patcher, approval bus, or second ledger exists.
+- Full Debug and ReleaseFast pass `19/19` steps and `2,184/2,184` tests.
+  Source ReleaseFast passes `9/9`; source SHA-256 is
+  `4D348DF8F6E19A7D79F54E6DE2987C7C5369E6630B75E3BB667EFE274E87DFA3`.
+- Installed promotion remains deferred. Receipt:
+  `.docs/todo/changelog/069-repair-approval-boundary.md`.
+
 ## 2026-08-14 - Source-anchored repair candidates (Move 74)
 
 **Outcome:** Added one proposal-only repair candidate socket to the existing

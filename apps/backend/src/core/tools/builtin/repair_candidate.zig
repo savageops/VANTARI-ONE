@@ -89,7 +89,7 @@ pub fn execute(
     const patch_hash = evaluation_events.contentHash(patch_descriptor);
     const baseline_match = std.mem.eql(u8, expected_baseline, current_baseline);
 
-    try evaluation_events.appendRepairCandidateEvent(
+    const candidate_event_seq = try evaluation_events.appendRepairCandidateEvent(
         allocator,
         execution_context.workspace_root,
         session_id,
@@ -108,8 +108,8 @@ pub fn execute(
 
     const summary = try std.fmt.allocPrint(
         allocator,
-        "CANDIDATE_ID {s}\nSTATUS ready\nSOURCE_BASELINE {s}\nPATCH_SHA256 sha256:{s}\nBEFORE_SHA256 sha256:{s}\nMUTATION_ALLOWED false\nNEXT approval required before apply",
-        .{ candidate_id, current_baseline, patch_hash[0..], before.sha256_hex.? },
+        "CANDIDATE_ID {s}\nCANDIDATE_EVENT_SEQ {d}\nSTATUS ready\nSOURCE_BASELINE {s}\nPATCH_SHA256 sha256:{s}\nBEFORE_SHA256 sha256:{s}\nMUTATION_ALLOWED false\nNEXT operator approval required before apply",
+        .{ candidate_id, candidate_event_seq, current_baseline, patch_hash[0..], before.sha256_hex.? },
     );
     defer allocator.free(summary);
     return module.okEnvelope(allocator, definition.name, summary);

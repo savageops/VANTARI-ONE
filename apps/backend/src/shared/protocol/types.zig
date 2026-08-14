@@ -13,6 +13,7 @@ pub const methods = struct {
     pub const session_compact = "session/compact";
     pub const session_cancel = "session/cancel";
     pub const input_respond = "input/respond";
+    pub const repair_candidate_approve = "repair/approve";
     pub const session_get = "session/get";
     pub const session_list = "session/list";
     pub const schedule_get = "schedule/get";
@@ -32,6 +33,7 @@ pub const Capabilities = struct {
     session_compact: bool = true,
     session_cancel: bool = true,
     input_respond: bool = true,
+    repair_candidate_approval: bool = true,
     session_get: bool = true,
     session_list: bool = true,
     schedule_get: bool = true,
@@ -122,6 +124,16 @@ pub const InputRespondResult = struct {
     session_id: []const u8,
     request_id: []const u8,
     accepted: bool,
+};
+
+pub const RepairCandidateApprovalResult = struct {
+    session_id: []const u8,
+    candidate_id: []const u8,
+    approval_id: []const u8,
+    candidate_event_seq: u64,
+    approval_event_seq: u64,
+    approved: bool,
+    mutation_allowed: bool,
 };
 
 pub const ScheduleSummary = struct {

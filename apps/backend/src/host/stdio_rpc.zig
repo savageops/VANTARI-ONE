@@ -1,6 +1,7 @@
 const std = @import("std");
 const context_compactor = @import("../core/context/compactor.zig");
 const config_file = @import("../core/config/file.zig");
+const evaluation_events = @import("../core/evaluation/events.zig");
 const loop = @import("../core/executor/loop.zig");
 const prompts = @import("../core/prompts/index.zig");
 const protocol_events = @import("../shared/protocol/events.zig");
@@ -49,6 +50,9 @@ pub const Error = error{
     InputNotFound,
     InputSessionMismatch,
     InputUnavailable,
+    RepairCandidateNotFound,
+    RepairCandidateMismatch,
+    RepairCandidateBaselineConflict,
     RpcRemoteError,
     ServerShuttingDown,
 };
@@ -794,6 +798,9 @@ fn processRequest(server: *Server, request_payload: []const u8) !?[]u8 {
         Error.ScheduleNotFound => return errorResponseOrNull(server.allocator, id, -32004, "Schedule not found"),
         Error.SessionRunning => return errorResponseOrNull(server.allocator, id, -32002, "Session already running"),
         Error.InputNotFound, Error.InputSessionMismatch, Error.InputAlreadyResolved, Error.InputAlreadyPending, Error.InputUnavailable => return errorResponseOrNull(server.allocator, id, -32602, "Input request is no longer available"),
+        Error.RepairCandidateNotFound => return errorResponseOrNull(server.allocator, id, -32007, "Repair candidate not found"),
+        Error.RepairCandidateMismatch => return errorResponseOrNull(server.allocator, id, -32008, "Repair candidate approval does not match the candidate"),
+        Error.RepairCandidateBaselineConflict => return errorResponseOrNull(server.allocator, id, -32009, "Repair candidate source baseline changed"),
         Error.ProviderNotFound => return errorResponseOrNull(server.allocator, id, -32006, "Provider not found"),
         Error.ServerShuttingDown => return errorResponseOrNull(server.allocator, id, rpc_server_busy_code, "Server shutting down"),
         Error.ExecutionFailed => return errorResponseOrNull(server.allocator, id, -32000, "Execution failed"),
@@ -831,6 +838,9 @@ fn dispatch(
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.input_respond)) {
         return handleInputRespond(server, params);
+    }
+    if (std.mem.eql(u8, method_name, protocol_types.methods.repair_candidate_approve)) {
+        return handleRepairCandidateApprove(server, params);
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.session_get)) {
         return handleSessionGet(server, params);
@@ -1359,6 +1369,53 @@ fn handleInputRespond(server: *Server, params: ?std.json.Value) ![]u8 {
         .session_id = session_id,
         .request_id = request_id,
         .accepted = true,
+    });
+}
+
+/// Record operator approval for one exact proposal. This protocol method is
+/// intentionally separate from the model-facing tool catalog: approval is a
+/// human decision and this handler only appends evidence, never source bytes.
+fn handleRepairCandidateApprove(server: *Server, params: ?std.json.Value) ![]u8 {
+    const Args = struct {
+        session_id: []const u8,
+        candidate_id: []const u8,
+        approval_id: []const u8,
+        approved_by: []const u8,
+        patch_sha256: []const u8,
+        expected_source_baseline: []const u8,
+    };
+
+    var parsed = try parseParams(Args, server.allocator, params);
+    defer parsed.deinit();
+    const params_value = params orelse return Error.InvalidParams;
+    if (params_value != .object) return Error.InvalidParams;
+    const candidate_event_seq = (try optionalU64FromObject(&params_value.object, "candidate_event_seq")) orelse return Error.InvalidParams;
+    const approval_event_seq = evaluation_events.appendRepairCandidateApprovalEvent(
+        server.allocator,
+        server.config.workspace_root,
+        parsed.value.session_id,
+        candidate_event_seq,
+        parsed.value.candidate_id,
+        parsed.value.approval_id,
+        parsed.value.approved_by,
+        parsed.value.patch_sha256,
+        parsed.value.expected_source_baseline,
+    ) catch |err| switch (err) {
+        evaluation_events.Error.EmptyEvidence => return Error.InvalidParams,
+        evaluation_events.Error.CandidateNotFound => return Error.RepairCandidateNotFound,
+        evaluation_events.Error.CandidateMismatch => return Error.RepairCandidateMismatch,
+        evaluation_events.Error.CandidateBaselineConflict => return Error.RepairCandidateBaselineConflict,
+        else => return err,
+    };
+
+    return renderJsonAlloc(server.allocator, protocol_types.RepairCandidateApprovalResult{
+        .session_id = parsed.value.session_id,
+        .candidate_id = parsed.value.candidate_id,
+        .approval_id = parsed.value.approval_id,
+        .candidate_event_seq = candidate_event_seq,
+        .approval_event_seq = approval_event_seq,
+        .approved = true,
+        .mutation_allowed = true,
     });
 }
 
@@ -2640,6 +2697,60 @@ test "processRequest returns method-not-found errors for unknown methods" {
     try std.testing.expect(response != null);
     try std.testing.expect(std.mem.indexOf(u8, response.?, "\"id\":\"req-1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, response.?, "\"code\":-32601") != null);
+}
+
+test "repair/approve records operator approval for the exact candidate" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    var session = try store.initSession(std.testing.allocator, workspace_root, "approve candidate");
+    defer session.deinit(std.testing.allocator);
+    const baseline = try evaluation_events.sourceBaseline(std.testing.allocator);
+    defer std.testing.allocator.free(baseline);
+    const patch_hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const patch_sha256 = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const candidate_seq = try evaluation_events.appendRepairCandidateEvent(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "candidate-rpc",
+        "failure-rpc",
+        "replace_in_file",
+        "README.md",
+        "before-rpc",
+        patch_hash,
+        baseline,
+        baseline,
+        true,
+    );
+
+    const request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"approve-1\",\"method\":\"repair/approve\",\"params\":{{\"session_id\":{f},\"candidate_id\":\"candidate-rpc\",\"candidate_event_seq\":{d},\"approval_id\":\"approval-rpc\",\"approved_by\":\"operator\",\"patch_sha256\":\"{s}\",\"expected_source_baseline\":{f}}}}}",
+        .{ std.json.fmt(session.id, .{}), candidate_seq, patch_sha256, std.json.fmt(baseline, .{}) },
+    );
+    defer std.testing.allocator.free(request);
+
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"error\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"approved\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"mutation_allowed\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"approval_event_seq\":2") != null);
+
+    const events = try store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer types.deinitSessionEvents(std.testing.allocator, events);
+    try std.testing.expectEqual(@as(usize, 2), events.len);
+    try std.testing.expectEqualStrings(evaluation_events.repair_candidate_approval_event_type, events[1].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[1].message, "\"candidate_event_seq\":1") != null);
 }
 
 test "session/send rejects unknown prompt modes before session execution" {

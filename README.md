@@ -289,8 +289,11 @@ in that same event spine. It requires an inspected existing target, captures the
 before hash, hashes the operation/path/patch descriptor, and records expected and
 current source baselines. Source drift returns a typed conflict; even a matching
 candidate reports `mutation_allowed:false` and performs no write. Approval and
-application remain a later, explicit stage over the existing reviewed write
-tools.
+application remain explicit stages over the existing reviewed write tools. The
+operator-only `repair/approve` socket now binds the candidate event sequence/id,
+stored patch hash, and expected/current source baseline before appending one
+`var1.repair_candidate_approval.v1` receipt. It is evidence only; Move 76 owns
+application.
 
 ```text
 session/create ─► session/send ─► [executor loop] ─► session/get
