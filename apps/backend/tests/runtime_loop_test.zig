@@ -100,6 +100,19 @@ const StreamingToolLoopContext = struct {
     }
 };
 
+const StreamRuleLoopContext = struct {
+    allocator: std.mem.Allocator,
+    call_count: usize = 0,
+    saw_injection: bool = false,
+    payloads: [3]?[]u8 = .{ null, null, null },
+
+    fn deinit(self: *StreamRuleLoopContext) void {
+        for (self.payloads) |payload| {
+            if (payload) |value| self.allocator.free(value);
+        }
+    }
+};
+
 fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
     if (needle.len == 0) return 0;
     var count: usize = 0;
@@ -372,6 +385,31 @@ fn mockStreamAssistantToolAssistantLoop(
     try hooks.onAssistantDelta("alpha.");
     return allocator.dupe(u8,
         \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"Observed alpha."}}]}
+    );
+}
+
+fn mockStreamRuleAbortThenSuccess(
+    ctx_ptr: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    _: []const u8,
+    payload: []const u8,
+    hooks: VAR1.core.provider_runtime.StreamHooks,
+) anyerror![]u8 {
+    var ctx: *StreamRuleLoopContext = @ptrCast(@alignCast(ctx_ptr.?));
+    ctx.payloads[ctx.call_count] = try ctx.allocator.dupe(u8, payload);
+    defer ctx.call_count += 1;
+
+    if (ctx.call_count == 0) {
+        try hooks.onAssistantDelta("The unsafe branch begins with eval(");
+        if (!hooks.shouldAbort()) return error.TestStreamAbortNotRequested;
+        return error.StreamAborted;
+    }
+
+    ctx.saw_injection = std.mem.indexOf(u8, payload, "[Stream rule 'no-eval' triggered]") != null;
+    try hooks.onAssistantDelta("Safe completion.");
+    return allocator.dupe(u8,
+        \\{"model":"gemma-4-e2b-it","choices":[{"message":{"content":"Safe completion."}}]}
     );
 }
 
@@ -1452,6 +1490,65 @@ test "loop persists streamed assistant deltas around tool execution without coll
     try std.testing.expectEqual(@as(usize, 4), countOccurrences(events, "assistant_delta"));
     try std.testing.expect(std.mem.indexOf(u8, events, "call_stream_read") != null);
     try std.testing.expect(std.mem.indexOf(u8, events, "var1.tool_finished.v1") != null);
+}
+
+test "loop aborts TTSR before terminal state and retries with durable correction" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
+    defer std.testing.allocator.free(workspace_root);
+
+    const config = try makeConfig(std.testing.allocator, workspace_root, 4);
+    defer config.deinit(std.testing.allocator);
+
+    var context = StreamRuleLoopContext{ .allocator = std.testing.allocator };
+    defer context.deinit();
+
+    const result = try VAR1.core.executor.runPromptWithTransport(
+        std.testing.allocator,
+        config,
+        "Produce a safe answer.",
+        .{
+            .context = &context,
+            .sendFn = mockStreamingSendShouldNotBeUsed,
+            .streamFn = mockStreamRuleAbortThenSuccess,
+        },
+    );
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), context.call_count);
+    try std.testing.expect(context.saw_injection);
+    try std.testing.expectEqualStrings("Safe completion.", result.output);
+
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, result.session_id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
+
+    var rule_index: ?usize = null;
+    var assistant_response_index: ?usize = null;
+    var terminal_count: usize = 0;
+    for (events, 0..) |event, index| {
+        if (std.mem.eql(u8, event.event_type, "rule_injected")) rule_index = index;
+        if (assistant_response_index == null and std.mem.eql(u8, event.event_type, "assistant_response")) {
+            assistant_response_index = index;
+        }
+        if (std.mem.eql(u8, event.event_type, "turn_terminal")) terminal_count += 1;
+    }
+    try std.testing.expect(rule_index != null);
+    try std.testing.expect(assistant_response_index != null);
+    try std.testing.expect(rule_index.? < assistant_response_index.?);
+    try std.testing.expectEqual(@as(usize, 1), terminal_count);
+    try std.testing.expectEqualStrings("turn_terminal", events[events.len - 1].event_type);
+
+    const transcript = try VAR1.core.session_store.readSessionMessages(std.testing.allocator, workspace_root, result.session_id);
+    defer VAR1.shared.types.deinitSessionMessages(std.testing.allocator, transcript);
+    var correction_count: usize = 0;
+    for (transcript) |message| {
+        if (message.role == .user and std.mem.indexOf(u8, message.content, "[Stream rule 'no-eval' triggered]") != null) {
+            correction_count += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), correction_count);
 }
 
 test "loop persists multi-tool batches in assistant source order before follow-up context" {

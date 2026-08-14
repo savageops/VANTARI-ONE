@@ -209,10 +209,10 @@ advance the queue until the real installed consumer path proves it.
 | 56 | Give Python eval one persistent, session-owned kernel. | source-complete: `builtin/eval.zig` owns one workspace+session kernel registry; variables survive calls, timeout terminates the worker, and sessions remain isolated. Debug `19/19`, `2,121/2,121`; installed promotion deferred. |
 | 57 | Give Bun eval the same persistent, session-owned lifecycle. | source-complete: the same worker protocol, registry, bounded reader, timeout, and teardown path supports Bun JavaScript; Python-or-Bun availability stays definition-owned, with Windows `bun.exe` resolution. Debug `19/19`, `2,121/2,121`; installed promotion deferred. |
 | 57a | Persist the smallest renderer-backed TUI policy: named theme and status-row placement. | source-complete: `core/config/file.zig::TuiPolicy` validates four named palettes and `bottom`/`top`; settings writes through `config/set`; `tui_chat.zig` applies the palette and reserves one top row while the composer stays bottom. Focused TUI `9/9`, `126/126`; Debug `19/19`, `2,129/2,129`; source ReleaseFast `9/9`; installed promotion deferred. Research: `.docs/research/2026-08-14-tui-theme-status-settings.md`. |
-| 57b | Repair and simplify root multiple-choice interaction across normal and align modes. | source-complete plus consumer hardening: initialized-slice cleanup removes the late-invalid `ask_user` crash; `question_view.State` renders bounded settings-style horizontal rows with clamped focus and review/submit; malformed `input_requested` data cancels safely without unwinding replay; frame projection sanitizes hostile text, uses static display keys while preserving response ids, and guards clipped viewports. Focused TUI `131/131`; Debug `19/19`, `2,144/2,144`; source ReleaseFast exit `0`, SHA-256 `7CD32F0D445F96E411EE8B35308A40CF08077BDE3703855525E446667799B3BB`; installed promotion deferred. Research: `.docs/research/2026-08-14-root-question-review-panel.md` and `.docs/research/2026-08-14-question-panel-consumer-hardening.md`. |
+| 57b | Repair and simplify root multiple-choice interaction across normal and align modes. | source-complete plus consumer hardening: initialized-slice cleanup removes the late-invalid `ask_user` crash; root catalogs and the orchestrator allow-list retain the bounded interaction; `question_view.State` renders bounded settings-style horizontal rows with clamped focus and review/submit; malformed `input_requested` data cancels safely without unwinding replay; frame projection sanitizes hostile text, uses static display keys while preserving response ids, and guards clipped viewports. Focused TUI `132/132`; Debug `19/19`, `2,151/2,151`; source ReleaseFast exit `0`, SHA-256 `521FE17CC941C0CA34605FFEAADD27BA9B3DC5001847022A308AFFE45BA26DE7`; installed promotion deferred. Research: `.docs/research/2026-08-14-root-question-review-panel.md`, `.docs/research/2026-08-14-question-panel-consumer-hardening.md`, and `.docs/research/2026-08-14-question-panel-runtime-contract.md`. |
 | 58 | consolidate/add-tests | source-complete: `core/tools/process.zig` is the single bounded child owner for `shell_exec` and persistent eval. Timeout/session teardown uses one receipt-bearing path; response readers drain beyond the 64 KiB display cap; Windows uses Job Object teardown plus bounded process/thread waits. Debug `19/19`, `2,137/2,137`; focused TUI `9/9`, `129/129`; source ReleaseFast `9/9`; dupe-audit reports zero duplicate candidates. Installed promotion remains deferred. |
 | 59 | Keep one DAP client from attach through pause, stack, scopes, variables, continue, and detach. | closed source-only: `builtin/dap.zig` is registered through the normal catalog/dispatch path; one workspace+session adapter uses `core/tools/process.zig::PersistentProcess` and exact Content-Length framing; seven risk-correct sockets cover attach/pause/stack/scopes/variables/continue/detach; host teardown runs after request workers join; a real Python stdio adapter proves one process ID across the lifecycle. Debug `19/19`, `2,141/2,141`; focused TUI `9/9`, `130/130`; source ReleaseFast `9/9`; packaged GGUF audit finds 2 semantic candidates and 0 exact duplicate candidates across 89 segments; source SHA-256 `20D9B9001719F891DF984CAD480B0DFCB712E6197FAF27F6907CE8B205F97D8D`; installed promotion remains deferred. Research: `.docs/research/2026-08-14-dap-move59.md`. |
-| 60 | Make a TTSR rule match abort the provider read before terminal completion. | executor/provider streaming seam; abort is observable and replayable. |
+| 60 | Make a TTSR rule match abort the provider read before terminal completion. | closed source-only: one `StreamHooks.shouldAbortFn` crosses all provider adapters; the reader stops before terminal completion, `loop.zig` persists correction plus `rule_injected` evidence, and the existing turn loop retries. Debug `19/19`, `2,151/2,151`; source ReleaseFast `9/9`; SHA-256 `521FE17CC941C0CA34605FFEAADD27BA9B3DC5001847022A308AFFE45BA26DE7`; installed provider proof deferred. Research: `.docs/research/2026-08-14-ttsr-abort-move60.md`. |
 
 ## 61-70 — Reduce prompt mass and make context deterministic
 
@@ -283,16 +283,24 @@ and top/bottom status placement persist through the existing settings/config
   source-complete:
   `core/tools/process.zig` owns bounded one-shot commands and persistent worker
   teardown, with timeout, post-cap drain, and Windows tree receipts. The current
-  source graph is Debug `19/19`, `2,144/2,144`; focused TUI is `131/131`; source
+  source graph is Debug `19/19`, `2,151/2,151`; focused TUI is `132/132`; source
   ReleaseFast exits `0` at source SHA-256
-  `7CD32F0D445F96E411EE8B35308A40CF08077BDE3703855525E446667799B3BB`. Move 59
-  is now source-complete; the next queued frontier is Move 60. The
+  `521FE17CC941C0CA34605FFEAADD27BA9B3DC5001847022A308AFFE45BA26DE7`. Move 59
+  is now source-complete. Move 60 is also source-complete: TTSR aborts the
+  provider read before terminal completion, persists the correction, and retries
+  through the existing executor. The
   provider-driven installed question response remains an explicit residual for
   the Move52a consumer path because live promotion is deferred. The TUI input repair
 is installed-proven at `74981E5C9CF956E3F3003FA15FDEB1D94F05A55BE9192FD4EDB1F0DE2FDE62AD`:
 the settings overlay renders through the normal frame boundary, Shift+Tab
 reverses its section navigation, and the bare-prefix palette reuses the
-executable command registry without opening a parallel command system.
+  executable command registry without opening a parallel command system. The
+  question controller also has root catalog/allow-list coverage and a real
+  Vaxis render-boundary probe across all prompt modes. Research and receipts:
+  `.docs/research/2026-08-14-question-panel-runtime-contract.md`,
+  `.docs/research/2026-08-14-ttsr-abort-move60.md`,
+  `.docs/todo/changelog/050-ttsr-abort-move60.md`, and
+  `.docs/todo/changelog/051-question-panel-runtime-contract.md`.
 The provider cost/compat chain has no pending continuation.
 PLUG has no active runtime frontier: reopen it only after a concrete need and a
 new owner-mapped recon. Keep context sharding and autonomous repair behind the

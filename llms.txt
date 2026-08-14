@@ -107,6 +107,14 @@ Rules:
   response ids, and clipped viewports are guarded. Malformed requests become one bounded message plus run cancellation;
   the session cancel/shutdown path wakes the same broker wait. Child profiles omit the tool and fail closed
   with `InputUnavailable`; do not add a question poller or second status bus.
+- Root normal, root-agent, and orchestrator-only catalogs retain `ask_user`,
+  while the orchestrator allow-list continues to deny artifact and command
+  tools. `orchestrate`, `build`, `align`, and `plan` share the same Vaxis-tested
+  question controller.
+- TTSR matches stop provider reads through one typed stream abort hook before
+  terminal completion. The executor persists correction plus `rule_injected`
+  evidence and retries through the existing loop; installed provider proof is
+  still deferred.
 - The source and installed Windows lifecycle meshes prove queue-only assignment,
   one claim, client detach, exact owner-tree loss, generation replacement,
   same-session resume, nested direct/group/parent delivery, one terminal ticket,

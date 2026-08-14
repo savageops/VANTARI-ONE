@@ -199,6 +199,12 @@ session event spine. `stdio_rpc.InputBroker` holds only the process-local wait;
 its key is the session id plus provider tool-call id, so concurrent sessions may
 reuse provider-local ids safely.
 
+`tools/runtime.zig` keeps `ask_user` in the root normal, root-agent, and
+orchestrator-only catalogs and rechecks the same allow-list at dispatch. The
+orchestrator-only route still denies file, command, and artifact tools; child
+profiles remain headless. Prompt mode selects provider-visible guidance only,
+so `orchestrate`, `build`, `align`, and `plan` share the same question path.
+
 ```text
 root provider turn -> ask_user -> input_requested event -> TUI question controller
                                                    <- input/respond <- operator
@@ -217,6 +223,12 @@ text, uses static display keys while retaining original response ids, and guards
 clipped header/divider/row slots. The controller does not borrow helper-stack or
 freed temporary buffers. There is no input poller, second status bus, transcript
 copy, or resolved-event family.
+
+Provider stream-rule matches use the same single-owner principle. The reader
+checks one abort hook before and after SSE/delta processing, adapters forward it,
+and `loop.zig` persists correction plus `rule_injected` evidence before retrying
+through the normal turn loop. A typed post-completion guard covers adapters that
+ignore the callback; no second stream reader or retry manager exists.
 
 ## Context compaction flow
 

@@ -306,12 +306,23 @@ cancellation instead of unwinding TUI replay. Vaxis-borrowed question text now
 stays in State, static literals, or one frame arena until `vx.render`; the
 display projection also rejects invalid UTF-8/control text, preserves original
 response ids behind static `a`–`f` labels, and guards clipped header/divider/row
-slots. `orchestrate` and `align` share the controller. Focused TUI is `131/131`,
-full Debug is `2,144/2,144`, and source ReleaseFast exits `0` at SHA-256
-`7CD32F0D445F96E411EE8B35308A40CF08077BDE3703855525E446667799B3BB`;
+slots. `orchestrate`, `build`, `align`, and `plan` share the controller. Root
+normal, root-agent, and orchestrator-only catalogs all retain `ask_user`; child
+profiles remain headless. Focused TUI is `132/132`, full Debug is
+`2,151/2,151`, and source ReleaseFast exits `0` at SHA-256
+`521FE17CC941C0CA34605FFEAADD27BA9B3DC5001847022A308AFFE45BA26DE7`;
 installed promotion remains intentionally deferred. Research:
-`.docs/research/2026-08-14-root-question-review-panel.md` and
-`.docs/research/2026-08-14-question-panel-consumer-hardening.md`.
+`.docs/research/2026-08-14-root-question-review-panel.md`,
+`.docs/research/2026-08-14-question-panel-consumer-hardening.md`, and
+`.docs/research/2026-08-14-question-panel-runtime-contract.md`.
+
+Move 60 is source-complete. The provider stream reader checks one typed abort
+hook before and after SSE/delta processing, adapters forward the hook, and the
+executor persists a correction plus `rule_injected` evidence before retrying
+through the existing turn loop. A post-completion guard covers adapters that
+ignore the callback. Debug is `19/19` and `2,151/2,151`; source ReleaseFast is
+`9/9` at the same SHA-256 above. Installed TTSR/provider proof remains deferred.
+Research: `.docs/research/2026-08-14-ttsr-abort-move60.md`.
 
 ## Sandbox capability boundary
 

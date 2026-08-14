@@ -1,5 +1,37 @@
 # Execution Log
 
+## 2026-08-14 - Question panel runtime contract
+
+**Outcome:** Closed the root catalog/dispatch seam and proved the existing
+multiple-choice panel through the real Vaxis render boundary without adding a
+second interaction system.
+
+- Root normal, root-agent, and orchestrator-only catalogs retain `ask_user`;
+  the orchestrator allow-list still denies artifact and command tools, and
+  child profiles remain headless.
+- The same settings-style horizontal-row controller renders and flushes in
+  orchestrate, build, align, and plan. Focused TUI `132/132`; full Debug
+  `19/19`, `2,151/2,151`; source ReleaseFast `9/9`.
+- Source SHA-256 is
+  `521FE17CC941C0CA34605FFEAADD27BA9B3DC5001847022A308AFFE45BA26DE7`.
+  Installed promotion remains explicitly deferred.
+- Research and receipt: `.docs/research/2026-08-14-question-panel-runtime-contract.md`
+  and `.docs/todo/changelog/051-question-panel-runtime-contract.md`.
+
+## 2026-08-14 - TTSR stream abort
+
+**Outcome:** Closed Move 60 in source by stopping matched provider streams
+before stale terminal completion and retrying through the existing executor.
+
+- One typed provider abort hook crosses the SSE reader and all current
+  adapters; the executor persists correction plus `rule_injected` evidence and
+  retries without a second stream owner.
+- Full Debug `19/19`, `2,151/2,151`; source ReleaseFast `9/9`; source SHA-256
+  `521FE17CC941C0CA34605FFEAADD27BA9B3DC5001847022A308AFFE45BA26DE7`.
+- Installed promotion and live provider TTSR proof remain deferred.
+- Research and receipt: `.docs/research/2026-08-14-ttsr-abort-move60.md` and
+  `.docs/todo/changelog/050-ttsr-abort-move60.md`.
+
 ## 2026-08-14 - Question panel consumer hardening
 
 **Outcome:** Hardened the existing source question-panel projection against

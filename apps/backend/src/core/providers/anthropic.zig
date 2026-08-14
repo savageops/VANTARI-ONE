@@ -45,6 +45,7 @@ pub fn completeWithTransportAndHooks(
     const transport_hooks = if (streaming) provider.StreamHooks{
         .context = &stream_context,
         .onRawEventFn = onRawAnthropicEvent,
+        .shouldAbortFn = shouldAbortAnthropicStream,
     } else provider.StreamHooks{};
     const headers = provider.RequestHeaders{
         .auth_scheme = config.auth_scheme,
@@ -86,6 +87,11 @@ const AnthropicStreamContext = struct {
     allocator: std.mem.Allocator,
     downstream: provider.StreamHooks,
 };
+
+fn shouldAbortAnthropicStream(ctx: ?*anyopaque) bool {
+    const state: *AnthropicStreamContext = @ptrCast(@alignCast(ctx.?));
+    return state.downstream.shouldAbort();
+}
 
 /// Forward raw Anthropic events and project text/reasoning deltas into the
 /// canonical event spine without teaching the shared HTTP transport Anthropic

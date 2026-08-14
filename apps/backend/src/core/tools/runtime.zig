@@ -52,12 +52,17 @@ const agent_tool_definitions = agents.definitions;
 const collaboration_tool_definitions = agent_message.definitions;
 const interactive_tool_definitions = ask_user.definitions;
 const agent_and_collaboration_tool_definitions = agent_tool_definitions ++ collaboration_tool_definitions;
+const agent_collaboration_interactive_tool_definitions = agent_and_collaboration_tool_definitions ++ interactive_tool_definitions;
+const collaboration_interactive_tool_definitions = collaboration_tool_definitions ++ interactive_tool_definitions;
 
 const workspace_state_tool_definitions = workspace_state_tools.definitions;
 const base_tool_definitions = registry.file_tool_definitions ++ dap_tool.definitions ++ [_]types.ToolDefinition{eval_tool.definition};
 const file_plus_collaboration_tool_definitions = base_tool_definitions ++ collaboration_tool_definitions;
 const file_plus_interactive_tool_definitions = file_plus_collaboration_tool_definitions ++ interactive_tool_definitions;
 const file_plus_workspace_state_tool_definitions = file_plus_interactive_tool_definitions ++ workspace_state_tool_definitions;
+// Root turns may pause for one bounded operator decision. Keep that capability
+// in the normal catalog and in orchestrator-only mode; it does not grant file,
+// command, or delegation authority.
 const file_plus_agent_tool_definitions = file_plus_interactive_tool_definitions ++ agent_tool_definitions;
 const all_tool_definitions = file_plus_workspace_state_tool_definitions ++ agent_tool_definitions;
 const read_tool_definitions = [_]types.ToolDefinition{
@@ -111,15 +116,15 @@ pub fn workspaceStateRelevant(prompt: []const u8) bool {
 }
 
 pub fn builtinDefinitions(include_agent_tools: bool) []const types.ToolDefinition {
-    return if (include_agent_tools) file_plus_agent_tool_definitions[0..] else file_plus_collaboration_tool_definitions[0..];
+    return if (include_agent_tools) file_plus_agent_tool_definitions[0..] else file_plus_interactive_tool_definitions[0..];
 }
 
 pub fn builtinDefinitionsForContext(execution_context: ExecutionContext) []const types.ToolDefinition {
     if (execution_context.orchestrator_only) {
         return if (execution_context.agent_service != null and execution_context.delegation_depth_remaining > 0)
-            agent_and_collaboration_tool_definitions[0..]
+            agent_collaboration_interactive_tool_definitions[0..]
         else
-            collaboration_tool_definitions[0..];
+            collaboration_interactive_tool_definitions[0..];
     }
     if (execution_context.capability_profile_id) |profile_id| {
         const profile = profile_contract.resolveProfile(profile_id) catch return no_tool_definitions[0..];
@@ -501,7 +506,7 @@ fn ensureToolAllowed(execution_context: ExecutionContext, tool_name: []const u8)
         return Error.CapabilityDenied;
     }
     if (execution_context.orchestrator_only) {
-        if (!agents.handles(tool_name) and !agent_message.handles(tool_name)) return Error.CapabilityDenied;
+        if (!agents.handles(tool_name) and !agent_message.handles(tool_name) and !ask_user.handles(tool_name)) return Error.CapabilityDenied;
         if (agents.handles(tool_name) and !std.mem.eql(u8, tool_name, "agents")) {
             const ledger = execution_context.agent_eligibility_ledger orelse return Error.AgentEligibilityRequired;
             if (!ledger.hasCurrent()) return Error.AgentEligibilityRequired;
@@ -572,6 +577,68 @@ test "tool catalog includes the built-in coding tools" {
     try std.testing.expect(std.mem.indexOf(u8, catalog, "dap_detach") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "Example JSON: {\"pattern\":\"read_file\",\"path\":\"src\",\"glob\":\"*.zig\",\"max_results\":20}") != null);
     try std.testing.expect(std.mem.indexOf(u8, catalog, "todo_slice") == null);
+}
+
+test "root catalogs and orchestrator policy retain bounded operator questions" {
+    const normal = builtinDefinitions(false);
+    const with_agents = builtinDefinitions(true);
+    const orchestrator = builtinDefinitionsForContext(.{
+        .workspace_root = ".",
+        .orchestrator_only = true,
+    });
+
+    for ([_][]const types.ToolDefinition{ normal, with_agents, orchestrator }) |definitions| {
+        var found = false;
+        for (definitions) |definition| {
+            if (std.mem.eql(u8, definition.name, "ask_user")) {
+                found = true;
+                break;
+            }
+        }
+        try std.testing.expect(found);
+    }
+}
+
+test "orchestrator can execute ask_user without gaining artifact tools" {
+    const Input = struct {
+        fn respond(
+            _: ?*anyopaque,
+            allocator: std.mem.Allocator,
+            _: []const u8,
+            _: []const u8,
+            _: []const u8,
+        ) ![]u8 {
+            return allocator.dupe(u8, "{\"schema\":\"var1.input_response.v1\",\"request_id\":\"call-root-question\",\"answers\":[]}");
+        }
+    };
+
+    var call = types.ToolCall{
+        .id = try std.testing.allocator.dupe(u8, "call-root-question"),
+        .name = try std.testing.allocator.dupe(u8, "ask_user"),
+        .arguments_json = try std.testing.allocator.dupe(u8, "{\"questions\":[{\"prompt\":\"Choose\",\"options\":[{\"label\":\"One\"},{\"label\":\"Two\"}]}]}"),
+    };
+    defer call.deinit(std.testing.allocator);
+
+    const output = try execute(std.testing.allocator, .{
+        .workspace_root = ".",
+        .session_id = "root-question",
+        .orchestrator_only = true,
+        .input_service = .{
+            .requestFn = Input.respond,
+        },
+    }, call);
+    defer std.testing.allocator.free(output);
+    try std.testing.expect(std.mem.indexOf(u8, output, "var1.input_response.v1") != null);
+    var denied_call = types.ToolCall{
+        .id = try std.testing.allocator.dupe(u8, "call-read"),
+        .name = try std.testing.allocator.dupe(u8, "read_file"),
+        .arguments_json = try std.testing.allocator.dupe(u8, "{\"path\":\"README.md\"}"),
+    };
+    defer denied_call.deinit(std.testing.allocator);
+    try std.testing.expectError(Error.CapabilityDenied, execute(std.testing.allocator, .{
+        .workspace_root = ".",
+        .orchestrator_only = true,
+    }, denied_call));
 }
 
 test "DAP stays out of read-only recon profiles" {

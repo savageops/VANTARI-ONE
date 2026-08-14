@@ -20,6 +20,7 @@ pub const Error = error{
     ContextWindowExceeded,
     MissingAssistantContent,
     StepLimitExceeded,
+    StreamRuleMatched,
     ToolBudgetExceeded,
 };
 
@@ -413,6 +414,10 @@ pub fn runPromptWithOptions(
             options.transport,
             options.prompt_mode,
         ) catch |err| {
+            if (err == Error.StreamRuleMatched) {
+                provider_retries = 0;
+                continue;
+            }
             // Connection-level failures are genuinely unrecoverable — the
             // server is unreachable. Propagate immediately.
             //
@@ -1180,6 +1185,7 @@ fn completeWithContextRecovery(
         .context = &stream_context,
         .onAssistantDeltaFn = onProviderAssistantDelta,
         .onReasoningDeltaFn = onProviderReasoningDelta,
+        .shouldAbortFn = shouldAbortProviderStream,
     };
 
     defer stream_context.deinitAccumulators();
@@ -1188,6 +1194,11 @@ fn completeWithContextRecovery(
         .messages = messages.items,
         .tool_definitions = tools.builtinDefinitionsForContext(execution_context),
     }, transport, stream_hooks) catch |err| {
+        if (err == provider.Error.StreamAborted and stream_context.rule_abort_requested) {
+            if (try injectStreamRule(allocator, config, hooks, session, messages, &stream_context)) {
+                return Error.StreamRuleMatched;
+            }
+        }
         if (err != error.ContextWindowExceeded or !config.context_policy.retry_on_provider_overflow) return err;
 
         const estimate = context_builder.budget.estimateChatMessages(messages.items);
@@ -1214,31 +1225,23 @@ fn completeWithContextRecovery(
         return dispatch.completeWithTransportAndHooks(allocator, config, .{
             .messages = messages.items,
             .tool_definitions = tools.builtinDefinitionsForContext(execution_context),
-        }, transport, stream_hooks);
+        }, transport, stream_hooks) catch |retry_err| {
+            if (retry_err == provider.Error.StreamAborted and stream_context.rule_abort_requested) {
+                if (try injectStreamRule(allocator, config, hooks, session, messages, &stream_context)) {
+                    return Error.StreamRuleMatched;
+                }
+            }
+            return retry_err;
+        };
     };
 
-    // Stream-rule (TTSR) post-completion check: if a rule fired during
-    // streaming, emit the rule_injected event and add the correction message
-    // to the context for the next turn. The model sees its mistake was caught
-    // and the rule's guidance, then retries on the next loop iteration.
+    // Fixture transports and provider adapters that do not honor shouldAbort
+    // can still return a completion after a rule fired. Discard that completion
+    // before the caller can execute tools or commit terminal assistant state.
     if (stream_context.rule_abort_requested) {
-        if (stream_context.rule_match) |match| {
-            const injection_msg = context_stream_rules.formatInjectionMessage(allocator, match) catch {
-                return completion;
-            };
-            defer allocator.free(injection_msg);
-
-            try recordSessionEvent(
-                allocator,
-                config.workspace_root,
-                hooks,
-                session.id,
-                "rule_injected",
-                injection_msg,
-                session.status,
-            );
-
-            try messages.append(try types.initTextMessage(allocator, .user, injection_msg));
+        if (try injectStreamRule(allocator, config, hooks, session, messages, &stream_context)) {
+            completion.deinit(allocator);
+            return Error.StreamRuleMatched;
         }
     }
 
@@ -1275,6 +1278,47 @@ const ProviderDeltaContext = struct {
         self.reasoning_accumulator.deinit();
     }
 };
+
+fn shouldAbortProviderStream(ctx: ?*anyopaque) bool {
+    const delta_context: *ProviderDeltaContext = @ptrCast(@alignCast(ctx.?));
+    return delta_context.rule_abort_requested;
+}
+
+fn injectStreamRule(
+    allocator: std.mem.Allocator,
+    config: types.Config,
+    hooks: Hooks,
+    session: types.SessionRecord,
+    messages: *std.array_list.Managed(types.ChatMessage),
+    stream_context: *ProviderDeltaContext,
+) !bool {
+    const match = stream_context.rule_match orelse return false;
+    const injection_msg = try context_stream_rules.formatInjectionMessage(allocator, match);
+    defer allocator.free(injection_msg);
+
+    // Persist the correction before emitting its event. The next provider
+    // attempt uses the same in-memory message, while a cold rebuild obtains
+    // the identical correction from messages.jsonl.
+    try store.appendSessionMessage(
+        allocator,
+        config.workspace_root,
+        session.id,
+        .user,
+        injection_msg,
+        std.time.milliTimestamp(),
+    );
+    try messages.append(try types.initTextMessage(allocator, .user, injection_msg));
+    try recordSessionEvent(
+        allocator,
+        config.workspace_root,
+        hooks,
+        session.id,
+        "rule_injected",
+        injection_msg,
+        session.status,
+    );
+    return true;
+}
 
 fn onProviderAssistantDelta(ctx: ?*anyopaque, delta: []const u8) !void {
     const delta_context: *ProviderDeltaContext = @ptrCast(@alignCast(ctx.?));

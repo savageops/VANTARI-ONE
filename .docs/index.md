@@ -52,6 +52,8 @@ This directory contains project records, research, planning chains, and complete
 - [`research/2026-08-14-tui-theme-status-settings.md`](research/2026-08-14-tui-theme-status-settings.md) — renderer-backed theme/status configuration, saved settings path, and the finite YAGNI boundary.
 - [`research/2026-08-14-root-question-review-panel.md`](research/2026-08-14-root-question-review-panel.md) — oh-my-pi normalization/review harvest, ask_user cleanup crash, settings-style question rows, and source-only proof boundary.
 - [`research/2026-08-14-question-panel-consumer-hardening.md`](research/2026-08-14-question-panel-consumer-hardening.md) — render-safe question projection, clipped-viewport guards, static display keys, cross-harness input invariants, and deferred installed boundary.
+- [`research/2026-08-14-question-panel-runtime-contract.md`](research/2026-08-14-question-panel-runtime-contract.md) — root catalog/dispatch repair, all-mode Vaxis render proof, and the deferred provider-driven installed boundary.
+- [`research/2026-08-14-ttsr-abort-move60.md`](research/2026-08-14-ttsr-abort-move60.md) — provider read abort, durable correction injection, executor retry, and source-only TTSR proof.
 - [`research/2026-08-14-process-supervisor-move58.md`](research/2026-08-14-process-supervisor-move58.md) — shared bounded child owner, persistent eval teardown, post-cap drain, Windows tree receipts, and deferred installed boundary.
 - [`research/2026-08-14-dap-move59.md`](research/2026-08-14-dap-move59.md) — one session-owned DAP client, exact Content-Length framing, risk-correct tool sockets, and source-only proof boundary.
 - [`research/2026-08-13-provider-prism-staging.md`](research/2026-08-13-provider-prism-staging.md) — staged provider harvest receipt; promotion is deferred pending the complete installed auth/header path.
@@ -74,6 +76,8 @@ This directory contains project records, research, planning chains, and complete
 - [`todo/changelog/045-tui-theme-status-settings.md`](todo/changelog/045-tui-theme-status-settings.md) — source-only saved TUI palettes/status placement, renderer consumer, and responsiveness proof.
 - [`todo/changelog/046-root-question-panel-resilience.md`](todo/changelog/046-root-question-panel-resilience.md) — source-only crash-safe question normalization, settings-style multi-question review panel, and normal/align parity proof.
 - [`todo/changelog/049-question-panel-consumer-hardening.md`](todo/changelog/049-question-panel-consumer-hardening.md) — source-only hostile-text and clipped-viewport hardening for the shared question panel.
+- [`todo/changelog/050-ttsr-abort-move60.md`](todo/changelog/050-ttsr-abort-move60.md) — source-only stream-rule abort before terminal completion, durable correction, and normal retry.
+- [`todo/changelog/051-question-panel-runtime-contract.md`](todo/changelog/051-question-panel-runtime-contract.md) — root question catalog/allow-list repair and all-prompt-mode Vaxis render-boundary proof.
 - [`todo/changelog/047-process-supervisor-move58.md`](todo/changelog/047-process-supervisor-move58.md) — source-only canonical process supervisor, eval timeout/drain receipts, and adversarial framing proof.
 - [`todo/changelog/048-dap-move59.md`](todo/changelog/048-dap-move59.md) — source-only session-owned DAP lifecycle, shared process teardown, and real adapter regression proof.
 - [`todo/findings/31-provider-model-parity-ohmypi.md`](todo/findings/31-provider-model-parity-ohmypi.md) — oh-my-pi provider/model parity audit and residual boundary.

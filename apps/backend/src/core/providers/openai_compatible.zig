@@ -12,6 +12,7 @@ pub const Error = error{
     MissingChoice,
     MissingContent,
     ShortHttpResponseBody,
+    StreamAborted,
 };
 
 const max_head_bytes = 64 * 1024;
@@ -104,9 +105,10 @@ pub const StreamHooks = struct {
     onAssistantDeltaFn: ?*const fn (ctx: ?*anyopaque, delta: []const u8) anyerror!void = null,
     onReasoningDeltaFn: ?*const fn (ctx: ?*anyopaque, delta: []const u8) anyerror!void = null,
     onRawEventFn: ?*const fn (ctx: ?*anyopaque, event_json: []const u8) anyerror!void = null,
+    shouldAbortFn: ?*const fn (ctx: ?*anyopaque) bool = null,
 
     pub fn hasHandlers(self: StreamHooks) bool {
-        return self.onAssistantDeltaFn != null or self.onReasoningDeltaFn != null or self.onRawEventFn != null;
+        return self.onAssistantDeltaFn != null or self.onReasoningDeltaFn != null or self.onRawEventFn != null or self.shouldAbortFn != null;
     }
 
     pub fn onAssistantDelta(self: StreamHooks, delta: []const u8) !void {
@@ -128,6 +130,13 @@ pub const StreamHooks = struct {
         if (self.onRawEventFn) |callback| {
             try callback(self.context, event_json);
         }
+    }
+
+    pub fn shouldAbort(self: StreamHooks) bool {
+        if (self.shouldAbortFn) |callback| {
+            return callback(self.context);
+        }
+        return false;
     }
 };
 
@@ -1071,11 +1080,13 @@ fn readStreamingResponse(allocator: std.mem.Allocator, source_reader: *std.Io.Re
     // buffering internally; we need to be explicit about it.
     var buffer: [64 * 1024]u8 = undefined;
     while (true) {
+        if (hooks.shouldAbort()) return Error.StreamAborted;
         const read_len = try source_reader.readSliceShort(&buffer);
         if (read_len == 0) break;
         try raw_response.appendSlice(buffer[0..read_len]);
         if (raw_response.items.len > max_transport_bytes) return error.StreamTooLong;
         try processStreamingHttpBytes(allocator, raw_response.items, &state);
+        if (hooks.shouldAbort()) return Error.StreamAborted;
         if (state.stream_complete) break;
     }
     try state.sse.flushRemainder();
@@ -1231,6 +1242,7 @@ const SseDeltaEmitter = struct {
             if (std.mem.eql(u8, data, "[DONE]")) continue;
 
             try self.hooks.onRawEvent(data);
+            if (self.hooks.shouldAbort()) return Error.StreamAborted;
 
             var parsed = std.json.parseFromSlice(ParsedStreamChunk, self.allocator, data, .{
                 .ignore_unknown_fields = true,
@@ -1240,9 +1252,11 @@ const SseDeltaEmitter = struct {
             const delta = parsed.value.choices[0].delta;
             if (delta.content) |content| {
                 try self.hooks.onAssistantDelta(content);
+                if (self.hooks.shouldAbort()) return Error.StreamAborted;
             }
             if (delta.reasoning_content) |reasoning| {
                 try self.hooks.onReasoningDelta(reasoning);
+                if (self.hooks.shouldAbort()) return Error.StreamAborted;
             }
         }
     }
@@ -1524,6 +1538,76 @@ const TestDeltaCapture = struct {
 fn captureTestAssistantDelta(ctx: ?*anyopaque, delta: []const u8) !void {
     const capture: *TestDeltaCapture = @ptrCast(@alignCast(ctx.?));
     try capture.output.appendSlice(delta);
+}
+
+const StreamAbortCapture = struct {
+    output: std.array_list.Managed(u8),
+    delta_count: usize = 0,
+    abort: bool = false,
+
+    fn init(allocator: std.mem.Allocator) StreamAbortCapture {
+        return .{ .output = std.array_list.Managed(u8).init(allocator) };
+    }
+
+    fn deinit(self: *StreamAbortCapture) void {
+        self.output.deinit();
+    }
+};
+
+fn captureAbortAssistantDelta(ctx: ?*anyopaque, delta: []const u8) !void {
+    const capture: *StreamAbortCapture = @ptrCast(@alignCast(ctx.?));
+    capture.delta_count += 1;
+    try capture.output.appendSlice(delta);
+    if (std.mem.indexOf(u8, delta, "eval(") != null) capture.abort = true;
+}
+
+fn shouldAbortCapturedStream(ctx: ?*anyopaque) bool {
+    const capture: *StreamAbortCapture = @ptrCast(@alignCast(ctx.?));
+    return capture.abort;
+}
+
+test "provider aborts SSE read after a rule callback and before later deltas" {
+    const raw_response =
+        "HTTP/1.1 200 OK\r\n" ++
+        "content-type: text/event-stream\r\n" ++
+        "\r\n" ++
+        "data: {\"choices\":[{\"delta\":{\"content\":\"eval(\"}}]}\r\n\r\n" ++
+        "data: {\"choices\":[{\"delta\":{\"content\":\"must-not-arrive\"}}]}\r\n\r\n" ++
+        "data: [DONE]\r\n\r\n";
+
+    var capture = StreamAbortCapture.init(std.testing.allocator);
+    defer capture.deinit();
+    var source_reader: std.Io.Reader = .fixed(raw_response);
+
+    try std.testing.expectError(Error.StreamAborted, readStreamingResponse(
+        std.testing.allocator,
+        &source_reader,
+        .{
+            .context = &capture,
+            .onAssistantDeltaFn = captureAbortAssistantDelta,
+            .shouldAbortFn = shouldAbortCapturedStream,
+        },
+    ));
+    try std.testing.expectEqual(@as(usize, 1), capture.delta_count);
+    try std.testing.expectEqualStrings("eval(", capture.output.items);
+    try std.testing.expect(capture.abort);
+}
+
+test "provider checks an already-aborted stream before reading" {
+    var capture = StreamAbortCapture.init(std.testing.allocator);
+    defer capture.deinit();
+    capture.abort = true;
+    var source_reader: std.Io.Reader = .fixed("not read");
+
+    try std.testing.expectError(Error.StreamAborted, readStreamingResponse(
+        std.testing.allocator,
+        &source_reader,
+        .{
+            .context = &capture,
+            .shouldAbortFn = shouldAbortCapturedStream,
+        },
+    ));
+    try std.testing.expectEqual(@as(usize, 0), capture.delta_count);
 }
 
 test "provider parses SSE assistant deltas and reconstructs final content" {

@@ -75,6 +75,7 @@ pub fn completeWithTransportAndHooks(
     const transport_hooks = if (downstream_hooks.hasHandlers()) provider.StreamHooks{
         .context = &stream_context,
         .onRawEventFn = onRawEvent,
+        .shouldAbortFn = shouldAbortCodexStream,
     } else provider.StreamHooks{};
 
     provider.clearFailureDiagnostic();
@@ -199,6 +200,11 @@ const CodexStreamContext = struct {
     allocator: std.mem.Allocator,
     downstream: provider.StreamHooks,
 };
+
+fn shouldAbortCodexStream(ctx: ?*anyopaque) bool {
+    const state: *CodexStreamContext = @ptrCast(@alignCast(ctx.?));
+    return state.downstream.shouldAbort();
+}
 
 fn onRawEvent(ctx: ?*anyopaque, event_json: []const u8) anyerror!void {
     const stream: *CodexStreamContext = @ptrCast(@alignCast(ctx.?));

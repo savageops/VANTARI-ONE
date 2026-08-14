@@ -5996,6 +5996,45 @@ test "tui question requests share one crash-safe panel in orchestrate and align"
     try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "invalid question") != null);
 }
 
+test "tui question panel survives the Vaxis render boundary in every prompt mode" {
+    const allocator = std.testing.allocator;
+    var writer = std.Io.Writer.Allocating.init(allocator);
+    defer writer.deinit();
+    var vx = try tui.init(allocator, .{});
+    defer vx.deinit(allocator, &writer.writer);
+    try vx.resize(allocator, &writer.writer, .{
+        .rows = 14,
+        .cols = 120,
+        .x_pixel = 0,
+        .y_pixel = 0,
+    });
+
+    var input = TextInput.init(allocator, &vx.unicode);
+    defer input.deinit();
+    var state = ChatState{
+        .allocator = allocator,
+        .client = undefined,
+        .workspace_root = "workspace",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    const request = "{\"request_id\":\"call-render\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Direction\",\"options\":[{\"id\":\"a\",\"label\":\"Fast\"},{\"id\":\"b\",\"label\":\"Careful\"}]},{\"id\":\"q2\",\"prompt\":\"Scope\",\"options\":[{\"id\":\"a\",\"label\":\"Local\"},{\"id\":\"b\",\"label\":\"Full\"}]}]}";
+    const modes = [_]prompt_modes.PromptMode{ .orchestrate, .build, .@"align", .plan };
+    for (modes) |mode| {
+        state.prompt_mode = mode;
+        state.last_event_seq = 0;
+        try std.testing.expect(try state.recordProgressEvent(1, "input_requested", request));
+        try draw(&vx, &writer.writer, &state, &input);
+        try std.testing.expect(writer.written().len > 0);
+        state.clearInputRequest();
+    }
+}
+
 test "tui agent child rows show a bounded turn summary instead of tool phases" {
     const allocator = std.testing.allocator;
     var state = ChatState{

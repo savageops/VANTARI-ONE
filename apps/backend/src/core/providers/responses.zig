@@ -42,6 +42,7 @@ pub fn completeWithTransportAndHooks(
     const transport_hooks = if (streaming) provider.StreamHooks{
         .context = &stream_context,
         .onRawEventFn = onRawResponsesEvent,
+        .shouldAbortFn = shouldAbortResponsesStream,
     } else provider.StreamHooks{};
     const headers = provider.RequestHeaders{
         .auth_scheme = config.auth_scheme,
@@ -79,6 +80,11 @@ const ResponsesStreamContext = struct {
     allocator: std.mem.Allocator,
     downstream: provider.StreamHooks,
 };
+
+fn shouldAbortResponsesStream(ctx: ?*anyopaque) bool {
+    const state: *ResponsesStreamContext = @ptrCast(@alignCast(ctx.?));
+    return state.downstream.shouldAbort();
+}
 
 /// Forward raw Responses events and project text/reasoning deltas without
 /// adding a second streaming transport or event owner.

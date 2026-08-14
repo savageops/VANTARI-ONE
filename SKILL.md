@@ -61,6 +61,9 @@ second runtime owner.
   text and guard clipped rows. Malformed requests must cancel safely, not crash
   the renderer. Child profiles are headless and must continue or report
   `InputUnavailable`; never create a polling question loop.
+- `ask_user` must appear in the root normal, root-agent, and orchestrator-only
+  catalogs and pass the same dispatch allow-list. Child profiles must not gain
+  operator-input capability. Prompt modes reuse the one question controller.
 - In the TUI, Shift+Tab cycles the session-local prompt lens
   `orchestrate -> build -> align -> plan`; the next `session/send` applies one
   provider-visible layer and defaults to `orchestrate`. It does not change
@@ -115,6 +118,10 @@ requires source/installed SHA-256 equality and the installed consumer path.
   shared execution context used by file, search, LSP, and shell tools. It never
   relocates `.var`.
 - `search_files` requires `iex`. Do not hide an `rg`, `grep`, or `sed` fallback.
+- TTSR matches use the provider reader's typed abort hook. Source proof requires
+  the read to stop before terminal completion, durable correction plus
+  `rule_injected` evidence, and retry through the existing executor; installed
+  provider proof remains a separate promotion gate.
 - Browser routes are redacted prototypes. Owner routes are loopback-only and
   token/generation gated.
 - Scheduler leadership is source-proven with one crash-released lock and
