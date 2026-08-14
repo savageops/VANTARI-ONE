@@ -10,6 +10,8 @@ pub const semantic = @import("semantic.zig");
 pub const stream_rules = @import("stream_rules.zig");
 
 pub const appendProviderMessages = builder.appendProviderMessages;
+pub const appendProviderMessagesWithReport = builder.appendProviderMessagesWithReport;
+pub const CompileReport = builder.CompileReport;
 pub const compactSession = compactor.compactSession;
 
 test "context namespace exposes builder" {

@@ -66,6 +66,29 @@ Installed promotion and provider-driven live question proof remain deferred;
 the preserved installed owner remains on
 `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
 
+## Current context-compile recovery boundary — 2026-08-14
+
+Move 69 keeps `apps/backend/src/core/context/builder.zig` as the only
+provider-window compiler. Each compile returns a small `CompileReport` with
+counts for synthesized interrupted tool results and skipped orphan,
+missing-id, or mismatched rows. The durable `messages.jsonl` transcript is not
+rewritten.
+
+`core/executor/loop.zig` emits one
+`var1.context_compile_diagnostic.v1` event through the existing `events.jsonl`
+writer only when a report is non-empty. `provider_overflow` compaction then
+rebuilds from the latest checkpoint plus durable suffix and retries once; no
+executor-local durable tool batch is appended into the retry payload. The TUI
+suppresses this mechanics row in silent/normal posture and formats its counts
+in full logs.
+
+Debug passes `19/19` build steps and `2,163/2,163` tests. Source ReleaseFast
+passes `9/9` with SHA-256
+`898CAF97FD90F14B0FF3C202887467F7FFDDAC670583BEFB8B4491C2F6909DD6`.
+Installed promotion remains deferred. Research and receipt:
+`.docs/research/2026-08-14-context-compile-diagnostics-move69.md` and
+`.docs/todo/changelog/060-context-compile-diagnostics-move69.md`.
+
 ## Current ticket and scheduler policy boundary — 2026-08-14
 
 Move 63 adds no scheduler registry or quota layer. The four retired

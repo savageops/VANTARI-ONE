@@ -61,6 +61,7 @@ This directory contains project records, research, planning chains, and complete
 - [`research/2026-08-14-prompt-budget-behavior-matrix.md`](research/2026-08-14-prompt-budget-behavior-matrix.md) — Move 66 estimated prompt budget, prompt-owned behavior matrix, route coverage, and exact-token residual.
 - [`research/2026-08-14-message-identity-compaction-ranges.md`](research/2026-08-14-message-identity-compaction-ranges.md) — Move 67 existing ledger identity/range owners and cold replay proof.
 - [`research/2026-08-14-token-accounting-precision-move68.md`](research/2026-08-14-token-accounting-precision-move68.md) — Move 68 exact/estimated/unknown token accounting, footer precision, `/status` invalidation, and source proof.
+- [`research/2026-08-14-context-compile-diagnostics-move69.md`](research/2026-08-14-context-compile-diagnostics-move69.md) — Move 69 compiler-owned repair counts, typed context diagnostics, overflow rebuild proof, and source-only boundary.
 - [`research/2026-08-14-ttsr-abort-move60.md`](research/2026-08-14-ttsr-abort-move60.md) — provider read abort, durable correction injection, executor retry, and source-only TTSR proof.
 - [`research/2026-08-14-process-supervisor-move58.md`](research/2026-08-14-process-supervisor-move58.md) — shared bounded child owner, persistent eval teardown, post-cap drain, Windows tree receipts, and deferred installed boundary.
 - [`research/2026-08-14-dap-move59.md`](research/2026-08-14-dap-move59.md) — one session-owned DAP client, exact Content-Length framing, risk-correct tool sockets, and source-only proof boundary.
@@ -94,6 +95,7 @@ This directory contains project records, research, planning chains, and complete
 - [`todo/changelog/057-prompt-budget-behavior-matrix.md`](todo/changelog/057-prompt-budget-behavior-matrix.md) — Move 66 prompt budget, mode/profile matrix, and source proof.
 - [`todo/changelog/058-stable-message-ids-compaction-ranges.md`](todo/changelog/058-stable-message-ids-compaction-ranges.md) — Move 67 stable message IDs, compaction ranges, and replay proof.
 - [`todo/changelog/059-token-accounting-precision.md`](todo/changelog/059-token-accounting-precision.md) — Move 68 token precision labels, unknown-safe context display, and source proof.
+- [`todo/changelog/060-context-compile-diagnostics-move69.md`](todo/changelog/060-context-compile-diagnostics-move69.md) — Move 69 typed compiler repair diagnostics, compiler-only overflow retry, and source proof.
 - [`todo/changelog/047-process-supervisor-move58.md`](todo/changelog/047-process-supervisor-move58.md) — source-only canonical process supervisor, eval timeout/drain receipts, and adversarial framing proof.
 - [`todo/changelog/048-dap-move59.md`](todo/changelog/048-dap-move59.md) — source-only session-owned DAP lifecycle, shared process teardown, and real adapter regression proof.
 - [`todo/findings/31-provider-model-parity-ohmypi.md`](todo/findings/31-provider-model-parity-ohmypi.md) — oh-my-pi provider/model parity audit and residual boundary.

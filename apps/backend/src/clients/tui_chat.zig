@@ -3966,6 +3966,7 @@ fn formatProgress(allocator: std.mem.Allocator, event_type: []const u8, message:
     if (std.mem.eql(u8, event_type, "child_convergence_started")) return try allocator.dupe(u8, "agents converging");
     if (std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type)) return formatTurnTerminal(allocator, message);
     if (std.mem.eql(u8, event_type, "session_failed")) return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "failed: {s}", .{message}));
+    if (std.mem.eql(u8, event_type, protocol_events.context_compile_diagnostic_event_type)) return formatContextCompileDiagnostic(allocator, message);
     if (std.mem.startsWith(u8, event_type, "context_compaction_")) return formatContextCompaction(allocator, event_type, message);
 
     return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "{s}: {s}", .{ progressLabel(event_type), message }));
@@ -4125,6 +4126,25 @@ fn formatContextCompaction(allocator: std.mem.Allocator, event_type: []const u8,
     if (std.mem.eql(u8, event_type, "context_compaction_started")) return try allocator.dupe(u8, "context: compacting");
     if (std.mem.eql(u8, event_type, "context_compaction_completed")) return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "context: {s}", .{message}));
     return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "context: {s}", .{message}));
+}
+
+fn formatContextCompileDiagnostic(allocator: std.mem.Allocator, message: []const u8) !?[]u8 {
+    const Diagnostic = struct {
+        synthesized_tool_results: u32 = 0,
+        skipped_tool_results: u32 = 0,
+    };
+    var parsed = std.json.parseFromSlice(Diagnostic, allocator, message, .{ .ignore_unknown_fields = true }) catch
+        return try allocator.dupe(u8, "context: compile diagnostic malformed");
+    defer parsed.deinit();
+    return try trimOwnedProgress(allocator, try std.fmt.allocPrint(
+        allocator,
+        "context: repaired {d}, skipped {d} tool result{s}",
+        .{
+            parsed.value.synthesized_tool_results,
+            parsed.value.skipped_tool_results,
+            if (@as(u64, parsed.value.synthesized_tool_results) + @as(u64, parsed.value.skipped_tool_results) == 1) "" else "s",
+        },
+    ));
 }
 
 fn compactToolList(allocator: std.mem.Allocator, tools: []const u8) ![]u8 {
@@ -4327,6 +4347,7 @@ fn skipProgressEvent(event_type: []const u8) bool {
         std.mem.eql(u8, event_type, "provider_turn_recovered") or
         std.mem.eql(u8, event_type, "branch_converged") or
         std.mem.eql(u8, event_type, "session_delegated") or
+        std.mem.eql(u8, event_type, protocol_events.context_compile_diagnostic_event_type) or
         std.mem.startsWith(u8, event_type, "context_compaction_");
 }
 
@@ -4347,6 +4368,7 @@ fn progressLabel(event_type: []const u8) []const u8 {
     if (std.mem.eql(u8, event_type, "tool_blocked")) return "blocked";
     if (std.mem.eql(u8, event_type, "tool_budget_exceeded")) return "budget";
     if (std.mem.eql(u8, event_type, "session_waiting")) return "waiting";
+    if (std.mem.eql(u8, event_type, protocol_events.context_compile_diagnostic_event_type)) return "context";
     if (std.mem.startsWith(u8, event_type, "context_compaction_")) return "context";
     if (std.mem.eql(u8, event_type, protocol_events.turn_terminal_event_type)) return "terminal";
     if (std.mem.eql(u8, event_type, "session_failed")) return "failed";
@@ -4483,6 +4505,19 @@ test "tui progress renders tool lifecycle as compact user-facing rows" {
     const legacy_completed = try formatLegacyToolCompleted(allocator, "tool completed: shell_exec");
     defer if (legacy_completed) |value| allocator.free(value);
     try std.testing.expect(legacy_completed != null);
+}
+
+test "tui context compile diagnostics stay compact and hidden outside full logs" {
+    const allocator = std.testing.allocator;
+    const formatted = (try formatProgress(
+        allocator,
+        protocol_events.context_compile_diagnostic_event_type,
+        "{\"schema\":\"var1.context_compile_diagnostic.v1\",\"phase\":\"provider_rebuild\",\"synthesized_tool_results\":1,\"skipped_tool_results\":1}",
+    )) orelse return error.TestUnexpectedNull;
+    defer allocator.free(formatted);
+    try std.testing.expectEqualStrings("context: repaired 1, skipped 1 tool results", formatted);
+    try std.testing.expect(!shouldRenderProgressEvent(.normal, protocol_events.context_compile_diagnostic_event_type));
+    try std.testing.expect(shouldRenderProgressEvent(.full, protocol_events.context_compile_diagnostic_event_type));
 }
 
 test "tui progress renders hostile output chunks without corrupting the transcript surface" {

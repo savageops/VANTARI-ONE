@@ -1,5 +1,24 @@
 # Execution Log
 
+## 2026-08-14 - Typed context-compile diagnostics (Move 69)
+
+**Outcome:** Kept provider-context reconstruction in one compiler and made
+malformed tool-topology repair observable without adding a repair bus.
+
+- `core/context/builder.zig` returns bounded synthesized/skipped tool-result
+  counts; the append-only transcript remains unchanged.
+- `core/executor/loop.zig` persists one typed
+  `var1.context_compile_diagnostic.v1` event only when a repair or skip occurs.
+- Provider-overflow retry compacts, rebuilds through the compiler, and retries
+  once without duplicating durable tool context. Silent/normal TUI posture
+  suppresses the diagnostic; full posture renders compact counts.
+- Debug passes `19/19` build steps and `2,163/2,163` tests. Source ReleaseFast
+  passes `9/9`; source SHA-256 is
+  `898CAF97FD90F14B0FF3C202887467F7FFDDAC670583BEFB8B4491C2F6909DD6`.
+- Installed promotion remains deferred. Research and receipt:
+  `.docs/research/2026-08-14-context-compile-diagnostics-move69.md` and
+  `.docs/todo/changelog/060-context-compile-diagnostics-move69.md`.
+
 ## 2026-08-14 - Stable message IDs and compaction ranges (Move 67)
 
 **Outcome:** Closed the existing session/context identity seam with a cold

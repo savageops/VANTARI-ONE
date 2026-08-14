@@ -36,6 +36,18 @@ pub const ToolReview = struct {
     reason: []const u8,
 };
 
+pub const context_compile_diagnostic_event_type = "context_compile_diagnostic";
+
+/// One compact diagnostic for a provider-context compile. Counts describe
+/// durable rows that were repaired or skipped while preserving the valid
+/// prefix; the event carries no transcript content.
+pub const ContextCompileDiagnostic = struct {
+    schema: []const u8 = "var1.context_compile_diagnostic.v1",
+    phase: []const u8,
+    synthesized_tool_results: u32,
+    skipped_tool_results: u32,
+};
+
 /// One run-final carrier. `run_seq` is the exact durable `session_started.seq`
 /// for an admitted run, or zero when admission failed before a start row could
 /// exist. Timeout remains distinct evidence even though SessionStatus projects
@@ -113,6 +125,19 @@ pub fn serializeTurnTerminal(
         .cached_tokens = input.cached_tokens,
         .usage_precision = input.usage_precision,
         .cost_total_usd = input.cost_total_usd,
+    });
+}
+
+pub fn serializeContextCompileDiagnostic(
+    allocator: std.mem.Allocator,
+    phase: []const u8,
+    synthesized_tool_results: u32,
+    skipped_tool_results: u32,
+) ![]u8 {
+    return serialize(allocator, ContextCompileDiagnostic{
+        .phase = phase,
+        .synthesized_tool_results = synthesized_tool_results,
+        .skipped_tool_results = skipped_tool_results,
     });
 }
 
@@ -195,4 +220,13 @@ test "TurnTerminal serializes one escaped typed outcome" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"run_seq\":17") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"outcome\":\"timed_out\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "provider \\\"deadline\\\"") != null);
+}
+
+test "ContextCompileDiagnostic serializes repair counts" {
+    const json = try serializeContextCompileDiagnostic(std.testing.allocator, "provider_rebuild", 2, 1);
+    defer std.testing.allocator.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "var1.context_compile_diagnostic.v1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"phase\":\"provider_rebuild\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"synthesized_tool_results\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"skipped_tool_results\":1") != null);
 }

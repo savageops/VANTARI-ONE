@@ -166,8 +166,9 @@ sequenceDiagram
   E->>S: load or create session
   E->>X: build model-visible transcript view
   X->>S: read messages and latest context checkpoint
-  X->>X: reject orphan tool results or unresolved assistant tool calls
-  X-->>E: summary plus recent raw transcript
+  X->>X: compile valid prefix; repair projection-only tool topology
+  X-->>E: summary plus recent raw transcript plus compile report
+  E->>S: append typed context_compile_diagnostic when report is non-empty
   E->>E: estimate provider window against context policy
   alt threshold exceeded
     E->>S: append context_compaction_started event
@@ -267,7 +268,14 @@ unknown row. `/status` suppresses cumulative totals after an unaccounted
 completed turn. No provider-specific telemetry registry or second ledger owns
 this projection.
 
-The context builder also validates OpenAI-compatible tool-call adjacency before any provider dispatch. An assistant message with tool calls must be followed by matching tool-result rows in assistant source order; orphan tool rows and unresolved assistant tool-call tails fail closed as transcript integrity errors. This keeps `.var/sessions/<id>/messages.jsonl` append-only while preventing corrupt or crash-interrupted ledgers from becoming malformed model-visible context.
+The context builder owns OpenAI-compatible tool-call adjacency before any
+provider dispatch. It preserves the valid transcript prefix, synthesizes a
+bounded interrupted result for an unresolved assistant tool-call tail, and
+skips orphan, missing-id, or mismatched tool rows in the model-visible
+projection. Each non-empty compile report is persisted as one
+`var1.context_compile_diagnostic.v1` event with synthesized/skipped counts;
+`.var/sessions/<id>/messages.jsonl` remains append-only. Topology that cannot
+be repaired still fails closed before provider dispatch.
 
 The executor keeps a preserved in-memory suffix only for non-durable internal continuations. After a complete assistant tool-call batch and its tool-result rows are appended to `messages.jsonl`, ownership transfers back to the context builder. Provider-overflow recovery and threshold compaction therefore rebuild durable tool context from the session ledger instead of replaying both the ledger copy and an executor-local copy into the same provider retry payload.
 
@@ -538,7 +546,7 @@ hash-matched binary.
 - `src/core/executor/loop.zig`
   kernel-owned execution loop
 - `src/core/context/builder.zig`
-  sole owner for turning session storage into provider-ready transcript messages
+  sole owner for turning session storage into provider-ready transcript messages and returning bounded repair diagnostics
 - `src/core/context/compactor.zig`
   sole owner for planning and writing summary checkpoints from stable message sequence entries/ranges
 - `src/core/context/budget.zig`

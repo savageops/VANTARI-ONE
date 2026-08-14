@@ -108,7 +108,7 @@ session.json + messages.jsonl + latest valid context.jsonl
 - `loop.zig`, CLI clients, HTTP bridge, and provider adapters must not manually assemble chat history.
 - Full transcript retention and model-visible context are separate control planes.
 - Context overflow recovery must rebuild through the compiler after checkpoint writes. It must not append in-memory duplicates over persisted tool batches.
-- Unsupported transcript topology, such as orphan tool results or unresolved assistant tool-call tails, must fail before provider dispatch with durable evidence.
+- The context compiler may repair an orphan tool result or unresolved assistant tool-call tail only in the model-visible projection; it must preserve the append-only transcript and emit one typed `context_compile_diagnostic` with synthesized/skipped counts. Unsupported topology that cannot be repaired must fail before provider dispatch with durable evidence.
 - `ContextPolicy.prompt_budget_tokens` is the single estimated system-prompt ceiling. `core/prompts/builder.zig` enforces it before provider dispatch with `PromptBudgetExceeded`; native provider tool schemas remain outside the prompt string and inside full context-window accounting.
 - Prompt behavior belongs to hot-loaded layers. The source matrix proves all four modes plus terse/detailed, solo/orchestrated, conservative/aggressive, and low/high-cadence profiles across tool routes without executor branches. `shared/types.zig::TokenPrecision` carries exact provider usage, estimated compiler context, or unknown accounting through the existing turn events; do not present an estimate or partial cumulative total as exact.
 - Exact tokenizer integration is admissible only when tests prove approximate heuristics misclassify real provider windows.
@@ -126,6 +126,7 @@ Typed events are the runtime's nervous system. String breadcrumbs may exist only
 | Tool lifecycle | `tool_requested -> tool_reviewed -> tool_started -> tool_output_delta* -> tool_finished -> tool_completed`. |
 | Command output | bounded stdout/stderr deltas with stream id, cap marker, and byte-safe payload. |
 | Interactive input | `input_requested` persists the bounded question request; `input/respond` resolves one broker wait and the normal tool/terminal span supplies completion evidence. |
+| Context compile | `context_compile_diagnostic` with schema `var1.context_compile_diagnostic.v1` when the compiler repairs or skips malformed tool rows. |
 | Terminal | exactly one `turn_terminal` with schema `var1.turn_terminal.v1`, the exact `session_started.seq`, and outcome `completed`, `failed`, `timed_out`, or `cancelled`. |
 
 ### Directives
@@ -382,7 +383,7 @@ Capability claims carry mechanism and proof. "Works" is not a mechanism. "Fast" 
 4. Interruptible process supervision: long commands support timeout, operator cancellation, stdout/stderr draining, process-tree termination, and post-kill evidence.
 5. C ABI acceleration socket: add a narrow `extern` boundary only after profiling identifies a real bottleneck; candidate domains are tokenizer probes, SIMD search, JSONL scanning, and terminal width/grapheme kernels.
 6. Arena/quota discipline: split allocators by turn, provider payload, tool result, and UI frame.
-7. Deterministic context compiler: context assembly becomes a replayable compiler with diagnostics emitted as typed compile errors rather than late provider failures.
+7. Deterministic context compiler: context assembly is a replayable compiler with typed compile diagnostics before provider dispatch; unrecoverable topology remains a typed failure.
 8. Tool-result structural diffing: file mutation tools emit compact effect records with before/after metadata, byte counts, hashes, and optional localized hunks.
 9. Write-intent ledger: write-capable tools reserve intent records before mutation, commit effect records after mutation, and reconcile abandoned intents at cold start.
 10. Frontier TUI workbench: terminal renders live item graph, bounded child turn summaries, assistant token stream, tool spans, command output, cancellation affordance, session navigation, pool/queue metadata, and optional raw event inspection.

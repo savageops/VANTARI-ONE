@@ -36,6 +36,10 @@ second runtime owner.
   explicit deterministic ID. `context.jsonl` checkpoints retain inclusive
   source ranges and `first_kept_seq`; compaction must rebuild from those
   ledgers and never rewrite transcript rows.
+- The context compiler is the only provider-window builder. It may synthesize
+  interrupted tool results or skip orphan rows in the projection, preserves
+  the transcript, and emits `var1.context_compile_diagnostic.v1` counts through
+  `events.jsonl`; provider-overflow retry rebuilds through that same compiler.
 - Assignment admits ticket work to the queue. It does not launch an agent.
 - `agent_routes.max_concurrency` is the sole ticket execution capacity knob.
   `running` is active, `idle = max - running`, `queued` is admitted backlog, and

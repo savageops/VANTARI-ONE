@@ -1696,6 +1696,19 @@ test "loop self-heals unresolved persisted tool calls before provider dispatch" 
     var completed = try VAR1.core.session_store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
     defer completed.deinit(std.testing.allocator);
     try std.testing.expectEqual(VAR1.shared.types.SessionStatus.completed, completed.status);
+
+    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
+    var diagnostic_seen = false;
+    for (events) |event| {
+        if (std.mem.eql(u8, event.event_type, VAR1.shared.protocol.events.context_compile_diagnostic_event_type)) {
+            diagnostic_seen = true;
+            try std.testing.expect(std.mem.indexOf(u8, event.message, "var1.context_compile_diagnostic.v1") != null);
+            try std.testing.expect(std.mem.indexOf(u8, event.message, "\"synthesized_tool_results\":1") != null);
+            try std.testing.expect(std.mem.indexOf(u8, event.message, "\"skipped_tool_results\":0") != null);
+        }
+    }
+    try std.testing.expect(diagnostic_seen);
 }
 
 test "loop blocks undeclared tool calls before execution and returns protocol-visible denial" {

@@ -258,6 +258,7 @@ pub fn runPromptWithOptions(
     var base_message_count = rebuildProviderBaseMessages(
         allocator,
         config,
+        options.hooks,
         execution_context,
         session,
         &messages,
@@ -333,6 +334,7 @@ pub fn runPromptWithOptions(
                 base_message_count = try rebuildProviderBaseMessages(
                     allocator,
                     config,
+                    options.hooks,
                     execution_context,
                     session,
                     &messages,
@@ -704,6 +706,7 @@ pub fn runPromptWithOptions(
                     base_message_count = try rebuildProviderBaseMessages(
                         allocator,
                         config,
+                        options.hooks,
                         execution_context,
                         session,
                         &messages,
@@ -727,6 +730,7 @@ pub fn runPromptWithOptions(
                     base_message_count = try rebuildProviderBaseMessages(
                         allocator,
                         config,
+                        options.hooks,
                         execution_context,
                         session,
                         &messages,
@@ -804,6 +808,7 @@ pub fn runPromptWithOptions(
                 base_message_count = try rebuildProviderBaseMessages(
                     allocator,
                     config,
+                    options.hooks,
                     execution_context,
                     session,
                     &messages,
@@ -868,6 +873,7 @@ pub fn runPromptWithOptions(
             base_message_count = try rebuildProviderBaseMessages(
                 allocator,
                 config,
+                options.hooks,
                 execution_context,
                 session,
                 &messages,
@@ -1053,6 +1059,7 @@ fn awaitChildGroups(
 fn rebuildProviderBaseMessages(
     allocator: std.mem.Allocator,
     config: types.Config,
+    hooks: Hooks,
     execution_context: tools.ExecutionContext,
     session: types.SessionRecord,
     messages: *std.array_list.Managed(types.ChatMessage),
@@ -1093,7 +1100,32 @@ fn rebuildProviderBaseMessages(
     defer allocator.free(system_prompt);
 
     try messages.append(try types.initTextMessage(allocator, .system, system_prompt));
-    try context_builder.appendProviderMessages(allocator, config.workspace_root, messages, session);
+    var compile_report = context_builder.CompileReport{};
+    try context_builder.appendProviderMessagesWithReport(
+        allocator,
+        config.workspace_root,
+        messages,
+        session,
+        &compile_report,
+    );
+    if (compile_report.hasDiagnostics()) {
+        const diagnostic = try protocol_events.serializeContextCompileDiagnostic(
+            allocator,
+            "provider_rebuild",
+            compile_report.synthesized_tool_results,
+            compile_report.skipped_tool_results,
+        );
+        defer allocator.free(diagnostic);
+        try recordSessionEvent(
+            allocator,
+            config.workspace_root,
+            hooks,
+            session.id,
+            protocol_events.context_compile_diagnostic_event_type,
+            diagnostic,
+            session.status,
+        );
+    }
 
     const base_message_count = messages.items.len;
     try messages.appendSlice(preserved.items);
@@ -1142,6 +1174,7 @@ fn ensureContextWithinBudget(
     return rebuildProviderBaseMessages(
         allocator,
         config,
+        hooks,
         execution_context,
         session,
         messages,
@@ -1202,6 +1235,7 @@ fn completeWithContextRecovery(
         base_message_count.* = try rebuildProviderBaseMessages(
             allocator,
             config,
+            hooks,
             execution_context,
             session,
             messages,

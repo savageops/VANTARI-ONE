@@ -1146,10 +1146,19 @@ test "context builder rejects unresolved assistant tool-call transcripts before 
     }
 
     // Self-healing: builder synthesizes missing tool results instead of hard-failing.
-    try VAR1.core.context.appendProviderMessages(std.testing.allocator, workspace_root, &provider_messages, session);
+    var report = VAR1.core.context.builder.CompileReport{};
+    try VAR1.core.context.builder.appendProviderMessagesWithReport(
+        std.testing.allocator,
+        workspace_root,
+        &provider_messages,
+        session,
+        &report,
+    );
     // The provider window should contain the assistant tool-call message
     // plus a synthetic tool result for the unresolved call.
     try std.testing.expect(provider_messages.items.len >= 2);
+    try std.testing.expectEqual(@as(u32, 1), report.synthesized_tool_results);
+    try std.testing.expectEqual(@as(u32, 0), report.skipped_tool_results);
 }
 
 test "context builder skips orphan tool results created by corrupt suffix boundaries" {
@@ -1178,11 +1187,20 @@ test "context builder skips orphan tool results created by corrupt suffix bounda
     }
 
     // Self-healing: orphan tool results are skipped, not hard-failed.
-    try VAR1.core.context.appendProviderMessages(std.testing.allocator, workspace_root, &provider_messages, session);
+    var report = VAR1.core.context.builder.CompileReport{};
+    try VAR1.core.context.builder.appendProviderMessagesWithReport(
+        std.testing.allocator,
+        workspace_root,
+        &provider_messages,
+        session,
+        &report,
+    );
     // The orphan tool result should be skipped. Only the initial user prompt
     // should appear in the provider window (no tool messages).
     try std.testing.expectEqual(@as(usize, 1), provider_messages.items.len);
     try std.testing.expectEqual(VAR1.shared.types.MessageRole.user, provider_messages.items[0].role);
+    try std.testing.expectEqual(@as(u32, 0), report.synthesized_tool_results);
+    try std.testing.expectEqual(@as(u32, 1), report.skipped_tool_results);
 }
 
 test "context budget and overflow primitives expose explicit capability boundaries" {

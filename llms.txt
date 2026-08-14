@@ -27,6 +27,13 @@ orchestrator tool routes without executor branches. `TokenPrecision` carries
 exact provider usage, estimated compiler context, or unknown accounting through
 the existing turn events; exactness is never inferred from `chars / 4`.
 
+The context compiler is the sole provider-window builder. It preserves the
+append-only transcript, reports synthesized interrupted tool results and
+skipped orphan/mismatched rows through `var1.context_compile_diagnostic.v1`,
+and provider-overflow recovery rebuilds from the checkpoint plus durable
+suffix before one retry. The TUI suppresses this mechanics event in silent and
+normal posture; full logs show compact counts.
+
 The TUI footer is one non-wrapping read model: status, prompt mode, model,
 effort, context used/capacity/percent, and remaining context. Active/max agents
 and queue pressure are signal-gated; finite priced session cost may share the

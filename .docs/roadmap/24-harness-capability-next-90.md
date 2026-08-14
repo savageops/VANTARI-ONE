@@ -226,7 +226,7 @@ advance the queue until the real installed consumer path proves it.
 | 66 | Add prompt-token budgets and behavior-profile tests by provider, tool set, skill route, and active mode. | source-complete: `context.prompt_budget_tokens` defaults to `8,192`; `builder.zig` enforces the shared estimated system-prompt budget with `PromptBudgetExceeded` before provider dispatch, while native provider schemas remain outside the string budget. One matrix covers `orchestrate`, `build`, `align`, `plan`, terse/detailed, solo/orchestrated, conservative/aggressive, and low/high-cadence profiles across root, recon, and orchestrator tool routes without executor branches. Debug `19/19`, `2,154/2,154`; source ReleaseFast `9/9`; source SHA-256 `CA61A2DD503C0A5A70850AB12A809DE43F471B3ED86FF46DF439A50F8B89BC0D`; installed promotion deferred. Research: `.docs/research/2026-08-14-prompt-budget-behavior-matrix.md`. |
 | 67 | Add stable message IDs and explicit compaction source/kept sequence ranges before automatic compaction. | source-complete: the existing session owner retains generated `msg-<seq>` and explicit deterministic IDs, and compaction records inclusive `source_seq_start`, `source_seq_end`, and `first_kept_seq` ranges. The regression proves byte-identical `messages.jsonl`, explicit-ID deduplication, checkpoint identity, and summary-plus-exact-suffix cold replay. Debug `19/19`, `2,155/2,155`; source ReleaseFast `9/9`; source SHA-256 `CA61A2DD503C0A5A70850AB12A809DE43F471B3ED86FF46DF439A50F8B89BC0D`; installed promotion deferred. Research: `.docs/research/2026-08-14-message-identity-compaction-ranges.md`. |
 | 68 | Separate exact, estimated, and unknown token accounting; expose capacity and remaining only at the proven precision. | source-complete: `TokenPrecision` now distinguishes provider-reported usage, compiler-estimated context, and unknown accounting through the existing turn events. The footer marks estimates with `~`, suppresses unknown used/remaining values, and `/status` invalidates cumulative totals after an unaccounted completed turn. Debug `19/19`, `2,159/2,159`; source ReleaseFast `9/9`; source SHA-256 `41C90C2BDF0CB6350E9056EC361E8280FB8EF423AC941A8F4015B88B71695E15`; installed promotion deferred. Research: `.docs/research/2026-08-14-token-accounting-precision-move68.md`. |
-| 69 | Emit typed context-compile diagnostics and rebuild overflow recovery only through the compiler. | `core/context`; no in-memory duplicate tool batches. |
+| 69 | Emit typed context-compile diagnostics and rebuild overflow recovery only through the compiler. | source-complete: `core/context/builder.zig` returns per-compile synthesized/skipped repair counts; `core/executor/loop.zig` emits one `var1.context_compile_diagnostic.v1` event through the existing spine only when non-empty; the TUI suppresses it outside full logs; provider-overflow retry rebuilds from checkpoint plus durable suffix without duplicate tool rows. Debug `19/19`, `2,163/2,163`; source ReleaseFast `9/9`; source SHA-256 `898CAF97FD90F14B0FF3C202887467F7FFDDAC670583BEFB8B4491C2F6909DD6`; installed promotion deferred. Research: `.docs/research/2026-08-14-context-compile-diagnostics-move69.md`. |
 | 70 | Implement task-branch context shards with bounded suffixes and one evidence-bearing merge checkpoint back into the parent. | context plus agent sessions; branch isolation without transcript duplication. |
 
 ## 71-80 — Close the gated self-repair loop
@@ -336,8 +336,19 @@ and top/bottom status placement persist through the existing settings/config
   Installed promotion remains deferred. Research and receipt are
   `.docs/research/2026-08-14-token-accounting-precision-move68.md` and
   `.docs/todo/changelog/059-token-accounting-precision.md`.
-  Move 69 is next: typed context-compile diagnostics and compiler-only
-  overflow recovery.
+  Move 69 is now source-complete: the context compiler returns bounded
+  synthesized/skipped repair counts, the executor persists one typed
+  `var1.context_compile_diagnostic.v1` event only when a repair occurs, and
+  normal/silent TUI posture suppresses the mechanics while full logs retain a
+  compact count. Provider-overflow recovery still compacts and rebuilds only
+  through the compiler; the existing regression proves no duplicate durable
+  tool context. Debug is `19/19`, `2,163/2,163`; source ReleaseFast is `9/9` at
+  SHA-256 `898CAF97FD90F14B0FF3C202887467F7FFDDAC670583BEFB8B4491C2F6909DD6`.
+  Installed promotion remains deferred. Research and receipt are
+  `.docs/research/2026-08-14-context-compile-diagnostics-move69.md` and
+  `.docs/todo/changelog/060-context-compile-diagnostics-move69.md`.
+  Move 70 is next: task-branch context shards with one evidence-bearing merge
+  checkpoint.
   Provider-driven installed question response remains an explicit residual for
   the Move52a consumer path because live promotion is deferred. The TUI input repair
 is installed-proven at `74981E5C9CF956E3F3003FA15FDEB1D94F05A55BE9192FD4EDB1F0DE2FDE62AD`:
