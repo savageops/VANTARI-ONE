@@ -49,7 +49,21 @@ pub const ContextCompileDiagnostic = struct {
 };
 
 pub const failure_receipt_schema = "var1.failure_receipt.v1";
+pub const repair_diagnosis_schema = "var1.repair_diagnosis.v1";
 pub const max_failure_detail_bytes: usize = 2048;
+
+/// One deterministic diagnosis attached to a failure receipt. It names a
+/// fixed invariant and the durable event span that proves the failed turn;
+/// free-form telemetry and guessed causes do not enter this record.
+pub const RepairDiagnosis = struct {
+    schema: []const u8 = repair_diagnosis_schema,
+    diagnosis_id: []const u8,
+    invariant: []const u8,
+    evidence_start_seq: u64,
+    evidence_end_seq: u64,
+    evidence_start_event: []const u8 = "session_started",
+    evidence_end_event: []const u8 = "turn_terminal",
+};
 
 /// One bounded, deterministic description of a terminal harness failure.
 /// The receipt is embedded in the existing turn-terminal event so the event
@@ -61,6 +75,7 @@ pub const FailureReceipt = struct {
     failure_class: []const u8,
     phase: []const u8,
     detail: []const u8,
+    diagnosis: ?RepairDiagnosis = null,
 };
 
 /// One run-final carrier. `run_seq` is the exact durable `session_started.seq`
@@ -78,6 +93,9 @@ pub const turn_terminal_event_type = "turn_terminal";
 
 pub const TurnTerminalInput = struct {
     outcome: TurnTerminalOutcome,
+    /// Set by the terminal event owner before serialization. Direct serializer
+    /// callers may leave it zero, which omits the diagnosis span.
+    terminal_event_seq: u64 = 0,
     detail: []const u8 = "",
     failure_class: []const u8 = "",
     failure_phase: []const u8 = "turn",
@@ -208,6 +226,55 @@ pub fn boundedFailureDetail(detail: []const u8) []const u8 {
     return detail[0..end];
 }
 
+/// Map normalized failure evidence to one stable invariant. This is a bounded
+/// diagnosis label, not an LLM-generated explanation.
+pub fn repairDiagnosisInvariant(failure_class: []const u8, phase: []const u8) []const u8 {
+    if (std.mem.eql(u8, failure_class, "auth")) return "provider_authentication_succeeds";
+    if (std.mem.eql(u8, failure_class, "capability")) return "requested_capability_is_available";
+    if (std.mem.eql(u8, failure_class, "context")) return "provider_context_compiles";
+    if (std.mem.eql(u8, failure_class, "execution_limit")) return "turn_stays_within_execution_budget";
+    if (std.mem.eql(u8, failure_class, "provider_transport")) return "provider_transport_completes";
+    if (std.mem.eql(u8, failure_class, "stale_lease")) return "session_lease_is_current";
+    if (std.mem.eql(u8, failure_class, "stale_owner")) return "session_owner_is_current";
+    if (std.mem.eql(u8, failure_class, "tool")) return "tool_span_completes";
+    if (std.mem.eql(u8, failure_class, "timeout")) return "turn_completes_before_deadline";
+    if (std.mem.eql(u8, phase, "scheduler")) return "scheduler_reconciles_owned_turn";
+    if (std.mem.eql(u8, phase, "tool")) return "tool_span_completes";
+    if (std.mem.eql(u8, phase, "provider")) return "provider_turn_settles";
+    return "turn_reaches_terminal_state";
+}
+
+/// Derive a stable diagnosis identity from the failure and its durable causal
+/// span. Wall-clock time, allocator order, and free-form detail do not affect it.
+pub fn repairDiagnosisId(
+    allocator: std.mem.Allocator,
+    failure_id: []const u8,
+    invariant: []const u8,
+    evidence_start_seq: u64,
+    evidence_end_seq: u64,
+) ![]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(repair_diagnosis_schema);
+    hasher.update("\x00");
+    hasher.update(failure_id);
+    hasher.update("\x00");
+    hasher.update(invariant);
+    hasher.update("\x00");
+    var sequence_buffer: [64]u8 = undefined;
+    const sequence_text = try std.fmt.bufPrint(&sequence_buffer, "{d}:{d}", .{ evidence_start_seq, evidence_end_seq });
+    hasher.update(sequence_text);
+
+    var digest: [32]u8 = undefined;
+    hasher.final(&digest);
+    var hex: [64]u8 = undefined;
+    const hex_chars = "0123456789abcdef";
+    for (digest, 0..) |byte, index| {
+        hex[index * 2] = hex_chars[@as(usize, byte >> 4)];
+        hex[index * 2 + 1] = hex_chars[@as(usize, byte & 0x0f)];
+    }
+    return std.fmt.allocPrint(allocator, "diagnosis-{s}", .{hex[0..]});
+}
+
 /// Derive a stable receipt identity from the durable subject/run boundary and
 /// normalized failure evidence. No wall-clock or random value participates.
 pub fn failureReceiptId(
@@ -252,6 +319,8 @@ pub fn serializeTurnTerminal(
 ) ![]u8 {
     var failure_id: ?[]u8 = null;
     defer if (failure_id) |value| allocator.free(value);
+    var diagnosis_id: ?[]u8 = null;
+    defer if (diagnosis_id) |value| allocator.free(value);
 
     var failure: ?FailureReceipt = null;
     if (isFailureOutcome(input.outcome)) {
@@ -259,11 +328,23 @@ pub fn serializeTurnTerminal(
         const phase = normalizeFailurePhase(input.failure_phase, input.detail);
         const detail = boundedFailureDetail(input.detail);
         failure_id = try failureReceiptId(allocator, subject_id, run_seq, failure_class, phase, detail);
+        var diagnosis: ?RepairDiagnosis = null;
+        if (run_seq > 0 and input.terminal_event_seq > 0) {
+            const invariant = repairDiagnosisInvariant(failure_class, phase);
+            diagnosis_id = try repairDiagnosisId(allocator, failure_id.?, invariant, run_seq, input.terminal_event_seq);
+            diagnosis = RepairDiagnosis{
+                .diagnosis_id = diagnosis_id.?,
+                .invariant = invariant,
+                .evidence_start_seq = run_seq,
+                .evidence_end_seq = input.terminal_event_seq,
+            };
+        }
         failure = .{
             .failure_id = failure_id.?,
             .failure_class = failure_class,
             .phase = phase,
             .detail = detail,
+            .diagnosis = diagnosis,
         };
     }
 
@@ -381,6 +462,7 @@ test "TurnTerminal serializes one escaped typed outcome" {
 test "failed terminal serializes one normalized deterministic failure receipt" {
     const input: TurnTerminalInput = .{
         .outcome = .failed,
+        .terminal_event_seq = 9,
         .detail = "BadStatus status=503 provider unavailable",
     };
     const first = try serializeTurnTerminal(std.testing.allocator, "session-failure", 4, input);
@@ -393,6 +475,11 @@ test "failed terminal serializes one normalized deterministic failure receipt" {
     try std.testing.expect(std.mem.indexOf(u8, first, "\"failure_class\":\"provider_transport\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "\"phase\":\"turn\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "\"failure_id\":\"failure-") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "var1.repair_diagnosis.v1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "\"invariant\":\"provider_transport_completes\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "\"evidence_start_seq\":4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "\"evidence_end_seq\":9") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "\"diagnosis_id\":\"diagnosis-") != null);
 }
 
 test "successful and cancelled terminals do not manufacture failure receipts" {

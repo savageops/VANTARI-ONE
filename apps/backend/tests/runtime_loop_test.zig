@@ -1221,6 +1221,9 @@ test "loop records a failed session when provider transport fails" {
     try std.testing.expectEqualStrings("turn_started", events[2].event_type);
     try std.testing.expectEqualStrings("turn_terminal", events[3].event_type);
     try std.testing.expect(std.mem.indexOf(u8, events[3].message, "ConnectionRefused") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[3].message, "var1.repair_diagnosis.v1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[3].message, "\"evidence_start_seq\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[3].message, "\"evidence_end_seq\":4") != null);
     try expectOneTurnTerminal(events, "failed");
     try std.testing.expectEqualStrings("turn_terminal", capture.last_event_type.?);
     try std.testing.expectEqualStrings("failed", capture.last_status.?);

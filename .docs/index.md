@@ -97,6 +97,7 @@ This directory contains project records, research, planning chains, and complete
 - [`todo/changelog/063-question-modal-frame.md`](todo/changelog/063-question-modal-frame.md) — full-frame question modal, cramped-viewport proof, and reference-aligned multi-select review behavior.
 - [`todo/changelog/065-question-modal-batch-boundary.md`](todo/changelog/065-question-modal-batch-boundary.md) — bounded question envelope, cell-width-safe display, maximum-batch proof, and source-only promotion boundary.
 - [`todo/changelog/066-repair-receipts-move72.md`](todo/changelog/066-repair-receipts-move72.md) — immutable per-turn replay receipt, secret-free transient hashes, and source-only proof boundary.
+- [`todo/changelog/067-repair-diagnosis-move73.md`](todo/changelog/067-repair-diagnosis-move73.md) — fixed-invariant causal diagnosis nested in terminal failure evidence and source-only proof boundary.
 - [`todo/changelog/064-failure-receipts-move71.md`](todo/changelog/064-failure-receipts-move71.md) — normalized terminal failure receipts, session projection, ticket reconciliation, and idempotent requeue identity.
 - [`todo/changelog/053-write-intent-real-tools.md`](todo/changelog/053-write-intent-real-tools.md) — Move 62 real file-tool intent reserve/commit/reconciliation proof.
 - [`todo/changelog/054-ticket-quota-scheduler-policy.md`](todo/changelog/054-ticket-quota-scheduler-policy.md) — Move 63 queue-only policy ownership and sole capacity-key proof.

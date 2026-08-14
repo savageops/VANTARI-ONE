@@ -431,7 +431,7 @@ steps and `2,178/2,178` tests; source ReleaseFast is `9/9` at SHA-256
 Installed promotion remains deferred. Receipt:
 `.docs/todo/changelog/064-failure-receipts-move71.md`.
 
-## Current immutable replay receipt boundary — 2026-08-14
+## Move 72 immutable replay receipt boundary — 2026-08-14
 
 Move 72 appends one `var1.repair_receipt.v1` event to the existing
 `events.jsonl` ledger at root-turn admission, before context compilation or
@@ -449,6 +449,23 @@ source ReleaseFast build is `9/9` at SHA-256
 Installed promotion remains deferred; the preserved installed owner remains
 on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
 Receipt: `.docs/todo/changelog/066-repair-receipts-move72.md`.
+
+## Current causal diagnosis boundary — 2026-08-14
+
+Move 73 keeps diagnosis inside the existing failed or timed-out
+`turn_terminal.failure` payload. `shared/protocol/events.zig` maps normalized
+failure class and phase to one fixed invariant label, derives a deterministic
+`diagnosis-<sha256>` ID, and records the exact causal span from
+`session_started.seq` through `turn_terminal.seq`. The record is
+`var1.repair_diagnosis.v1`; it contains no model-generated cause or free-form
+telemetry. Completed and cancelled turns remain diagnosis-free.
+
+Full Debug and ReleaseFast are `19/19` steps and `2,180/2,180` tests. The
+source ReleaseFast build is `9/9` at SHA-256
+`F0D19C0BE1E92EFD59986437731B2B96884CE81F7E8703137C45B0046E861137`.
+Installed promotion remains deferred; the preserved installed owner remains
+on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+Receipt: `.docs/todo/changelog/067-repair-diagnosis-move73.md`.
 
 ## Current task-branch context boundary — 2026-08-14
 

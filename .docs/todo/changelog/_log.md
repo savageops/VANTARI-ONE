@@ -1,5 +1,23 @@
 # Execution Log
 
+## 2026-08-14 - Deterministic causal diagnosis (Move 73)
+
+**Outcome:** Added a bounded causal-diagnosis record inside the existing
+failure receipt without creating a second event stream.
+
+- Failed and timed-out `turn_terminal` payloads now carry one
+  `var1.repair_diagnosis.v1` record. Normalized failure class/phase selects a
+  fixed invariant; no model-generated cause or free-form telemetry is stored.
+- The deterministic diagnosis ID binds the failure ID, invariant, and exact
+  event span from `session_started.seq` through `turn_terminal.seq`.
+- Completed and cancelled turns remain diagnosis-free. The diagnosis is
+  serialized with terminal settlement, so it cannot become an orphan row.
+- Full Debug and ReleaseFast pass `19/19` steps and `2,180/2,180` tests.
+  Source ReleaseFast passes `9/9`; source SHA-256 is
+  `F0D19C0BE1E92EFD59986437731B2B96884CE81F7E8703137C45B0046E861137`.
+- Installed promotion remains deferred. Receipt:
+  `.docs/todo/changelog/067-repair-diagnosis-move73.md`.
+
 ## 2026-08-14 - Immutable replay receipts (Move 72)
 
 **Outcome:** Added one immutable per-turn replay receipt to the existing event

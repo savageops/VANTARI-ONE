@@ -278,6 +278,12 @@ original input and selected model while hashing transient effective config,
 canonical tool catalog, tracked environment, and source baseline; raw
 snapshots do not become session state.
 
+Failed and timed-out terminal payloads also carry one bounded
+`var1.repair_diagnosis.v1` record inside the same event. It maps normalized
+failure evidence to a fixed invariant, binds a deterministic diagnosis ID to
+the `session_started.seq` → `turn_terminal.seq` span, and keeps completed and
+cancelled turns free of repair diagnosis.
+
 ```text
 session/create ─► session/send ─► [executor loop] ─► session/get
                                                     ─► session/compact
@@ -1053,6 +1059,7 @@ failure pressure rather than line coverage:
 - Active-request shutdown with cancellation before join and one terminal event
 - Deterministic failure receipts projected from failed/timed-out terminal rows into sessions and tickets
 - Immutable replay receipts with exact input/model retention, secret-free config/tool/environment hashes, and source-baseline evidence
+- Deterministic causal diagnosis with fixed invariants and exact terminal event spans; no free-form repair telemetry
 - Bridge token verification, origin guard, payload redaction
 - Delegation scope zero-value rejection and profile expansion validation
 - Direct/group/parent agent mail, replay, provider-failure unread retention,
