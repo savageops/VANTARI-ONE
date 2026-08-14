@@ -146,7 +146,9 @@ dispatch path. `search_files` declares and probes the installed `ix` executable;
 when `ix` is absent, the catalog reports `unavailable` and dispatch fails closed.
 `eval` declares Python with the platform-correct Bun executable as an
 alternative; the catalog exposes both names while dispatch selects one
-persistent kernel per workspace and session.
+persistent kernel per workspace and session. `core/tools/process.zig` is the
+shared bounded child owner for eval and `shell_exec`: it owns pipe draining,
+timeouts, session teardown, and Windows tree receipts.
 
 ### Interjection Protocol (Speak While Working)
 
@@ -162,7 +164,7 @@ Synthesized from 8 competitor patterns (oh-my-pi, Eve, Scion, nullclaw, OpenClaw
 
 ### Root interactive questions
 
-The root model may call `ask_user` when an operator choice changes the result. It accepts a bounded batch of related questions, normalizes options to `a`–`e` plus `f / Other`, and persists the exact `var1.input_requested.v1` request in the session event spine. The TUI renders a settings-style panel with one horizontal row per visible question, Up/Down question focus, Left/Right option focus, Enter select, Space check, inline Other text, and an explicit review/submit state. `orchestrate` and `align` use the same controller. Malformed requests are reported and cancel the waiting run without unwinding the TUI. `input/respond` is the only resolution method. Cancellation and owner shutdown wake the same broker wait. Child profiles are headless and fail closed with `InputUnavailable`, so a background agent cannot hang waiting for a terminal that it does not own.
+The root model may call `ask_user` when an operator choice changes the result. It accepts a bounded batch of related questions, normalizes options to `a`–`e` plus `f / Other`, and persists the exact `var1.input_requested.v1` request in the session event spine. The TUI renders a settings-style panel with one horizontal row per visible question, Up/Down question focus, Left/Right option focus, Enter select, Space check, inline Other text, and an explicit review/submit state. `orchestrate` and `align` use the same controller. Question text stays borrowed from State-owned, static, or frame-owned storage until `vx.render`; the display projection rejects invalid UTF-8/control text, uses static option keys while preserving original response ids, and guards clipped viewports. Malformed requests are reported and cancel the waiting run without unwinding the TUI. `input/respond` is the only resolution method. Cancellation and owner shutdown wake the same broker wait. Child profiles are headless and fail closed with `InputUnavailable`, so a background agent cannot hang waiting for a terminal that it does not own.
 
 ### Deferred plugin socket
 
@@ -525,8 +527,8 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 | Hash-anchored edits | **Shipped source path** | read_file hashes and edit preconditions reject stale content before mutation. |
 | Provider capability probing | **Frontier scaffold** | Cache code exists without a runtime adapter consumer. |
 | Arena/quota discipline | **Frontier scaffold** | Scoped allocators exist; quota counters are not maintained by the live turn path. |
-| DAP | **Non-composable prototype** | attach destroys its adapter before return; stacktrace and variables start fresh unattached adapters. |
-| eval | **Source-complete; installed promotion pending** | One workspace+session-owned persistent kernel supports Python or Bun JavaScript with bounded newline protocol, output cap, timeout termination, and session isolation. Move 58 still routes worker teardown through the canonical process supervisor. |
+| DAP | **Source-complete; installed promotion pending** | One workspace+session adapter uses `PersistentProcess` with exact Content-Length framing; seven risk-correct lifecycle sockets cover attach, pause, stack, scopes, variables, continue, and detach. Debug `2,141/2,141`, source ReleaseFast, and real Python adapter cleanup pass; installed promotion remains deferred. |
+| eval | **Source-complete; installed promotion pending** | One workspace+session-owned persistent kernel supports Python or Bun JavaScript with bounded newline protocol, output cap, timeout termination, session isolation, and shared `core/tools/process.zig` teardown. Timeout and oversized-response tests prove reaping, drain, and framing recovery; installed promotion remains deferred. |
 | Scheduler leadership | **Source and two-process proven** | One crash-released OS lock spans the tick; `lease.json` carries a nonzero generation and is read back before dispatch. Two complete source kernels produced one reserved/completed attempt and zero survivors. |
 
 The current evidence and ordered repair ledger live in the

@@ -21,13 +21,19 @@ owner: apps/backend/src/core/tools/builtin/ask_user.zig; apps/backend/src/client
 - `tui_chat.zig` catches malformed `input_requested` payloads, reports one
   bounded system message, and cancels the waiting run without recursively
   re-entering progress replay.
+- Question-panel rendering now keeps Vaxis-borrowed text valid through the
+  outer `vx.render`: prompts/options and answer summaries point to State-owned
+  or static storage, and the dynamic header uses one frame-owned arena. This
+  closes the valid-request render crash caused by stack and freed temporary
+  buffers.
 
 ## Evidence
 
-- Focused TUI: `9/9` steps, `129/129` tests passed.
-- Full Debug: `19/19` steps, `2,136/2,136` tests passed.
+- Focused TUI: `9/9` steps, `130/130` tests passed, including normal/review
+  screen-cell ownership.
+- Full Debug: `19/19` steps, `2,139/2,139` tests passed.
 - Source ReleaseFast: `9/9` steps succeeded; source SHA-256
-  `284E99A020F28E480AEF8B42E06E4C73A5CEE1820B383C010E167749D015EBD2`.
+  `63DB8D95DF123791A71B253DEBDB7F376E3BC56E86BABF95116B42E5C6FAC37F`.
 - Live installed promotion was not run by design.
 
 ## Reference and boundary

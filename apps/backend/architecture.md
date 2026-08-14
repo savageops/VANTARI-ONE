@@ -61,6 +61,8 @@ flowchart TB
   executor --> evaluation["src/core/evaluation/events.zig"]
   tools --> toolRegistry["src/core/tools/registry.zig"]
   tools --> toolModules["src/core/tools/builtin/*.zig"]
+  tools --> processOwner["src/core/tools/process.zig"]
+  processOwner --> processTree["src/shared/process_tree.zig"]
   tools --> agents["src/core/agents/service.zig"]
   agents --> supervisor["src/core/agents/supervisor.zig"]
   scheduler --> tickets["src/core/tickets/index.zig"]
@@ -209,8 +211,12 @@ selects, Space toggles multi-select, and Other opens inline text followed by
 confirmation. Session cancel and owner shutdown broadcast to pending waits;
 terminal replay clears an unanswered controller. Child profiles do not receive
 `ask_user` and return `InputUnavailable` instead of blocking without an operator
-surface. There is no input poller, second status bus, transcript copy, or
-resolved-event family.
+surface. Question-panel strings remain State-owned, static, or frame-owned until
+the outer `vx.render` call; the display projection rejects invalid UTF-8/control
+text, uses static display keys while retaining original response ids, and guards
+clipped header/divider/row slots. The controller does not borrow helper-stack or
+freed temporary buffers. There is no input poller, second status bus, transcript
+copy, or resolved-event family.
 
 ## Context compaction flow
 
@@ -521,6 +527,10 @@ hash-matched binary.
   sole owner for assembling internal guardrails, user-editable system/developer prompt layers, and the live tool-use contract
 - `src/core/tools/`
   typed tool socket namespace, built-in module registry/runtime, pre-dispatch review, availability resolver, command-backed search dispatch, and workspace-state helpers
+- `src/core/tools/process.zig`
+  sole bounded child-process owner for one-shot commands, persistent eval workers, and session-owned DAP adapters; owns line/Content-Length framing, pipe draining, deadlines, session teardown, and Windows tree receipts
+- `src/core/tools/builtin/dap.zig`
+  seven risk-correct DAP sockets over one workspace-plus-session adapter registry; owns attach/pause/stack/scopes/variables/continue/detach protocol state and delegates process lifetime to `process.zig`
 - `src/core/agents/spec.zig`
   stable specialist ids, execution-kind floors, capability profiles, route roles, budgets, and output contracts
 - `src/core/agents/mailbox.zig`

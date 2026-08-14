@@ -1,5 +1,37 @@
 # Execution Log
 
+## 2026-08-14 - Question panel consumer hardening
+
+**Outcome:** Hardened the existing source question-panel projection against
+hostile model text and clipped terminal frames without adding an interaction
+system.
+
+- The Vaxis display projection now normalizes invalid UTF-8/control text, uses
+  static option keys, preserves original response ids, and guards every fixed
+  row against the viewport.
+- Focused TUI `131/131` and full Debug `2,144/2,144` pass; source ReleaseFast
+  exits `0`. Installed promotion remains explicitly deferred.
+- Research and receipt: `.docs/research/2026-08-14-question-panel-consumer-hardening.md`
+  and `.docs/todo/changelog/049-question-panel-consumer-hardening.md`.
+
+## 2026-08-14 - Session-owned DAP lifecycle
+
+**Outcome:** Closed Move 59 in source by composing DAP into the existing
+definition, dispatch, and bounded process owners.
+
+- `builtin/dap.zig` now exposes attach, pause, stack trace, scopes, variables,
+  continue, and detach through seven risk-correct tool definitions.
+- One adapter remains keyed by workspace plus session. Exact Content-Length
+  frames preserve interleaved events/responses; timeouts and teardown use
+  `PersistentProcess` and Windows tree receipts.
+- Debug `19/19` and `2,141/2,141`, `test-tui` exit `0`, and source ReleaseFast
+  exit `0` pass. Source SHA-256 is
+  `20D9B9001719F891DF984CAD480B0DFCB712E6197FAF27F6907CE8B205F97D8D`.
+- The real Python adapter lifecycle test leaves no adapter child. Installed
+  promotion remains intentionally deferred.
+- Research and receipt: `.docs/research/2026-08-14-dap-move59.md` and
+  `.docs/todo/changelog/048-dap-move59.md`.
+
 ## 2026-08-14 - Root question panel resilience
 
 **Outcome:** Repaired the model-issued multiple-choice path and kept it inside
@@ -12,7 +44,10 @@ the existing `ask_user`/event/broker/RPC owners.
   an explicit review/submit state. `orchestrate` and `align` share the path.
 - Malformed `input_requested` data produces one bounded system message and
   direct run cancellation instead of unwinding the event loop.
-- Focused TUI `9/9` and `129/129`, full Debug `19/19` and `2,136/2,136`, and
+- Question-panel strings now remain State-owned, static, or frame-owned until
+  `vx.render`; the normal and review render states have a screen-cell ownership
+  regression test.
+- Focused TUI `9/9` and `130/130`, full Debug `19/19` and `2,139/2,139`, and
   source ReleaseFast `9/9` pass. Live installed promotion remains deferred.
 - Research and receipt: `.docs/research/2026-08-14-root-question-review-panel.md`
   and `.docs/todo/changelog/046-root-question-panel-resilience.md`.

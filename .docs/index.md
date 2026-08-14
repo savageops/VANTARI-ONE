@@ -51,6 +51,9 @@ This directory contains project records, research, planning chains, and complete
 - [`research/2026-08-13-persistent-eval-kernels.md`](research/2026-08-13-persistent-eval-kernels.md) — persistent Python/Bun kernel harvest, definition-owned availability, bounded worker protocol, and Move 58 boundary.
 - [`research/2026-08-14-tui-theme-status-settings.md`](research/2026-08-14-tui-theme-status-settings.md) — renderer-backed theme/status configuration, saved settings path, and the finite YAGNI boundary.
 - [`research/2026-08-14-root-question-review-panel.md`](research/2026-08-14-root-question-review-panel.md) — oh-my-pi normalization/review harvest, ask_user cleanup crash, settings-style question rows, and source-only proof boundary.
+- [`research/2026-08-14-question-panel-consumer-hardening.md`](research/2026-08-14-question-panel-consumer-hardening.md) — render-safe question projection, clipped-viewport guards, static display keys, cross-harness input invariants, and deferred installed boundary.
+- [`research/2026-08-14-process-supervisor-move58.md`](research/2026-08-14-process-supervisor-move58.md) — shared bounded child owner, persistent eval teardown, post-cap drain, Windows tree receipts, and deferred installed boundary.
+- [`research/2026-08-14-dap-move59.md`](research/2026-08-14-dap-move59.md) — one session-owned DAP client, exact Content-Length framing, risk-correct tool sockets, and source-only proof boundary.
 - [`research/2026-08-13-provider-prism-staging.md`](research/2026-08-13-provider-prism-staging.md) — staged provider harvest receipt; promotion is deferred pending the complete installed auth/header path.
 - [`todo/findings/00-INDEX.md`](todo/findings/00-INDEX.md) — executable P0/P1/P2 closure order; current authority over older completion claims.
 - [`roadmap/24-harness-capability-next-90.md`](roadmap/24-harness-capability-next-90.md) — 90 dependency-ordered moves ranked by operator value, capability leverage, integrity risk, and friction removed.
@@ -70,6 +73,9 @@ This directory contains project records, research, planning chains, and complete
 - [`todo/changelog/044-persistent-eval-kernels.md`](todo/changelog/044-persistent-eval-kernels.md) — source-only Python/Bun persistent eval parity, alternative dependency truth, and Move 58 process-supervisor boundary.
 - [`todo/changelog/045-tui-theme-status-settings.md`](todo/changelog/045-tui-theme-status-settings.md) — source-only saved TUI palettes/status placement, renderer consumer, and responsiveness proof.
 - [`todo/changelog/046-root-question-panel-resilience.md`](todo/changelog/046-root-question-panel-resilience.md) — source-only crash-safe question normalization, settings-style multi-question review panel, and normal/align parity proof.
+- [`todo/changelog/049-question-panel-consumer-hardening.md`](todo/changelog/049-question-panel-consumer-hardening.md) — source-only hostile-text and clipped-viewport hardening for the shared question panel.
+- [`todo/changelog/047-process-supervisor-move58.md`](todo/changelog/047-process-supervisor-move58.md) — source-only canonical process supervisor, eval timeout/drain receipts, and adversarial framing proof.
+- [`todo/changelog/048-dap-move59.md`](todo/changelog/048-dap-move59.md) — source-only session-owned DAP lifecycle, shared process teardown, and real adapter regression proof.
 - [`todo/findings/31-provider-model-parity-ohmypi.md`](todo/findings/31-provider-model-parity-ohmypi.md) — oh-my-pi provider/model parity audit and residual boundary.
 - [`todo/changelog/PLUG-plugin-socket.md`](todo/changelog/PLUG-plugin-socket.md) — Move40 deferred-delete receipt; the plugin manager was removed and the remaining manifest/isolation/socket types are contract-only.
 - [`roadmap/20-adversarial-concurrency-mesh.md`](roadmap/20-adversarial-concurrency-mesh.md) — closed six-seam 100-way contention mesh with exact ledger, replay, and shutdown evidence and no new harness.

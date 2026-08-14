@@ -29,7 +29,9 @@ options stay horizontal, and submission is an explicit review boundary.
   Space to toggle multi-select, Tab/Shift+Tab to move rows, and a review state
   before submit.
 - Clamp question and option cursors before every access. Bound row rendering to
-  the viewport and keep inline `f / Other` input in the same panel.
+  the viewport and keep inline `f / Other` input in the same panel. The frame
+  projection must sanitize invalid UTF-8/control text, use static display keys,
+  and preserve the original option ids in the response.
 - Treat malformed `input_requested` data as recoverable client input. Show one
   bounded system message and cancel the waiting run through a direct RPC helper;
   do not propagate the parse error through event replay.

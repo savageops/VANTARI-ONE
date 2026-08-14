@@ -302,10 +302,16 @@ serialization free only initialized slices, removing the late-invalid batch
 crash. `question_view.State` renders one bounded horizontal row per visible
 question with clamped question/option focus and a review/submit state; malformed
 `input_requested` data produces one bounded system message and direct run
-cancellation instead of unwinding TUI replay. `orchestrate` and `align` share
-the controller. Focused TUI is `129/129`, full Debug is `2,136/2,136`, and
-source ReleaseFast is `9/9`; installed promotion remains intentionally
-deferred. Research: `.docs/research/2026-08-14-root-question-review-panel.md`.
+cancellation instead of unwinding TUI replay. Vaxis-borrowed question text now
+stays in State, static literals, or one frame arena until `vx.render`; the
+display projection also rejects invalid UTF-8/control text, preserves original
+response ids behind static `a`–`f` labels, and guards clipped header/divider/row
+slots. `orchestrate` and `align` share the controller. Focused TUI is `131/131`,
+full Debug is `2,144/2,144`, and source ReleaseFast exits `0` at SHA-256
+`7CD32F0D445F96E411EE8B35308A40CF08077BDE3703855525E446667799B3BB`;
+installed promotion remains intentionally deferred. Research:
+`.docs/research/2026-08-14-root-question-review-panel.md` and
+`.docs/research/2026-08-14-question-panel-consumer-hardening.md`.
 
 ## Sandbox capability boundary
 
@@ -331,8 +337,9 @@ health/catalog owner processes were stopped before a final VANTARI/VAR1
 process census of `0`. The installed catalog truthfully reported `search_files`
 unavailable because the required dependency was absent in that earlier proof;
 Move 54 then closed the executable identity and TUI input repair boundaries,
-and Move 55 closed the definition-owned manifest. Moves 56-57 now close the
-source eval-kernel parity seam; Move 58 remains the process-supervisor handoff.
+and Move 55 closed the definition-owned manifest. Moves 56-58 now close the
+source eval-kernel and process-supervisor seam; Move 59 closes the DAP lifecycle
+seam and Move 60 is the next frontier.
 
 Move 55 closes the capability-manifest drift seam. `ToolDefinition.availability`
 now carries each module-owned dependency declaration. `core/tools/registry.zig`
@@ -363,14 +370,32 @@ The harvest and decision record is `.docs/research/2026-08-13-mode-routing-ui-oa
 
 Moves 56-57 are source-complete. `builtin/eval.zig` now keeps one persistent
 kernel per workspace+session for Python or Bun, preserves variables across
-calls, isolates sessions, bounds output, and terminates timed-out workers.
-`ToolDefinition.availability` reports one Python-or-Bun capability, and Windows
-uses the real `bun.exe` executable rather than a PowerShell wrapper. Debug proof
-is `19/19` and `2,121/2,121`; installed promotion remains deferred. Move 58
-will route this worker through the canonical process supervisor. Remaining
-provider parity gaps are Anthropic/OpenCode login semantics; the current
-Anthropic Messages transport and Codex OAuth path remain separate, proven
-owners.
+calls, isolates sessions, and bounds output. `ToolDefinition.availability`
+reports one Python-or-Bun capability, and Windows uses the real `bun.exe`
+executable rather than a PowerShell wrapper.
+
+Move 58 is source-complete. `core/tools/process.zig` is the single bounded child
+owner for `shell_exec` and persistent eval. It owns serialized worker writes,
+post-cap response draining, timeout/session teardown, Windows Job Object tree
+termination, bounded waits, and `PersistentTerminationReceipt` evidence.
+Eval retains only its protocol and session registry. Debug proof is `19/19` and
+`2,137/2,137`; focused TUI is `9/9` and `129/129`; source ReleaseFast is `9/9`.
+Installed promotion remains deferred.
+
+Move 59 is source-complete. `core/tools/builtin/dap.zig` now traverses the
+normal catalog/dispatch path with seven risk-correct sockets. One adapter client
+is retained per workspace plus session and uses the shared
+`core/tools/process.zig::PersistentProcess` owner. Exact Content-Length framing
+preserves event/response boundaries, and host teardown releases the registry
+after request workers join. A real Python stdio adapter proves initialize,
+attach, pause, stackTrace, scopes, variables, and continue on one process;
+recon profiles do not receive command-class DAP tools. Debug is `19/19` and
+`2,141/2,141`; focused TUI remains `9/9` and `130/130`; source ReleaseFast is
+`9/9`; source SHA-256 is
+`20D9B9001719F891DF984CAD480B0DFCB712E6197FAF27F6907CE8B205F97D8D`.
+Installed promotion remains deferred. Research and receipt are
+`.docs/research/2026-08-14-dap-move59.md` and
+`.docs/todo/changelog/048-dap-move59.md`.
 
 Move 57a closes the renderer-backed TUI settings seam. `core/config/file.zig`
 owns `TuiPolicy` with four named palettes and `bottom`/`top` status placement;

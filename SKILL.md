@@ -57,8 +57,9 @@ second runtime owner.
   settings-style horizontal row per visible question, uses Up/Down for question
   focus, Left/Right for option focus, Enter to select, Space to check, and
   `f / Other` for inline text, then presents one review state before one
-  `input/respond` call. Malformed requests must cancel safely, not crash the
-  renderer. Child profiles are headless and must continue or report
+  `input/respond` call. The frame projection must sanitize invalid UTF-8/control
+  text and guard clipped rows. Malformed requests must cancel safely, not crash
+  the renderer. Child profiles are headless and must continue or report
   `InputUnavailable`; never create a polling question loop.
 - In the TUI, Shift+Tab cycles the session-local prompt lens
   `orchestrate -> build -> align -> plan`; the next `session/send` applies one
