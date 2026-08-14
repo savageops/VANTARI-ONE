@@ -1,5 +1,23 @@
 # Execution Log
 
+## 2026-08-14 - Approved repair application (Move 76)
+
+**Outcome:** Routed one explicitly approved repair through the existing
+reviewed `replace_in_file` path and write-intent ledger.
+
+- `repair/apply` verifies candidate/approval sequence and ID, exact patch JSON
+  and read tag, resolved target, patch hash, and source baseline before any
+  write.
+- The existing read inspection, stale-tag, effect, and reserve/commit owners
+  remain canonical. A `var1.repair_candidate_applied.v1` receipt records the
+  effect without storing patch body or source bytes.
+- A deterministic approval-bound tool-call ID plus the process-local apply
+  mutex makes concurrent and repeated requests no-op after an applied receipt
+  or committed intent.
+- Debug passes `19/19` steps and `2,191/2,191` tests. Installed promotion
+  remains deferred. Receipt:
+  `.docs/todo/changelog/071-repair-apply-move76.md`.
+
 ## 2026-08-14 - Provider capability dispatch (Move 61)
 
 **Outcome:** Wired the existing fixed provider capability cache into the live

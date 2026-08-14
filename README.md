@@ -293,7 +293,13 @@ application remain explicit stages over the existing reviewed write tools. The
 operator-only `repair/approve` socket now binds the candidate event sequence/id,
 stored patch hash, and expected/current source baseline before appending one
 `var1.repair_candidate_approval.v1` receipt. It is evidence only; Move 76 owns
-application.
+application. `repair/apply` now accepts the exact `replace_in_file` JSON payload,
+rechecks the approval, target, patch hash, and baseline, then dispatches the
+existing reviewed writer. The normal read inspection, stale tag, effect
+envelope, and write-intent reserve/commit path remains the only mutation owner;
+`var1.repair_candidate_applied.v1` makes a successful application retry-safe.
+Source proof is Debug `19/19` / `2,191/2,191`; installed promotion remains
+deferred.
 
 ```text
 session/create ─► session/send ─► [executor loop] ─► session/get

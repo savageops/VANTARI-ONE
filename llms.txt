@@ -97,6 +97,13 @@ Rules:
   `write_file`/`append_file`/`replace_in_file`, commit measured effect evidence
   after mutation, and close unresolved reservations as `abandoned` at safe cold
   start. No rollback is claimed without byte evidence.
+- The gated repair path is `repair_candidate` → operator-only `repair/approve`
+  → operator-only `repair/apply`. Candidates carry the exact `replace_in_file`
+  JSON payload and read tag but never mutate. Apply verifies event identity,
+  target, patch hash, and source baseline, then dispatches the existing reviewed
+  writer; `var1.repair_candidate_applied.v1` plus the committed write intent
+  makes retries no-op. Exact-input rerun, evaluation, rollback, and regression
+  promotion remain Moves 77–80.
 - runtime.full_access_mode is false by default; resolved child routes carry it
   into the shared file/search/LSP/shell execution context, and it never relocates
   .var.

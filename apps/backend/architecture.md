@@ -377,6 +377,17 @@ measured snapshot, and host/executor cold-start paths append one `abandoned`
 terminal row for unresolved reservations on non-running or proven-stale
 sessions. This is durable effect evidence, not an unproven rollback claim.
 
+The gated repair path keeps the same owner boundary. `repair_candidate` accepts
+only the exact `replace_in_file` JSON payload plus its read tag and records a
+proposal; operator-only `repair/approve` records approval evidence; and
+operator-only `repair/apply` verifies both event identities, the resolved
+target, patch hash, and source baseline before dispatching the existing
+reviewed writer. The writer still owns inspection, stale-tag rejection, effect
+envelopes, and write-intent reserve/commit. One
+`var1.repair_candidate_applied.v1` receipt plus a deterministic approval-bound
+tool-call ID makes retries no-op. No repair queue, patcher, or second ledger is
+introduced.
+
 Delegation is validated at one eligibility-first agent boundary. In root orchestrator mode, `agents {}` must precede launch or configuration mutation, but it is not a mandatory first-turn action. `AgentService` hot-loads the registry, resolves every route, reads fixed-pool and current-team projections, and returns one sorted `var1.agent_eligibility.v1` snapshot with a SHA-256 receipt. The active prompt chooses whether to stay quiet, inspect, message, challenge, launch, accept queueing, or wake; no executor branch selects for it. `launch_agent` accepts one `{ context, tasks[] }` batch whose task ids must be route-eligible and revalidates scope, route, depth, contact, and capacity before effects. `core/agents/spec.zig` resolves editable personas over compiled execution-kind and capability-profile floors; custom ids must inherit through `extends`, so config cannot grant arbitrary tools or provider credentials. `configure_agent` validates and atomically replaces `config.json`; the next eligibility or launch read sees the new registry. Child prompts contain only the selected private capsule, explicit shared context, finite task, and output contract. The parent transcript is never copied into a child window.
 
 Derivative memory and evaluator evidence are deliberately non-authoritative. `src/core/memory/derivative.zig` requires `session_id`, `source_seq_start`, and `source_seq_end`, and rejects transcript replay-shaped payloads. `src/core/evaluation/events.zig` appends redacted heartbeat/evaluator events with evaluator mutation forbidden. RecursiveMAS latent transfer, GRASP gradients, dynamic markets, autonomous background evolution, exact tokenizer integration, and plugin auto-discovery remain unsupported behavior until there is a tested contract for cancellation, idempotency, cold-start recovery, and lifecycle ownership.

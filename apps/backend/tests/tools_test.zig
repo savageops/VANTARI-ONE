@@ -490,10 +490,24 @@ test "repair candidate records ready and drift-blocked proposals without mutatio
     const baseline = try VAR1.core.evaluation.events.sourceBaseline(std.testing.allocator);
     defer std.testing.allocator.free(baseline);
 
+    var read_call = try makeToolCallWithId(std.testing.allocator, "call-candidate-read", "read_file", "{\"path\":\"notes/candidate.zig\"}");
+    defer read_call.deinit(std.testing.allocator);
+    const read_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, sessionExecCtx(workspace_root, session.id), read_call);
+    defer std.testing.allocator.free(read_output);
+    const tag_start = (std.mem.indexOf(u8, read_output, "#") orelse return error.TestExpectedEqual) + 1;
+    const tag_end = std.mem.indexOfScalarPos(u8, read_output, tag_start, ']') orelse return error.TestExpectedEqual;
+    const tag = read_output[tag_start..tag_end];
+    const ready_patch = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"path\":\"notes/candidate.zig\",\"old_text\":\"const answer = 1;\",\"new_text\":\"const answer = 2;\",\"tag\":\"{s}\"}}",
+        .{tag},
+    );
+    defer std.testing.allocator.free(ready_patch);
+
     const ready_args = try std.fmt.allocPrint(
         std.testing.allocator,
-        "{{\"candidate_id\":\"candidate-ready\",\"failure_id\":\"failure-1\",\"path\":\"notes/candidate.zig\",\"operation\":\"replace_in_file\",\"patch\":\"const answer = 2;\\n\",\"expected_source_baseline\":{f}}}",
-        .{std.json.fmt(baseline, .{})},
+        "{{\"candidate_id\":\"candidate-ready\",\"failure_id\":\"failure-1\",\"path\":\"notes/candidate.zig\",\"operation\":\"replace_in_file\",\"patch\":{f},\"expected_source_baseline\":{f}}}",
+        .{ std.json.fmt(ready_patch, .{}), std.json.fmt(baseline, .{}) },
     );
     defer std.testing.allocator.free(ready_args);
     var ready_call = try makeToolCallWithId(std.testing.allocator, "call-candidate-ready", "repair_candidate", ready_args);
@@ -502,7 +516,18 @@ test "repair candidate records ready and drift-blocked proposals without mutatio
     defer std.testing.allocator.free(ready_output);
     try std.testing.expect(std.mem.indexOf(u8, ready_output, "STATUS ready") != null);
 
-    const stale_args = "{\"candidate_id\":\"candidate-stale\",\"failure_id\":\"failure-1\",\"path\":\"notes/candidate.zig\",\"operation\":\"replace_in_file\",\"patch\":\"const answer = 3;\",\"expected_source_baseline\":\"git:stale\"}";
+    const stale_patch = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"path\":\"notes/candidate.zig\",\"old_text\":\"const answer = 1;\",\"new_text\":\"const answer = 3;\",\"tag\":\"{s}\"}}",
+        .{tag},
+    );
+    defer std.testing.allocator.free(stale_patch);
+    const stale_args = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"candidate_id\":\"candidate-stale\",\"failure_id\":\"failure-1\",\"path\":\"notes/candidate.zig\",\"operation\":\"replace_in_file\",\"patch\":{f},\"expected_source_baseline\":\"git:stale\"}}",
+        .{std.json.fmt(stale_patch, .{})},
+    );
+    defer std.testing.allocator.free(stale_args);
     var stale_call = try makeToolCallWithId(std.testing.allocator, "call-candidate-stale", "repair_candidate", stale_args);
     defer stale_call.deinit(std.testing.allocator);
     try std.testing.expectError(

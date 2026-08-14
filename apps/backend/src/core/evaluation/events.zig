@@ -16,6 +16,8 @@ pub const repair_candidate_event_type = "repair_candidate";
 pub const repair_candidate_schema = "var1.repair_candidate.v1";
 pub const repair_candidate_approval_event_type = "repair_candidate_approval";
 pub const repair_candidate_approval_schema = "var1.repair_candidate_approval.v1";
+pub const repair_candidate_applied_event_type = "repair_candidate_applied";
+pub const repair_candidate_applied_schema = "var1.repair_candidate_applied.v1";
 
 const repair_environment_keys = [_][]const u8{
     "VANTARI_HOME",
@@ -229,6 +231,19 @@ const RepairCandidateApprovalPayload = struct {
     expected_source_baseline: []const u8 = "",
 };
 
+const RepairCandidateAppliedPayload = struct {
+    schema: []const u8 = "",
+    candidate_id: []const u8 = "",
+    candidate_event_seq: u64 = 0,
+    approval_id: []const u8 = "",
+    approval_event_seq: u64 = 0,
+    tool_call_id: []const u8 = "",
+    operation: []const u8 = "",
+    target_path: []const u8 = "",
+    patch_sha256: []const u8 = "",
+    effect_sha256: []const u8 = "",
+};
+
 /// Append one explicit operator approval for an exact candidate event. The
 /// approval is itself immutable evidence; it does not carry patch text and does
 /// not mutate source. Repeating the same approval identity returns the original
@@ -344,6 +359,187 @@ pub fn appendRepairCandidateApprovalEvent(
 
     return store.appendEventWithSeq(allocator, workspace_root, session_id, .{
         .event_type = repair_candidate_approval_event_type,
+        .message = message,
+        .timestamp_ms = std.time.milliTimestamp(),
+    });
+}
+
+/// Verify the exact operator approval before a repair can reach the existing
+/// write tool. The returned flag is true when this approval already produced
+/// an applied receipt, which keeps retries mutation-idempotent.
+pub fn verifyRepairCandidateApply(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    candidate_event_seq: u64,
+    approval_event_seq: u64,
+    candidate_id: []const u8,
+    approval_id: []const u8,
+    operation: []const u8,
+    target_path: []const u8,
+    patch_sha256: []const u8,
+    expected_source_baseline: []const u8,
+) !bool {
+    if (candidate_event_seq == 0 or approval_event_seq == 0) return Error.EmptyEvidence;
+    const required = [_][]const u8{
+        session_id,
+        candidate_id,
+        approval_id,
+        operation,
+        target_path,
+        patch_sha256,
+        expected_source_baseline,
+    };
+    for (required) |value| {
+        if (std.mem.trim(u8, value, " \t\r\n").len == 0) return Error.EmptyEvidence;
+    }
+
+    const events = try store.readEvents(allocator, workspace_root, session_id);
+    defer types.deinitSessionEvents(allocator, events);
+
+    var candidate_event: ?*const types.SessionEvent = null;
+    var approval_event: ?*const types.SessionEvent = null;
+    var already_applied = false;
+    for (events) |*event| {
+        if (event.seq == candidate_event_seq and std.mem.eql(u8, event.event_type, repair_candidate_event_type)) {
+            candidate_event = event;
+        }
+        if (event.seq == approval_event_seq and std.mem.eql(u8, event.event_type, repair_candidate_approval_event_type)) {
+            approval_event = event;
+        }
+        if (!std.mem.eql(u8, event.event_type, repair_candidate_applied_event_type)) continue;
+        const parsed = std.json.parseFromSlice(RepairCandidateAppliedPayload, allocator, event.message, .{
+            .ignore_unknown_fields = true,
+        }) catch continue;
+        defer parsed.deinit();
+        if (std.mem.eql(u8, parsed.value.schema, repair_candidate_applied_schema) and
+            std.mem.eql(u8, parsed.value.candidate_id, candidate_id) and
+            parsed.value.candidate_event_seq == candidate_event_seq and
+            std.mem.eql(u8, parsed.value.approval_id, approval_id) and
+            parsed.value.approval_event_seq == approval_event_seq)
+        {
+            already_applied = true;
+        }
+    }
+
+    const candidate = candidate_event orelse return Error.CandidateNotFound;
+    var parsed_candidate = std.json.parseFromSlice(RepairCandidatePayload, allocator, candidate.message, .{
+        .ignore_unknown_fields = true,
+    }) catch return Error.CandidateMismatch;
+    defer parsed_candidate.deinit();
+    if (!std.mem.eql(u8, parsed_candidate.value.schema, repair_candidate_schema) or
+        !std.mem.eql(u8, parsed_candidate.value.candidate_id, candidate_id) or
+        !parsed_candidate.value.baseline_match or
+        !std.mem.eql(u8, parsed_candidate.value.status, "ready") or
+        !std.mem.eql(u8, parsed_candidate.value.operation, operation) or
+        !std.mem.eql(u8, parsed_candidate.value.target_path, target_path) or
+        !std.mem.eql(u8, parsed_candidate.value.patch_sha256, patch_sha256) or
+        !std.mem.eql(u8, parsed_candidate.value.expected_source_baseline, expected_source_baseline))
+    {
+        return Error.CandidateMismatch;
+    }
+
+    const approval = approval_event orelse return Error.CandidateMismatch;
+    var parsed_approval = std.json.parseFromSlice(RepairCandidateApprovalPayload, allocator, approval.message, .{
+        .ignore_unknown_fields = true,
+    }) catch return Error.CandidateMismatch;
+    defer parsed_approval.deinit();
+    if (!std.mem.eql(u8, parsed_approval.value.schema, repair_candidate_approval_schema) or
+        !std.mem.eql(u8, parsed_approval.value.candidate_id, candidate_id) or
+        parsed_approval.value.candidate_event_seq != candidate_event_seq or
+        !std.mem.eql(u8, parsed_approval.value.approval_id, approval_id) or
+        !std.mem.eql(u8, parsed_approval.value.patch_sha256, patch_sha256) or
+        !std.mem.eql(u8, parsed_approval.value.expected_source_baseline, expected_source_baseline))
+    {
+        return Error.CandidateMismatch;
+    }
+
+    // A previously applied approval is already durable evidence. Do not make
+    // a successful repair fail merely because a later source commit changed
+    // the current Git baseline during a retry.
+    if (already_applied) return true;
+
+    const current_source_baseline = try sourceBaseline(allocator);
+    defer allocator.free(current_source_baseline);
+    if (!std.mem.eql(u8, parsed_candidate.value.current_source_baseline, current_source_baseline) or
+        !std.mem.eql(u8, parsed_candidate.value.expected_source_baseline, current_source_baseline))
+    {
+        return Error.CandidateBaselineConflict;
+    }
+
+    return false;
+}
+
+/// Record the successful application after the existing write tool commits
+/// its write intent. Repeating the same identity returns the original event
+/// sequence and never appends a duplicate application receipt.
+pub fn appendRepairCandidateAppliedEvent(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    candidate_event_seq: u64,
+    approval_event_seq: u64,
+    candidate_id: []const u8,
+    approval_id: []const u8,
+    tool_call_id: []const u8,
+    operation: []const u8,
+    target_path: []const u8,
+    patch_sha256: []const u8,
+    effect_sha256: []const u8,
+) !u64 {
+    if (candidate_event_seq == 0 or approval_event_seq == 0) return Error.EmptyEvidence;
+    const required = [_][]const u8{
+        session_id,
+        candidate_id,
+        approval_id,
+        tool_call_id,
+        operation,
+        target_path,
+        patch_sha256,
+        effect_sha256,
+    };
+    for (required) |value| {
+        if (std.mem.trim(u8, value, " \t\r\n").len == 0) return Error.EmptyEvidence;
+    }
+
+    const events = try store.readEvents(allocator, workspace_root, session_id);
+    defer types.deinitSessionEvents(allocator, events);
+    for (events) |*event| {
+        if (!std.mem.eql(u8, event.event_type, repair_candidate_applied_event_type)) continue;
+        const parsed = std.json.parseFromSlice(RepairCandidateAppliedPayload, allocator, event.message, .{
+            .ignore_unknown_fields = true,
+        }) catch continue;
+        defer parsed.deinit();
+        if (std.mem.eql(u8, parsed.value.schema, repair_candidate_applied_schema) and
+            std.mem.eql(u8, parsed.value.candidate_id, candidate_id) and
+            parsed.value.candidate_event_seq == candidate_event_seq and
+            std.mem.eql(u8, parsed.value.approval_id, approval_id) and
+            parsed.value.approval_event_seq == approval_event_seq)
+        {
+            return event.seq;
+        }
+    }
+
+    const message = try std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"{s}\",\"candidate_id\":{f},\"candidate_event_seq\":{d},\"approval_id\":{f},\"approval_event_seq\":{d},\"tool_call_id\":{f},\"operation\":{f},\"target_path\":{f},\"patch_sha256\":{f},\"effect_sha256\":{f},\"status\":\"applied\",\"mutation_allowed\":true}}",
+        .{
+            repair_candidate_applied_schema,
+            std.json.fmt(candidate_id, .{}),
+            candidate_event_seq,
+            std.json.fmt(approval_id, .{}),
+            approval_event_seq,
+            std.json.fmt(tool_call_id, .{}),
+            std.json.fmt(operation, .{}),
+            std.json.fmt(target_path, .{}),
+            std.json.fmt(patch_sha256, .{}),
+            std.json.fmt(effect_sha256, .{}),
+        },
+    );
+    defer allocator.free(message);
+
+    return store.appendEventWithSeq(allocator, workspace_root, session_id, .{
+        .event_type = repair_candidate_applied_event_type,
         .message = message,
         .timestamp_ms = std.time.milliTimestamp(),
     });

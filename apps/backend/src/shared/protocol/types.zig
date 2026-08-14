@@ -14,6 +14,7 @@ pub const methods = struct {
     pub const session_cancel = "session/cancel";
     pub const input_respond = "input/respond";
     pub const repair_candidate_approve = "repair/approve";
+    pub const repair_candidate_apply = "repair/apply";
     pub const session_get = "session/get";
     pub const session_list = "session/list";
     pub const schedule_get = "schedule/get";
@@ -34,6 +35,7 @@ pub const Capabilities = struct {
     session_cancel: bool = true,
     input_respond: bool = true,
     repair_candidate_approval: bool = true,
+    repair_candidate_apply: bool = true,
     session_get: bool = true,
     session_list: bool = true,
     schedule_get: bool = true,
@@ -134,6 +136,18 @@ pub const RepairCandidateApprovalResult = struct {
     approval_event_seq: u64,
     approved: bool,
     mutation_allowed: bool,
+};
+
+pub const RepairCandidateApplyResult = struct {
+    session_id: []const u8,
+    candidate_id: []const u8,
+    approval_id: []const u8,
+    candidate_event_seq: u64,
+    approval_event_seq: u64,
+    tool_call_id: []const u8,
+    applied: bool,
+    already_applied: bool,
+    output: ?[]const u8 = null,
 };
 
 pub const ScheduleSummary = struct {

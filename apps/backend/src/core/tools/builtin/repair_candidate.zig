@@ -6,7 +6,7 @@ const evaluation_events = @import("../../evaluation/events.zig");
 
 pub const definition = types.ToolDefinition{
     .name = "repair_candidate",
-    .description = "Record a source-baseline-anchored repair candidate without changing files. Approval and apply are separate operations.",
+    .description = "Record a source-baseline-anchored repair candidate without changing files. The patch is the exact replace_in_file JSON payload, including its read tag. Approval and apply are separate operations.",
     .review_risk = .write_capable,
     .parameters_json =
     \\{
@@ -16,19 +16,30 @@ pub const definition = types.ToolDefinition{
     \\    "failure_id": { "type": "string", "description": "Durable failure receipt id that caused this proposal." },
     \\    "path": { "type": "string", "description": "Existing target path that was inspected before proposal." },
     \\    "operation": { "type": "string", "enum": ["replace_in_file"] },
-    \\    "patch": { "type": "string", "description": "Exact proposed patch body. It is hashed for the durable receipt and is not applied." },
+    \\    "patch": { "type": "string", "description": "Exact replace_in_file JSON payload, including path, old_text, new_text, and the read_file tag. It is hashed for the durable receipt and is not applied." },
     \\    "expected_source_baseline": { "type": "string", "description": "Source baseline captured with the failure, such as git:<commit> or unavailable." }
     \\  },
     \\  "required": ["candidate_id", "failure_id", "path", "operation", "patch", "expected_source_baseline"],
     \\  "additionalProperties": false
     \\}
     ,
-    .example_json = "{\"candidate_id\":\"candidate-1\",\"failure_id\":\"failure-1\",\"path\":\"apps/backend/src/core/foo.zig\",\"operation\":\"replace_in_file\",\"patch\":\"...\",\"expected_source_baseline\":\"git:abc123\"}",
-    .usage_hint = "Proposal only: inspect the exact target first. This tool records hashes and baseline status, never changes source, and baseline drift blocks the candidate.",
+    .example_json = "{\"candidate_id\":\"candidate-1\",\"failure_id\":\"failure-1\",\"path\":\"apps/backend/src/core/foo.zig\",\"operation\":\"replace_in_file\",\"patch\":\"{\\\"path\\\":\\\"apps/backend/src/core/foo.zig\\\",\\\"old_text\\\":\\\"old\\\",\\\"new_text\\\":\\\"new\\\",\\\"tag\\\":\\\"a1b2\\\"}\",\"expected_source_baseline\":\"git:abc123\"}",
+    .usage_hint = "Proposal only: inspect the exact target first and copy the replace_in_file payload, including its read_file tag. This tool records hashes and baseline status, never changes source, and baseline drift blocks the candidate.",
 };
 
 pub const availability = module.AvailabilitySpec{};
 const max_candidate_patch_bytes: usize = 64 * 1024;
+
+/// The repair loop deliberately reuses the existing replace_in_file contract.
+/// Keeping this shape public lets the operator apply route validate the same
+/// payload without inventing a second patch language.
+pub const ReplacePatch = struct {
+    path: []const u8,
+    old_text: []const u8,
+    new_text: []const u8,
+    replace_all: bool = false,
+    tag: []const u8,
+};
 
 pub fn execute(
     allocator: std.mem.Allocator,
@@ -65,6 +76,17 @@ pub fn execute(
         std.mem.trim(u8, expected_baseline, " \t\r\n").len == 0 or
         !std.mem.eql(u8, operation, "replace_in_file") or
         patch.len > max_candidate_patch_bytes)
+    {
+        return module.Error.InvalidRepairCandidate;
+    }
+
+    var patch_args = std.json.parseFromSlice(ReplacePatch, allocator, patch, .{
+        .ignore_unknown_fields = false,
+    }) catch return module.Error.InvalidRepairCandidate;
+    defer patch_args.deinit();
+    if (!std.mem.eql(u8, patch_args.value.path, requested_path) or
+        std.mem.trim(u8, patch_args.value.tag, " \t\r\n").len == 0 or
+        patch_args.value.old_text.len == 0)
     {
         return module.Error.InvalidRepairCandidate;
     }

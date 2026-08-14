@@ -146,6 +146,14 @@ requires source/installed SHA-256 equality and the installed consumer path.
   `abandoned` terminal row for unresolved reservations; it never claims a
   rollback that was not observed. Move 62 remains source-only until installed
   promotion is explicitly scheduled.
+- The gated repair path is `repair_candidate` → operator-only `repair/approve`
+  → operator-only `repair/apply`. The candidate patch is the exact
+  `replace_in_file` JSON payload, including its `read_file` tag. Apply verifies
+  candidate/approval sequence and ID, target, patch hash, and source baseline,
+  then dispatches the existing reviewed writer. The applied receipt and
+  committed intent make repeated requests no-op; Moves 77–80 still own exact
+  rerun, evaluation, rollback, and regression promotion. Never expose repair
+  approval as a model tool or add a patcher.
 - Browser routes are redacted prototypes. Owner routes are loopback-only and
   token/generation gated.
 - Scheduler leadership is source-proven with one crash-released lock and

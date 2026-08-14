@@ -7,6 +7,7 @@ const prompts = @import("../core/prompts/index.zig");
 const protocol_events = @import("../shared/protocol/events.zig");
 const input_protocol = @import("../shared/protocol/input.zig");
 const protocol_types = @import("../shared/protocol/types.zig");
+const fsutil = @import("../shared/fsutil.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
 const provider_profile = @import("../core/providers/profile.zig");
 const models = @import("../core/providers/models.zig");
@@ -16,6 +17,7 @@ const buffer_service = @import("../core/executor/buffer.zig");
 const store = @import("../core/sessions/store.zig");
 const auth_store = @import("../core/auth/store.zig");
 const tools = @import("../core/tools/runtime.zig");
+const repair_candidate = @import("../core/tools/builtin/repair_candidate.zig");
 const eval_tool = @import("../core/tools/builtin/eval.zig");
 const types = @import("../shared/types.zig");
 const stdio_client = @import("stdio_client.zig");
@@ -518,6 +520,7 @@ const Server = struct {
     agent_service: tools.AgentService,
     stdout_file: std.fs.File,
     write_mutex: std.Thread.Mutex = .{},
+    repair_apply_mutex: std.Thread.Mutex = .{},
     request_pool: std.Thread.Pool = undefined,
     request_pool_started: bool = false,
     request_admission: RequestAdmission = .{},
@@ -841,6 +844,9 @@ fn dispatch(
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.repair_candidate_approve)) {
         return handleRepairCandidateApprove(server, params);
+    }
+    if (std.mem.eql(u8, method_name, protocol_types.methods.repair_candidate_apply)) {
+        return handleRepairCandidateApply(server, params);
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.session_get)) {
         return handleSessionGet(server, params);
@@ -1417,6 +1423,197 @@ fn handleRepairCandidateApprove(server: *Server, params: ?std.json.Value) ![]u8 
         .approved = true,
         .mutation_allowed = true,
     });
+}
+
+/// Apply one exact approved replace_in_file payload through the canonical tool
+/// dispatcher. The approval is a control-plane decision; the write tool still
+/// owns inspection, stale-tag rejection, effect evidence, and write-intent
+/// reserve/commit. A process-local mutex closes the concurrent retry window.
+fn handleRepairCandidateApply(server: *Server, params: ?std.json.Value) ![]u8 {
+    const Args = struct {
+        session_id: []const u8,
+        candidate_id: []const u8,
+        approval_id: []const u8,
+        patch: []const u8,
+        expected_source_baseline: []const u8,
+    };
+
+    var parsed = try parseParams(Args, server.allocator, params);
+    defer parsed.deinit();
+    const params_value = params orelse return Error.InvalidParams;
+    if (params_value != .object) return Error.InvalidParams;
+    const candidate_event_seq = (try optionalU64FromObject(&params_value.object, "candidate_event_seq")) orelse return Error.InvalidParams;
+    const approval_event_seq = (try optionalU64FromObject(&params_value.object, "approval_event_seq")) orelse return Error.InvalidParams;
+    if (parsed.value.patch.len == 0 or parsed.value.expected_source_baseline.len == 0) return Error.InvalidParams;
+
+    var patch_args = std.json.parseFromSlice(repair_candidate.ReplacePatch, server.allocator, parsed.value.patch, .{
+        .ignore_unknown_fields = false,
+    }) catch return Error.InvalidParams;
+    defer patch_args.deinit();
+    if (patch_args.value.path.len == 0 or patch_args.value.old_text.len == 0 or patch_args.value.tag.len == 0) return Error.InvalidParams;
+
+    var session = store.readSessionRecord(server.allocator, server.config.workspace_root, parsed.value.session_id) catch {
+        return Error.SessionNotFound;
+    };
+    defer session.deinit(server.allocator);
+    if (server.runtime.isRunning(session.id)) return Error.SessionRunning;
+
+    server.repair_apply_mutex.lock();
+    defer server.repair_apply_mutex.unlock();
+
+    const target_path = fsutil.resolveWithAccessMode(
+        server.allocator,
+        server.config.workspace_root,
+        patch_args.value.path,
+        session.full_access_mode,
+    ) catch return Error.InvalidParams;
+    defer server.allocator.free(target_path);
+
+    const operation = "replace_in_file";
+    const patch_descriptor = try std.fmt.allocPrint(server.allocator, "{s}\x00{s}\x00{s}", .{ operation, patch_args.value.path, parsed.value.patch });
+    defer server.allocator.free(patch_descriptor);
+    const patch_digest = evaluation_events.contentHash(patch_descriptor);
+    const patch_sha256 = try std.fmt.allocPrint(server.allocator, "sha256:{s}", .{patch_digest[0..]});
+    defer server.allocator.free(patch_sha256);
+
+    const tool_call_id = try std.fmt.allocPrint(server.allocator, "repair-apply-{d}", .{approval_event_seq});
+    defer server.allocator.free(tool_call_id);
+
+    const intents = try store.readWriteIntents(server.allocator, server.config.workspace_root, session.id);
+    defer {
+        for (intents) |entry| entry.deinit(server.allocator);
+        server.allocator.free(intents);
+    }
+    var committed_effect_sha256: ?[]const u8 = null;
+    for (intents) |entry| {
+        if (std.mem.eql(u8, entry.id, tool_call_id) and
+            std.mem.eql(u8, entry.status, "committed") and
+            (entry.path == null or std.mem.eql(u8, entry.path.?, target_path)))
+        {
+            committed_effect_sha256 = entry.after_sha256 orelse "unavailable";
+            break;
+        }
+    }
+
+    const already_applied = evaluation_events.verifyRepairCandidateApply(
+        server.allocator,
+        server.config.workspace_root,
+        session.id,
+        candidate_event_seq,
+        approval_event_seq,
+        parsed.value.candidate_id,
+        parsed.value.approval_id,
+        operation,
+        target_path,
+        patch_sha256,
+        parsed.value.expected_source_baseline,
+    ) catch |err| switch (err) {
+        evaluation_events.Error.EmptyEvidence => return Error.InvalidParams,
+        evaluation_events.Error.CandidateNotFound => return Error.RepairCandidateNotFound,
+        evaluation_events.Error.CandidateMismatch => return Error.RepairCandidateMismatch,
+        evaluation_events.Error.CandidateBaselineConflict => if (committed_effect_sha256) |effect_sha256| blk: {
+            _ = try evaluation_events.appendRepairCandidateAppliedEvent(
+                server.allocator,
+                server.config.workspace_root,
+                session.id,
+                candidate_event_seq,
+                approval_event_seq,
+                parsed.value.candidate_id,
+                parsed.value.approval_id,
+                tool_call_id,
+                operation,
+                target_path,
+                patch_sha256,
+                effect_sha256,
+            );
+            break :blk true;
+        } else return Error.RepairCandidateBaselineConflict,
+        else => return err,
+    };
+
+    if (already_applied or committed_effect_sha256 != null) {
+        return renderJsonAlloc(server.allocator, protocol_types.RepairCandidateApplyResult{
+            .session_id = session.id,
+            .candidate_id = parsed.value.candidate_id,
+            .approval_id = parsed.value.approval_id,
+            .candidate_event_seq = candidate_event_seq,
+            .approval_event_seq = approval_event_seq,
+            .tool_call_id = tool_call_id,
+            .applied = false,
+            .already_applied = true,
+        });
+    }
+
+    var inspection_ledger = tools.FileInspectionLedger.init(server.allocator);
+    defer inspection_ledger.deinit();
+    const execution_context = tools.ExecutionContext{
+        .workspace_root = server.config.workspace_root,
+        .full_access_mode = session.full_access_mode,
+        .session_id = session.id,
+        .file_inspection_ledger = &inspection_ledger,
+    };
+    const tool_call = types.ToolCall{
+        .id = @constCast(tool_call_id),
+        .name = @constCast(operation),
+        .arguments_json = @constCast(parsed.value.patch),
+    };
+    const review_decision = tools.review.reviewToolCall(tool_call, tools.builtinDefinitionsForContext(execution_context));
+    const review_event = try tools.review.renderReviewEvent(server.allocator, tool_call, review_decision);
+    defer server.allocator.free(review_event);
+    try server.recordAndEmitSessionEvent(
+        session.id,
+        "tool_reviewed",
+        review_event,
+        types.statusLabel(session.status),
+        std.time.milliTimestamp(),
+    );
+    if (!review_decision.approved) return Error.ExecutionFailed;
+
+    const read_id = try std.fmt.allocPrint(server.allocator, "repair-read-{d}", .{approval_event_seq});
+    defer server.allocator.free(read_id);
+    const read_arguments = try std.fmt.allocPrint(server.allocator, "{{\"path\":{f}}}", .{std.json.fmt(patch_args.value.path, .{})});
+    defer server.allocator.free(read_arguments);
+    const read_call = types.ToolCall{
+        .id = @constCast(read_id),
+        .name = @constCast("read_file"),
+        .arguments_json = @constCast(read_arguments),
+    };
+    const read_output = tools.execute(server.allocator, execution_context, read_call) catch return Error.ExecutionFailed;
+    server.allocator.free(read_output);
+
+    const tool_output = tools.execute(server.allocator, execution_context, tool_call) catch return Error.ExecutionFailed;
+    errdefer server.allocator.free(tool_output);
+    const effect_digest = evaluation_events.contentHash(tool_output);
+    const effect_sha256 = try std.fmt.allocPrint(server.allocator, "sha256:{s}", .{effect_digest[0..]});
+    defer server.allocator.free(effect_sha256);
+    _ = try evaluation_events.appendRepairCandidateAppliedEvent(
+        server.allocator,
+        server.config.workspace_root,
+        session.id,
+        candidate_event_seq,
+        approval_event_seq,
+        parsed.value.candidate_id,
+        parsed.value.approval_id,
+        tool_call_id,
+        operation,
+        target_path,
+        patch_sha256,
+        effect_sha256,
+    );
+
+    const response = try renderJsonAlloc(server.allocator, protocol_types.RepairCandidateApplyResult{
+        .session_id = session.id,
+        .candidate_id = parsed.value.candidate_id,
+        .approval_id = parsed.value.approval_id,
+        .candidate_event_seq = candidate_event_seq,
+        .approval_event_seq = approval_event_seq,
+        .tool_call_id = tool_call_id,
+        .applied = true,
+        .already_applied = false,
+        .output = tool_output,
+    });
+    server.allocator.free(tool_output);
+    return response;
 }
 
 fn handleSessionGet(server: *Server, params: ?std.json.Value) ![]u8 {
@@ -2751,6 +2948,117 @@ test "repair/approve records operator approval for the exact candidate" {
     try std.testing.expectEqual(@as(usize, 2), events.len);
     try std.testing.expectEqualStrings(evaluation_events.repair_candidate_approval_event_type, events[1].event_type);
     try std.testing.expect(std.mem.indexOf(u8, events[1].message, "\"candidate_event_seq\":1") != null);
+}
+
+test "repair/apply uses the reviewed write tool and is retry-idempotent" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    const stdout_file = try attachTestStdout(&tmp, &server, "repair-apply-output.bin");
+    defer stdout_file.close();
+
+    var session = try store.initSession(std.testing.allocator, workspace_root, "apply approved repair");
+    defer session.deinit(std.testing.allocator);
+    const target_path = try fsutil.resolveWithAccessMode(std.testing.allocator, workspace_root, "notes/apply.txt", false);
+    defer std.testing.allocator.free(target_path);
+    try fsutil.writeText(target_path, "before\n");
+
+    const read_call = types.ToolCall{
+        .id = @constCast("repair-test-read"),
+        .name = @constCast("read_file"),
+        .arguments_json = @constCast("{\"path\":\"notes/apply.txt\"}"),
+    };
+    const read_output = try tools.execute(std.testing.allocator, .{
+        .workspace_root = workspace_root,
+        .session_id = session.id,
+    }, read_call);
+    defer std.testing.allocator.free(read_output);
+    const tag_start = (std.mem.indexOf(u8, read_output, "#") orelse return error.TestExpectedEqual) + 1;
+    const tag_end = std.mem.indexOfScalarPos(u8, read_output, tag_start, ']') orelse return error.TestExpectedEqual;
+    const tag = read_output[tag_start..tag_end];
+    const patch = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"path\":\"notes/apply.txt\",\"old_text\":\"before\",\"new_text\":\"after\",\"tag\":\"{s}\"}}",
+        .{tag},
+    );
+    defer std.testing.allocator.free(patch);
+    const patch_descriptor = try std.fmt.allocPrint(std.testing.allocator, "replace_in_file\x00notes/apply.txt\x00{s}", .{patch});
+    defer std.testing.allocator.free(patch_descriptor);
+    const patch_digest = evaluation_events.contentHash(patch_descriptor);
+    const patch_sha256 = try std.fmt.allocPrint(std.testing.allocator, "sha256:{s}", .{patch_digest[0..]});
+    defer std.testing.allocator.free(patch_sha256);
+    const baseline = try evaluation_events.sourceBaseline(std.testing.allocator);
+    defer std.testing.allocator.free(baseline);
+    const before_digest = evaluation_events.contentHash("before\n");
+    const candidate_seq = try evaluation_events.appendRepairCandidateEvent(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        "candidate-apply",
+        "failure-apply",
+        "replace_in_file",
+        target_path,
+        before_digest[0..],
+        patch_digest[0..],
+        baseline,
+        baseline,
+        true,
+    );
+
+    const approval_request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"apply-approve\",\"method\":\"repair/approve\",\"params\":{{\"session_id\":{f},\"candidate_id\":\"candidate-apply\",\"candidate_event_seq\":{d},\"approval_id\":\"approval-apply\",\"approved_by\":\"operator\",\"patch_sha256\":{f},\"expected_source_baseline\":{f}}}}}",
+        .{ std.json.fmt(session.id, .{}), candidate_seq, std.json.fmt(patch_sha256, .{}), std.json.fmt(baseline, .{}) },
+    );
+    defer std.testing.allocator.free(approval_request);
+    const approval_response = (try processRequest(&server, approval_request)).?;
+    defer std.testing.allocator.free(approval_response);
+    try std.testing.expect(std.mem.indexOf(u8, approval_response, "\"approved\":true") != null);
+
+    const apply_request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"apply-1\",\"method\":\"repair/apply\",\"params\":{{\"session_id\":{f},\"candidate_id\":\"candidate-apply\",\"candidate_event_seq\":{d},\"approval_id\":\"approval-apply\",\"approval_event_seq\":2,\"patch\":{f},\"expected_source_baseline\":{f}}}}}",
+        .{ std.json.fmt(session.id, .{}), candidate_seq, std.json.fmt(patch, .{}), std.json.fmt(baseline, .{}) },
+    );
+    defer std.testing.allocator.free(apply_request);
+    const apply_response = (try processRequest(&server, apply_request)).?;
+    defer std.testing.allocator.free(apply_response);
+    try std.testing.expect(std.mem.indexOf(u8, apply_response, "\"applied\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, apply_response, "\"already_applied\":false") != null);
+
+    const changed = try fsutil.readTextAlloc(std.testing.allocator, target_path);
+    defer std.testing.allocator.free(changed);
+    try std.testing.expectEqualStrings("after\n", changed);
+
+    const retry_response = (try processRequest(&server, apply_request)).?;
+    defer std.testing.allocator.free(retry_response);
+    try std.testing.expect(std.mem.indexOf(u8, retry_response, "\"applied\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, retry_response, "\"already_applied\":true") != null);
+    const unchanged = try fsutil.readTextAlloc(std.testing.allocator, target_path);
+    defer std.testing.allocator.free(unchanged);
+    try std.testing.expectEqualStrings("after\n", unchanged);
+
+    const intents = try store.readWriteIntents(std.testing.allocator, workspace_root, session.id);
+    defer {
+        for (intents) |entry| entry.deinit(std.testing.allocator);
+        std.testing.allocator.free(intents);
+    }
+    try std.testing.expectEqual(@as(usize, 2), intents.len);
+    try std.testing.expectEqualStrings("reserved", intents[0].status);
+    try std.testing.expectEqualStrings("committed", intents[1].status);
+
+    const events = try store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer types.deinitSessionEvents(std.testing.allocator, events);
+    try std.testing.expectEqual(@as(usize, 4), events.len);
+    try std.testing.expectEqualStrings(evaluation_events.repair_candidate_applied_event_type, events[3].event_type);
+    try std.testing.expect(std.mem.indexOf(u8, events[3].message, "\"mutation_allowed\":true") != null);
 }
 
 test "session/send rejects unknown prompt modes before session execution" {

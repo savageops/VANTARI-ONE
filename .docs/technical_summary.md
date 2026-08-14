@@ -492,9 +492,10 @@ Receipt: `.docs/todo/changelog/067-repair-diagnosis-move73.md`.
 Move 74 composes the candidate proposal into the existing tool registry/runtime
 and `events.jsonl` owner. `repair_candidate` resolves the target through shared
 access mode, requires an existing inspected file, captures its before hash,
-hashes the operation/path/patch descriptor, and records expected/current source
-baselines. It never writes, reserves a write intent, stores patch body, or
-allows mutation. A drift mismatch appends `baseline_conflict` evidence and
+validates the exact `replace_in_file` JSON payload/tag, hashes the
+operation/path/patch descriptor, and records expected/current source baselines.
+It never writes, reserves a write intent, stores patch body, or allows
+mutation. A drift mismatch appends `baseline_conflict` evidence and
 returns typed `RepairBaselineConflict`; a matching baseline returns `ready` but
 still reports `mutation_allowed:false`. Move 75 adds the explicit operator
 approval stage; Moves 76–80 own application, exact-input replay, evaluation,
@@ -508,6 +509,30 @@ modes; installed promotion remains deferred and the preserved installed owner
 remains on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
 Receipt: `.docs/todo/changelog/069-repair-approval-boundary.md`.
 
+## Current repair-application boundary — 2026-08-14
+
+Move 76 closes application without adding a patcher. The operator-only
+`repair/apply` RPC accepts the exact `replace_in_file` JSON payload, including
+the `read_file` tag, and verifies the candidate event sequence/id, approval
+event sequence/id, operation, resolved target, patch hash, and expected source
+baseline. It then dispatches the existing reviewed tool path. The normal file
+inspection ledger, stale-tag rejection, effect envelope, and write-intent
+reserve/commit remain the mutation owners.
+
+One `var1.repair_candidate_applied.v1` receipt records the successful effect.
+The deterministic approval-bound tool-call ID and a process-local apply mutex
+make concurrent/repeated requests no-op after a committed intent or applied
+receipt. The event stores hashes and identity only; it does not store patch
+body or source bytes.
+
+The Move 76 integration proof applies one approved edit, verifies the
+reserved → committed intent pair and applied receipt, then retries without a
+second mutation or duplicate receipt. Full Debug is `19/19` steps and
+`2,191/2,191` tests; installed promotion remains intentionally deferred.
+The source ReleaseFast build is `9/9` at SHA-256
+`E57D6491A7385BAF945CA6AA7938FA15CC5B971045A3A735950F8E10EB6EB2A2`.
+Receipt: `.docs/todo/changelog/071-repair-apply-move76.md`.
+
 ## Current repair-approval boundary — 2026-08-14
 
 The operator-only `repair/approve` RPC binds candidate event sequence/id, the
@@ -517,7 +542,8 @@ rechecks the current source baseline before appending one
 identity returns its existing sequence; mismatches fail before mutation. The
 receipt reports `mutation_allowed:true` as approval evidence only: it stores no
 patch body, does not write files, and does not reserve a write intent. Move 76
-will apply the approved candidate through existing reviewed tools.
+now applies the approved candidate through the existing reviewed tools; the
+application boundary is recorded above.
 
 Full Debug and ReleaseFast are `19/19` steps and `2,184/2,184` tests. The
 source ReleaseFast build is `9/9` at SHA-256
