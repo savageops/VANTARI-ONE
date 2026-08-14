@@ -15,6 +15,7 @@ pub const methods = struct {
     pub const input_respond = "input/respond";
     pub const repair_candidate_approve = "repair/approve";
     pub const repair_candidate_apply = "repair/apply";
+    pub const repair_rerun = "repair/rerun";
     pub const session_get = "session/get";
     pub const session_list = "session/list";
     pub const schedule_get = "schedule/get";
@@ -36,6 +37,7 @@ pub const Capabilities = struct {
     input_respond: bool = true,
     repair_candidate_approval: bool = true,
     repair_candidate_apply: bool = true,
+    repair_rerun: bool = true,
     session_get: bool = true,
     session_list: bool = true,
     schedule_get: bool = true,
@@ -148,6 +150,21 @@ pub const RepairCandidateApplyResult = struct {
     applied: bool,
     already_applied: bool,
     output: ?[]const u8 = null,
+};
+
+pub const RepairRerunResult = struct {
+    session_id: []const u8,
+    rerun_id: []const u8,
+    child_session_id: []const u8,
+    source_receipt_seq: u64,
+    applied_event_seq: u64,
+    child_status: []const u8,
+    outcome: []const u8,
+    original_input_sha256: []const u8,
+    config_sha256: []const u8,
+    input_match: bool,
+    config_match: bool,
+    provider_dispatched: bool,
 };
 
 pub const ScheduleSummary = struct {

@@ -104,6 +104,13 @@ Rules:
   writer; `var1.repair_candidate_applied.v1` plus the committed write intent
   makes retries no-op. Exact-input rerun, evaluation, rollback, and regression
   promotion remain Moves 77–80.
+- `repair/rerun` is operator-only and requires the immutable repair receipt plus
+  a later applied receipt. It creates a fresh linked child, routes the recorded
+  input/model/provider/mode through `session/send`, and gates input/config
+  hashes before provider I/O. A mismatch emits no `turn_started`; a matching
+  treatment uses the normal provider lane. Started/completed relationship
+  receipts remain in the existing event spine; interrupted work is not retried
+  implicitly.
 - runtime.full_access_mode is false by default; resolved child routes carry it
   into the shared file/search/LSP/shell execution context, and it never relocates
   .var.

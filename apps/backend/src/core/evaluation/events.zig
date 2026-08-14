@@ -18,6 +18,9 @@ pub const repair_candidate_approval_event_type = "repair_candidate_approval";
 pub const repair_candidate_approval_schema = "var1.repair_candidate_approval.v1";
 pub const repair_candidate_applied_event_type = "repair_candidate_applied";
 pub const repair_candidate_applied_schema = "var1.repair_candidate_applied.v1";
+pub const repair_rerun_started_event_type = "repair_rerun_started";
+pub const repair_rerun_completed_event_type = "repair_rerun_completed";
+pub const repair_rerun_schema = "var1.repair_rerun.v1";
 
 const repair_environment_keys = [_][]const u8{
     "VANTARI_HOME",
@@ -107,12 +110,17 @@ pub fn appendRepairReceiptEvent(
     run_seq: u64,
     original_input: []const u8,
     model: []const u8,
+    provider_id: []const u8,
+    prompt_mode: []const u8,
     config_snapshot: []const u8,
     tool_catalog_snapshot: []const u8,
     source_baseline: []const u8,
     environment_snapshot: []const u8,
 ) !void {
-    if (run_seq == 0 or std.mem.trim(u8, original_input, " \t\r\n").len == 0) return Error.EmptyEvidence;
+    if (run_seq == 0 or std.mem.trim(u8, original_input, " \t\r\n").len == 0 or
+        std.mem.trim(u8, model, " \t\r\n").len == 0 or
+        std.mem.trim(u8, prompt_mode, " \t\r\n").len == 0)
+        return Error.EmptyEvidence;
 
     const input_hash = contentHash(original_input);
     const config_hash = contentHash(config_snapshot);
@@ -121,13 +129,15 @@ pub fn appendRepairReceiptEvent(
     const environment_hash = contentHash(environment_snapshot);
     const message = try std.fmt.allocPrint(
         allocator,
-        "{{\"schema\":\"{s}\",\"run_seq\":{d},\"replay_input_immutable\":true,\"original_input\":{f},\"original_input_sha256\":\"sha256:{s}\",\"model\":{f},\"config_sha256\":\"sha256:{s}\",\"tool_catalog_sha256\":\"sha256:{s}\",\"source_baseline\":{f},\"source_baseline_sha256\":\"sha256:{s}\",\"environment_sha256\":\"sha256:{s}\"}}",
+        "{{\"schema\":\"{s}\",\"run_seq\":{d},\"replay_input_immutable\":true,\"original_input\":{f},\"original_input_sha256\":\"sha256:{s}\",\"model\":{f},\"provider_id\":{f},\"prompt_mode\":{f},\"config_sha256\":\"sha256:{s}\",\"tool_catalog_sha256\":\"sha256:{s}\",\"source_baseline\":{f},\"source_baseline_sha256\":\"sha256:{s}\",\"environment_sha256\":\"sha256:{s}\"}}",
         .{
             repair_receipt_schema,
             run_seq,
             std.json.fmt(original_input, .{}),
             input_hash[0..],
             std.json.fmt(model, .{}),
+            std.json.fmt(provider_id, .{}),
+            std.json.fmt(prompt_mode, .{}),
             config_hash[0..],
             tool_catalog_hash[0..],
             std.json.fmt(source_baseline, .{}),
@@ -139,6 +149,104 @@ pub fn appendRepairReceiptEvent(
 
     try store.appendEvent(allocator, workspace_root, session_id, .{
         .event_type = repair_receipt_event_type,
+        .message = message,
+        .timestamp_ms = std.time.milliTimestamp(),
+    });
+}
+
+/// The only comparison primitive used by an exact replay gate. Receipt fields
+/// carry the stable `sha256:<hex>` label; snapshots remain transient.
+pub fn contentHashMatches(label: []const u8, content: []const u8) bool {
+    const hex = if (std.mem.startsWith(u8, label, "sha256:")) label[7..] else label;
+    const digest = contentHash(content);
+    return std.mem.eql(u8, hex, digest[0..]);
+}
+
+pub const RepairReceiptPayload = struct {
+    schema: []const u8 = "",
+    run_seq: u64 = 0,
+    replay_input_immutable: bool = false,
+    original_input: []const u8 = "",
+    original_input_sha256: []const u8 = "",
+    model: []const u8 = "",
+    provider_id: []const u8 = "",
+    prompt_mode: []const u8 = "",
+    config_sha256: []const u8 = "",
+    tool_catalog_sha256: []const u8 = "",
+    source_baseline: []const u8 = "",
+    source_baseline_sha256: []const u8 = "",
+    environment_sha256: []const u8 = "",
+};
+
+pub const RepairRerunState = enum {
+    started,
+    completed,
+
+    pub fn label(self: RepairRerunState) []const u8 {
+        return switch (self) {
+            .started => "started",
+            .completed => "completed",
+        };
+    }
+};
+
+/// Append the durable control-plane edge between a failed source run and its
+/// isolated exact-input treatment session. The child session owns provider and
+/// tool events; the source session owns this compact relationship receipt.
+pub fn appendRepairRerunEvent(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session_id: []const u8,
+    state: RepairRerunState,
+    rerun_id: []const u8,
+    source_receipt_seq: u64,
+    applied_event_seq: u64,
+    child_session_id: []const u8,
+    original_input_sha256: []const u8,
+    config_sha256: []const u8,
+    source_baseline: []const u8,
+    outcome: []const u8,
+    input_match: bool,
+    config_match: bool,
+    provider_dispatched: bool,
+) !u64 {
+    if (source_receipt_seq == 0 or applied_event_seq == 0) return Error.EmptyEvidence;
+    const required = [_][]const u8{
+        session_id,
+        rerun_id,
+        child_session_id,
+        original_input_sha256,
+        config_sha256,
+        source_baseline,
+        outcome,
+    };
+    for (required) |value| {
+        if (std.mem.trim(u8, value, " \t\r\n").len == 0) return Error.EmptyEvidence;
+    }
+
+    const message = try std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"{s}\",\"rerun_id\":{f},\"source_receipt_seq\":{d},\"applied_event_seq\":{d},\"child_session_id\":{f},\"original_input_sha256\":{f},\"config_sha256\":{f},\"source_baseline\":{f},\"state\":\"{s}\",\"outcome\":{f},\"input_match\":{},\"config_match\":{},\"provider_dispatched\":{}}}",
+        .{
+            repair_rerun_schema,
+            std.json.fmt(rerun_id, .{}),
+            source_receipt_seq,
+            applied_event_seq,
+            std.json.fmt(child_session_id, .{}),
+            std.json.fmt(original_input_sha256, .{}),
+            std.json.fmt(config_sha256, .{}),
+            std.json.fmt(source_baseline, .{}),
+            state.label(),
+            std.json.fmt(outcome, .{}),
+            input_match,
+            config_match,
+            provider_dispatched,
+        },
+    );
+    defer allocator.free(message);
+
+    return store.appendEventWithSeq(allocator, workspace_root, session_id, .{
+        .event_type = if (state == .started) repair_rerun_started_event_type else repair_rerun_completed_event_type,
         .message = message,
         .timestamp_ms = std.time.milliTimestamp(),
     });
@@ -701,6 +809,8 @@ test "repair receipt persists exact input and hashes transient replay state" {
         7,
         input,
         "glm-5.2",
+        "openai-compatible",
+        "orchestrate",
         config_snapshot,
         tool_catalog_snapshot,
         source_baseline,
@@ -716,6 +826,8 @@ test "repair receipt persists exact input and hashes transient replay state" {
     try std.testing.expect(std.mem.indexOf(u8, events[0].message, "\"replay_input_immutable\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, events[0].message, input) != null);
     try std.testing.expect(std.mem.indexOf(u8, events[0].message, "\"model\":\"glm-5.2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[0].message, "\"provider_id\":\"openai-compatible\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, events[0].message, "\"prompt_mode\":\"orchestrate\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, events[0].message, "secret") == null);
 
     const input_hash = contentHash(input);

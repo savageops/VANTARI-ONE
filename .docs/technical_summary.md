@@ -533,6 +533,31 @@ The source ReleaseFast build is `9/9` at SHA-256
 `E57D6491A7385BAF945CA6AA7938FA15CC5B971045A3A735950F8E10EB6EB2A2`.
 Receipt: `.docs/todo/changelog/071-repair-apply-move76.md`.
 
+## Current exact repair-replay boundary — 2026-08-14
+
+Move 77 adds operator-only `repair/rerun` after approved application. The
+handler requires the immutable `var1.repair_receipt.v1` and a later
+`var1.repair_candidate_applied.v1`, derives a deterministic source/evidence
+identity, and creates a fresh child linked by `continued_from_session_id`.
+The child inherits the source access scope but owns its own transcript and
+event ledger; the recorded model, provider identity, prompt mode, and exact
+input route through the existing `session/send` and executor/provider lane.
+
+The executor appends the child replay receipt, then compares the exact input and
+effective configuration hash before context compilation or provider I/O. A
+mismatch persists `repair_replay_identity_mismatch` and never emits
+`turn_started`; a matching treatment records the normal provider events and
+assistant output. The source event spine carries compact started/completed
+relationship receipts. Completed requests are idempotent; an incomplete start
+is explicit in-progress evidence for the later cold-start reconciliation move.
+
+Full Debug and ReleaseFast are `19/19` steps and `2,193/2,193` tests. The
+source ReleaseFast build is `9/9` at SHA-256
+`EF77BFE3144819008B027ADDB0EF66A945A0CD0CA33CC9FA76629E77E03EB07A`.
+Installed promotion remains deferred; the preserved installed owner remains
+on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+Receipt: `.docs/todo/changelog/072-repair-rerun-move77.md`.
+
 ## Current repair-approval boundary — 2026-08-14
 
 The operator-only `repair/approve` RPC binds candidate event sequence/id, the

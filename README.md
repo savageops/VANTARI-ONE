@@ -301,6 +301,16 @@ envelope, and write-intent reserve/commit path remains the only mutation owner;
 Source proof is Debug `19/19` / `2,191/2,191`; installed promotion remains
 deferred.
 
+Move 77 now admits an approved repair treatment through operator-only
+`repair/rerun`. It requires the immutable replay receipt and later applied
+receipt, creates a fresh linked child session, and sends the exact recorded
+input/model/provider/mode through the normal executor/provider lane. The child
+receipt gates input and effective configuration hashes before provider I/O;
+changed identity fails without `turn_started`, while a matching treatment
+records normal provider output. Debug and ReleaseFast are `19/19` with
+`2,193/2,193` tests; installed promotion remains deferred. Moves 78–80 still
+own invariant comparison, rollback, and regression promotion.
+
 ```text
 session/create ─► session/send ─► [executor loop] ─► session/get
                                                     ─► session/compact

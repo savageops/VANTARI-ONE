@@ -22,6 +22,7 @@ pub const Error = error{
     StepLimitExceeded,
     StreamRuleMatched,
     ToolBudgetExceeded,
+    ReplayConfigMismatch,
 };
 
 pub const Hooks = struct {
@@ -101,6 +102,11 @@ pub const RunOptions = struct {
     session_id: ?[]const u8 = null,
     hooks: Hooks = .{},
     prompt_mode: prompts.PromptMode = .orchestrate,
+    /// When present, the admitted session is an exact repair treatment. The
+    /// gate runs after the transient effective config is assembled and before
+    /// context compilation or provider I/O.
+    expected_replay_input_sha256: ?[]const u8 = null,
+    expected_replay_config_sha256: ?[]const u8 = null,
 };
 
 pub fn runPrompt(allocator: std.mem.Allocator, config: types.Config, prompt: []const u8) !types.SessionRunResult {
@@ -262,11 +268,35 @@ pub fn runPromptWithOptions(
         run_seq,
         session.prompt,
         config.openai_model,
+        config.auth_provider orelse "",
+        options.prompt_mode.label(),
         config_snapshot,
         tool_catalog_snapshot,
         source_baseline,
         environment_snapshot,
     );
+
+    const input_replay_match = if (options.expected_replay_input_sha256) |expected|
+        evaluation_events.contentHashMatches(expected, session.prompt)
+    else
+        true;
+    const config_replay_match = if (options.expected_replay_config_sha256) |expected|
+        evaluation_events.contentHashMatches(expected, config_snapshot)
+    else
+        true;
+    if (!input_replay_match or !config_replay_match) {
+        try failSession(
+            allocator,
+            config.workspace_root,
+            options.hooks,
+            &session,
+            run_seq,
+            .failed,
+            "repair_replay_identity_mismatch",
+            run_start_ms,
+        );
+        return error.ReplayConfigMismatch;
+    }
 
     // A resumed parent rebuilds its child-group index from receipts before the
     // first provider dispatch. Any recovered group is parked/converged through

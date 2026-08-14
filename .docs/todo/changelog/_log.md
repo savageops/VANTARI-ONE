@@ -1,5 +1,28 @@
 # Execution Log
 
+## 2026-08-14 - Exact repair replay treatment (Move 77)
+
+**Outcome:** Reran approved repairs through a fresh child session with the exact
+original input and effective configuration gate.
+
+- Operator-only `repair/rerun` requires the immutable repair receipt and a later
+  applied receipt, then derives one deterministic source/evidence identity.
+- The child carries `continued_from_session_id` and the source access scope but
+  uses its own transcript and event ledger. Recorded model/provider/mode values
+  route through the existing `session/send` and executor/provider path.
+- Input and config hashes are checked after the child receipt is appended and
+  before context compilation/provider I/O. A mismatch fails closed without a
+  `turn_started`; a matching treatment records normal provider events.
+- `repair_rerun_started` and `repair_rerun_completed` are compact relationship
+  receipts. Completed requests are idempotent; an incomplete start remains an
+  explicit in-progress state for Move 80 reconciliation.
+- Debug and ReleaseFast pass `19/19` steps and `2,193/2,193` tests. Source
+  ReleaseFast is `9/9` at SHA-256
+  `EF77BFE3144819008B027ADDB0EF66A945A0CD0CA33CC9FA76629E77E03EB07A`.
+  Installed promotion remains deferred.
+
+Receipt: `.docs/todo/changelog/072-repair-rerun-move77.md`.
+
 ## 2026-08-14 - Approved repair application (Move 76)
 
 **Outcome:** Routed one explicitly approved repair through the existing

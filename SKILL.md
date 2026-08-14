@@ -154,6 +154,12 @@ requires source/installed SHA-256 equality and the installed consumer path.
   committed intent make repeated requests no-op; Moves 77–80 still own exact
   rerun, evaluation, rollback, and regression promotion. Never expose repair
   approval as a model tool or add a patcher.
+- Move 77 now owns operator-only `repair/rerun`: require the immutable replay
+  receipt and later applied receipt, create a fresh linked treatment child, and
+  send the recorded input/model/provider/mode through `session/send`. Gate
+  input/config hashes before provider I/O; changed identity must not emit
+  `turn_started`. Keep relationship receipts in the existing event spine and
+  leave interrupted starts for Move 80 reconciliation.
 - Browser routes are redacted prototypes. Owner routes are loopback-only and
   token/generation gated.
 - Scheduler leadership is source-proven with one crash-released lock and

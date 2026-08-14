@@ -55,6 +55,9 @@ pub const Error = error{
     RepairCandidateNotFound,
     RepairCandidateMismatch,
     RepairCandidateBaselineConflict,
+    RepairRerunNotFound,
+    RepairRerunInProgress,
+    RepairRerunMismatch,
     RpcRemoteError,
     ServerShuttingDown,
 };
@@ -804,6 +807,9 @@ fn processRequest(server: *Server, request_payload: []const u8) !?[]u8 {
         Error.RepairCandidateNotFound => return errorResponseOrNull(server.allocator, id, -32007, "Repair candidate not found"),
         Error.RepairCandidateMismatch => return errorResponseOrNull(server.allocator, id, -32008, "Repair candidate approval does not match the candidate"),
         Error.RepairCandidateBaselineConflict => return errorResponseOrNull(server.allocator, id, -32009, "Repair candidate source baseline changed"),
+        Error.RepairRerunNotFound => return errorResponseOrNull(server.allocator, id, -32010, "Repair replay receipt or applied change not found"),
+        Error.RepairRerunInProgress => return errorResponseOrNull(server.allocator, id, -32011, "Repair rerun is already in progress"),
+        Error.RepairRerunMismatch => return errorResponseOrNull(server.allocator, id, -32012, "Repair rerun identity is not replayable"),
         Error.ProviderNotFound => return errorResponseOrNull(server.allocator, id, -32006, "Provider not found"),
         Error.ServerShuttingDown => return errorResponseOrNull(server.allocator, id, rpc_server_busy_code, "Server shutting down"),
         Error.ExecutionFailed => return errorResponseOrNull(server.allocator, id, -32000, "Execution failed"),
@@ -847,6 +853,9 @@ fn dispatch(
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.repair_candidate_apply)) {
         return handleRepairCandidateApply(server, params);
+    }
+    if (std.mem.eql(u8, method_name, protocol_types.methods.repair_rerun)) {
+        return handleRepairRerun(server, params);
     }
     if (std.mem.eql(u8, method_name, protocol_types.methods.session_get)) {
         return handleSessionGet(server, params);
@@ -956,6 +965,8 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         model_override: ?[]const u8 = null,
         provider_id: ?[]const u8 = null,
         prompt_mode: ?[]const u8 = null,
+        expected_replay_input_sha256: ?[]const u8 = null,
+        expected_replay_config_sha256: ?[]const u8 = null,
     };
 
     var parsed = try parseParams(Args, server.allocator, params);
@@ -1165,6 +1176,8 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         .session_id = session.id,
         .hooks = hooks,
         .prompt_mode = prompt_mode,
+        .expected_replay_input_sha256 = parsed.value.expected_replay_input_sha256,
+        .expected_replay_config_sha256 = parsed.value.expected_replay_config_sha256,
     }) catch |err| switch (err) {
         loop.Error.Cancelled => {
             var cancelled = try store.readSessionRecord(server.allocator, server.config.workspace_root, session.id);
@@ -1614,6 +1627,276 @@ fn handleRepairCandidateApply(server: *Server, params: ?std.json.Value) ![]u8 {
     });
     server.allocator.free(tool_output);
     return response;
+}
+
+const RepairAppliedPayload = struct {
+    schema: []const u8 = "",
+    candidate_id: []const u8 = "",
+    candidate_event_seq: u64 = 0,
+    approval_id: []const u8 = "",
+    approval_event_seq: u64 = 0,
+    status: []const u8 = "",
+    mutation_allowed: bool = false,
+};
+
+const RepairRerunPayload = struct {
+    schema: []const u8 = "",
+    rerun_id: []const u8 = "",
+    source_receipt_seq: u64 = 0,
+    applied_event_seq: u64 = 0,
+    child_session_id: []const u8 = "",
+    original_input_sha256: []const u8 = "",
+    config_sha256: []const u8 = "",
+    source_baseline: []const u8 = "",
+    state: []const u8 = "",
+    outcome: []const u8 = "",
+    input_match: bool = false,
+    config_match: bool = false,
+    provider_dispatched: bool = false,
+};
+
+/// Rerun one approved application in a fresh session using the exact original
+/// input and the recorded model/provider/mode. The loop performs the final
+/// config-hash gate before context compilation or provider I/O; this handler
+/// owns only the source-to-treatment relationship and child-session setup.
+fn handleRepairRerun(server: *Server, params: ?std.json.Value) ![]u8 {
+    const Args = struct {
+        session_id: []const u8,
+    };
+
+    var parsed = try parseParams(Args, server.allocator, params);
+    defer parsed.deinit();
+    const params_value = params orelse return Error.InvalidParams;
+    if (params_value != .object) return Error.InvalidParams;
+    const source_receipt_seq = (try optionalU64FromObject(&params_value.object, "source_receipt_seq")) orelse return Error.InvalidParams;
+    const applied_event_seq = (try optionalU64FromObject(&params_value.object, "applied_event_seq")) orelse return Error.InvalidParams;
+    if (source_receipt_seq == 0 or applied_event_seq == 0 or applied_event_seq <= source_receipt_seq) return Error.InvalidParams;
+
+    var source_session = store.readSessionRecord(server.allocator, server.config.workspace_root, parsed.value.session_id) catch {
+        return Error.SessionNotFound;
+    };
+    defer source_session.deinit(server.allocator);
+    if (server.runtime.isRunning(source_session.id)) return Error.SessionRunning;
+
+    const identity = try std.fmt.allocPrint(
+        server.allocator,
+        "repair-rerun\x00{s}\x00{d}\x00{d}",
+        .{ source_session.id, source_receipt_seq, applied_event_seq },
+    );
+    defer server.allocator.free(identity);
+    const identity_digest = evaluation_events.contentHash(identity);
+    const rerun_id = try std.fmt.allocPrint(server.allocator, "repair-rerun-{s}", .{identity_digest[0..]});
+    defer server.allocator.free(rerun_id);
+
+    const events = try store.readEvents(server.allocator, server.config.workspace_root, source_session.id);
+    defer types.deinitSessionEvents(server.allocator, events);
+
+    var receipt_event: ?*const types.SessionEvent = null;
+    var applied_event: ?*const types.SessionEvent = null;
+    for (events) |*event| {
+        if (event.seq == source_receipt_seq and std.mem.eql(u8, event.event_type, evaluation_events.repair_receipt_event_type)) {
+            receipt_event = event;
+        }
+        if (event.seq == applied_event_seq and std.mem.eql(u8, event.event_type, evaluation_events.repair_candidate_applied_event_type)) {
+            applied_event = event;
+        }
+    }
+    const source_receipt = receipt_event orelse return Error.RepairRerunNotFound;
+    const source_applied = applied_event orelse return Error.RepairRerunNotFound;
+
+    var receipt = std.json.parseFromSlice(evaluation_events.RepairReceiptPayload, server.allocator, source_receipt.message, .{
+        .ignore_unknown_fields = true,
+    }) catch return Error.RepairRerunMismatch;
+    defer receipt.deinit();
+    var applied = std.json.parseFromSlice(RepairAppliedPayload, server.allocator, source_applied.message, .{
+        .ignore_unknown_fields = true,
+    }) catch return Error.RepairRerunMismatch;
+    defer applied.deinit();
+
+    if (!std.mem.eql(u8, receipt.value.schema, evaluation_events.repair_receipt_schema) or
+        !receipt.value.replay_input_immutable or
+        receipt.value.original_input.len == 0 or
+        receipt.value.model.len == 0 or
+        receipt.value.prompt_mode.len == 0 or
+        receipt.value.config_sha256.len == 0 or
+        !evaluation_events.contentHashMatches(receipt.value.original_input_sha256, receipt.value.original_input) or
+        !std.mem.eql(u8, applied.value.schema, evaluation_events.repair_candidate_applied_schema) or
+        !std.mem.eql(u8, applied.value.status, "applied") or
+        !applied.value.mutation_allowed or
+        applied.value.approval_event_seq == 0)
+    {
+        return Error.RepairRerunMismatch;
+    }
+
+    for (events) |event| {
+        if (std.mem.eql(u8, event.event_type, evaluation_events.repair_rerun_completed_event_type)) {
+            var completed = std.json.parseFromSlice(RepairRerunPayload, server.allocator, event.message, .{
+                .ignore_unknown_fields = true,
+            }) catch continue;
+            defer completed.deinit();
+            if (!std.mem.eql(u8, completed.value.schema, evaluation_events.repair_rerun_schema) or
+                !std.mem.eql(u8, completed.value.rerun_id, rerun_id)) continue;
+            return renderJsonAlloc(server.allocator, protocol_types.RepairRerunResult{
+                .session_id = source_session.id,
+                .rerun_id = completed.value.rerun_id,
+                .child_session_id = completed.value.child_session_id,
+                .source_receipt_seq = completed.value.source_receipt_seq,
+                .applied_event_seq = completed.value.applied_event_seq,
+                .child_status = completed.value.outcome,
+                .outcome = completed.value.outcome,
+                .original_input_sha256 = completed.value.original_input_sha256,
+                .config_sha256 = completed.value.config_sha256,
+                .input_match = completed.value.input_match,
+                .config_match = completed.value.config_match,
+                .provider_dispatched = completed.value.provider_dispatched,
+            });
+        }
+        if (std.mem.eql(u8, event.event_type, evaluation_events.repair_rerun_started_event_type)) {
+            var started = std.json.parseFromSlice(RepairRerunPayload, server.allocator, event.message, .{
+                .ignore_unknown_fields = true,
+            }) catch continue;
+            defer started.deinit();
+            if (std.mem.eql(u8, started.value.schema, evaluation_events.repair_rerun_schema) and
+                std.mem.eql(u8, started.value.rerun_id, rerun_id))
+            {
+                return Error.RepairRerunInProgress;
+            }
+        }
+    }
+
+    const source_baseline = try evaluation_events.sourceBaseline(server.allocator);
+    defer server.allocator.free(source_baseline);
+    var child_session = try store.initSessionWithOptions(server.allocator, server.config.workspace_root, receipt.value.original_input, .{
+        .status = .initialized,
+        .continued_from_session_id = source_session.id,
+        .display_name = rerun_id,
+        .full_access_mode = source_session.full_access_mode,
+    });
+    defer child_session.deinit(server.allocator);
+    try server.runtime.ensureSession(server.allocator, child_session.id, true);
+
+    _ = try evaluation_events.appendRepairRerunEvent(
+        server.allocator,
+        server.config.workspace_root,
+        source_session.id,
+        .started,
+        rerun_id,
+        source_receipt_seq,
+        applied_event_seq,
+        child_session.id,
+        receipt.value.original_input_sha256,
+        receipt.value.config_sha256,
+        source_baseline,
+        "running",
+        true,
+        true,
+        false,
+    );
+
+    const has_provider_id = receipt.value.provider_id.len > 0;
+    const rerun_params = if (has_provider_id)
+        try std.fmt.allocPrint(
+            server.allocator,
+            "{{\"session_id\":{f},\"model_override\":{f},\"provider_id\":{f},\"prompt_mode\":{f},\"expected_replay_input_sha256\":{f},\"expected_replay_config_sha256\":{f}}}",
+            .{
+                std.json.fmt(child_session.id, .{}),
+                std.json.fmt(receipt.value.model, .{}),
+                std.json.fmt(receipt.value.provider_id, .{}),
+                std.json.fmt(receipt.value.prompt_mode, .{}),
+                std.json.fmt(receipt.value.original_input_sha256, .{}),
+                std.json.fmt(receipt.value.config_sha256, .{}),
+            },
+        )
+    else
+        try std.fmt.allocPrint(
+            server.allocator,
+            "{{\"session_id\":{f},\"model_override\":{f},\"prompt_mode\":{f},\"expected_replay_input_sha256\":{f},\"expected_replay_config_sha256\":{f}}}",
+            .{
+                std.json.fmt(child_session.id, .{}),
+                std.json.fmt(receipt.value.model, .{}),
+                std.json.fmt(receipt.value.prompt_mode, .{}),
+                std.json.fmt(receipt.value.original_input_sha256, .{}),
+                std.json.fmt(receipt.value.config_sha256, .{}),
+            },
+        );
+    defer server.allocator.free(rerun_params);
+
+    var rerun_params_value = std.json.parseFromSlice(std.json.Value, server.allocator, rerun_params, .{}) catch return Error.InvalidParams;
+    defer rerun_params_value.deinit();
+    const send_payload = handleSessionSend(server, rerun_params_value.value) catch |err| {
+        _ = evaluation_events.appendRepairRerunEvent(
+            server.allocator,
+            server.config.workspace_root,
+            source_session.id,
+            .completed,
+            rerun_id,
+            source_receipt_seq,
+            applied_event_seq,
+            child_session.id,
+            receipt.value.original_input_sha256,
+            receipt.value.config_sha256,
+            source_baseline,
+            "request_rejected",
+            false,
+            false,
+            false,
+        ) catch {};
+        return err;
+    };
+    defer server.allocator.free(send_payload);
+
+    var completed_child = store.readSessionRecord(server.allocator, server.config.workspace_root, child_session.id) catch return Error.ExecutionFailed;
+    defer completed_child.deinit(server.allocator);
+    const child_events = try store.readEvents(server.allocator, server.config.workspace_root, child_session.id);
+    defer types.deinitSessionEvents(server.allocator, child_events);
+    var input_match = false;
+    var config_match = false;
+    var provider_dispatched = false;
+    for (child_events) |event| {
+        if (std.mem.eql(u8, event.event_type, "turn_started")) provider_dispatched = true;
+        if (!std.mem.eql(u8, event.event_type, evaluation_events.repair_receipt_event_type)) continue;
+        var child_receipt = std.json.parseFromSlice(evaluation_events.RepairReceiptPayload, server.allocator, event.message, .{
+            .ignore_unknown_fields = true,
+        }) catch continue;
+        defer child_receipt.deinit();
+        if (!std.mem.eql(u8, child_receipt.value.schema, evaluation_events.repair_receipt_schema)) continue;
+        input_match = std.mem.eql(u8, child_receipt.value.original_input, receipt.value.original_input) and
+            std.mem.eql(u8, child_receipt.value.original_input_sha256, receipt.value.original_input_sha256);
+        config_match = std.mem.eql(u8, child_receipt.value.config_sha256, receipt.value.config_sha256);
+    }
+    const outcome = if (!input_match or !config_match) "identity_mismatch" else types.statusLabel(completed_child.status);
+    _ = try evaluation_events.appendRepairRerunEvent(
+        server.allocator,
+        server.config.workspace_root,
+        source_session.id,
+        .completed,
+        rerun_id,
+        source_receipt_seq,
+        applied_event_seq,
+        child_session.id,
+        receipt.value.original_input_sha256,
+        receipt.value.config_sha256,
+        source_baseline,
+        outcome,
+        input_match,
+        config_match,
+        provider_dispatched,
+    );
+
+    return renderJsonAlloc(server.allocator, protocol_types.RepairRerunResult{
+        .session_id = source_session.id,
+        .rerun_id = rerun_id,
+        .child_session_id = child_session.id,
+        .source_receipt_seq = source_receipt_seq,
+        .applied_event_seq = applied_event_seq,
+        .child_status = types.statusLabel(completed_child.status),
+        .outcome = outcome,
+        .original_input_sha256 = receipt.value.original_input_sha256,
+        .config_sha256 = receipt.value.config_sha256,
+        .input_match = input_match,
+        .config_match = config_match,
+        .provider_dispatched = provider_dispatched,
+    });
 }
 
 fn handleSessionGet(server: *Server, params: ?std.json.Value) ![]u8 {
@@ -3059,6 +3342,182 @@ test "repair/apply uses the reviewed write tool and is retry-idempotent" {
     try std.testing.expectEqual(@as(usize, 4), events.len);
     try std.testing.expectEqualStrings(evaluation_events.repair_candidate_applied_event_type, events[3].event_type);
     try std.testing.expect(std.mem.indexOf(u8, events[3].message, "\"mutation_allowed\":true") != null);
+}
+
+test "repair/rerun rejects a changed effective config before provider dispatch" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    const stdout_file = try attachTestStdout(&tmp, &server, "repair-rerun-output.bin");
+    defer stdout_file.close();
+
+    var session = try store.initSession(std.testing.allocator, workspace_root, "rerun the exact failed input");
+    defer session.deinit(std.testing.allocator);
+    const baseline = try evaluation_events.sourceBaseline(std.testing.allocator);
+    defer std.testing.allocator.free(baseline);
+    try evaluation_events.appendRepairReceiptEvent(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        1,
+        "rerun the exact failed input",
+        config.openai_model,
+        "openai-compatible",
+        "orchestrate",
+        "old-effective-config",
+        "tools",
+        baseline,
+        "environment",
+    );
+    _ = try evaluation_events.appendRepairCandidateAppliedEvent(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        10,
+        11,
+        "candidate-rerun",
+        "approval-rerun",
+        "repair-apply-11",
+        "replace_in_file",
+        "README.md",
+        "sha256:patch",
+        "sha256:effect",
+    );
+
+    const request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"rerun-1\",\"method\":\"repair/rerun\",\"params\":{{\"session_id\":{f},\"source_receipt_seq\":1,\"applied_event_seq\":2}}}}",
+        .{std.json.fmt(session.id, .{})},
+    );
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"error\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"outcome\":\"identity_mismatch\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"input_match\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"config_match\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"provider_dispatched\":false") != null);
+
+    const Envelope = struct { result: protocol_types.RepairRerunResult };
+    var parsed_response = try std.json.parseFromSlice(Envelope, std.testing.allocator, response, .{
+        .ignore_unknown_fields = true,
+    });
+    defer parsed_response.deinit();
+    const child_events = try store.readEvents(std.testing.allocator, workspace_root, parsed_response.value.result.child_session_id);
+    defer types.deinitSessionEvents(std.testing.allocator, child_events);
+    for (child_events) |event| {
+        try std.testing.expect(!std.mem.eql(u8, event.event_type, "turn_started"));
+    }
+
+    const source_events = try store.readEvents(std.testing.allocator, workspace_root, session.id);
+    defer types.deinitSessionEvents(std.testing.allocator, source_events);
+    try std.testing.expectEqual(@as(usize, 4), source_events.len);
+    try std.testing.expectEqualStrings(evaluation_events.repair_rerun_started_event_type, source_events[2].event_type);
+    try std.testing.expectEqualStrings(evaluation_events.repair_rerun_completed_event_type, source_events[3].event_type);
+}
+
+test "repair/rerun reuses the exact input and config through the normal provider lane" {
+    const ReplayTransport = struct {
+        fn send(
+            _: ?*anyopaque,
+            allocator: std.mem.Allocator,
+            _: []const u8,
+            _: []const u8,
+            _: []const u8,
+        ) anyerror![]u8 {
+            return allocator.dupe(u8, "{\"model\":\"test-model\",\"choices\":[{\"message\":{\"content\":\"replayed exact input\"}}]}");
+        }
+    };
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    server.transport = .{ .context = null, .sendFn = ReplayTransport.send };
+    defer server.deinit();
+    const stdout_file = try attachTestStdout(&tmp, &server, "repair-rerun-success-output.bin");
+    defer stdout_file.close();
+
+    var session = try store.initSession(std.testing.allocator, workspace_root, "rerun the exact failed input");
+    defer session.deinit(std.testing.allocator);
+    const baseline = try evaluation_events.sourceBaseline(std.testing.allocator);
+    defer std.testing.allocator.free(baseline);
+    const config_snapshot = try std.fmt.allocPrint(std.testing.allocator, "{f}", .{std.json.fmt(config, .{})});
+    defer std.testing.allocator.free(config_snapshot);
+    try evaluation_events.appendRepairReceiptEvent(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        1,
+        session.prompt,
+        config.openai_model,
+        "",
+        "orchestrate",
+        config_snapshot,
+        "tools",
+        baseline,
+        "environment",
+    );
+    _ = try evaluation_events.appendRepairCandidateAppliedEvent(
+        std.testing.allocator,
+        workspace_root,
+        session.id,
+        10,
+        11,
+        "candidate-rerun-success",
+        "approval-rerun-success",
+        "repair-apply-success",
+        "replace_in_file",
+        "README.md",
+        "sha256:patch",
+        "sha256:effect",
+    );
+
+    const request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"rerun-success\",\"method\":\"repair/rerun\",\"params\":{{\"session_id\":{f},\"source_receipt_seq\":1,\"applied_event_seq\":2}}}}",
+        .{std.json.fmt(session.id, .{})},
+    );
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"error\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"outcome\":\"completed\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"input_match\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"config_match\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"provider_dispatched\":true") != null);
+
+    const Envelope = struct { result: protocol_types.RepairRerunResult };
+    var parsed_response = try std.json.parseFromSlice(Envelope, std.testing.allocator, response, .{
+        .ignore_unknown_fields = true,
+    });
+    defer parsed_response.deinit();
+    try std.testing.expectEqualStrings("completed", parsed_response.value.result.child_status);
+
+    const child_events = try store.readEvents(std.testing.allocator, workspace_root, parsed_response.value.result.child_session_id);
+    defer types.deinitSessionEvents(std.testing.allocator, child_events);
+    var saw_turn_started = false;
+    var saw_replayed_output = false;
+    for (child_events) |event| {
+        if (std.mem.eql(u8, event.event_type, "turn_started")) saw_turn_started = true;
+        if (std.mem.indexOf(u8, event.message, "replayed exact input") != null) saw_replayed_output = true;
+    }
+    try std.testing.expect(saw_turn_started);
+    try std.testing.expect(saw_replayed_output);
 }
 
 test "session/send rejects unknown prompt modes before session execution" {
