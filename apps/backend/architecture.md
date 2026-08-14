@@ -199,11 +199,13 @@ session event spine. `stdio_rpc.InputBroker` holds only the process-local wait;
 its key is the session id plus provider tool-call id, so concurrent sessions may
 reuse provider-local ids safely.
 
-`tools/runtime.zig` keeps `ask_user` in the root normal, root-agent, and
-orchestrator-only catalogs and rechecks the same allow-list at dispatch. The
-orchestrator-only route still denies file, command, and artifact tools; child
-profiles remain headless. Prompt mode selects provider-visible guidance only,
-so `orchestrate`, `build`, `align`, and `plan` share the same question path.
+`tools/runtime.zig` keeps `ask_user` in every root prompt-mode catalog and
+rechecks the same allow-list at dispatch. The root `orchestrate` mode denies
+file, command, and artifact tools; `build`, `align`, and `plan` retain the
+normal root catalog; child profiles remain headless. Prompt mode selects
+provider-visible guidance and the root catalog posture, so all four modes
+share the same question path without a persistent orchestrator-only config
+owner.
 
 ```text
 root provider turn -> ask_user -> input_requested event -> TUI question controller
@@ -337,7 +339,7 @@ sequenceDiagram
   end
 ```
 
-Tool definitions are schema-first. The shared shape lives in `shared/types.zig` as `ToolDefinition { name, description, parameters_json, review_risk, example_json, usage_hint }`. Per-tool modules under `core/tools/builtin/` own their definition, review risk, availability contract, and execute path. The registry resolves availability from module-owned names/specs instead of duplicating string branches. Provider request construction uses the native name/description/parameters schema; CLI and RPC catalog export, review classification, operator guidance, and failure repair hints derive from the same module-owned metadata without embedding a second human catalog in the provider prompt. Backend primitives are not agent tools until this metadata-and-dispatch path exists.
+Tool definitions are schema-first. The shared shape lives in `shared/types.zig` as `ToolDefinition { name, description, parameters_json, review_risk, example_json, usage_hint }`. Per-tool modules under `core/tools/builtin/` own their definition, review risk, availability contract, and execute path. The registry resolves availability from module-owned names/specs instead of duplicating string branches. Provider request construction uses the native name/description/parameters schema; CLI and RPC catalog export, review classification, operator guidance, and failure correction hints derive from the same module-owned metadata without embedding a second human catalog in the provider prompt. Backend primitives are not agent tools until this metadata-and-dispatch path exists.
 
 `search_files` is the content-search tool. It declares an `external_command("ix")` dependency, resolves the workspace path in Zig, then invokes `ix search --json --max-hits ...` through the command-runner boundary. The advertised pattern contract is native IX expression syntax (`lit:needle`, `re:TODO|FIXME`, `lit:a || lit:b`), not rg/grep flag emulation. `list_files` is the native Zig path-discovery tool and does not shell to `ix`. Installing `VAR1` therefore requires a real `ix` executable for content search; when it is absent, catalog availability reports `search_files` as unavailable and execution fails early with `ToolUnavailable`.
 
@@ -377,57 +379,12 @@ measured snapshot, and host/executor cold-start paths append one `abandoned`
 terminal row for unresolved reservations on non-running or proven-stale
 sessions. This is durable effect evidence, not an unproven rollback claim.
 
-The gated repair path keeps the same owner boundary. `repair_candidate` accepts
-only the exact `replace_in_file` JSON payload plus its read tag and records a
-proposal; operator-only `repair/approve` records approval evidence; and
-operator-only `repair/apply` verifies both event identities, the resolved
-target, patch hash, and source baseline before dispatching the existing
-reviewed writer. The writer still owns inspection, stale-tag rejection, effect
-envelopes, and write-intent reserve/commit. One
-`var1.repair_candidate_applied.v1` receipt plus a deterministic approval-bound
-tool-call ID makes retries no-op. No repair queue, patcher, or second ledger is
-introduced.
-
-Move 77 extends the same boundary with operator-only `repair/rerun`. It requires
-the immutable replay receipt and a later applied receipt, creates a fresh child
-linked by `continued_from_session_id`, and routes the recorded input,
-model/provider identity, and prompt mode through the existing `session/send`
-executor path. `loop.zig` compares the exact input and effective config hash
-before context/provider work; mismatch emits no `turn_started`. The source
-event spine stores compact started/completed rerun relationship receipts, with
-completed-request idempotence and an explicit interrupted-state boundary for
-Move 80. The parent transcript is not copied and no replay-specific provider,
-queue, or patcher is permitted.
-
-Move 78 keeps evaluation in that same owner. `repair/rerun` appends one
-idempotent `var1.repair_evaluation.v1` receipt to the source event spine after
-the treatment settles. The receipt compares baseline/treatment outcome, turn
-latency, conservative observable tool-span side effects, token/cost evidence,
-exact identity/provider invariants, and optional bounds. Existing
-`var1.tool_effect.v1` receipts remain the authority for file effects; evaluation
-is evidence-only and does not mutate the executor.
-
-Move 79 keeps rollback in that same owner. Operator-only `repair/rollback` binds
-a failed evaluation to its candidate, approval, and applied sequence edge,
-requires the current source baseline and full current-file hash, and routes an
-exact inverse payload through the reviewed `replace_in_file` writer. The source
-event spine appends started/completed `var1.repair_rollback.v1` receipts; the
-completed row is valid only when the target hash equals the candidate's
-pre-apply hash. The failed treatment and hypothesis remain readable, retries
-are deterministic no-ops, and an interrupted start remains explicit for Move 80
-cold-start reconciliation. No git reset/checkout, patcher, rollback worker, or
-second ledger exists.
-
-Move 80 keeps promotion and crash recovery in that same event owner. A passing
-treatment over a failed or cancelled baseline appends one deterministic,
-idempotent `var1.repair_regression.v1` receipt; the receipt is evidence only
-and cannot mutate source. `reconcileRepairLifecycles` runs from the existing
-session read projections after stale-owner reconciliation. It closes orphaned
-rerun and rollback starts exactly once, evaluates a completed child when the
-existing evidence is sufficient, marks missing/initialized treatments
-abandoned, and classifies rollback bytes as `rolled_back_recovered`,
-`abandoned`, or `recovery_required`. It never reruns provider I/O, repeats a
-file mutation, creates a worker, or adds a ledger.
+The repair/replay control plane is intentionally retired. The durable session
+transcript, typed terminal/failure evidence, review gate, and write-intent
+ledger already provide the useful execution and effect boundaries. Reopen a
+repair feature only after a fresh owner map proves a concrete capability gap;
+do not add a second ledger, patcher, evaluator worker, rollback queue, or hidden
+retry path.
 
 Delegation is validated at one eligibility-first agent boundary. In root orchestrator mode, `agents {}` must precede launch or configuration mutation, but it is not a mandatory first-turn action. `AgentService` hot-loads the registry, resolves every route, reads fixed-pool and current-team projections, and returns one sorted `var1.agent_eligibility.v1` snapshot with a SHA-256 receipt. The active prompt chooses whether to stay quiet, inspect, message, challenge, launch, accept queueing, or wake; no executor branch selects for it. `launch_agent` accepts one `{ context, tasks[] }` batch whose task ids must be route-eligible and revalidates scope, route, depth, contact, and capacity before effects. `core/agents/spec.zig` resolves editable personas over compiled execution-kind and capability-profile floors; custom ids must inherit through `extends`, so config cannot grant arbitrary tools or provider credentials. `configure_agent` validates and atomically replaces `config.json`; the next eligibility or launch read sees the new registry. Child prompts contain only the selected private capsule, explicit shared context, finite task, and output contract. The parent transcript is never copied into a child window.
 
@@ -518,8 +475,10 @@ passes the exact label on the next `session/send`; omission defaults to
 `executor/loop.zig` carries the typed value through every prompt rebuild,
 including compaction, child convergence, wake, and provider-overflow recovery.
 The layer changes provider-visible guidance and may select a configured route
-through `agent_routes.prompt_modes`. It does not branch the executor, tool
-catalog, access policy, or agent capacity.
+through `agent_routes.prompt_modes`. For a root run, `orchestrate` also selects
+the delegation catalog and dispatch allow-list; `build`, `align`, and `plan`
+retain the normal root catalog. It does not branch the executor, access policy,
+or agent capacity, and child profiles remain unchanged.
 
 `store.ensureStoreReady(...)` creates the canonical sessions directory and initializes execution-owner-local sequence state. It never scans or rewrites existing `session.json` records. Explicit migrations own schema changes; this prevents startup cost from scaling with session count and prevents mixed-version processes from erasing additive fields they do not understand.
 
@@ -628,9 +587,9 @@ hash-matched binary.
 - `src/core/agents/supervisor.zig`
   fixed-pool group execution, O(1) live indexes, condition-based wait, cancellation, terminal ordering, and idempotent mailbox-backed convergence
 - `src/core/tickets/index.zig`
-  canonical ticket ledger, queue projection, claims, leases, stale-owner repair, and terminal evidence
+  canonical ticket ledger, queue projection, claims, leases, stale-owner reconciliation, and terminal evidence
 - `src/core/scheduler/service.zig`
-  capacity-aware ticket dispatch, heartbeat, stale requeue, terminal reconciliation, and repair gating
+  capacity-aware ticket dispatch, heartbeat, stale requeue, and terminal reconciliation
 - `src/core/sessions/summaries.zig`
   bounded durable session summaries used by session navigation and the child-agent TUI row
 - `src/core/agents/profile.zig` + `scope.zig`
@@ -655,7 +614,8 @@ hash-matched binary.
 - `src/host/stdio_rpc.zig`
   bounded kernel-side JSON-RPC dispatch, atomic turn admission, session-keyed buffer projection, exact-generation interactive cancellation, cancellation-before-join shutdown, subscriptions, and response emission
 - `src/host/owner_state.zig`
-  crash-released startup/lifetime leases and atomic project-local owner projection
+  crash-released startup/lifetime leases, atomic project-local owner projection,
+  and exact-identity clean-shutdown removal
 - `src/host/owner_client.zig`
   public reconnecting `LocalClient` facade with live generation/protocol/executable handshake
 - `src/host/bridge_access.zig`

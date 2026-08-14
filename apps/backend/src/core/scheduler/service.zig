@@ -306,7 +306,6 @@ pub const Service = struct {
                 .lease_token = ticket.lease_token,
                 .terminal_receipt = terminal_receipt,
                 .failure_id = failure_id,
-                .repair_required = session.status != .completed,
                 .idempotency_key = idempotency_key,
                 .completed_at_ms = now_ms,
             }) catch |err| switch (err) {
@@ -1118,7 +1117,7 @@ test "scheduler settles an expired terminal child before owner recovery" {
     try std.testing.expectEqual(tickets.TicketStatus.completed, ticket.status);
 }
 
-test "scheduler completes terminal child sessions and marks failed or cancelled work for repair" {
+test "scheduler completes terminal child sessions and reconciles failed or cancelled work" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1130,7 +1129,7 @@ test "scheduler completes terminal child sessions and marks failed or cancelled 
     const store = tickets.TicketStore.init(allocator, workspace);
     const completed_ticket_id = try createAssignedTicket(allocator, &store, workspace, "complete", "docs", 100);
     defer allocator.free(completed_ticket_id);
-    const failed_ticket_id = try createAssignedTicket(allocator, &store, workspace, "repair", "bug", 200);
+    const failed_ticket_id = try createAssignedTicket(allocator, &store, workspace, "failed task", "bug", 200);
     defer allocator.free(failed_ticket_id);
     const cancelled_ticket_id = try createAssignedTicket(allocator, &store, workspace, "cancelled", "task", 300);
     defer allocator.free(cancelled_ticket_id);
@@ -1142,12 +1141,12 @@ test "scheduler completes terminal child sessions and marks failed or cancelled 
     const now_ms = std.time.milliTimestamp();
     try claimTicketForTest(allocator, &store, completed_ticket_id, "worker-complete", completed_session.id, "complete-lease", now_ms + 30_000, 1, 1);
 
-    var failed_session = try sessions.initSessionWithOptions(allocator, workspace, "repair", .{ .display_name = "failed child" });
+    var failed_session = try sessions.initSessionWithOptions(allocator, workspace, "failed task", .{ .display_name = "failed child" });
     defer failed_session.deinit(allocator);
     try sessions.setSessionStatus(allocator, workspace, &failed_session, .running);
     const failed_run_seq = try sessions.appendEventWithSeq(allocator, workspace, failed_session.id, .{
         .event_type = "session_started",
-        .message = "repair run",
+        .message = "failed run",
         .timestamp_ms = now_ms,
     });
     var failed_terminal = try sessions.commitTurnTerminal(
@@ -1185,17 +1184,14 @@ test "scheduler completes terminal child sessions and marks failed or cancelled 
     const failed_ticket = projection.findConst(failed_ticket_id) orelse return error.TestExpectedTicket;
     const cancelled_ticket = projection.findConst(cancelled_ticket_id) orelse return error.TestExpectedTicket;
     try std.testing.expectEqual(tickets.TicketStatus.completed, completed_ticket.status);
-    try std.testing.expect(!completed_ticket.repair_required);
     try std.testing.expectEqualStrings(completed_session.id, completed_ticket.active_session_id);
     try std.testing.expect(std.mem.indexOf(u8, completed_ticket.terminal_receipt, "output_bytes=9") != null);
     try std.testing.expectEqual(tickets.TicketStatus.completed, failed_ticket.status);
-    try std.testing.expect(failed_ticket.repair_required);
     try std.testing.expect(std.mem.indexOf(u8, failed_ticket.terminal_receipt, "status=failed") != null);
     try std.testing.expect(std.mem.indexOf(u8, failed_ticket.terminal_receipt, "failure=provider failed") != null);
     try std.testing.expect(std.mem.indexOf(u8, failed_ticket.terminal_receipt, "failure_id=failure-") != null);
     try std.testing.expect(std.mem.startsWith(u8, failed_ticket.failure_id, "failure-"));
     try std.testing.expectEqual(tickets.TicketStatus.completed, cancelled_ticket.status);
-    try std.testing.expect(cancelled_ticket.repair_required);
     try std.testing.expect(std.mem.indexOf(u8, cancelled_ticket.terminal_receipt, "status=cancelled") != null);
     try std.testing.expectEqual(@as(usize, 12), projection.valid_events);
 

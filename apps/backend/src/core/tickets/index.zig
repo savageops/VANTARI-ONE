@@ -85,10 +85,6 @@ const RawEvent = struct {
     failure_class: []const u8 = "",
     failure_id: []const u8 = "",
     terminal_receipt: []const u8 = "",
-    repair_required: bool = false,
-    approval_id: []const u8 = "",
-    rerun_session_id: []const u8 = "",
-    regression_artifact: []const u8 = "",
 };
 
 pub const CreateInput = struct {
@@ -174,7 +170,6 @@ pub const CompleteInput = struct {
     lease_token: []const u8,
     terminal_receipt: []const u8,
     failure_id: []const u8 = "",
-    repair_required: bool = false,
     idempotency_key: []const u8,
     completed_at_ms: i64,
 };
@@ -182,9 +177,6 @@ pub const CompleteInput = struct {
 pub const CloseInput = struct {
     ticket_id: []const u8,
     expected_revision: u64,
-    approval_id: []const u8 = "",
-    rerun_session_id: []const u8 = "",
-    regression_artifact: []const u8 = "",
     idempotency_key: []const u8,
     closed_at_ms: i64,
 };
@@ -208,16 +200,12 @@ pub const Ticket = struct {
     failure_class: []const u8,
     failure_id: []const u8,
     terminal_receipt: []const u8,
-    approval_id: []const u8,
-    rerun_session_id: []const u8,
-    regression_artifact: []const u8,
     revision: u64,
     worker_generation: u64,
     lease_expires_at_ms: i64,
     attempt: u32,
     created_at_ms: i64,
     updated_at_ms: i64,
-    repair_required: bool,
     claim_complete: bool,
 };
 
@@ -660,7 +648,6 @@ pub const TicketStore = struct {
             .session_id = input.session_id,
             .failure_id = input.failure_id,
             .terminal_receipt = input.terminal_receipt,
-            .repair_required = input.repair_required,
             .transitioned_at_ms = input.completed_at_ms,
         };
         const appended = try self.appendEventLocked(&event);
@@ -686,8 +673,6 @@ pub const TicketStore = struct {
         if (projection.poisoned_suffix) return Error.PoisonedSuffix;
         const ticket = projection.find(input.ticket_id) orelse return Error.TicketNotFound;
         if (ticket.status != .completed or ticket.revision != input.expected_revision) return Error.InvalidTerminalEvidence;
-        if (ticket.repair_required and (input.approval_id.len == 0 or input.rerun_session_id.len == 0 or input.regression_artifact.len == 0)) return Error.InvalidTerminalEvidence;
-
         var event = RawEvent{
             .schema = "var1.ticket_event.v2",
             .event_type = "close",
@@ -696,9 +681,6 @@ pub const TicketStore = struct {
             .source = "review",
             .idempotency_key = input.idempotency_key,
             .revision = ticket.revision + 1,
-            .approval_id = input.approval_id,
-            .rerun_session_id = input.rerun_session_id,
-            .regression_artifact = input.regression_artifact,
             .transitioned_at_ms = input.closed_at_ms,
         };
         const appended = try self.appendEventLocked(&event);
@@ -771,16 +753,12 @@ pub const TicketStore = struct {
                 .failure_class = "",
                 .failure_id = "",
                 .terminal_receipt = "",
-                .approval_id = "",
-                .rerun_session_id = "",
-                .regression_artifact = "",
                 .revision = if (event.revision > 0) event.revision else 1,
                 .worker_generation = 0,
                 .lease_expires_at_ms = 0,
                 .attempt = 0,
                 .created_at_ms = event.created_at_ms,
                 .updated_at_ms = if (event.transitioned_at_ms > 0) event.transitioned_at_ms else event.created_at_ms,
-                .repair_required = event.repair_required,
                 .claim_complete = false,
             });
             return;
@@ -802,10 +780,6 @@ pub const TicketStore = struct {
         if (event.failure_class.len > 0) ticket.failure_class = try arena.dupe(u8, event.failure_class);
         if (event.failure_id.len > 0) ticket.failure_id = try arena.dupe(u8, event.failure_id);
         if (event.terminal_receipt.len > 0) ticket.terminal_receipt = try arena.dupe(u8, event.terminal_receipt);
-        if (event.approval_id.len > 0) ticket.approval_id = try arena.dupe(u8, event.approval_id);
-        if (event.rerun_session_id.len > 0) ticket.rerun_session_id = try arena.dupe(u8, event.rerun_session_id);
-        if (event.regression_artifact.len > 0) ticket.regression_artifact = try arena.dupe(u8, event.regression_artifact);
-        if (event.repair_required) ticket.repair_required = true;
 
         if (std.mem.eql(u8, kind, "claim") or std.mem.eql(u8, kind, "resume")) {
             ticket.active_session_id = try arena.dupe(u8, event.session_id);
@@ -1093,7 +1067,7 @@ test "ticket store terminal evidence keeps completed separate from closed" {
     const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
     defer allocator.free(workspace);
     const store = TicketStore.init(allocator, workspace);
-    var created = try store.create(.{ .title = "repair", .description = "needs evidence", .category = "bug", .severity = "high", .created_at_ms = 800 });
+    var created = try store.create(.{ .title = "failed task", .description = "needs terminal evidence", .category = "bug", .severity = "high", .created_at_ms = 800 });
     defer created.deinit(allocator);
     var assigned = try store.transition(.{ .ticket_id = created.ticket_id, .status = .assigned, .reason = "queue", .idempotency_key = "assign-terminal", .transitioned_at_ms = 801 });
     defer assigned.deinit(allocator);
@@ -1101,11 +1075,10 @@ test "ticket store terminal evidence keeps completed separate from closed" {
     defer claim.deinit(allocator);
 
     try std.testing.expectError(Error.InvalidTerminalEvidence, store.complete(.{ .ticket_id = created.ticket_id, .expected_revision = claim.revision, .session_id = "session-terminal", .lease_token = "lease-terminal", .terminal_receipt = "", .idempotency_key = "complete-empty", .completed_at_ms = 901 }));
-    var completed = try store.complete(.{ .ticket_id = created.ticket_id, .expected_revision = claim.revision, .session_id = "session-terminal", .lease_token = "lease-terminal", .terminal_receipt = "receipt-1", .repair_required = true, .idempotency_key = "complete-1", .completed_at_ms = 901 });
+    var completed = try store.complete(.{ .ticket_id = created.ticket_id, .expected_revision = claim.revision, .session_id = "session-terminal", .lease_token = "lease-terminal", .terminal_receipt = "receipt-1", .idempotency_key = "complete-1", .completed_at_ms = 901 });
     defer completed.deinit(allocator);
     try std.testing.expectEqual(TicketStatus.completed, completed.status);
-    try std.testing.expectError(Error.InvalidTerminalEvidence, store.close(.{ .ticket_id = created.ticket_id, .expected_revision = completed.revision, .idempotency_key = "close-missing", .closed_at_ms = 902 }));
-    var closed = try store.close(.{ .ticket_id = created.ticket_id, .expected_revision = completed.revision, .approval_id = "approval-1", .rerun_session_id = "rerun-1", .regression_artifact = "regression-1", .idempotency_key = "close-1", .closed_at_ms = 903 });
+    var closed = try store.close(.{ .ticket_id = created.ticket_id, .expected_revision = completed.revision, .idempotency_key = "close-1", .closed_at_ms = 902 });
     defer closed.deinit(allocator);
     try std.testing.expectEqual(TicketStatus.closed, closed.status);
 
@@ -1113,10 +1086,6 @@ test "ticket store terminal evidence keeps completed separate from closed" {
     defer projection.deinit();
     const ticket = projection.findConst(created.ticket_id).?;
     try std.testing.expectEqual(TicketStatus.closed, ticket.status);
-    try std.testing.expect(ticket.repair_required);
-    try std.testing.expectEqualStrings("approval-1", ticket.approval_id);
-    try std.testing.expectEqualStrings("rerun-1", ticket.rerun_session_id);
-    try std.testing.expectEqualStrings("regression-1", ticket.regression_artifact);
 }
 
 test "ticket store preserves valid prefix and rejects poisoned suffix writes" {
@@ -1199,7 +1168,7 @@ test "ticket store snapshots every lifecycle bucket and flags a poisoned suffix"
     defer closed_claim.deinit(allocator);
     var closed_receipt = try store.complete(.{ .ticket_id = closed.ticket_id, .expected_revision = closed_claim.revision, .session_id = "snapshot-closed-session", .lease_token = "snapshot-closed-lease", .terminal_receipt = "snapshot closed", .idempotency_key = "snapshot-complete-closed", .completed_at_ms = 5001 });
     defer closed_receipt.deinit(allocator);
-    var close_receipt = try store.close(.{ .ticket_id = closed.ticket_id, .expected_revision = closed_receipt.revision, .approval_id = "snapshot-approval", .rerun_session_id = "snapshot-rerun", .regression_artifact = "snapshot-regression", .idempotency_key = "snapshot-close", .closed_at_ms = 5002 });
+    var close_receipt = try store.close(.{ .ticket_id = closed.ticket_id, .expected_revision = closed_receipt.revision, .idempotency_key = "snapshot-close", .closed_at_ms = 5002 });
     defer close_receipt.deinit(allocator);
 
     const snapshot = try store.snapshot();

@@ -39,6 +39,14 @@ pub const Snapshot = struct {
     }
 };
 
+pub const Identity = struct {
+    generation: []const u8,
+    pid: u32,
+    port: u16,
+    token: []const u8,
+    workspace_root: []const u8,
+};
+
 /// Return the project-local execution-owner projection path. Owner state never
 /// relocates into a home-scoped runtime root.
 pub fn statePath(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
@@ -106,6 +114,35 @@ pub fn write(allocator: std.mem.Allocator, projection: Projection) !void {
     });
     defer allocator.free(payload);
     try fsutil.writeText(path, payload);
+}
+
+/// Remove the projection only when it still identifies this exact owner.
+/// Crash-stale or replaced projections remain available for fail-closed
+/// diagnosis; a clean owner cannot erase a newer generation.
+pub fn removeIfCurrent(allocator: std.mem.Allocator, identity: Identity) !bool {
+    const path = try statePath(allocator, identity.workspace_root);
+    defer allocator.free(path);
+
+    var snapshot = read(allocator, identity.workspace_root) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return false,
+    };
+    defer snapshot.deinit();
+
+    if (!std.mem.eql(u8, snapshot.generation, identity.generation) or
+        snapshot.pid != identity.pid or
+        snapshot.port != identity.port or
+        !std.mem.eql(u8, snapshot.token, identity.token) or
+        !std.mem.eql(u8, snapshot.workspace_root, identity.workspace_root))
+    {
+        return false;
+    }
+
+    std.fs.cwd().deleteFile(path) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    return true;
 }
 
 /// Read and validate one owner projection. Schema or protocol drift fails
@@ -257,4 +294,44 @@ test "owner projection rejects protocol drift" {
     defer std.testing.allocator.free(payload);
     try fsutil.writeText(path, payload);
     try std.testing.expectError(error.InvalidOwnerProjection, read(std.testing.allocator, workspace_root));
+}
+
+test "owner projection removes only the matching generation" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}",
+        .{tmp.sub_path},
+    );
+    defer std.testing.allocator.free(workspace_root);
+    const path = try statePath(std.testing.allocator, workspace_root);
+    defer std.testing.allocator.free(path);
+
+    try write(std.testing.allocator, .{
+        .generation = "generation-current",
+        .pid = 42,
+        .port = 4311,
+        .token = "owner-token-current",
+        .workspace_root = workspace_root,
+        .executable_path = "E:/bin/vantari.exe",
+        .started_at_ms = 100,
+    });
+
+    try std.testing.expect(!try removeIfCurrent(std.testing.allocator, .{
+        .generation = "generation-old",
+        .pid = 42,
+        .port = 4311,
+        .token = "owner-token-current",
+        .workspace_root = workspace_root,
+    }));
+    try std.testing.expect(fsutil.fileExists(path));
+    try std.testing.expect(try removeIfCurrent(std.testing.allocator, .{
+        .generation = "generation-current",
+        .pid = 42,
+        .port = 4311,
+        .token = "owner-token-current",
+        .workspace_root = workspace_root,
+    }));
+    try std.testing.expect(!fsutil.fileExists(path));
 }

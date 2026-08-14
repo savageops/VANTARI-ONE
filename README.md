@@ -272,79 +272,12 @@ Each admitted run closes with exactly one `turn_terminal` event. Its
 and records `completed`, `failed`, `timed_out`, or `cancelled`; the session JSON
 status is a recoverable projection of that ledger fact.
 
-Before context compilation and provider dispatch, the loop appends one
-`var1.repair_receipt.v1` row to the same event ledger. It retains the exact
-original input and selected model while hashing transient effective config,
-canonical tool catalog, tracked environment, and source baseline; raw
-snapshots do not become session state.
-
-Failed and timed-out terminal payloads also carry one bounded
-`var1.repair_diagnosis.v1` record inside the same event. It maps normalized
-failure evidence to a fixed invariant, binds a deterministic diagnosis ID to
-the `session_started.seq` → `turn_terminal.seq` span, and keeps completed and
-cancelled turns free of repair diagnosis.
-
-The proposal-only `repair_candidate` tool records a source-anchored candidate
-in that same event spine. It requires an inspected existing target, captures the
-before hash, hashes the operation/path/patch descriptor, and records expected and
-current source baselines. Source drift returns a typed conflict; even a matching
-candidate reports `mutation_allowed:false` and performs no write. Approval and
-application remain explicit stages over the existing reviewed write tools. The
-operator-only `repair/approve` socket now binds the candidate event sequence/id,
-stored patch hash, and expected/current source baseline before appending one
-`var1.repair_candidate_approval.v1` receipt. It is evidence only; Move 76 owns
-application. `repair/apply` now accepts the exact `replace_in_file` JSON payload,
-rechecks the approval, target, patch hash, and baseline, then dispatches the
-existing reviewed writer. The normal read inspection, stale tag, effect
-envelope, and write-intent reserve/commit path remains the only mutation owner;
-`var1.repair_candidate_applied.v1` makes a successful application retry-safe.
-Source proof is Debug `19/19` / `2,191/2,191`; installed promotion remains
-deferred.
-
-Move 77 now admits an approved repair treatment through operator-only
-`repair/rerun`. It requires the immutable replay receipt and later applied
-receipt, creates a fresh linked child session, and sends the exact recorded
-input/model/provider/mode through the normal executor/provider lane. The child
-receipt gates input and effective configuration hashes before provider I/O;
-changed identity fails without `turn_started`, while a matching treatment
-records normal provider output. Debug and ReleaseFast are `19/19` with
-`2,193/2,193` tests; installed promotion remains deferred.
-
-Move 78 adds one idempotent `var1.repair_evaluation.v1` receipt to the existing
-source event spine. It compares baseline/treatment outcomes, turn latency,
-observable tool-span side effects, token/cost evidence, exact identity/provider
-invariants, and optional `repair/rerun` bounds; `var1.tool_effect.v1` remains the
-source of file-effect certainty. Debug and ReleaseFast are `19/19` with
-`2,194/2,194` tests; source ReleaseFast is `9/9` at SHA-256
-`67BF8D1BABCDA39ECC9C4F1E29EF3A9F778EEBAC5DD52A8461EAFA2ED46F3E00`.
-Installed promotion remains deferred. Move 79 owns rollback; Move 80 owns
-regression promotion and cold-start reconciliation.
-
-Move 79 closes the rollback half of that loop. Operator-only `repair/rollback`
-binds a failed evaluation to the candidate, approval, and applied event
-sequences; a required full current-file hash and source baseline reject stale
-requests before mutation. The exact inverse payload reuses the reviewed
-`replace_in_file` writer, and `var1.repair_rollback.v1` is completed only when
-the target hash equals the candidate pre-apply hash. Failed treatment,
-evaluation, and rollback traces remain; deterministic identity makes retries
-no-op. Debug and ReleaseFast are `19/19` with `2,195/2,195` tests; source
-ReleaseFast is `9/9` at SHA-256
-`C7B493E757130ED11AF93ED56FCCB1248C5A1E3C980D94D4D61D2BF33201B36C`.
-Installed promotion remains deferred; Move 80 owns promotion and cold-start
-reconciliation.
-
-Move 80 closes the self-repair loop without adding a worker or second ledger.
-A passing treatment over a failed or cancelled baseline appends one idempotent
-`var1.repair_regression.v1` receipt to the existing source event spine. On
-cold start, `session/get` and `session/list` reconcile orphaned rerun and
-rollback starts exactly once: completed children are evaluated, missing or
-initialized treatments are closed as abandoned, and rollback bytes are
-classified as recovered, abandoned, or `recovery_required`. Recovery never
-replays provider I/O or file mutation. Debug and ReleaseFast are `19/19` with
-`2,196/2,196` tests; source ReleaseFast is `9/9` at SHA-256
-`E9E6BBBED7F7A52D3A5B48EAB78D63D4AA38E10FA548F468608771551067D4B8`.
-Installed promotion remains deferred; the preserved installed owner remains
-on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
+Replay and self-repair control-plane work is intentionally retired from the
+kernel. The durable session transcript, typed event spine, failure receipt,
+review gate, and existing write-intent owner remain the useful path. A future
+repair feature must first prove a concrete capability gap and a smaller owner
+map; it must not add a second ledger, patcher, evaluator worker, or hidden
+retry path.
 
 ```text
 session/create ─► session/send ─► [executor loop] ─► session/get
@@ -563,7 +496,7 @@ The model-visible catalog is generated from module-owned definitions. Each entry
 
 All tool definitions are schema-first. The registry resolves availability from module-owned specs — `search_files` probes the `ix` executable at startup and reports unavailable if absent, rather than failing at invocation time. `tools/list` and `vantari tools --json` expose the same catalog with availability metadata, examples, and usage hints.
 
-**Bounded output:** File tools accept full content when the provider delivers it; long generated artifacts still prefer `write_file` seed plus `append_file` chunks for progress and recovery. Shell output capture is capped at 64KB per stream. Output-budget violations return `ToolPayloadExceeded` with repair hints instead of silent truncation.
+**Bounded output:** File tools accept full content when the provider delivers it; long generated artifacts still prefer `write_file` seed plus `append_file` chunks for progress and recovery. Shell output capture is capped at 64KB per stream. Output-budget violations return `ToolPayloadExceeded` with correction hints instead of silent truncation.
 
 <br/>
 
@@ -704,9 +637,9 @@ The access layer enforces:
 | Missing configured prompt file | Error, not silent fallback |
 | Empty configured prompt file | Error, not silent fallback |
 | Unknown `[context]` config key | Rejected, not ignored |
-| Crash-interrupted tool topology | Deterministic provider-window repair; transcript remains append-only |
+| Crash-interrupted tool topology | Deterministic provider-window recovery; transcript remains append-only |
 | Malformed JSONL suffix | Valid prefix retained; append refuses to cross the suffix and leaves bytes unchanged. Operator-facing corruption events are not yet projected. |
-| Command output payload exceeds limit | `ToolPayloadExceeded` with repair hints |
+| Command output payload exceeds limit | `ToolPayloadExceeded` with correction hints |
 | External search binary absent | Tool reported unavailable at startup, not at invocation |
 | Bridge audit write failure | Action aborted |
 | Delegation scope zero-value | Rejected |
@@ -735,11 +668,16 @@ System and developer prompts are user-editable workspace files. The internal gua
 
 The TUI adds one session-local behavioral lens on top of this envelope. Shift+Tab
 cycles `orchestrate → build → align → plan`; the next `session/send` applies
-the selected provider-visible layer and defaults to `orchestrate`. Optional
+the selected provider-visible layer and defaults to `orchestrate`. In root
+sessions, `orchestrate` is the enforced delegation posture and exposes only
+the agent/collaboration/interactive catalog; `build`, `align`, and `plan` retain
+the normal root tools. The CLI exposes the same choice through `--prompt-mode`
+so non-TUI consumers do not need a persistent policy toggle. Optional
 `agent_routes.prompt_modes` entries can select a provider/model and turn budget
 for each lens through the same route owner; explicit per-turn overrides win.
-The lens changes guidance and route selection only — not executor logic, tools,
-access, or agent capacity — so the model remains the behavior authority.
+The lens changes guidance, route selection, and the root catalog posture; it
+does not change child capability profiles, executor state, access policy, or
+agent capacity.
 
 <br/>
 
@@ -1120,14 +1058,14 @@ failure pressure rather than line coverage:
 
 - Corrupted JSONL suffixes, torn writes, BOMs, duplicated sequence IDs
 - Stale running sessions with no active kernel owner
-- Crash-interrupted tool batches and deterministic provider-window repair
+- Crash-interrupted tool batches and deterministic provider-window recovery
 - Context overflow recovery without duplicate transcript entries
 - Command timeout, process locks, stdout/stderr cap markers
 - 100-way same-session admission with one turn owner and retained steer messages
 - Active-request shutdown with cancellation before join and one terminal event
 - Deterministic failure receipts projected from failed/timed-out terminal rows into sessions and tickets
-- Immutable replay receipts with exact input/model retention, secret-free config/tool/environment hashes, and source-baseline evidence
-- Deterministic causal diagnosis with fixed invariants and exact terminal event spans; no free-form repair telemetry
+- Exact terminal evidence with bounded failure identity and source-baseline-safe write intent
+- Deterministic session/event readback across cold starts without a second replay or repair ledger
 - Bridge token verification, origin guard, payload redaction
 - Delegation scope zero-value rejection and profile expansion validation
 - Direct/group/parent agent mail, replay, provider-failure unread retention,

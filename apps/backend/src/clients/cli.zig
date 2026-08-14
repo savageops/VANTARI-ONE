@@ -13,6 +13,7 @@ const stdio_rpc = @import("../host/stdio_rpc.zig");
 const fsutil = @import("../shared/fsutil.zig");
 const shared_types = @import("../shared/types.zig");
 const provider_profile = @import("../core/providers/profile.zig");
+const prompt_modes = @import("../core/prompts/index.zig");
 const owner_state = @import("../host/owner_state.zig");
 const web = @import("../host/http_bridge.zig");
 
@@ -25,6 +26,7 @@ const RunCliOptions = struct {
     session_id: ?[]const u8 = null,
     json_output: bool = false,
     enable_agent_tools: bool = true,
+    prompt_mode: prompt_modes.PromptMode = .orchestrate,
     /// Per-invocation model override (not persisted). Swaps the active
     /// provider model for this run only.
     model_override: ?[]const u8 = null,
@@ -88,6 +90,7 @@ const TurnOverrides = struct {
     provider_override: ?[]const u8 = null,
     context_window_override: ?u64 = null,
     max_output_tokens: ?u64 = null,
+    prompt_mode: prompt_modes.PromptMode = .orchestrate,
 };
 
 const ParsedRunArguments = struct {
@@ -369,12 +372,12 @@ pub const sessions_help_text =
 
 pub const run_help_text =
     \\Usage:
-    \\  var run --prompt <text> [--json] [--no-agent-tools]
-    \\  var run --prompt-file <path> [--json] [--no-agent-tools]
-    \\  var run --session-id <session-id> [--json] [--no-agent-tools]
-    \\  VAR1 run --prompt <text> [--json] [--no-agent-tools]
-    \\  VAR1 run --prompt-file <path> [--json] [--no-agent-tools]
-    \\  VAR1 run --session-id <session-id> [--json] [--no-agent-tools]
+    \\  var run --prompt <text> [--prompt-mode <mode>] [--json] [--no-agent-tools]
+    \\  var run --prompt-file <path> [--prompt-mode <mode>] [--json] [--no-agent-tools]
+    \\  var run --session-id <session-id> [--prompt-mode <mode>] [--json] [--no-agent-tools]
+    \\  VAR1 run --prompt <text> [--prompt-mode <mode>] [--json] [--no-agent-tools]
+    \\  VAR1 run --prompt-file <path> [--prompt-mode <mode>] [--json] [--no-agent-tools]
+    \\  VAR1 run --session-id <session-id> [--prompt-mode <mode>] [--json] [--no-agent-tools]
     \\
     \\Flags:
     \\  --prompt <text>           Execute an inline prompt as a new session.
@@ -384,6 +387,7 @@ pub const run_help_text =
     \\  --model <id|provider/id>  Override the selected model; a known provider/id selects that provider for this run.
     \\  --context-window <tokens> Override the context-window size for compaction thresholds this run only.
     \\  --max-output-tokens <n>   Override the reserved output token budget this run only.
+    \\  --prompt-mode <mode>      Select orchestrate, build, align, or plan; default: orchestrate.
     \\  --json                    Emit {"session_id","output"} instead of plain text.
     \\  --no-agent-tools          Hide launch_agent, agent_status, wait_agent, and list_agents from the model.
     \\  -h, --help                Print help for the run command.
@@ -391,6 +395,7 @@ pub const run_help_text =
     \\Rules:
     \\  Exactly one prompt source is allowed: --prompt, --prompt-file, or --session-id.
     \\  When --session-id is provided, VAR1 resumes the stored session prompt and does not accept a new prompt source.
+    \\  orchestrate is the default root posture; build, align, and plan retain the normal root tool catalog.
     \\
     \\Examples:
     \\  VAR1 run --prompt "List the files under src."
@@ -501,27 +506,6 @@ pub const providers_help_text =
     \\Flags:
     \\  --json              Emit the var1.providers.v1 schema payload.
     \\  -h, --help          Print help for the providers command.
-    \\
-;
-
-pub const stats_help_text =
-    \\Usage:
-    \\  VAR1 stats
-    \\
-    \\Description:
-    \\  Read the local performance counter register. Each counter maps to a
-    \\  cost center from the VANTARI mechanical cost model (AGENTS.md §X).
-    \\  Counters include: context_compile, provider_turn, tool_dispatch,
-    \\  command_run, tui_frame, session_recovery, jsonl_scan, event_replay.
-    \\
-    \\  This command sends no model request and writes no file. It reads
-    \\  the fixed-memory counter register (~300 bytes) and emits JSON.
-    \\
-    \\Flags:
-    \\  -h, --help          Print help for the stats command.
-    \\
-    \\Examples:
-    \\  VAR1 stats
     \\
 ;
 
@@ -815,16 +799,10 @@ pub fn main(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void 
     }
 
     if (std.mem.eql(u8, command, "stats")) {
-        // VAR1 stats — local performance counter read-out. Sends no model
-        // request, writes no file. Reads the fixed-memory counter register
-        // (AGENTS.md §XVIII item 15).
-        const telemetry = @import("../core/evaluation/telemetry.zig");
-        const register = telemetry.CounterRegister{};
-        const json = try register.renderJson(allocator);
-        defer allocator.free(json);
-        try writeStdout(json);
-        try writeStdout("\n");
-        return;
+        // Retired Move 84 surface: keep the old token from falling through as
+        // a provider prompt until a measured counter owner exists.
+        try printUnknownCommand(command);
+        return error.InvalidArgs;
     }
 
     if (!std.mem.startsWith(u8, command, "-")) {
@@ -935,6 +913,7 @@ fn executeRunViaKernel(allocator: std.mem.Allocator, workspace_root: []const u8,
             .model_override = turn_overrides.model_override,
             .context_window_override = run_options.context_window_override,
             .max_output_tokens = run_options.max_output_tokens,
+            .prompt_mode = run_options.prompt_mode,
         },
     );
     defer allocator.free(turn.session_id);
@@ -969,6 +948,7 @@ fn resolveTurnOverrides(options: RunCliOptions) TurnOverrides {
         .model_override = options.model_override,
         .context_window_override = options.context_window_override,
         .max_output_tokens = options.max_output_tokens,
+        .prompt_mode = options.prompt_mode,
     };
 
     if (resolved.provider_override) |provider_id| {
@@ -1034,6 +1014,7 @@ fn executePromptTurn(
             .model_override = overrides.model_override,
             .context_window_override = overrides.context_window_override,
             .max_output_tokens = overrides.max_output_tokens,
+            .prompt_mode = overrides.prompt_mode.label(),
         })
     else
         try renderJsonAlloc(allocator, .{
@@ -1043,6 +1024,7 @@ fn executePromptTurn(
             .model_override = overrides.model_override,
             .context_window_override = overrides.context_window_override,
             .max_output_tokens = overrides.max_output_tokens,
+            .prompt_mode = overrides.prompt_mode.label(),
         });
     defer allocator.free(send_params);
 
@@ -1838,7 +1820,6 @@ pub fn helpText(command: ?[]const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "serve")) return serve_help_text;
     if (std.mem.eql(u8, name, "tools")) return tools_help_text;
     if (std.mem.eql(u8, name, "models")) return models_help_text;
-    if (std.mem.eql(u8, name, "stats")) return stats_help_text;
     if (std.mem.eql(u8, name, "help")) return root_help_text;
     return null;
 }
@@ -1874,6 +1855,11 @@ fn parseRunArguments(iter: *std.process.ArgIterator) !ParsedRunArguments {
         }
         if (std.mem.eql(u8, arg, "--no-agent-tools")) {
             parsed.options.enable_agent_tools = false;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--prompt-mode")) {
+            const label = iter.next() orelse return error.InvalidArgs;
+            parsed.options.prompt_mode = prompt_modes.PromptMode.fromString(label) orelse return error.InvalidArgs;
             continue;
         }
         if (std.mem.eql(u8, arg, "--model")) {

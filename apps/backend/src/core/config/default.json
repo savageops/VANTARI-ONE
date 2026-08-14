@@ -56,10 +56,8 @@
   },
   "agents": {
     "_help": {
-      "orchestrator_only": "When true, a root session receives only agent-control tools, must call agents before dispatch, and delegates artifact-heavy work into isolated child context windows. Child capability profiles are unchanged.",
       "definitions": "Editable fixed specialist personas. Built-in ids may override the fields shown here. A new lowercase snake_case id must set extends to one built-in id; inheritance fixes execution kind and capability profile while the definition may tune persona, condition, route role, budgets, output contract, doctrine tags, ticket ownership, checkpoint contract, autonomy, effort, and temperature. effort/temperature null or absent = VANTARI (the kernel) decides. Changes hot-load on the next agents snapshot."
     },
-    "orchestrator_only": true,
     "definitions": {
       "general": {
         "enabled": true,

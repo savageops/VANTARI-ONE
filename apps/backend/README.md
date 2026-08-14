@@ -30,8 +30,8 @@ Write-capable file tools use the existing session ledger as a two-phase
 evidence boundary: reserve the provider tool-call ID and before-hash before the
 mutation, commit the measured after-hash/bytes after it, and append one
 `abandoned` row for an unresolved reservation at safe cold start. The ledger
-does not claim rollback; it preserves the exact boundary needed by later repair
-work.
+does not claim rollback; it preserves the exact boundary needed by later
+owner-led recovery.
 
 Every retained subsystem reduces ambiguity at the call site while increasing guarantees in the core. A session is correct only when the operator can observe the same causal chain the kernel will replay after cold start.
 
@@ -123,7 +123,7 @@ fixed-pool `Supervisor` path. `running` is active work, `idle = max - running`,
 A changed ceiling replaces the same physical pool at its next idle boundary;
 active work drains and reports the actual prior ceiling. No `tickets` config
 branch, second pool, or pending-capacity ledger changes this state machine.
-Heartbeats, leases, stale-owner requeue, terminal reconciliation, and repair
+Heartbeats, leases, stale-owner requeue, terminal reconciliation, and failure
 evidence remain durable scheduler/ticket state.
 
 Scheduler leadership is inter-process exclusive in source. One shared OS-owned
@@ -183,11 +183,12 @@ keeps shard lifecycle rows out of compiler checkpoint selection and preserves
 parent range/token metadata on bounded terminal results. `Supervisor` remains
 the one convergence owner and returns the result through the existing mailbox.
 No shard registry, transcript copier, polling loop, or second worker pool was
-added. Move 70 is source-complete; installed promotion remains deferred.
+added. Move 70 is current through the existing session/compiler/Supervisor
+owners; installed summary/session readback passes.
 
 ### Root interactive questions
 
-The root model may call `ask_user` when an operator choice changes the result. It accepts a bounded batch of related questions, capped at 60, normalizes options to `a`–`e` plus `f / Other`, and persists the exact `var1.input_requested.v1` request in the session event spine. Root normal, root-agent, and orchestrator-only catalogs retain this capability; the orchestrator allow-list still denies artifact and command tools. The TUI gives the existing question controller the complete Vaxis frame and renders a settings-style modal with one horizontal row per visible question, Up/Down question focus, Left/Right option focus, Enter select, Space toggle, inline Other text, and an explicit review/submit state. Long batches cannot collide with transcript, reasoning-dock, status-bar, or footer geometry. Multi-select Enter/Space stays on the question until review. `orchestrate`, `build`, `align`, and `plan` use the same controller. Empty, wrong-schema, wrong-kind, or oversized envelopes are rejected before rendering. Question text stays borrowed from State-owned, static, or frame-owned storage until `vx.render`; the display projection rejects invalid UTF-8/control text, truncates by terminal cell width, uses static option keys while preserving original response ids, and guards clipped viewports. Malformed requests are reported and cancel the waiting run without unwinding the TUI. Both idle and streaming key paths now share one recovery boundary for controller and `input/respond` errors, keeping the panel available for retry or explicit cancellation. `input/respond` is the only resolution method. Cancellation and owner shutdown wake the same broker wait. Child profiles are headless and fail closed with `InputUnavailable`, so a background agent cannot hang waiting for a terminal that it does not own.
+The root model may call `ask_user` when an operator choice changes the result. It accepts a bounded batch of related questions, capped at 60, normalizes options to `a`–`e` plus `f / Other`, and persists the exact `var1.input_requested.v1` request in the session event spine. Every root prompt mode retains this capability; only `orchestrate` narrows the rest of the catalog to delegation and collaboration. The TUI gives the existing question controller the complete Vaxis frame and renders a settings-style modal with one horizontal row per visible question, Up/Down question focus, Left/Right option focus, Enter select, Space toggle, inline Other text, and an explicit review/submit state. Long batches cannot collide with transcript, reasoning-dock, status-bar, or footer geometry. Multi-select Enter/Space stays on the question until review. `orchestrate`, `build`, `align`, and `plan` use the same controller. Empty, wrong-schema, wrong-kind, or oversized envelopes are rejected before rendering. Question text stays borrowed from State-owned, static, or frame-owned storage until `vx.render`; the display projection rejects invalid UTF-8/control text, truncates by terminal cell width, uses static option keys while preserving original response ids, and guards clipped viewports. Malformed requests are reported and cancel the waiting run without unwinding the TUI. Both idle and streaming key paths now share one recovery boundary for controller and `input/respond` errors, keeping the panel available for retry or explicit cancellation. `input/respond` is the only resolution method. Cancellation and owner shutdown wake the same broker wait. Child profiles are headless and fail closed with `InputUnavailable`, so a background agent cannot hang waiting for a terminal that it does not own.
 
 ### Deferred plugin socket
 
@@ -267,9 +268,10 @@ The system prompt is assembled in ordered layers: internal guardrails → operat
 The TUI's session-local prompt lens sits in that same builder. Shift+Tab cycles
 `orchestrate`, `build`, `align`, and `plan`; the next `session/send` carries the
 exact label and the kernel hot-loads one provider-visible guidance layer.
-`orchestrate` is the default. Unknown labels fail before execution. This lens
-does not select tools, change access, alter the executor, or change model/agent
-capacity; prompts remain the behavior control plane.
+`orchestrate` is the default. Unknown labels fail before execution. In a root
+run, `orchestrate` also selects the delegation-only catalog and dispatch
+allow-list; `build`, `align`, and `plan` retain the normal root tools. Child
+profiles, access, executor state, and agent capacity remain unchanged.
 
 The assembled provider-facing system prompt has one context-policy guard:
 
@@ -441,8 +443,11 @@ runtime `log_level` setting cycles the value and applies it on the next turn.
 `orchestrate`, `build`, `align`, and `plan`. It can select `provider_id`,
 `model`, `wire_api`, effort, temperature, context, and output reserve. Explicit
 `session/send` provider/model fields win over the configured mode; credentials
-remain owned by `auth.json`. No mode-specific executor, tool registry, or
-provider pipeline exists.
+remain owned by `auth.json`. Shift+Tab makes the same choice quickly in the
+TUI; root `orchestrate` enforces the delegation catalog, while the other modes
+retain normal root tools. CLI runs use `--prompt-mode`; child profiles keep
+their existing capability floors. No mode-specific executor or provider
+pipeline exists.
 
 ### Renderer configuration
 
@@ -493,7 +498,7 @@ per-cell palette schema or menu-position registry.
 - `src/core/agents/service.zig` — route eligibility, launch, supervision, and convergence composition
 - `src/core/agents/mailbox.zig` — sequence-addressed direct/parent/group delivery and unread cursor
 - `src/core/agents/supervisor.zig` — bounded in-process delegation
-- `src/core/tickets/index.zig` — canonical ticket ledger, queue projection, claims, leases, and repair evidence
+- `src/core/tickets/index.zig` — canonical ticket ledger, queue projection, claims, leases, and terminal evidence
 - `src/core/scheduler/store.zig` — scheduled jobs, attempts, process-exclusive leadership, and generation projection
 - `src/core/scheduler/service.zig` — capacity-aware ticket dispatch and stale-owner reconciliation under one leadership guard
 - `src/core/sessions/summaries.zig` — bounded durable session/agent turn summaries
@@ -521,7 +526,7 @@ This lane is session-native end to end with frontier cognitive capabilities:
 - Buffer speculation (concurrent navigation previews + next-turn injection)
 - Interjection protocol (speak while working — USER_STEER_MESSAGE at step boundary)
 - Per-turn config hot-loading
-- Session-local prompt-mode cycling with provider-visible guidance on the next turn
+- Session-local prompt-mode cycling with provider-visible guidance and root catalog posture on the next turn
 - Default-restricted agent filesystem/process boundary with explicit `runtime.full_access_mode` opt-in
 - Session-scoped access projection: the selected boundary is visible in the TUI and inherited by child routes without moving `.var` ownership
 - Root-only interactive `ask_user` questions through the existing event spine, broker, and `input/respond`; child profiles remain headless
@@ -553,40 +558,32 @@ consumer path from frontier scaffolds that still need lifecycle proof.
 
 | Mechanism | Current state | Exact boundary |
 |---|---|---|
-| Append-only event spine | **Source and installed proven** | `events.jsonl` stores monotonic sequence numbers; stdio notifications carry the exact stored sequence and the tracked TUI advances only by that identity with demand-driven suffix repair. |
+| Append-only event spine | **Source and installed proven** | `events.jsonl` stores monotonic sequence numbers; stdio notifications carry the exact stored sequence and the tracked TUI advances only by that identity with demand-driven suffix recovery. |
 | Single terminal settlement | **Source and installed proven** | `commitTurnTerminal` admits exactly one `var1.turn_terminal.v1` row per `session_started.seq`; repeated identical settlement is idempotent, conflicting or stale settlement is rejected, and legacy terminal names are read-only. |
-| Failure receipt | **Source-complete; installed promotion pending** | Failed/timed-out `turn_terminal` rows carry bounded `var1.failure_receipt.v1` class/phase/detail plus deterministic `failure-<sha256>` identity; session projection and ticket reconciliation preserve it, while completed/cancelled rows remain receipt-free. |
-| Immutable replay receipt | **Source-complete; installed promotion pending** | Each admitted root turn appends one `var1.repair_receipt.v1` before context/provider dispatch; exact input/model stay in the event; config/tool catalog/environment are SHA-256 values; source baseline is `git:<commit>` or `unavailable`; raw snapshots are not durable. Debug/ReleaseFast `19/19` / `2,180/2,180`; source ReleaseFast `9/9`; installed promotion deferred. |
-| Causal diagnosis | **Source-complete; installed promotion pending** | Failed/timed-out `turn_terminal.failure` rows carry one bounded `var1.repair_diagnosis.v1` fixed invariant, deterministic diagnosis ID, and exact `session_started.seq` → `turn_terminal.seq` evidence span; completed/cancelled rows remain diagnosis-free. Debug/ReleaseFast `19/19` / `2,180/2,180`; source ReleaseFast `9/9`; installed promotion deferred. |
-| Repair candidate | **Source-complete; installed promotion pending** | Proposal-only `repair_candidate` requires an inspected existing target, validates the exact `replace_in_file` JSON payload/tag, captures its before hash, hashes the exact operation/path/patch descriptor, appends `var1.repair_candidate.v1` with expected/current source baselines, and returns typed `RepairBaselineConflict` on drift. Ready candidates still report `mutation_allowed:false`; no write intent or mutation occurs. Debug/ReleaseFast closure proof `19/19` / `2,182/2,182`; current source graph `19/19` / `2,191/2,191`; installed promotion deferred. |
-| Repair approval | **Source-complete; installed promotion pending** | Operator-only `repair/approve` binds the exact candidate event sequence/id, stored patch hash, and expected/current source baseline, then appends `var1.repair_candidate_approval.v1`; repeated approval identity is sequentially idempotent, and approval evidence does not mutate source or reserve a write intent. Debug/ReleaseFast `19/19` / `2,184/2,184`; source ReleaseFast `9/9`; installed promotion deferred. |
-| Repair application | **Source-complete; installed promotion pending** | Operator-only `repair/apply` verifies candidate/approval sequence/id, exact patch/tag, resolved target, patch hash, and source baseline, then dispatches the existing reviewed `replace_in_file` path. The normal inspection, stale-tag, effect, and write-intent owners remain canonical; `var1.repair_candidate_applied.v1` plus committed intent identity makes retries no-op. Debug `19/19` / `2,191/2,191`; source ReleaseFast build `9/9`; installed promotion deferred. |
-| Repair replay treatment | **Source-complete; installed promotion pending** | Operator-only `repair/rerun` requires the immutable replay receipt and later applied receipt, creates a fresh `continued_from_session_id` child, and reuses the recorded input/model/provider/mode through `session/send`. The executor gates input/config hashes before provider I/O; mismatches emit no `turn_started`, matching treatments persist normal provider output, and started/completed relationship receipts are idempotent. Debug/ReleaseFast `19/19` / `2,193/2,193`; source ReleaseFast `9/9` at `EF77BFE3144819008B027ADDB0EF66A945A0CD0CA33CC9FA76629E77E03EB07A`; installed promotion deferred. |
-| Repair evaluation | **Source-complete; installed promotion pending** | Move 78 appends one idempotent `var1.repair_evaluation.v1` receipt to the existing source event spine. It compares baseline/treatment outcome, `turn_started`→`turn_terminal` latency, conservative observable tool-span side effects, token/cost evidence, exact identity/provider invariants, and optional numeric bounds; file-effect certainty remains `var1.tool_effect.v1` and evaluator mutation is forbidden. Debug/ReleaseFast `19/19` / `2,194/2,194`; source ReleaseFast `9/9` at `67BF8D1BABCDA39ECC9C4F1E29EF3A9F778EEBAC5DD52A8461EAFA2ED46F3E00`; installed promotion deferred. |
-| Repair rollback | **Source-complete; installed promotion pending** | Move 79 adds operator-only `repair/rollback`. It binds a failed evaluation to candidate/approval/applied sequence evidence, requires current source and full current-file SHA-256, and routes an exact inverse payload through the existing reviewed `replace_in_file` path. Started/completed `var1.repair_rollback.v1` receipts preserve the failed treatment and hypothesis; completion requires the candidate pre-apply hash, stale requests reject before mutation, and deterministic identity makes retries no-op. Debug/ReleaseFast `19/19` / `2,195/2,195`; source ReleaseFast `9/9` at `C7B493E757130ED11AF93ED56FCCB1248C5A1E3C980D94D4D61D2BF33201B36C`; installed promotion deferred. |
-| Repair promotion/recovery | **Source-complete; installed promotion pending** | Move 80 appends one idempotent `var1.repair_regression.v1` receipt only when a treatment passes over a failed/cancelled baseline. Cold-start `session/get`/`session/list` reconciles orphaned rerun and rollback starts exactly once from `events.jsonl`; completed children can be evaluated, incomplete treatments are abandoned, and ambiguous rollback bytes remain `recovery_required`. No provider or file mutation is replayed. Debug/ReleaseFast `19/19` / `2,196/2,196`; source ReleaseFast `9/9` at `E9E6BBBED7F7A52D3A5B48EAB78D63D4AA38E10FA548F468608771551067D4B8`; installed promotion deferred. |
+| Failure receipt | **Source and installed readback proven** | Failed/timed-out `turn_terminal` rows carry bounded `var1.failure_receipt.v1` class/phase/detail plus deterministic `failure-<sha256>` identity; session projection and ticket reconciliation preserve it, while completed/cancelled rows remain receipt-free. |
+| Repair/replay control plane | **Retired** | The proposal, approval, replay, evaluator, rollback, and regression chain was removed after the YAGNI audit. Sessions, typed terminal/failure evidence, review gates, and the existing write-intent owner remain canonical. |
 | Generation-bound cancellation | **Source and installed proven** | The tracked TUI sends the observed `session_started.seq` as `expected_run_seq`; missing, unobserved, and stale generations do not mutate a newer run. Shutdown retains an admission-fenced unconditional path. |
 | Message transcript writer | **Source and installed proven** | One per-session owner serializes every message role and initializes sequence from a bounded valid tail. Multi-process writer ownership remains coupled to the persistent-host work. |
 | Persistent execution owner | **Source and installed proven** | One workspace lease converges 20 concurrent clients on one owner/kernel tree. Explicit workspace selection defeats inherited/configured redirection. Client detach preserves the generation; graceful stop drains; forced owner death leaves zero descendants; the next client creates one new generation. Installed owner lifecycle evidence is retained under `.zig-cache/owner-proofs/9cc5d7b8a1624e49937cb3b78716e1bb`. |
 | Session submission | **Source proven** | `run --session-id` routes through `LocalClient` and owner `session/send`; the retired per-session `run-session` process no longer bypasses shared capacity or nested delegation. |
-| Prompt-mode lens | **Source and installed proven** | `PromptMode` cycles through the TUI, exact labels cross `session/send`, unknown labels fail closed, and the provider envelope changes without an executor or capability branch. Debug `19/19` / `1,996/1,996`; ReleaseFast/install `9/9`; source/installed SHA-256 `145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`. |
+| Prompt-mode lens | **Source and installed proven** | `PromptMode` cycles through the TUI, exact labels cross `session/send`, unknown labels fail closed, root `orchestrate` enforces the delegation catalog, and `build` permits the normal root catalog. Installed current build-mode `list_files` evidence is session `session-1786727298743-52ecfe6aeb9f99dd`, tool lifecycle seqs `49–53` and `242–246`, response `250`, terminal `251`; current source/installed SHA-256 `59E150343A206A465ACACBB7E3F5466BDD052E4C8F4426C599AFB6D25A24FC8E`. Debug `19/19` / `2,184/2,184`; ReleaseFast/install `9/9`. |
 | Compact TUI status row | **Source and installed proven** | `formatFooterMetaWithPool` projects status, prompt mode, model, effort, context arithmetic/unknown, and remaining context without wrapping; focused TUI `77/77`, Debug `19/19` / `1,998/1,998`, ReleaseFast/install `9/9`; source/installed SHA-256 `F569105E0845F6F6F23282C3C3C697EE8B3939CAC5515E111AC29A5CEAF754C2`. |
 | Child branch/convergence | **Source and installed proven** | Fixed-pool convergence survives presentation-client exit. The process tracer kills the exact owner/kernel tree, waits for lease expiry, then resumes the same ticket child and immutable receipt under a new generation. Ordinary non-ticket orphan receipts still become `StaleAgentOwner`. Installed ticket evidence is retained under `.zig-cache/owner-proofs/825a25155fa64fe78b26a47789025ec9`. |
 | Agent mailbox | **Source and installed proven** | Direct, parent, and current-group delivery uses recipient event sequence, sender receipt, queue/wake intent, and provider-success unread cursor. The process tracer observes nested sibling and parent context once, with zero copied transcript rows. Installed ticket evidence is retained under `.zig-cache/owner-proofs/825a25155fa64fe78b26a47789025ec9`. |
 | Agent eligibility | **Source proven** | One hot-loaded `AgentService` snapshot advertises only route-resolvable specialists with capacity/team/communication state and an exact SHA-256 receipt. Quiet and hive prompt profiles choose different actions through the same executor; the dedicated installed snapshot probe has not run. |
-| Write-intent ledger | **Source-complete; installed promotion pending** | `write_file`/`append_file`/`replace_in_file` reserve session + tool-call + path + before hash before mutation and commit after hash/bytes after mutation; abandoned intents reconcile through the existing session owner. `repair_candidate` deliberately does not reserve or mutate; `repair/apply` reaches `replace_in_file` and records the committed intent under a deterministic approval-bound tool-call ID. Current source Debug `19/19` / `2,191/2,191`; source ReleaseFast `9/9`; installed promotion deferred. |
+| Write-intent ledger | **Source and installed proven** | `write_file`/`append_file`/`replace_in_file` reserve session + tool-call + path + before hash before mutation and commit after hash/bytes after mutation; the installed `write_file` path emits `var1.tool_effect.v1`, and abandoned intents reconcile through the existing session owner. |
 | Byte-level session integrity | **Source and installed proven** | One LF-only reader owns BOM, invalid-UTF-8, JSON/schema, duplicate, and non-monotonic boundaries across event/message/context/intent/summary projections. Append refuses a poisoned current tail without rewriting it; operator-facing corruption events remain a later diagnostics decision. |
-| Context compiler | **Source-complete; installed promotion pending** | One builder compiles transcript plus checkpoint state, reports bounded synthesized/skipped tool-row repairs through `var1.context_compile_diagnostic.v1`, rebuilds provider-overflow retries from the checkpoint plus durable suffix without duplicate tool context, and projects receipt-addressed parent checkpoint context into child windows without transcript duplication. Debug `19/19` / `2,166/2,166`; source ReleaseFast `9/9`; installed promotion deferred. |
+| Context compiler | **Source and installed readback proven** | One builder compiles transcript plus checkpoint state, reports bounded synthesized/skipped tool-row projection diagnostics through `var1.context_compile_diagnostic.v1`, rebuilds provider-overflow retries from the checkpoint plus durable suffix without duplicate tool context, and projects receipt-addressed parent checkpoint context into child windows without transcript duplication. Installed session/event readback uses the same spine. |
 | Compaction | **Manual writer shipped** | Entry-aware checkpoints retain stable message identity plus explicit source/kept ranges; autonomous/background compaction remains gated. |
-| TTSR stream rules | **Source-complete; installed promotion pending** | One provider abort hook stops SSE reads before terminal completion, persists correction plus `rule_injected` evidence, and retries through the existing executor. Debug `2,151/2,151`; installed provider proof remains deferred. |
+| TTSR stream rules | **Source retry proven; installed abort boundary proven** | One provider abort hook stops SSE reads before terminal completion, persists correction plus `rule_injected` evidence, and retries through the existing executor. The installed adversarial run proves abort/injection and is explicitly cancelled; successful installed recovery is not claimed. |
 | Hash-anchored edits | **Shipped source path** | read_file hashes and edit preconditions reject stale content before mutation. |
-| Provider capability probing | **Source-complete; installed promotion pending** | `core/providers/capability.zig::probe` is called by `dispatch.zig` after wire resolution and before provider I/O; current adapters prove streaming, native tool serialization, and context-overflow classification, while Responses alone reports `responses_api`; unresolved `.auto` fails closed. Debug/ReleaseFast `19/19` / `2,190/2,190`; source ReleaseFast `9/9`; installed promotion deferred. |
-| Arena/quota discipline | **Frontier scaffold** | Scoped allocators exist; quota counters are not maintained by the live turn path. |
-| DAP | **Source-complete; installed promotion pending** | One workspace+session adapter uses `PersistentProcess` with exact Content-Length framing; seven risk-correct lifecycle sockets cover attach, pause, stack, scopes, variables, continue, and detach. Debug `2,141/2,141`, source ReleaseFast, and real Python adapter cleanup pass; installed promotion remains deferred. |
-| eval | **Source-complete; installed promotion pending** | One workspace+session-owned persistent kernel supports Python or Bun JavaScript with bounded newline protocol, output cap, timeout termination, session isolation, and shared `core/tools/process.zig` teardown. Timeout and oversized-response tests prove reaping, drain, and framing recovery; installed promotion remains deferred. |
+| Provider capability probing | **Source and installed fail-closed proof** | `core/providers/capability.zig::probe` is called by `dispatch.zig` after wire resolution and before provider I/O; current adapters prove streaming, native tool serialization, and context-overflow classification, while Responses alone reports `responses_api`; unresolved `.auto` and unavailable installed provider/model selection fail closed. |
+| Arena/quota discipline | **Deferred; no live owner** | The unused scoped-arena/quota shell was removed. Reopen only when measured allocator pressure names one consumer, one canonical owner, and one readback proof. |
+| DAP | **Source proven; installed review boundary proven** | One workspace+session adapter uses `PersistentProcess` with exact Content-Length framing; seven risk-correct lifecycle sockets cover attach, pause, stack, scopes, variables, continue, and detach. Source adapter cleanup passes; installed dispatch stops at `unknown_high_impact` review before an adapter process starts. |
+| eval | **Source and installed proven** | One workspace+session-owned persistent kernel supports Python or Bun JavaScript with bounded newline protocol, output cap, timeout termination, session isolation, and shared `core/tools/process.zig` teardown. Installed set/get turns preserve values across calls and leave zero processes. |
 | Scheduler leadership | **Source and two-process proven** | One crash-released OS lock spans the tick; `lease.json` carries a nonzero generation and is read back before dispatch. Two complete source kernels produced one reserved/completed attempt and zero survivors. |
 
-The current evidence and ordered repair ledger live in the
+The current evidence and ordered project record live in the
 [full-harness SITREP](../../.docs/research/2026-08-12-full-harness-sitrep.md)
 and [findings index](../../.docs/todo/findings/00-INDEX.md).
 

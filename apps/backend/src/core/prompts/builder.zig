@@ -59,8 +59,9 @@ pub const PromptBuildOptions = struct {
     prompt_budget_tokens: u64 = types.default_prompt_budget_tokens,
 };
 
-/// Session-scoped behavioral lens. A mode changes the prompt layer only; it
-/// never changes the tool catalog, access policy, or executor state machine.
+/// Session-scoped behavioral lens. The root `orchestrate` mode also selects
+/// the bounded orchestration tool posture; other modes retain the normal root
+/// tool catalog. Child capability profiles remain independent of this lens.
 pub const PromptMode = enum {
     orchestrate,
     build,
@@ -93,9 +94,13 @@ pub const PromptMode = enum {
         };
     }
 
+    pub fn enforcesOrchestration(self: PromptMode) bool {
+        return self == .orchestrate;
+    }
+
     pub fn instruction(self: PromptMode) []const u8 {
         return switch (self) {
-            .orchestrate => "Coordinate the request as the primary agent. Decide whether to inspect, delegate, ask, or act. Keep the work moving and expose meaningful checkpoints.",
+            .orchestrate => "Coordinate the request as the primary agent. Start with the eligible agent snapshot when collaboration may help; delegate artifact-heavy work, ask bounded questions, and keep the work moving through meaningful checkpoints.",
             .build => "Bias toward direct implementation. Inspect the canonical owner, make the smallest durable change, run proof, and keep the operator informed. Delegate only independent work.",
             .@"align" => "Resolve material ambiguity before irreversible work. When preference discovery is needed, ask concise multiple-choice questions in bounded rounds, using 12 to 60 questions when the operator requests deep alignment. Otherwise state assumptions and proceed.",
             .plan => "Turn the request into bounded executable tickets. Name the owner, dependencies, acceptance proof, and next action, then keep the plan connected to delivery instead of using planning as work avoidance.",
@@ -371,6 +376,8 @@ test "prompt modes use a canonical cycle and reject unknown labels" {
     try std.testing.expectEqual(PromptMode.orchestrate, PromptMode.plan.next());
     try std.testing.expectEqual(PromptMode.@"align", PromptMode.fromString("align").?);
     try std.testing.expect(PromptMode.fromString("unknown") == null);
+    try std.testing.expect(PromptMode.orchestrate.enforcesOrchestration());
+    try std.testing.expect(!PromptMode.build.enforcesOrchestration());
 }
 
 test "prompt mode layer is present in the provider system envelope" {

@@ -120,7 +120,11 @@ $startInfo.CreateNoWindow = $true
 $startInfo.RedirectStandardInput = $true
 $startInfo.RedirectStandardOutput = $true
 $startInfo.RedirectStandardError = $true
-[void]$startInfo.Environment.Remove('VANTARI_HOME')
+# The kernel resolves config.json from VANTARI_HOME before workspace-local
+# fallback. Pin the child to this proof's isolated runtime so config/set is
+# read back from the same owner it mutated and never touches the live user
+# config.
+$startInfo.Environment['VANTARI_HOME'] = $runtimeRoot
 $startInfo.Environment['VANTARI_WORKSPACE'] = $tempWorkspace
 
 $process = [Diagnostics.Process]::new()
@@ -169,9 +173,50 @@ try {
     $responseSchema = [string]$setResponse.result.schema
     if ($responseSchema -ne 'var1.config_set.v1') { throw "Unexpected config/set schema: $responseSchema" }
 
+    $setThemeRequest = [ordered]@{
+        jsonrpc = '2.0'
+        id = 'settings-smoke-theme'
+        method = 'config/set'
+        params = [ordered]@{
+            section = 'tui'
+            key = 'theme'
+            value = 'midnight'
+        }
+    } | ConvertTo-Json -Compress -Depth 5
+    Write-Frame $process.StandardInput.BaseStream $setThemeRequest
+    $setThemeResponse = Read-Frame $process.StandardOutput.BaseStream $TimeoutMs | ConvertFrom-Json
+    if ($setThemeResponse.id -ne 'settings-smoke-theme' -or (Test-RpcError $setThemeResponse)) {
+        throw 'Installed TUI theme config/set RPC returned an error or mismatched id'
+    }
+    if ([string]$setThemeResponse.result.schema -ne 'var1.config_set.v1') {
+        throw "Unexpected TUI theme config/set schema: $($setThemeResponse.result.schema)"
+    }
+
+    $setPositionRequest = [ordered]@{
+        jsonrpc = '2.0'
+        id = 'settings-smoke-status-position'
+        method = 'config/set'
+        params = [ordered]@{
+            section = 'tui'
+            key = 'status_bar_position'
+            value = 'top'
+        }
+    } | ConvertTo-Json -Compress -Depth 5
+    Write-Frame $process.StandardInput.BaseStream $setPositionRequest
+    $setPositionResponse = Read-Frame $process.StandardOutput.BaseStream $TimeoutMs | ConvertFrom-Json
+    if ($setPositionResponse.id -ne 'settings-smoke-status-position' -or (Test-RpcError $setPositionResponse)) {
+        throw 'Installed TUI status position config/set RPC returned an error or mismatched id'
+    }
+    if ([string]$setPositionResponse.result.schema -ne 'var1.config_set.v1') {
+        throw "Unexpected TUI status position config/set schema: $($setPositionResponse.result.schema)"
+    }
+
     $written = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     if ([bool]$written.runtime.full_access_mode -ne $requestedFullAccess) {
-        throw 'config/set did not persist the requested typed value'
+        throw "config/set did not persist the requested typed value: path=$configPath requested=$requestedFullAccess written=$($written.runtime.full_access_mode) request=$setRequest"
+    }
+    if ([string]$written.tui.theme -ne 'midnight' -or [string]$written.tui.status_bar_position -ne 'top') {
+        throw "config/set did not persist the TUI policy values: theme=$($written.tui.theme) position=$($written.tui.status_bar_position)"
     }
 
     $process.StandardInput.Close()
@@ -212,6 +257,8 @@ $startedAt.Stop()
     config_set_schema = $responseSchema
     config_set_ms = $responseMs
     full_access_mode_written = $requestedFullAccess
+    tui_theme_written = [string]$written.tui.theme
+    status_bar_position_written = [string]$written.tui.status_bar_position
     isolated_runtime = $true
     isolated_runtime_removed = $true
     live_config_unchanged = $true

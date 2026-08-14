@@ -1,48 +1,33 @@
 ---
 type: finding
 id: harness-finding-31
-status: pending
+status: closed
 priority: P2
 owner: apps/backend/src/core
 source: ../../research/2026-08-12-full-harness-sitrep.md
 ---
 
-# Gated harness repair loop
+# Retired repair/replay control plane
 
 ## Finding
 
-VANTARI has now closed the source path through exact treatment admission.
-Moves 71–77 provide deterministic failure receipts, causal diagnosis,
-source-anchored candidates, operator approval, exact approved application, and
-exact-input/config replay through the existing session/executor/provider lane.
-Moves 78–80 still own invariant comparison, rollback, and regression promotion.
+The Move 72–80 self-repair and replay chain was removed in the 2026-08-14
+YAGNI pass. It spread one optional workflow across evaluation, host RPC, tool
+catalog, protocol types, ticket closure, and cold-start reconciliation without
+a current consumer or installed promotion proof.
 
-## Required state machine
+## Decision
 
-Failure receipt → deterministic causal diagnosis → candidate patch with baseline conflict check → explicit operator approval → isolated apply → exact original-input/config rerun → invariant comparison → regression lock and promote, or rollback with evidence.
+Delete the proposal, approval, apply, rerun, evaluation, rollback, regression,
+and repair-specific ticket closure paths. Keep the canonical session transcript,
+typed terminal/failure evidence, review gate, write-intent ledger, and normal
+session/provider lane. Historical research and changelog files remain as
+provenance; they are not active runtime contracts.
 
-Every transition persists an ID, input hash, source baseline hash, decision, effect receipt, evaluator result, and terminal state. Repair uses the existing tool runtime, tickets, sessions, and event spine. It does not create a parallel patcher or silent background mutator.
+## Reopen gate
 
-## Acceptance
+Reopen only after a fresh owner map identifies a concrete user capability gap,
+a single reusable owner, and a proof plan that beats the removed mechanism on
+usefulness per line of code. No autonomous source mutation or hidden retry.
 
-- A captured failure reruns from the exact original input and configuration.
-- No file changes before approval.
-- Baseline drift blocks apply before mutation.
-- An approved apply reaches `replace_in_file`, records the normal write intent,
-  and retries do not repeat a committed mutation.
-- `repair/rerun` admits only a valid immutable receipt and later applied receipt,
-  creates a fresh linked treatment child, and gates input/config identity before
-  provider dispatch; matching treatments use the normal provider lane.
-- A failed invariant rolls back and preserves both traces.
-- A passing repair creates a durable regression case that fails on the old baseline and passes on the new one.
-- Cold start resumes or reconciles every nonterminal repair state exactly once.
-
-## Source and salvage
-
-- User clipping: Your Agent Harness Should Repair Itself.
-- [Opik](https://github.com/comet-ml/opik): trace, diagnosis, approved diff, rerun, regression.
-- [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent): refinement snapshots, conflict detection, and rollback.
-
-## Out of scope
-
-Do not permit autonomous unapproved source mutation or call health telemetry self-repair.
+Retirement proof: research/2026-08-14-yagni-repair-replay-retirement.md.

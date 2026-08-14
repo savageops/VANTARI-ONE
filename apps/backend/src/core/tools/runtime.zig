@@ -12,7 +12,6 @@ const read_file = @import("builtin/read_file.zig");
 const write_file = @import("builtin/write_file.zig");
 const append_file = @import("builtin/append_file.zig");
 const replace_in_file = @import("builtin/replace_in_file.zig");
-const repair_candidate = @import("builtin/repair_candidate.zig");
 const shell_exec = @import("builtin/shell_exec.zig");
 const schedule_job = @import("builtin/schedule_job.zig");
 const log_ticket = @import("builtin/log_ticket.zig");
@@ -78,7 +77,6 @@ const write_tool_definitions = read_tool_definitions ++ [_]types.ToolDefinition{
     write_file.definition,
     append_file.definition,
     replace_in_file.definition,
-    repair_candidate.definition,
     shell_exec.definition,
     log_ticket.definition,
     memory.definitions[1],
@@ -240,7 +238,7 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
             return "Use mode=argv with argv only, or mode=powershell/shell/bash with command only. On Windows, use PowerShell-native commands such as Select-String and Get-ChildItem for compound queries; do not pipe cmd find/findstr patterns through PowerShell.";
         }
 
-        return "Arguments did not match the tool schema. Repair the JSON object and retry with only the declared fields.";
+        return "Arguments did not match the tool schema. Correct the JSON object and retry with only the declared fields.";
     }
 
     if (std.mem.eql(u8, error_name, "PathOutsideWorkspace")) {
@@ -248,7 +246,7 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
     }
 
     if (std.mem.eql(u8, error_name, "FileNotInspected")) {
-        if (std.mem.eql(u8, tool_name, "write_file") or std.mem.eql(u8, tool_name, "append_file") or std.mem.eql(u8, tool_name, "replace_in_file") or std.mem.eql(u8, tool_name, "repair_candidate")) {
+        if (std.mem.eql(u8, tool_name, "write_file") or std.mem.eql(u8, tool_name, "append_file") or std.mem.eql(u8, tool_name, "replace_in_file")) {
             return "Read the exact target with read_file before using write_file, append_file, or replace_in_file. For a new file, call read_file first and use its FileNotFound result as absence proof.";
         }
         return "The target was not inspected through the read ledger before this side effect. Inspect the exact target and retry.";
@@ -262,14 +260,6 @@ pub fn toolErrorHint(tool_name: []const u8, error_name: []const u8) ?[]const u8 
             return "The tool payload exceeded the transport reliability budget. Retry with a small write_file seed followed by append_file chunks split on record, syntax, or newline boundaries.";
         }
         return "The tool payload exceeded the reliability budget. Retry with a narrower request or a tool-specific bounded output setting.";
-    }
-
-    if (std.mem.eql(u8, error_name, "RepairBaselineConflict")) {
-        return "The repair candidate was recorded but the source baseline changed. Do not apply it; re-read the failure evidence and generate a new candidate against the current baseline.";
-    }
-
-    if (std.mem.eql(u8, error_name, "InvalidRepairCandidate")) {
-        return "A repair candidate requires a session, failure id, candidate id, existing inspected target, replace_in_file operation, patch body, and expected source baseline.";
     }
 
     if (std.mem.eql(u8, error_name, "FileNotFound")) {
@@ -456,9 +446,6 @@ pub fn executeWithRunner(
     if (std.mem.eql(u8, tool_call.name, "replace_in_file")) {
         return replace_in_file.execute(allocator, tool_execution_context, tool_call.arguments_json, runner);
     }
-    if (std.mem.eql(u8, tool_call.name, "repair_candidate")) {
-        return repair_candidate.execute(allocator, tool_execution_context, tool_call.arguments_json, runner);
-    }
     if (std.mem.eql(u8, tool_call.name, "shell_exec")) {
         return shell_exec.executeToolCall(allocator, tool_execution_context, tool_call.arguments_json, runner, tool_call.id);
     }
@@ -537,7 +524,6 @@ pub fn toolClassForName(tool_name: []const u8) ?profile_contract.ToolClass {
     if (std.mem.eql(u8, tool_name, "write_file") or
         std.mem.eql(u8, tool_name, "append_file") or
         std.mem.eql(u8, tool_name, "replace_in_file") or
-        std.mem.eql(u8, tool_name, "repair_candidate") or
         std.mem.eql(u8, tool_name, "memory_write") or
         std.mem.eql(u8, tool_name, "log_ticket") or
         std.mem.eql(u8, tool_name, "update_session_summary")) return .file_write;

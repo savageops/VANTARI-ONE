@@ -699,9 +699,7 @@ pub fn commitTurnTerminal(
             };
         }
 
-        var terminal_input = input;
-        terminal_input.terminal_event_seq = seq_state.next_seq;
-        const payload = try protocol_events.serializeTurnTerminal(allocator, session.id, scan.run_seq, terminal_input);
+        const payload = try protocol_events.serializeTurnTerminal(allocator, session.id, scan.run_seq, input);
         errdefer allocator.free(payload);
         const seq = try appendEventLocked(allocator, events_path, seq_state, .{
             .event_type = protocol_events.turn_terminal_event_type,

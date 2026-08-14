@@ -1651,9 +1651,10 @@ const ChatState = struct {
     }
 
     /// Cancel a run while applying an input_requested event without re-entering
-    /// the progress replay path. The normal cancel routine performs a replay
-    /// repair when its run cursor is cold; doing that from event application
-    /// creates a recursive error-set dependency and can deadlock the broker.
+    /// the progress readback path. The normal cancel routine performs a
+    /// durable progress readback when its run cursor is cold; doing that from
+    /// event application creates a recursive error-set dependency and can
+    /// deadlock the broker.
     fn cancelInvalidInputRun(self: *ChatState, session_id: []const u8) void {
         if (self.active_run_seq == 0) return;
         const params = renderCancelParams(self.allocator, session_id, self.active_run_seq) catch return;
@@ -2873,7 +2874,16 @@ fn activityConnector(kind: ActivityKind, is_last: bool) []const u8 {
 /// Variable-speed: the render loop advances the frame based on
 /// wall-clock time and activity level (reasoning deltas arriving).
 const braille_spinner_frames = [_][]const u8{
-    "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+    "⠋",
+    "⠙",
+    "⠹",
+    "⠸",
+    "⠼",
+    "⠴",
+    "⠦",
+    "⠧",
+    "⠇",
+    "⠏",
 };
 
 /// Compute the spinner frame index from wall-clock time.

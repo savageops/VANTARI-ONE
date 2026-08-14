@@ -311,12 +311,9 @@ fn verifyRegistryCase(index: usize) !void {
             }, call));
         },
         44 => {
-            var tmp = std.testing.tmpDir(.{});
-            defer tmp.cleanup();
-            const workspace = try tmpWorkspacePath(std.testing.allocator, &tmp, "policy");
-            defer std.testing.allocator.free(workspace);
-            const policy = try VAR1.core.config_file.loadAgentPolicy(std.testing.allocator, workspace);
-            try std.testing.expect(policy.orchestrator_only);
+            try std.testing.expect(std.mem.indexOf(u8, VAR1.core.config_file.default_document, "orchestrator_only") == null);
+            try std.testing.expect(VAR1.core.prompts.PromptMode.orchestrate.enforcesOrchestration());
+            try std.testing.expect(!VAR1.core.prompts.PromptMode.build.enforcesOrchestration());
         },
         45 => {
             const launch = findDefinition("launch_agent") orelse return error.MissingLaunchAgentDefinition;

@@ -31,7 +31,7 @@ pub const definition = types.ToolDefinition{
     \\}
     ,
     .example_json = "{\"action\":\"create\",\"title\":\"search_files unavailable when ix missing\",\"description\":\"The ix dependency is unresolved on Windows installs.\",\"category\":\"tool\",\"severity\":\"high\"}",
-    .usage_hint = "Create work as unassigned, transition it to assigned when it is admitted to the queue, and let the scheduler claim it through the configured agent pool. Use list for projected current state. Never use a direct transition to pretend that a provider task or repair review completed.",
+    .usage_hint = "Create work as unassigned, transition it to assigned when it is admitted to the queue, and let the scheduler claim it through the configured agent pool. Use list for projected current state. Never use a direct transition to pretend that a provider task or terminal review completed.",
 };
 
 pub const availability = module.AvailabilitySpec{};

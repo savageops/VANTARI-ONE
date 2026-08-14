@@ -313,6 +313,15 @@ pub fn serve(allocator: std.mem.Allocator, config: types.Config, options: ServeO
         thread.detach();
     }
     lifecycle.drain();
+    if (options.publish_owner) {
+        _ = owner_state.removeIfCurrent(allocator, .{
+            .generation = bridge.ownerGeneration(),
+            .pid = owner_state.currentPid(),
+            .port = listening_port,
+            .token = bridge.ownerToken(),
+            .workspace_root = config.workspace_root,
+        }) catch |err| bridge_access.logError("owner_projection_cleanup", null, err);
+    }
 }
 
 fn handleConnectionJob(job: *ConnectionJob) void {

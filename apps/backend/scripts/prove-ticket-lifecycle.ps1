@@ -587,18 +587,43 @@ try {
     throw 'Claimed child session or execution receipt is missing'
   }
 
-  $tuiStdout = Join-Path $resolvedProof 'tui-detach.stdout.log'
-  $tuiStderr = Join-Path $resolvedProof 'tui-detach.stderr.log'
-  $tuiProcess = Start-Process -FilePath $resolvedBinary -ArgumentList @('-c') -WorkingDirectory $resolvedProof -WindowStyle Hidden -RedirectStandardOutput $tuiStdout -RedirectStandardError $tuiStderr -PassThru
+  # `Start-Process -WindowStyle Hidden` can create a valid hidden console on
+  # Windows. That makes `-c` enter the interactive loop instead of exercising
+  # the noninteractive terminal boundary. Add one pipe-owning PowerShell
+  # wrapper so the actual VANTARI child receives a closed redirected stdin;
+  # drain the wrapper streams while it starts and retain the typed envelope.
+  $quotedBinary = $resolvedBinary.Replace('"', '""')
+  $tuiWrapperCommand = '& "' + $quotedBinary + '" -c'
+  $tuiWrapperEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($tuiWrapperCommand))
+  $tuiStartInfo = [Diagnostics.ProcessStartInfo]::new()
+  $tuiStartInfo.FileName = (Get-Process -Id $PID).Path
+  $tuiStartInfo.Arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $tuiWrapperEncoded"
+  $tuiStartInfo.WorkingDirectory = $resolvedProof
+  $tuiStartInfo.UseShellExecute = $false
+  $tuiStartInfo.CreateNoWindow = $true
+  $tuiStartInfo.RedirectStandardInput = $true
+  $tuiStartInfo.RedirectStandardOutput = $true
+  $tuiStartInfo.RedirectStandardError = $true
+  $tuiStartInfo.Environment['VANTARI_WORKSPACE'] = $resolvedProof
+  $tuiStartInfo.Environment['VANTARI_HOME'] = $runtimeRoot
+  $tuiProcess = [Diagnostics.Process]::new()
+  $tuiProcess.StartInfo = $tuiStartInfo
+  if (-not $tuiProcess.Start()) { throw 'Could not start noninteractive TUI proof process' }
+  $tuiStdoutTask = $tuiProcess.StandardOutput.ReadToEndAsync()
+  $tuiStderrTask = $tuiProcess.StandardError.ReadToEndAsync()
+  $tuiProcess.StandardInput.Close()
   $null = $ownedProcessIds.Add([int]$tuiProcess.Id)
   if (-not $tuiProcess.WaitForExit(15000)) {
     Stop-Process -Id $tuiProcess.Id -Force -ErrorAction SilentlyContinue
-    throw 'Noninteractive TUI did not detach within 15 seconds'
+    $tuiStdout = $tuiStdoutTask.GetAwaiter().GetResult()
+    $tuiStderr = $tuiStderrTask.GetAwaiter().GetResult()
+    throw "Noninteractive TUI did not detach within 15 seconds: stdout=$tuiStdout stderr=$tuiStderr"
   }
+  $tuiStdout = $tuiStdoutTask.GetAwaiter().GetResult()
+  $tuiStderr = $tuiStderrTask.GetAwaiter().GetResult()
   $tuiExitCode = $tuiProcess.ExitCode
-  $tuiError = Get-Content -Raw -LiteralPath $tuiStderr -ErrorAction SilentlyContinue
-  if ($tuiExitCode -eq 0 -or $tuiError -notmatch 'TerminalUnavailable') {
-    throw "Noninteractive TUI missed the typed terminal boundary: exit=$tuiExitCode stderr=$tuiError"
+  if ($tuiExitCode -eq 0 -or $tuiStderr -notmatch 'TerminalUnavailable') {
+    throw "Noninteractive TUI missed the typed terminal boundary: exit=$tuiExitCode stdout=$tuiStdout stderr=$tuiStderr"
   }
   if ($null -eq (Get-Process -Id ([int]$firstOwner.pid) -ErrorAction SilentlyContinue) -or
       $null -eq (Get-Process -Id ([int]$firstKernel.ProcessId) -ErrorAction SilentlyContinue) -or
@@ -633,10 +658,6 @@ try {
   if ([string]$resume.capability_hash -ne [string]$claim.capability_hash) {
     throw 'Resume changed the ticket capability identity'
   }
-  if ([bool]$complete.repair_required) {
-    throw 'Successful resumed ticket was marked repair-required'
-  }
-
   $ticketEvents = Read-TicketEvents
   foreach ($eventType in @('create', 'claim', 'resume', 'complete')) {
     $count = @($ticketEvents | Where-Object { $_.event_type -eq $eventType }).Count

@@ -3,7 +3,6 @@ const config_file = @import("../config/file.zig");
 const context_builder = @import("../context/index.zig");
 const context_stream_rules = @import("../context/stream_rules.zig");
 const agent_mailbox = @import("../agents/mailbox.zig");
-const evaluation_events = @import("../evaluation/events.zig");
 const prompts = @import("../prompts/index.zig");
 const draft = @import("draft.zig");
 const turn_payload = @import("turn_payload.zig");
@@ -22,7 +21,6 @@ pub const Error = error{
     StepLimitExceeded,
     StreamRuleMatched,
     ToolBudgetExceeded,
-    ReplayConfigMismatch,
 };
 
 pub const Hooks = struct {
@@ -102,11 +100,6 @@ pub const RunOptions = struct {
     session_id: ?[]const u8 = null,
     hooks: Hooks = .{},
     prompt_mode: prompts.PromptMode = .orchestrate,
-    /// When present, the admitted session is an exact repair treatment. The
-    /// gate runs after the transient effective config is assembled and before
-    /// context compilation or provider I/O.
-    expected_replay_input_sha256: ?[]const u8 = null,
-    expected_replay_config_sha256: ?[]const u8 = null,
 };
 
 pub fn runPrompt(allocator: std.mem.Allocator, config: types.Config, prompt: []const u8) !types.SessionRunResult {
@@ -226,8 +219,11 @@ pub fn runPromptWithOptions(
         execution_context.agent_eligibility_ledger = &agent_eligibility_ledger;
     }
     if (root_agent_run) {
-        const agent_policy = try config_file.loadAgentPolicy(allocator, config.workspace_root);
-        execution_context.orchestrator_only = agent_policy.orchestrator_only;
+        // Shift+Tab selects the session-local prompt lens. `orchestrate` is
+        // the only root posture that narrows the model-visible catalog; build,
+        // align, and plan retain the normal root tools. Child profiles never
+        // inherit this root-only posture.
+        execution_context.orchestrator_only = options.prompt_mode.enforcesOrchestration();
     }
     var tool_delta_context = ToolDeltaContext{
         .allocator = allocator,
@@ -242,60 +238,6 @@ pub fn runPromptWithOptions(
     };
     if (!execution_context.workspace_state_enabled and tools.workspaceStateRelevant(session.prompt)) {
         execution_context.workspace_state_enabled = true;
-    }
-
-    // Persist one immutable replay boundary before context compilation or the
-    // first provider dispatch. The raw config/catalog snapshots are transient;
-    // the evaluation owner stores only their hashes and the exact accepted
-    // input, so later repair work cannot silently substitute a new prompt or
-    // runtime surface.
-    const config_snapshot = try std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(config, .{})});
-    defer allocator.free(config_snapshot);
-    const tool_catalog_snapshot = try std.fmt.allocPrint(
-        allocator,
-        "{f}",
-        .{std.json.fmt(tools.builtinDefinitionsForContext(execution_context), .{})},
-    );
-    defer allocator.free(tool_catalog_snapshot);
-    const source_baseline = try evaluation_events.sourceBaseline(allocator);
-    defer allocator.free(source_baseline);
-    const environment_snapshot = try evaluation_events.environmentSnapshot(allocator);
-    defer allocator.free(environment_snapshot);
-    try evaluation_events.appendRepairReceiptEvent(
-        allocator,
-        config.workspace_root,
-        session.id,
-        run_seq,
-        session.prompt,
-        config.openai_model,
-        config.auth_provider orelse "",
-        options.prompt_mode.label(),
-        config_snapshot,
-        tool_catalog_snapshot,
-        source_baseline,
-        environment_snapshot,
-    );
-
-    const input_replay_match = if (options.expected_replay_input_sha256) |expected|
-        evaluation_events.contentHashMatches(expected, session.prompt)
-    else
-        true;
-    const config_replay_match = if (options.expected_replay_config_sha256) |expected|
-        evaluation_events.contentHashMatches(expected, config_snapshot)
-    else
-        true;
-    if (!input_replay_match or !config_replay_match) {
-        try failSession(
-            allocator,
-            config.workspace_root,
-            options.hooks,
-            &session,
-            run_seq,
-            .failed,
-            "repair_replay_identity_mismatch",
-            run_start_ms,
-        );
-        return error.ReplayConfigMismatch;
     }
 
     // A resumed parent rebuilds its child-group index from receipts before the
@@ -356,22 +298,8 @@ pub fn runPromptWithOptions(
     var provider_retries: u8 = 0;
     const max_provider_retries: u8 = 4;
 
-    // Per-turn scoped arena (roadmap P1-15). Reset after each step to bound
-    // memory growth across a long session. The arena scopes ephemeral
-    // allocations: system prompt build, checkpoint reads, context compilation.
-    // The persistent message list uses the parent allocator and survives resets.
-    var turn_arena = @import("../memory/scopes.zig").ScopedArena.init(
-        .turn,
-        allocator,
-        @import("../memory/scopes.zig").defaultQuota(.turn),
-    );
-    defer turn_arena.deinit();
-
     var step: usize = 0;
     while (step < config.max_steps) : (step += 1) {
-        // Reset the turn arena at the start of each step — all ephemeral
-        // allocations from the previous turn are freed in one operation.
-        turn_arena.reset();
         if (options.hooks.shouldCancel(session.id)) {
             try cancelSession(allocator, config.workspace_root, options.hooks, &session, run_seq, "Cancellation requested.");
             return Error.Cancelled;
@@ -428,8 +356,8 @@ pub fn runPromptWithOptions(
         // Typed turn ingress evidence: every provider turn starts with a
         // turn_started event carrying the step boundary and measured token
         // telemetry (AGENTS.md §IV, roadmap P0-2b). The message is allocated
-        // on the parent allocator (not the turn arena) because it is persisted
-        // to the event spine before this scope returns; free it immediately
+        // on the parent allocator because it is persisted to the event spine
+        // before this scope returns; free it immediately
         // after recordSessionEvent serializes it into the durable ledger.
         {
             const boundary_msg = turn_payload.turnStartedPayload(allocator, step, messages.items) catch "Provider turn started.";
@@ -1573,7 +1501,7 @@ fn renderToolFinishedEvent(
     );
 }
 
-test "tool finished schema errors carry actionable typed repair hints" {
+test "tool finished schema errors carry actionable typed correction hints" {
     const allocator = std.testing.allocator;
     var tool_call = types.ToolCall{
         .id = try allocator.dupe(u8, "call_schema"),

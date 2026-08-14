@@ -46,8 +46,11 @@ if (-not (Test-Path -LiteralPath $builtPath)) {
 $installDirectory = Split-Path -Parent $InstallPath
 New-Item -ItemType Directory -Force -Path $installDirectory | Out-Null
 
-# Kill any locked running copies so the install can proceed.
-function Stop-InstalledExecutableProcesses {
+# A running installed owner must drain through its authenticated owner route.
+# Force-stopping an arbitrary process can leave a provider turn, child kernel,
+# or durable lease mid-flight. If the projection cannot prove ownership of the
+# exact process and current workspace, fail closed and preserve the old binary.
+function Get-InstalledExecutableProcesses {
   param(
     [Parameter(Mandatory = $true)][string]$ExecutablePath
   )
@@ -58,14 +61,100 @@ function Stop-InstalledExecutableProcesses {
     $_.Path -and [string]::Equals([System.IO.Path]::GetFullPath($_.Path), $target, [StringComparison]::OrdinalIgnoreCase)
   }
 
-  foreach ($process in $processes) {
-    Write-Host "Stopping locked installed process $($process.ProcessName) pid=$($process.Id) path=$($process.Path)"
-    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-    Wait-Process -Id $process.Id -Timeout 5 -ErrorAction SilentlyContinue
+  return @($processes)
+}
+
+function Read-MatchingOwnerState {
+  param(
+    [Parameter(Mandatory = $true)][string]$StatePath,
+    [Parameter(Mandatory = $true)]$Process,
+    [Parameter(Mandatory = $true)][string]$WorkspaceRoot,
+    [Parameter(Mandatory = $true)][string]$ExecutablePath
+  )
+
+  if (-not (Test-Path -LiteralPath $StatePath)) {
+    return $null
+  }
+
+  try {
+    $state = Get-Content -Raw -LiteralPath $StatePath | ConvertFrom-Json
+    $stateWorkspace = [IO.Path]::GetFullPath([string]$state.workspace_root)
+    $expectedWorkspace = [IO.Path]::GetFullPath($WorkspaceRoot)
+    $stateExecutable = [IO.Path]::GetFullPath([string]$state.executable_path)
+    $targetExecutable = [IO.Path]::GetFullPath($ExecutablePath)
+    if ([int]$state.pid -ne $Process.Id) { return $null }
+    if (-not $stateWorkspace.Equals($expectedWorkspace, [StringComparison]::OrdinalIgnoreCase)) { return $null }
+    if (-not $stateExecutable.Equals($targetExecutable, [StringComparison]::OrdinalIgnoreCase)) { return $null }
+    if ([int]$state.port -le 0 -or [string]::IsNullOrWhiteSpace([string]$state.token)) { return $null }
+    return $state
+  } catch {
+    return $null
   }
 }
 
-Stop-InstalledExecutableProcesses -ExecutablePath $InstallPath
+function Stop-InstalledExecutableProcesses {
+  param(
+    [Parameter(Mandatory = $true)][string]$ExecutablePath,
+    [Parameter(Mandatory = $true)][string]$WorkspaceRoot,
+    [Parameter(Mandatory = $true)][string]$OwnerStatePath
+  )
+
+  $processes = @(Get-InstalledExecutableProcesses -ExecutablePath $ExecutablePath)
+  if ($processes.Count -eq 0) {
+    return
+  }
+
+  $ownerMatches = @(
+    foreach ($process in $processes) {
+      $state = Read-MatchingOwnerState `
+        -StatePath $OwnerStatePath `
+        -Process $process `
+        -WorkspaceRoot $WorkspaceRoot `
+        -ExecutablePath $ExecutablePath
+      if ($null -ne $state) {
+        [pscustomobject]@{ Process = $process; State = $state }
+      }
+    }
+  )
+  if ($ownerMatches.Count -ne 1) {
+    $processIds = @($processes | Select-Object -ExpandProperty Id) -join ','
+    throw "installed executable is locked by pid(s)=$processIds, but exactly one matching authenticated owner projection was not found at $OwnerStatePath; refusing force-stop. Drain the owner through its shutdown route or stop it manually, then retry."
+  }
+
+  $ownerMatch = $ownerMatches[0]
+  $process = $ownerMatch.Process
+  $state = $ownerMatch.State
+  try {
+    $headers = @{ 'x-var1-owner-token' = [string]$state.token }
+    $response = Invoke-RestMethod `
+      -Method Post `
+      -Uri "http://127.0.0.1:$($state.port)/owner/shutdown" `
+      -Headers $headers `
+      -TimeoutSec 5
+    if ($response.status -ne 'accepted') {
+      throw "owner shutdown returned status '$($response.status)'"
+    }
+  } catch {
+    throw "could not gracefully stop installed owner pid=$($process.Id): $($_.Exception.Message)"
+  }
+
+  Write-Host "Gracefully stopping installed owner pid=$($process.Id) port=$($state.port) workspace=$($state.workspace_root)"
+  $deadline = [DateTime]::UtcNow.AddSeconds(15)
+  do {
+    $remaining = @(Get-InstalledExecutableProcesses -ExecutablePath $ExecutablePath)
+    if ($remaining.Count -eq 0) { break }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $deadline)
+  if ($remaining.Count -ne 0) {
+    throw "installed owner shutdown did not drain the executable process tree: $(@($remaining | Select-Object -ExpandProperty Id) -join ',')"
+  }
+}
+
+$ownerStatePath = Join-Path $repoRoot ".var\runtime\execution-owner.json"
+Stop-InstalledExecutableProcesses `
+  -ExecutablePath $InstallPath `
+  -WorkspaceRoot $repoRoot `
+  -OwnerStatePath $ownerStatePath
 
 # Stage-copy with backup so a failed move doesn't corrupt the existing binary.
 $stagingPath = "$InstallPath.$PID.tmp"

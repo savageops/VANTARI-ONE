@@ -1,5 +1,131 @@
 # Execution Log
 
+## 2026-08-14 - Close current frontier after proactive YAGNI pass
+
+**Outcome:** The reactive repair/replay control plane remains deleted, and the
+current Windows consumer frontier is closed against one installed ReleaseFast
+artifact. The canonical session, event, review, provider, write-intent,
+process, ticket, and context owners carry the useful guarantees.
+
+- Current source/installed SHA-256 equality:
+  `59E150343A206A465ACACBB7E3F5466BDD052E4C8F4426C599AFB6D25A24FC8E`.
+- Current gate: Debug `19/19` steps, `2,184/2,184` tests, ReleaseFast seed `0`,
+  manifest `promotable`, and zero final exact-path installed processes.
+- Installed proof covers provider streaming, all four prompt-mode question
+  paths, persistent Python/Bun eval, settings, native write/effect evidence,
+  cancellation, owner/scheduler lifecycle, summary/event readback, and cleanup.
+- DAP review risk, adversarial TTSR recovery, reference-pressure shell, and the
+  nested hidden-TUI host Job boundary are explicit typed boundaries. No
+  fallback, repair ledger, replay path, review bypass, or detached launcher was
+  added.
+
+Receipts:
+`.docs/research/2026-08-14-roadmap-24-completion-audit.md`,
+`.docs/research/2026-08-14-roadmap-24-installed-frontier-proof.json`, and
+`.docs/research/2026-08-14-roadmap-24-release-manifest.json`.
+
+## 2026-08-14 - Retire repair/replay control plane (YAGNI pass; historical source receipt)
+
+**Outcome:** Removed the optional Moves 72–80 repair/replay chain and the
+repair-specific ticket closure fields. The canonical session transcript,
+typed terminal/failure evidence, review gate, provider capability contract,
+and write-intent ledger remain the owners.
+
+- Deleted roughly 3.7k repair-only source lines, the proposal tool, and the orphaned
+  `executor/batch.zig` extraction; removed the remaining ticket repair state.
+- Historical Move 72–80 records remain provenance only. They are no longer
+  active runtime or roadmap contracts.
+- Source validation at deletion time: Debug and ReleaseFast `19/19` steps and
+  `2,184/2,184` tests; the historical deletion artifact was `9/9` at SHA-256
+  `59849686B1CF3F08E69BF54B4B6BAF50B16D981F5DEEB099584349B31B5CA378`.
+  Installed promotion is not claimed.
+
+Receipt: `.docs/research/2026-08-14-yagni-repair-replay-retirement.md`.
+
+## 2026-08-14 - Delete unconnected performance telemetry (Move 84)
+
+**Outcome:** Removed the empty `CounterRegister` and `VAR1 stats` surface
+instead of adding a second telemetry owner. The old token now fails as an
+unknown command before provider dispatch.
+
+- `ix` owner search found only the empty CLI construction and unit-test
+  `record` calls; no production counter writer or health/RPC readback exists.
+- Source validation passed `19/19` steps and `2,184/2,184` tests.
+- Source ReleaseFast is `9/9` at SHA-256
+  `A1337ABC29728EAB78AB27BAA042227BEF62FEC295288B29400D822757C3F8FE`.
+- Source `stats` and `help stats` both returned `unknown command 'stats'`
+  with exit code `2`; no provider dispatch occurred.
+
+Reopen gate: measured bottleneck, one canonical owner, explicit operator
+consumer, and durable readback proof. Receipt:
+`.docs/research/2026-08-14-performance-telemetry-move84.md`.
+
+## 2026-08-14 - Repair regression promotion and cold-start reconciliation (Move 80)
+
+**Outcome:** Closed the final source-side self-repair transition without adding
+a worker, queue, patcher, retry daemon, or second ledger.
+
+- A completed treatment over a failed/cancelled baseline appends one idempotent
+  `var1.repair_regression.v1` receipt with candidate, approval, applied,
+  evaluation, outcome, and source-baseline evidence.
+- `session/get` and `session/list` reconcile orphaned rerun and rollback starts
+  exactly once from the existing event spine. Completed children can be
+  evaluated; missing/initialized children become `abandoned`; ambiguous file
+  bytes become `recovery_required`.
+- Recovery never replays provider I/O or file mutation. The second cold-start
+  read is a no-op on terminal repair receipts.
+- Debug and ReleaseFast pass `19/19` steps and `2,196/2,196` tests. Source
+  ReleaseFast is `9/9` at SHA-256
+  `E9E6BBBED7F7A52D3A5B48EAB78D63D4AA38E10FA548F468608771551067D4B8`.
+  Installed promotion remains deferred and the preserved installed owner pair
+  was not terminated.
+
+Receipt: `.docs/todo/changelog/075-repair-regression-cold-reconcile-move80.md`.
+
+## 2026-08-14 - Evidence-gated repair rollback (Move 79)
+
+**Outcome:** Rolled back a failed repair treatment through the existing reviewed
+writer while retaining the failed hypothesis and all source/treatment/evaluation
+traces.
+
+- Operator-only `repair/rollback` binds a failed evaluation to the candidate,
+  approval, and applied event sequences.
+- A required full current-file SHA-256 and current source baseline reject stale
+  rollback requests before mutation.
+- An exact inverse `replace_in_file` payload is reviewed and executed through
+  the existing inspection/effect/write-intent owners. Completion requires the
+  target hash to equal the candidate pre-apply hash.
+- Started/completed `var1.repair_rollback.v1` receipts and deterministic
+  identity preserve recovery evidence and make retries no-op. No patcher,
+  worker, git reset, second ledger, or model-facing mutation tool was added.
+- Debug and ReleaseFast pass `19/19` steps and `2,195/2,195` tests. Source
+  ReleaseFast is `9/9` at SHA-256
+  `C7B493E757130ED11AF93ED56FCCB1248C5A1E3C980D94D4D61D2BF33201B36C`.
+  Installed promotion remains deferred.
+
+Receipt: `.docs/todo/changelog/074-repair-rollback-move79.md`.
+
+## 2026-08-14 - Bounded repair evaluation receipt (Move 78)
+
+**Outcome:** Compared the source baseline and exact-input treatment through one
+machine-readable evaluator event on the existing source event spine.
+
+- `var1.repair_evaluation.v1` records terminal outcomes, turn latency,
+  observable tool-span side effects, prompt/completion/cached/total tokens,
+  measured or unavailable cost, exact identity/provider invariants, explicit
+  optional bounds, and the final `passed` decision.
+- `repair/rerun` accepts `max_latency_ms`, `max_side_effects_delta`,
+  `max_prompt_tokens`, `max_completion_tokens`, and integer
+  `max_cost_microusd` without moving evaluation into a second worker or ledger.
+- Repeated evaluation identity returns the existing sequence. File-effect proof
+  remains owned by `var1.tool_effect.v1`; evaluator events are mutation-free.
+- Debug and ReleaseFast pass `19/19` steps and `2,194/2,194` tests. Source
+  ReleaseFast is `9/9` at SHA-256
+  `67BF8D1BABCDA39ECC9C4F1E29EF3A9F778EEBAC5DD52A8461EAFA2ED46F3E00`.
+  Installed promotion remains deferred.
+
+Receipt: `.docs/todo/changelog/073-repair-evaluation-move78.md`.
+
 ## 2026-08-14 - Exact repair replay treatment (Move 77)
 
 **Outcome:** Reran approved repairs through a fresh child session with the exact
@@ -3403,3 +3529,56 @@ Installed promotion remains deferred and the installed owner remains on
 Research and receipt:
 `.docs/research/2026-08-14-question-modal-frame.md` and
 `.docs/todo/changelog/063-question-modal-frame.md`.
+
+**Move 88 Windows installer owner-boundary receipt (2026-08-14):** The
+installer now keeps the staged copy/backup/move path but refuses to force-stop
+an exact-path process. It requires one current owner projection matching PID,
+executable, workspace, port, and token, calls authenticated
+`POST /owner/shutdown`, and waits for zero exact-path processes before swap.
+PowerShell parsing passed. The live `-SkipBuild` probe failed closed on the
+stale projection for PIDs `22152,29908` without changing the binary. The
+installed lifecycle proof passed `4/4` clients, graceful shutdown, crash
+recovery, generation replacement, and final zero proof-owned processes.
+Source validation passed `19/19` steps and `2,196/2,196` tests. Installed
+promotion remains blocked by the preserved owner pair and source/installed
+hash mismatch. Research and receipt:
+`.docs/research/2026-08-14-windows-install-owner-boundary-move88.md` and
+`.docs/todo/changelog/076-windows-install-owner-boundary-move88.md`.
+# 2026-08-14 - Close Moves 85-87 by YAGNI deletion
+
+- Moves 85–87: deleted the unused allocator quota shell, plugin discovery, and
+- Move 85 removed `core/memory/scopes.zig`, its export, and the dead
+  `ScopedArena` lifecycle calls; Moves 86–87 remain contract-only reopen gates.
+  plugin supervision expansion after current owner/consumer census found no
+  measured pressure, mounted plugin, or live plugin process.
+- Canonical owners retained: allocator/process bounds, tool definitions and
+  availability, review risk, shared process supervision, effect receipts, and
+  cleanup.
+- Proof: current source census; `scripts/zigw.ps1 build test --summary all` ->
+  19/19 build steps and 2180/2180 tests; ReleaseFast SHA-256 `9FFBBFF13CECF76DC647DC5AF6485339D7C05D3196B97B3D1FDDBC6A8A88C8A4`.
+- Next: reconcile the installed owner boundary for Move 88.
+
+## 2026-08-14 — Owner projection clean-shutdown boundary
+
+- `owner_state.zig` now removes only an exact matching owner projection after
+  listener drain; stale or replaced projections remain fail-closed evidence.
+- `http_bridge.zig` owns the shutdown call; no second lifecycle or recovery
+  owner was added.
+- Proof: owner identity test plus current `19/19` and `2,180/2,180` source
+  graph; real-provider source smoke ended with zero exact source processes.
+
+## 2026-08-14 — Installed current-release boundary
+
+- `install_windows.ps1 -SkipBuild` installed ReleaseFast SHA-256
+  `50546CCD5EEDD4E451AAF08134186CF321366AABE659A636BA7AB08F74F5EF88`, equal
+  to the source artifact, and retained the previous binary as a `.bak`.
+- Installed help, health, tools, auth-status, and workspace probes exited `0`;
+  the 33-tool catalog retained `ask_user` and `replace_in_file`.
+- Repository proof owners used authenticated shutdown and ended at zero exact
+  source/installed processes. The real-provider question response remains an
+  explicit open boundary; no fallback or second question system was added.
+2026-08-14 - Close Moves 81-83 by YAGNI consolidation: checkpoint-addressed agent branches, session/event read models, and existing turn/tool/agent budgets remain the sole owners; no fork RPC, attention index, or quota ledger without measured consumer demand.
+2026-08-14 - Reconcile the fresh current-source ReleaseFast install: `2,182/2,182` tests, equal source/installed SHA-256 `3EFF45169AEC2BC419B20FF0EC8228A3B12AA508C5E93BE21509427F40191550`, exact owner gate, recoverable `.bak`, and zero final source/installed process census; Move 89 remains partial.
+2026-08-14 - Pin the ReleaseFast Zig build seed to `0` after proving random dependency traversal made repeated artifacts differ; two fixed-seed builds now equal `A7D01B37DBB3F954CF93F534CC04E9E662B86F34F19E4C2192EA302208515806`, the manifest is promotable at `19/19` and `2,184/2,184`, and installed proofs pass with zero exact-path processes.
+2026-08-14 - Move root orchestration ownership from persistent `agents.orchestrator_only` config to the existing `PromptMode`: Shift+Tab and CLI `--prompt-mode` derive the root catalog/dispatch posture, `orchestrate` remains the default, child profiles remain unchanged, and old config files stay readable but inert. Installed PTY and build-mode `list_files` proof passed on SHA-256 `A7D01B37DBB3F954CF93F534CC04E9E662B86F34F19E4C2192EA302208515806`.
+2026-08-14 - Refresh the prompt-mode owner proof after the formatter: current source and installed ReleaseFast SHA-256 match `59E150343A206A465ACACBB7E3F5466BDD052E4C8F4426C599AFB6D25A24FC8E`; Debug `19/19` and `2,184/2,184`, ReleaseFast `9/9`, installed build/orchestrate turns, two native `list_files` lifecycles, and the promotable release manifest all read back cleanly with zero final processes. Move 89 remains partial only at the named provider write/cancel/question and hidden-window boundaries.

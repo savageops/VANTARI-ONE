@@ -13,10 +13,6 @@ pub const methods = struct {
     pub const session_compact = "session/compact";
     pub const session_cancel = "session/cancel";
     pub const input_respond = "input/respond";
-    pub const repair_candidate_approve = "repair/approve";
-    pub const repair_candidate_apply = "repair/apply";
-    pub const repair_rerun = "repair/rerun";
-    pub const repair_rollback = "repair/rollback";
     pub const session_get = "session/get";
     pub const session_list = "session/list";
     pub const schedule_get = "schedule/get";
@@ -36,10 +32,6 @@ pub const Capabilities = struct {
     session_compact: bool = true,
     session_cancel: bool = true,
     input_respond: bool = true,
-    repair_candidate_approval: bool = true,
-    repair_candidate_apply: bool = true,
-    repair_rerun: bool = true,
-    repair_rollback: bool = true,
     session_get: bool = true,
     session_list: bool = true,
     schedule_get: bool = true,
@@ -130,58 +122,6 @@ pub const InputRespondResult = struct {
     session_id: []const u8,
     request_id: []const u8,
     accepted: bool,
-};
-
-pub const RepairCandidateApprovalResult = struct {
-    session_id: []const u8,
-    candidate_id: []const u8,
-    approval_id: []const u8,
-    candidate_event_seq: u64,
-    approval_event_seq: u64,
-    approved: bool,
-    mutation_allowed: bool,
-};
-
-pub const RepairCandidateApplyResult = struct {
-    session_id: []const u8,
-    candidate_id: []const u8,
-    approval_id: []const u8,
-    candidate_event_seq: u64,
-    approval_event_seq: u64,
-    tool_call_id: []const u8,
-    applied: bool,
-    already_applied: bool,
-    output: ?[]const u8 = null,
-};
-
-pub const RepairRerunResult = struct {
-    session_id: []const u8,
-    rerun_id: []const u8,
-    child_session_id: []const u8,
-    source_receipt_seq: u64,
-    applied_event_seq: u64,
-    child_status: []const u8,
-    outcome: []const u8,
-    original_input_sha256: []const u8,
-    config_sha256: []const u8,
-    input_match: bool,
-    config_match: bool,
-    provider_dispatched: bool,
-};
-
-pub const RepairRollbackResult = struct {
-    session_id: []const u8,
-    rollback_id: []const u8,
-    evaluation_id: []const u8,
-    candidate_event_seq: u64,
-    approval_event_seq: u64,
-    applied_event_seq: u64,
-    rollback_event_seq: u64,
-    target_path: []const u8,
-    rolled_back: bool,
-    already_rolled_back: bool,
-    baseline_restored: bool,
-    restored_sha256: []const u8,
 };
 
 pub const ScheduleSummary = struct {

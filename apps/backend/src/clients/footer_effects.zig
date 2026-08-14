@@ -15,6 +15,8 @@ pub const Config = struct {
     frame_ms: i64 = 80,
     band_half_width: f64 = 0.22,
     core_half_width: f64 = 0.075,
+    /// Width of the low-contrast outer shoulder on each side of the sweep.
+    fade_half_width: f64 = 0.07,
 };
 
 pub const Effect = enum {
@@ -28,6 +30,7 @@ pub const Palette = struct {
     base: Style,
     edge: Style,
     core: Style,
+    fade: Style = .{},
 };
 
 pub const Frame = struct {
@@ -36,6 +39,7 @@ pub const Frame = struct {
     phase: f64 = 0,
     band_half_width: f64 = 0.22,
     core_half_width: f64 = 0.075,
+    fade_half_width: f64 = 0.07,
 };
 
 pub const Controller = struct {
@@ -65,6 +69,7 @@ pub const Controller = struct {
         const duration_ms = self.durationMs();
         const band_half_width = self.bandHalfWidth();
         const core_half_width = self.coreHalfWidth(band_half_width);
+        const fade_half_width = self.fadeHalfWidth(band_half_width, core_half_width);
         if (elapsed_ms >= duration_ms) {
             return .{
                 .effect = self.selected_effect,
@@ -72,6 +77,7 @@ pub const Controller = struct {
                 .phase = 1,
                 .band_half_width = band_half_width,
                 .core_half_width = core_half_width,
+                .fade_half_width = fade_half_width,
             };
         }
 
@@ -85,6 +91,7 @@ pub const Controller = struct {
             .phase = sweepEase(std.math.clamp(phase, 0.0, 1.0)),
             .band_half_width = band_half_width,
             .core_half_width = core_half_width,
+            .fade_half_width = fade_half_width,
         };
     }
 
@@ -152,6 +159,12 @@ pub const Controller = struct {
     fn coreHalfWidth(self: *const Controller, band_half_width: f64) f64 {
         return std.math.clamp(self.config.core_half_width, 0.0, band_half_width);
     }
+
+    /// Keep the soft shoulder outside the core while tolerating campaign
+    /// configurations that ask for a wider fade than the band can provide.
+    fn fadeHalfWidth(self: *const Controller, band_half_width: f64, core_half_width: f64) f64 {
+        return std.math.clamp(self.config.fade_half_width, 0.0, band_half_width - core_half_width);
+    }
 };
 
 pub fn effectForMode(mode_label: []const u8, config: Config) Effect {
@@ -160,11 +173,12 @@ pub fn effectForMode(mode_label: []const u8, config: Config) Effect {
     return config.effect;
 }
 
+/// Move the sweep with zero velocity and acceleration at both endpoints so
+/// the color band settles into and out of the footer without a visible jerk.
 pub fn sweepEase(t: f64) f64 {
     const clamped = std.math.clamp(t, 0.0, 1.0);
-    if (clamped < 0.5) return 4.0 * clamped * clamped * clamped;
-    const inverse = -2.0 * clamped + 2.0;
-    return 1.0 - (inverse * inverse * inverse) / 2.0;
+    return clamped * clamped * clamped *
+        (clamped * (clamped * 6.0 - 15.0) + 10.0);
 }
 
 /// Build the footer as terminal segments while keeping the canonical footer
@@ -212,6 +226,7 @@ pub fn writeSegments(
     }
 
     const center = frame.phase * (1.0 + 2.0 * frame.band_half_width) - frame.band_half_width;
+    const fade_start = @max(frame.core_half_width, frame.band_half_width - frame.fade_half_width);
     var byte_index: usize = 0;
     var codepoint_index: usize = 0;
     while (byte_index < mode.len) {
@@ -229,8 +244,10 @@ pub fn writeSegments(
         const distance = @abs(position - center);
         const style = if (distance <= frame.core_half_width)
             palette.core
-        else if (distance <= frame.band_half_width)
+        else if (distance <= fade_start)
             palette.edge
+        else if (distance <= frame.band_half_width)
+            palette.fade
         else
             palette.base;
         segments[segment_count] = .{
@@ -262,12 +279,13 @@ test "campaign can be disabled without changing the renderer" {
     try std.testing.expectEqual(Effect.none, effectForMode("ORCHESTRATE", default_config));
 }
 
-test "sweep ease preserves endpoints and midpoint" {
+test "sweep ease preserves endpoints and uses a smootherstep profile" {
     try std.testing.expectEqual(@as(f64, 0), sweepEase(0));
     try std.testing.expectEqual(@as(f64, 1), sweepEase(1));
     try std.testing.expectApproxEqAbs(@as(f64, 0.5), sweepEase(0.5), 0.000001);
-    try std.testing.expect(sweepEase(0.25) < 0.25);
-    try std.testing.expect(sweepEase(0.75) > 0.75);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.103515625), sweepEase(0.25), 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.896484375), sweepEase(0.75), 0.000001);
+    try std.testing.expectApproxEqAbs(sweepEase(0.25), 1.0 - sweepEase(0.75), 0.000001);
 }
 
 test "sweep ease clamps out of range phases" {
@@ -400,6 +418,51 @@ test "active sweep preserves status and model segment styles" {
     try std.testing.expect(Style.eql(base, segments[count - 1].style));
 }
 
+test "active sweep gives both sides a soft outer shoulder" {
+    var segments: [32]Segment = undefined;
+    const fade: Style = .{ .dim = true };
+    const edge: Style = .{ .italic = true };
+    const core: Style = .{ .bold = true };
+    const count = writeSegments(
+        &segments,
+        "ready · orchestrate · model",
+        .{
+            .effect = .orchestrate_sweep,
+            .active = true,
+            .phase = 0.5,
+            .band_half_width = 0.22,
+            .core_half_width = 0.075,
+            .fade_half_width = 0.07,
+        },
+        .{ .base = .{}, .edge = edge, .core = core, .fade = fade },
+    );
+    try std.testing.expectEqual(@as(usize, 13), count);
+    try std.testing.expect(Style.eql(fade, segments[4].style));
+    try std.testing.expect(Style.eql(fade, segments[8].style));
+    try std.testing.expect(Style.eql(edge, segments[5].style));
+    try std.testing.expect(Style.eql(edge, segments[7].style));
+    try std.testing.expect(Style.eql(core, segments[6].style));
+}
+
+test "zero fade shoulder leaves the accent edge hard bounded" {
+    var segments: [32]Segment = undefined;
+    const fade: Style = .{ .dim = true };
+    const count = writeSegments(
+        &segments,
+        "ready · orchestrate · model",
+        .{
+            .effect = .orchestrate_sweep,
+            .active = true,
+            .phase = 0.5,
+            .fade_half_width = 0,
+        },
+        .{ .base = .{}, .edge = .{ .italic = true }, .core = .{ .bold = true }, .fade = fade },
+    );
+    for (segments[1 .. count - 1]) |segment| {
+        try std.testing.expect(!Style.eql(fade, segment.style));
+    }
+}
+
 test "active sweep produces the core style at the leading edge" {
     var segments: [32]Segment = undefined;
     const core: Style = .{ .bold = true };
@@ -484,10 +547,17 @@ test "controller phase advances through the active sweep" {
 }
 
 test "campaign geometry is carried into the frame config" {
-    var controller = Controller{ .config = .{ .band_half_width = 0.31, .core_half_width = 0.09 } };
+    var controller = Controller{ .config = .{ .band_half_width = 0.31, .core_half_width = 0.09, .fade_half_width = 0.06 } };
     const current = controller.frame("orchestrate", 100);
     try std.testing.expectApproxEqAbs(@as(f64, 0.31), current.band_half_width, 0.000001);
     try std.testing.expectApproxEqAbs(@as(f64, 0.09), current.core_half_width, 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.06), current.fade_half_width, 0.000001);
+}
+
+test "fade shoulder never consumes the configured core" {
+    var controller = Controller{ .config = .{ .band_half_width = 0.31, .core_half_width = 0.29, .fade_half_width = 0.5 } };
+    const current = controller.frame("orchestrate", 100);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.02), current.fade_half_width, 0.000001);
 }
 
 test "invalid UTF-8 mode data falls back to one canonical segment" {

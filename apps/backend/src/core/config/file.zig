@@ -106,12 +106,6 @@ pub const AgentRouteOverride = struct {
     }
 };
 
-pub const AgentPolicy = struct {
-    /// Root sessions become orchestration-only and must discover the compact
-    /// agent catalog before dispatching or mutating a specialist definition.
-    orchestrator_only: bool = true,
-};
-
 pub const default_document = @embedFile("default.json");
 
 pub fn path(allocator: std.mem.Allocator, workspace_root: []const u8) ![]u8 {
@@ -154,12 +148,12 @@ pub fn writeConfigKey(
     const root = parsed.value.object;
 
     // Navigate to the section.
-    var section_obj = root.get(section) orelse return Error.InvalidConfig;
-    if (section_obj != .object) return Error.InvalidConfig;
+    const section_obj = root.getPtr(section) orelse return Error.InvalidConfig;
+    if (section_obj.* != .object) return Error.InvalidConfig;
 
     // Mutate the key within the section. The ObjectMap uses the parsed
     // arena's managed allocator internally.
-    try section_obj.object.put(key, value);
+    try section_obj.*.object.put(key, value);
 
     // Re-validate the ENTIRE document after mutation. If validation fails,
     // the file is NOT written — the caller gets Error.InvalidConfig and the
@@ -266,18 +260,6 @@ pub fn loadAgentMaxConcurrency(allocator: std.mem.Allocator, workspace_root: []c
     const value = try optionalUsize(routes, "max_concurrency", 6);
     if (value == 0 or value > 64) return Error.InvalidConfig;
     return value;
-}
-
-/// Load root orchestration policy from the canonical config owner. Specialist
-/// definitions themselves are resolved by core/agents/spec.zig on every
-/// discovery and launch so config edits hot-load without a kernel restart.
-pub fn loadAgentPolicy(allocator: std.mem.Allocator, workspace_root: []const u8) !AgentPolicy {
-    var parsed = try parseDocument(allocator, workspace_root);
-    defer parsed.deinit();
-    const agents = objectField(parsed.value.object, "agents") orelse return .{};
-    return .{
-        .orchestrator_only = try optionalBool(agents, "orchestrator_only", true),
-    };
 }
 
 /// Load one role override without turning config.json into a credential store.
@@ -519,9 +501,14 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
         }
     }
     if (try validatedObjectField(root, "agents")) |value| {
+        // Keep the retired key readable for existing config files, but never
+        // load or apply it. PromptMode.orchestrate is the only live owner of
+        // the root orchestration posture.
         try rejectUnknownKeys(value, &.{ "_help", "orchestrator_only", "definitions" });
         try validateHelp(value, &.{ "orchestrator_only", "definitions" });
-        _ = try optionalBool(value, "orchestrator_only", true);
+        if (value.get("orchestrator_only")) |legacy| {
+            if (legacy != .bool) return Error.InvalidConfig;
+        }
         if (try validatedObjectField(value, "definitions")) |definitions| {
             var iterator = definitions.iterator();
             while (iterator.next()) |entry| {
@@ -869,6 +856,16 @@ test "default config documents every persistent value" {
     }
     try std.testing.expect(std.mem.indexOf(u8, default_document, "VANTARI_HOME is intentionally not configurable here") != null);
     try std.testing.expect(std.mem.indexOf(u8, default_document, "belong in the sibling auth.json") != null);
+    try std.testing.expect(std.mem.indexOf(u8, default_document, "orchestrator_only") == null);
+}
+
+test "legacy orchestrator config is accepted but has no runtime owner" {
+    const document =
+        \\{"version":1,"agents":{"_help":{"orchestrator_only":"Legacy ignored setting."},"orchestrator_only":false,"definitions":{}}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
+    defer parsed.deinit();
+    try validateDocumentShape(parsed.value.object);
 }
 
 test "ticket execution policy is not a config surface" {
@@ -904,6 +901,21 @@ test "config file is created beside runtime state and loads typed defaults" {
     defer std.testing.allocator.free(config_path);
     try std.testing.expect(fsutil.fileExists(config_path));
     try std.testing.expect(std.mem.endsWith(u8, config_path, ".var\\config.json") or std.mem.endsWith(u8, config_path, ".var/config.json"));
+}
+
+test "config set persists a typed boolean through the canonical file owner" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/workspace", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+
+    const config_path = try ensure(std.testing.allocator, workspace);
+    defer std.testing.allocator.free(config_path);
+    try writeConfigKey(std.testing.allocator, workspace, "runtime", "full_access_mode", .{ .bool = true });
+
+    var policy = try loadRuntimePolicy(std.testing.allocator, workspace);
+    defer policy.deinit(std.testing.allocator);
+    try std.testing.expect(policy.full_access_mode);
 }
 
 test "config environment values override runtime defaults and wire api is typed" {

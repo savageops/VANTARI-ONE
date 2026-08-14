@@ -49,20 +49,13 @@ plugin runtime, TUI expansion, or autonomous-repair mechanism without a current
 owner decision and evidence. Historical evidence stays readable, but a prior
 closeout cannot override current source and runtime proof.
 
-The current source-only posture slice adds `runtime.log_level` with a
-default-silent projection, validated `normal`/`full` detail levels, and
-next-turn hot-loading. It also adds `agent_routes.prompt_modes` as a reuse of
-the provider/model route owner for `orchestrate`, `build`, `align`, and `plan`.
-Debug `19/19` and `2,119/2,119` pass; installed promotion is intentionally
-deferred. Move 57a now closes the renderer-backed TUI settings seam with
-finite named themes and top/bottom status placement; focused TUI is `126/126`
-and the current Debug graph is `2,129/2,129`. Moves 56–57 close the source eval
-parity seam: Python and Bun use one workspace-plus-session kernel owner,
-bounded protocol, timeout, and isolation; their historical source proof is
-`2,121/2,121`. Move 58 owns the canonical process-supervisor handoff. Move
-57b now closes the root question crash boundary and compact review panel in
-source: focused TUI `129/129`, full Debug `2,136/2,136`, and source ReleaseFast
-`9/9`; installed provider-driven response remains explicitly open.
+The current posture slice is closed through the installed frontier: one
+`runtime.log_level`/`agent_routes.prompt_modes` owner, finite TUI settings,
+Python/Bun eval, the shared process supervisor, and the root question panel.
+The current graph passes Debug `19/19` and `2,184/2,184`; source and installed
+ReleaseFast SHA-256 match. Installed provider-driven questions pass in all four
+prompt modes, while DAP review, TTSR adversarial recovery, reference pressure,
+and nested hidden-TUI launch remain explicit typed boundaries.
 
 | Order | Priority | Finding | Owner surface | Status |
 |---|---|---|---|---|
@@ -70,11 +63,11 @@ source: focused TUI `129/129`, full Debug `2,136/2,136`, and source ReleaseFast
 | 11 | P0 | [Persistent agent worker and scheduler arbitration](11-persistent-agent-worker-and-scheduler-arbitration.md) | agents, scheduler, host | closed 2026-08-13 after installed lifecycle mesh and 036h review |
 | 12 | P0 | [Test isolation and runtime hygiene](12-test-isolation-and-runtime-hygiene.md) | build/test root, install/state hygiene | closed 2026-08-12 |
 | 13 | P0 | [Concurrent ledgers and replay identity](13-concurrent-ledgers-and-replay-identity.md) | sessions, protocol, TUI cursor | closed 2026-08-12 |
-| 20 | P1 | [Tool capability truth](20-tool-capability-truth.md) | eval, DAP, TTSR, search, capability probes | pending |
-| 21 | P1 | [Work-state and prompt consolidation](21-work-state-and-prompt-consolidation.md) | tickets, workspace tools, prompt builder | ticket-policy slice closed; remaining work-state/prompt duplication pending |
+| 20 | P1 | [Tool capability truth](20-tool-capability-truth.md) | eval, DAP, TTSR, search, capability probes | closed 2026-08-14 with installed eval/capability evidence and typed DAP/TTSR boundaries |
+| 21 | P1 | [Work-state and prompt consolidation](21-work-state-and-prompt-consolidation.md) | tickets, workspace tools, prompt builder | closed 2026-08-14 through ticket-only, native-schema, prompt-mode, and installed readback owners |
 | 22 | P1 | [Documentation and WIP truth](22-documentation-and-wip-truth.md) | project records, public docs, 021/035/036/PLUG | closed 2026-08-13 after Move40 reconciliation |
 | 30 | P2 | [TUI operator hierarchy](30-tui-operator-hierarchy.md) | TUI read model; Agent Hub deferred by Move 50 YAGNI decision | closed 2026-08-13 |
-| 31 | P2 | [Gated harness repair loop](31-gated-harness-repair-loop.md) | failure evidence, approval, replay, regression | pending |
+| 31 | P2 | [Retired repair/replay control plane](31-gated-harness-repair-loop.md) | YAGNI deletion; canonical session, ticket, event, review, and write-intent owners retained | retired 2026-08-14; reopen only with a fresh owner map |
 
 ## Promotion floor
 
@@ -86,9 +79,9 @@ The ledger closes only when:
 4. Every event consumer advances by ledger sequence.
 5. Built and installed ReleaseFast hashes match.
 6. A live provider/tool turn produces replayable session and event evidence.
-7. Chain 035 and reopened 036 pass a new terminal review; 036 now passes and is
-   archived, while 035 remains independently pending on its installed provider/
-   cost gate.
+7. Chain 035 and reopened 036 remain archived with current provider/cost
+   evidence; provider-parity gaps fail closed at their existing auth/capability
+   owners.
 
 ## Source-message proof
 

@@ -13,9 +13,11 @@ durability, budgets, evidence, recovery, and irreversible-action gates.
 
 TUI Shift+Tab cycles the session-local prompt mode `orchestrate`, `build`,
 `align`, `plan`; the next `session/send` carries the exact label, omission
-defaults to `orchestrate`, and unknown labels fail before execution. Prompt mode
-changes provider guidance only; it does not change the executor, tools, access,
-model, or capacity.
+defaults to `orchestrate`, and unknown labels fail before execution. Root
+`orchestrate` enforces the delegation catalog; `build`, `align`, and `plan`
+retain normal root tools. CLI consumers use `--prompt-mode`; there is no
+persistent orchestrator-only policy. Child profiles, access, model, capacity,
+and executor state remain unchanged.
 
 The assembled provider-facing system prompt is bounded by
 `context.prompt_budget_tokens` (default `8192`) through the existing context
@@ -97,39 +99,11 @@ Rules:
   `write_file`/`append_file`/`replace_in_file`, commit measured effect evidence
   after mutation, and close unresolved reservations as `abandoned` at safe cold
   start. No rollback is claimed without byte evidence.
-- The gated repair path is `repair_candidate` → operator-only `repair/approve`
-  → operator-only `repair/apply`. Candidates carry the exact `replace_in_file`
-  JSON payload and read tag but never mutate. Apply verifies event identity,
-  target, patch hash, and source baseline, then dispatches the existing reviewed
-  writer; `var1.repair_candidate_applied.v1` plus the committed write intent
-  makes retries no-op. Exact-input rerun, evaluation, rollback, and regression
-  promotion remain Moves 77–80.
-- `repair/rerun` is operator-only and requires the immutable repair receipt plus
-  a later applied receipt. It creates a fresh linked child, routes the recorded
-  input/model/provider/mode through `session/send`, and gates input/config
-  hashes before provider I/O. A mismatch emits no `turn_started`; a matching
-  treatment uses the normal provider lane. Started/completed relationship
-  receipts remain in the existing event spine; interrupted work is not retried
-  implicitly.
-- Move 78 appends one idempotent `var1.repair_evaluation.v1` receipt to the
-  source event spine. It compares baseline/treatment outcome, turn latency,
-  observable tool-span side effects, token/cost evidence, exact identity and
-  provider dispatch, and optional repair/rerun bounds. File-effect certainty
-  remains `var1.tool_effect.v1`; no evaluator worker, second ledger, or executor
-  mutation exists.
-- Move 79 adds operator-only `repair/rollback` on the same event spine. It
-  binds a failed evaluation to candidate/approval/applied sequences, rejects
-  stale source or full-file hashes before mutation, and routes an exact inverse
-  `replace_in_file` payload through the reviewed writer. A completed
-  `var1.repair_rollback.v1` receipt requires the candidate pre-apply hash;
-  started/completed rows retain the failed hypothesis and deterministic retry
-  identity makes repeats no-op.
-- Move 80 closes the repair loop on the same event spine: a passing treatment
-  over a failed/cancelled baseline appends one idempotent
-  `var1.repair_regression.v1` receipt. Cold-start `session/get`/`session/list`
-  closes orphaned rerun and rollback starts exactly once; it never replays
-  provider I/O or file mutation, and ambiguous bytes remain
-  `recovery_required`. No patcher, worker, git reset, or second ledger exists.
+- The repair/replay control plane is retired. The canonical capability remains
+  the durable session transcript, typed terminal/failure evidence, review gate,
+  and existing write-intent owner. Reopen it only after an owner-mapped YAGNI
+  review proves a concrete gap; no second ledger, patcher, evaluator worker,
+  rollback queue, or hidden retry.
 - runtime.full_access_mode is false by default; resolved child routes carry it
   into the shared file/search/LSP/shell execution context, and it never relocates
   .var.
@@ -169,9 +143,9 @@ Rules:
   terminal/error boundaries clear stale panel state, active Ctrl-C uses the same
   input cancellation route, and the session cancel/shutdown path wakes the same broker wait. Child profiles omit the tool and fail closed
   with `InputUnavailable`; do not add a question poller or second status bus.
-- Root normal, root-agent, and orchestrator-only catalogs retain `ask_user`,
-  while the orchestrator allow-list continues to deny artifact and command
-  tools. `orchestrate`, `build`, `align`, and `plan` share the same Vaxis-tested
+- Every root prompt mode retains `ask_user`; only root `orchestrate` denies
+  artifact and command tools through the enforced delegation catalog.
+  `orchestrate`, `build`, `align`, and `plan` share the same Vaxis-tested
   question controller.
 - TTSR matches stop provider reads through one typed stream abort hook before
   terminal completion. The executor persists correction plus `rule_injected`

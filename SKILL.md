@@ -80,13 +80,16 @@ second runtime owner.
   the renderer; terminal/error boundaries clear any stale panel, and active
   Ctrl-C uses the same input cancellation route. Child profiles are headless and must continue or report
   `InputUnavailable`; never create a polling question loop.
-- `ask_user` must appear in the root normal, root-agent, and orchestrator-only
-  catalogs and pass the same dispatch allow-list. Child profiles must not gain
+- `ask_user` must appear in every root prompt-mode catalog and pass the same
+  dispatch allow-list. Only root `orchestrate` narrows the catalog to
+  delegation, collaboration, and operator input. Child profiles must not gain
   operator-input capability. Prompt modes reuse the one question controller.
 - In the TUI, Shift+Tab cycles the session-local prompt lens
   `orchestrate -> build -> align -> plan`; the next `session/send` applies one
-  provider-visible layer and defaults to `orchestrate`. It does not change
-  tools, access, model, capacity, or executor behavior.
+  provider-visible layer and defaults to `orchestrate`. The selected root mode
+  also owns the tool posture; the CLI mirrors it with `--prompt-mode` instead
+  of a persistent `agents.orchestrator_only` setting. Child profiles, access,
+  model, capacity, and executor behavior remain unchanged.
 - The single TUI footer row projects `status · prompt mode · model · effort ·
   context used/capacity/percent · remaining` without wrapping; unknown context
   stays `ctx — / capacity`, estimated context carries `~`, and narrow fitting
@@ -140,41 +143,19 @@ requires source/installed SHA-256 equality and the installed consumer path.
 - TTSR matches use the provider reader's typed abort hook. Source proof requires
   the read to stop before terminal completion, durable correction plus
   `rule_injected` evidence, and retry through the existing executor; installed
-  provider proof remains a separate promotion gate.
+  proof records abort/injection and explicitly does not claim adversarial
+  recovery success.
 - Real file tools reserve a session/tool-call write intent before mutation and
   commit the measured effect afterward. Cold-start reconciliation appends one
   `abandoned` terminal row for unresolved reservations; it never claims a
-  rollback that was not observed. Move 62 remains source-only until installed
-  promotion is explicitly scheduled.
-- The gated repair path is `repair_candidate` → operator-only `repair/approve`
-  → operator-only `repair/apply`. The candidate patch is the exact
-  `replace_in_file` JSON payload, including its `read_file` tag. Apply verifies
-  candidate/approval sequence and ID, target, patch hash, and source baseline,
-  then dispatches the existing reviewed writer. The applied receipt and
-  committed intent make repeated requests no-op; Moves 77–80 still own exact
-  rerun, evaluation, rollback, and regression promotion. Never expose repair
-  approval as a model tool or add a patcher.
-- Move 77 now owns operator-only `repair/rerun`: require the immutable replay
-  receipt and later applied receipt, create a fresh linked treatment child, and
-  send the recorded input/model/provider/mode through `session/send`. Gate
-  input/config hashes before provider I/O; changed identity must not emit
- `turn_started`. Keep relationship receipts in the existing event spine and
-  leave interrupted starts for Move 80 reconciliation.
-- Move 78 now appends one idempotent `var1.repair_evaluation.v1` receipt to the
-  source event spine. Compare baseline/treatment outcomes, turn latency,
-  conservative observable tool-span side effects, token/cost evidence, exact
-  identity/provider invariants, and optional bounds. Keep file-effect certainty
-  in `var1.tool_effect.v1`; do not add an evaluator worker, ledger, or mutation
-  path. Move 79 now owns operator-only `repair/rollback`: bind a failed
-  evaluation to the candidate/approval/applied edge, require current source and
-  full-file hashes, route an exact inverse payload through reviewed
-  `replace_in_file`, and record completion only after the candidate pre-apply
-  hash is restored. Move 80 now owns regression promotion and cold-start repair
-  reconciliation: a passing treatment over a failed/cancelled baseline emits
-  one idempotent `var1.repair_regression.v1` receipt, while orphaned rerun and
-  rollback starts close exactly once from the existing event spine without
-  repeating provider or file mutation. Do not add a patcher, worker, git reset,
-  or second ledger.
+  rollback that was not observed. Move 62 is installed-proven through the
+  canonical `write_file` review/effect and intent reserve/commit path; source
+  reconciliation remains covered by the same session owner.
+- The repair/replay control plane is retired. Keep sessions, transcripts,
+  typed terminal/failure evidence, review gates, and the existing write-intent
+  owner as the canonical path. Reopen repair only after a fresh owner map proves
+  a concrete capability gap; do not add a second ledger, patcher, evaluator
+  worker, rollback queue, or hidden retry.
 - Browser routes are redacted prototypes. Owner routes are loopback-only and
   token/generation gated.
 - Scheduler leadership is source-proven with one crash-released lock and
@@ -183,9 +164,9 @@ requires source/installed SHA-256 equality and the installed consumer path.
   child materialization. The source Windows lifecycle mesh proves queue-only
   assignment, TUI detach, exact owner-tree loss, generation replacement,
   same-session resume, nested direct/group/parent delivery, one terminal ticket,
-  and zero proof-owned processes. Failure and cancellation project
-  `repair_required`; closure still requires approval, exact rerun, and regression
-  evidence. Installed hash-matched worker-kill/restart proof passes through the
+  and zero proof-owned processes. Failure and cancellation remain terminal
+  ticket evidence; no repair closure state is required. Installed hash-matched
+  worker-kill/restart proof passes through the
   real binary; exactly-once external effects remain behind the write-intent
   ledger. Do not infer arbitrary external-effect certainty from lifecycle proof.
 

@@ -259,18 +259,24 @@ the TUI and the next `session/send` carries the exact lower-case label. The
 host rejects unknown labels before session lookup or provider execution. The
 executor carries the typed value through initial prompt assembly, interjection,
 compaction, child parking/convergence, wake, and provider-overflow rebuilds.
-`core/prompts/builder.zig` inserts one provider-visible layer; mode selection
-does not change the executor, tool catalog, access policy, model, or agent
-capacity. Other clients retain the compatibility default.
+`core/prompts/builder.zig` inserts one provider-visible layer. A root
+`orchestrate` run also derives the delegation catalog and dispatch allow-list;
+`build`, `align`, and `plan` retain the normal root catalog. Child profiles,
+access, executor state, model, and agent capacity remain unchanged. The CLI
+uses `--prompt-mode`; the persistent `agents.orchestrator_only` key is absent
+from new and live config, while the validator keeps older files readable and
+inert.
 
-Move 43 proof: Debug passes `19/19` build steps and `1,996/1,996` tests;
-ReleaseFast/install passes `9/9`; installed TUI startup accepted Shift+Tab and
-blank startup/exit completed. Source and installed SHA-256 match
-`145F08FF38FA94D325006B4CC78A8C0EFD83A885E9A2F8DBA6152CFA20BFC1EC`; the
-proof-owned owner/kernel tree was explicitly torn down and the final installed
-VANTARI process census is zero. The seven-source harvest and rejected
-registry/executor complexity are recorded in
-`.docs/research/2026-08-13-prompt-mode-move43.md`.
+Move 43 proof: Debug passes `19/19` build steps and `2,184/2,184` tests;
+ReleaseFast/install passes `9/9`; installed provider turns pass in both
+`build` and default `orchestrate`, installed `build` `list_files` persists
+tool lifecycle seqs `49–53` and `242–246`, response `250`, and terminal `251`, and a real PTY
+renders the Shift+Tab transition from `orchestrate` to `build`. Source and
+installed SHA-256 match
+`85CE5E58BCDDBEBBDD6E04CA4978E8E9A2535CBA2EA50B76016841E3275D1481`; final
+source/installed process census is zero. The harvest and owner decision are
+recorded in `.docs/research/2026-08-13-prompt-mode-move43.md` and
+`.docs/research/2026-08-14-prompt-mode-orchestrator-owner.md`.
 
 Move 44 closes the compact TUI status row. `formatFooterMetaWithPool` remains
 the single projection owner and emits status, active `PromptMode`, model,
@@ -384,9 +390,10 @@ controller uses Enter/Space and inline `f / Other`, and `input/respond` wakes
 the session-scoped host broker. Child profiles omit the tool and fail with
 `InputUnavailable`. Session cancel, owner shutdown, terminal replay, duplicate
 cross-session request ids, empty answers, and Other serialization are covered by
-the same Debug graph. The installed catalog exposes `ask_user`; a real
-installed provider-driven question response remains the next consumer probe,
-not an unclaimed proof.
+the same Debug graph. The installed catalog exposes `ask_user`; the installed
+provider-driven `orchestrate` question response now passes through the
+existing broker and `input/respond` owners. Durable proof is
+`.docs/research/2026-08-14-roadmap-24-installed-input-response.json`.
 
 The follow-on question-panel repair is source-complete. `ask_user` and response
 serialization free only initialized slices, removing the late-invalid batch
@@ -451,133 +458,40 @@ steps and `2,178/2,178` tests; source ReleaseFast is `9/9` at SHA-256
 Installed promotion remains deferred. Receipt:
 `.docs/todo/changelog/064-failure-receipts-move71.md`.
 
-## Move 72 immutable replay receipt boundary — 2026-08-14
+## Retired repair/replay control plane — 2026-08-14
 
-Move 72 appends one `var1.repair_receipt.v1` event to the existing
-`events.jsonl` ledger at root-turn admission, before context compilation or
-provider dispatch. It retains the exact original input and selected model,
-records `replay_input_immutable: true`, and hashes the transient effective
-config, canonical tool catalog, tracked environment, and source baseline.
-The source baseline is `git:<commit>` when Git is available and `unavailable`
-otherwise. Raw config, tool, and environment snapshots are not durable. A
-regression embeds an API-key-like value in a config snapshot and proves it is
-absent from the stored receipt.
+The Move 72–80 self-repair and replay chain was removed during the YAGNI pass.
+It added a second control plane across evaluation, host RPC, tool catalog,
+protocol types, and recovery reconciliation without a current consumer. The
+canonical session transcript, typed terminal/failure evidence, review gate,
+write-intent ledger, and existing provider/session path remain.
 
-Full Debug and ReleaseFast are `19/19` steps and `2,180/2,180` tests. The
-source ReleaseFast build is `9/9` at SHA-256
-`8E15F5ED22631B232EFF2F5FE2FF1E6B336250D22C61E0313645A6BEAB256639`.
-Installed promotion remains deferred; the preserved installed owner remains
-on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
-Receipt: `.docs/todo/changelog/066-repair-receipts-move72.md`.
+The removed proposal, approval, apply, rerun, evaluation, rollback, regression,
+and cold-start repair handlers are not supported. Reopen them only after a
+fresh owner map proves a concrete capability gap and a smaller reusable owner.
+See research/2026-08-14-yagni-repair-replay-retirement.md.
 
-## Current causal diagnosis boundary — 2026-08-14
+## Move 84 performance telemetry boundary — 2026-08-14
 
-Move 73 keeps diagnosis inside the existing failed or timed-out
-`turn_terminal.failure` payload. `shared/protocol/events.zig` maps normalized
-failure class and phase to one fixed invariant label, derives a deterministic
-`diagnosis-<sha256>` ID, and records the exact causal span from
-`session_started.seq` through `turn_terminal.seq`. The record is
-`var1.repair_diagnosis.v1`; it contains no model-generated cause or free-form
-telemetry. Completed and cancelled turns remain diagnosis-free.
+The unconnected `CounterRegister` and zero-valued `VAR1 stats` command were
+deleted. `CounterRegister.record` had no production caller; the CLI created a
+fresh empty register, and no health/RPC owner projected the result. Runtime
+health, typed turn usage, event sequence, and session-ledger evidence remain
+the active observability surfaces. `stats` is rejected before provider
+dispatch, and the command is not advertised. Reopen only after a measured
+bottleneck identifies one canonical owner, explicit consumer, and durable
+readback path. See research/2026-08-14-performance-telemetry-move84.md.
 
-Full Debug and ReleaseFast are `19/19` steps and `2,180/2,180` tests. The
-source ReleaseFast build is `9/9` at SHA-256
-`F0D19C0BE1E92EFD59986437731B2B96884CE81F7E8703137C45B0046E861137`.
-Installed promotion remains deferred; the preserved installed owner remains
-on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
-Receipt: `.docs/todo/changelog/067-repair-diagnosis-move73.md`.
+## Moves 85–87 YAGNI deletion boundary — 2026-08-14
 
-## Current repair-candidate boundary — 2026-08-14
-
-Move 74 composes the candidate proposal into the existing tool registry/runtime
-and `events.jsonl` owner. `repair_candidate` resolves the target through shared
-access mode, requires an existing inspected file, captures its before hash,
-validates the exact `replace_in_file` JSON payload/tag, hashes the
-operation/path/patch descriptor, and records expected/current source baselines.
-It never writes, reserves a write intent, stores patch body, or allows
-mutation. A drift mismatch appends `baseline_conflict` evidence and
-returns typed `RepairBaselineConflict`; a matching baseline returns `ready` but
-still reports `mutation_allowed:false`. Move 75 adds the explicit operator
-approval stage; Moves 76–80 own application, exact-input replay, evaluation,
-rollback, and promotion.
-
-Full Debug and ReleaseFast are `19/19` steps and `2,184/2,184` tests. The
-source ReleaseFast build is `9/9` at SHA-256
-`4D348DF8F6E19A7D79F54E6DE2987C7C5369E6630B75E3BB667EFE274E87DFA3`.
-The existing full-frame question modal is source-verified across all prompt
-modes; installed promotion remains deferred and the preserved installed owner
-remains on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
-Receipt: `.docs/todo/changelog/069-repair-approval-boundary.md`.
-
-## Current repair-application boundary — 2026-08-14
-
-Move 76 closes application without adding a patcher. The operator-only
-`repair/apply` RPC accepts the exact `replace_in_file` JSON payload, including
-the `read_file` tag, and verifies the candidate event sequence/id, approval
-event sequence/id, operation, resolved target, patch hash, and expected source
-baseline. It then dispatches the existing reviewed tool path. The normal file
-inspection ledger, stale-tag rejection, effect envelope, and write-intent
-reserve/commit remain the mutation owners.
-
-One `var1.repair_candidate_applied.v1` receipt records the successful effect.
-The deterministic approval-bound tool-call ID and a process-local apply mutex
-make concurrent/repeated requests no-op after a committed intent or applied
-receipt. The event stores hashes and identity only; it does not store patch
-body or source bytes.
-
-The Move 76 integration proof applies one approved edit, verifies the
-reserved → committed intent pair and applied receipt, then retries without a
-second mutation or duplicate receipt. Full Debug is `19/19` steps and
-`2,191/2,191` tests; installed promotion remains intentionally deferred.
-The source ReleaseFast build is `9/9` at SHA-256
-`E57D6491A7385BAF945CA6AA7938FA15CC5B971045A3A735950F8E10EB6EB2A2`.
-Receipt: `.docs/todo/changelog/071-repair-apply-move76.md`.
-
-## Current exact repair-replay boundary — 2026-08-14
-
-Move 77 adds operator-only `repair/rerun` after approved application. The
-handler requires the immutable `var1.repair_receipt.v1` and a later
-`var1.repair_candidate_applied.v1`, derives a deterministic source/evidence
-identity, and creates a fresh child linked by `continued_from_session_id`.
-The child inherits the source access scope but owns its own transcript and
-event ledger; the recorded model, provider identity, prompt mode, and exact
-input route through the existing `session/send` and executor/provider lane.
-
-The executor appends the child replay receipt, then compares the exact input and
-effective configuration hash before context compilation or provider I/O. A
-mismatch persists `repair_replay_identity_mismatch` and never emits
-`turn_started`; a matching treatment records the normal provider events and
-assistant output. The source event spine carries compact started/completed
-relationship receipts. Completed requests are idempotent; an incomplete start
-is explicit in-progress evidence for the later cold-start reconciliation move.
-
-Full Debug and ReleaseFast are `19/19` steps and `2,193/2,193` tests. The
-source ReleaseFast build is `9/9` at SHA-256
-`EF77BFE3144819008B027ADDB0EF66A945A0CD0CA33CC9FA76629E77E03EB07A`.
-Installed promotion remains deferred; the preserved installed owner remains
-on `F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
-Receipt: `.docs/todo/changelog/072-repair-rerun-move77.md`.
-
-## Current repair-approval boundary — 2026-08-14
-
-The operator-only `repair/approve` RPC binds candidate event sequence/id, the
-exact stored patch hash, and the expected source baseline. The event owner
-rechecks the current source baseline before appending one
-`var1.repair_candidate_approval.v1` receipt. Repeating the same approval
-identity returns its existing sequence; mismatches fail before mutation. The
-receipt reports `mutation_allowed:true` as approval evidence only: it stores no
-patch body, does not write files, and does not reserve a write intent. Move 76
-now applies the approved candidate through the existing reviewed tools; the
-application boundary is recorded above.
-
-Full Debug and ReleaseFast are `19/19` steps and `2,184/2,184` tests. The
-source ReleaseFast build is `9/9` at SHA-256
-`4D348DF8F6E19A7D79F54E6DE2987C7C5369E6630B75E3BB667EFE274E87DFA3`.
-The full-frame question modal remains source-verified across all prompt modes;
-installed promotion is deferred and the preserved installed owner remains on
-`F5C78C9D1E2198015F1DA461CCDD6DEC0039EA62002B4F2B2A8BF69182E2B692`.
-Receipt: `.docs/todo/changelog/069-repair-approval-boundary.md`.
-
+No current measurement identifies allocator pressure that requires quota
+partitioning, and no mounted plugin or plugin JSON-RPC process exists in the
+consumer graph. Moves 85–87 are therefore delete-complete. The existing
+Move 85 deleted the unused ScopedArena/quota shell and its turn-loop lifecycle
+calls. Moves 86–87 remain contract-only delete decisions. The existing
+allocator, tool definition/availability, review, process, receipt, and cleanup
+owners remain available for a future concrete consumer; no quota registry,
+plugin discovery path, or plugin executor is added speculatively.
 ## Current task-branch context boundary — 2026-08-14
 
 Move 70 keeps the existing execution receipt, context compiler, session ledger,
@@ -797,7 +711,7 @@ filesystem mutation and `committed` after the measured after-hash and byte
 metric. A non-running or proven-stale session appends one `abandoned` terminal
 row for each reservation with no commit at cold start. No rollback simulator or
 second mutation manager is implied: an abandoned row records indeterminate
-effect state for the later repair loop.
+effect state for operator review.
 
 ## Persistent execution owner
 
@@ -925,13 +839,11 @@ zero-process cleanup.
 
 ## Self-repair boundary
 
-The runtime exposes the evidence needed for repair: typed failures, bounded command output, session ledgers, ticket leases, pool health, and replayable child events. The repair loop is deliberately gated:
-
-```text
-trace -> diagnose -> approve exact change -> rerun canonical path -> persist regression evidence
-```
-
-Health and TUI telemetry are observability. They do not claim an autonomous patcher or silently mutate code.
+The optional self-repair and replay control plane is retired. Typed failures,
+bounded command output, session ledgers, ticket leases, pool health, review
+gates, and write-intent evidence remain observability and operator-action
+boundaries; they do not imply an autonomous patcher, hidden rerun, or regression
+ledger.
 
 ## Current proof boundary
 
@@ -1144,8 +1056,8 @@ Health and TUI telemetry are observability. They do not claim an autonomous patc
   six unique received messages, and zero transcript copies at
   `.zig-cache/owner-proofs/ddc238496ee944a2bb586db735e6da2a`; the installed
   lifecycle root is `.zig-cache/owner-proofs/825a25155fa64fe78b26a47789025ec9`.
-  Failed and cancelled terminal sessions project `repair_required`; repair closure
-  still requires approval, exact rerun, and regression evidence. The installed
+  Failed and cancelled terminal sessions remain terminal ticket evidence; ticket
+  closure does not depend on a repair artifact chain. The installed
   run passes. Move 62 retains arbitrary external-effect certainty.
 - `git diff --check` exits 0 with line-ending warnings only.
 
@@ -1156,3 +1068,100 @@ for the executable closure order. The value-ranked implementation order is
 [`workspace.json`](workspace.json) carries
 the machine-readable boundary and [`../AGENTS.md`](../AGENTS.md) remains the
 normative contract.
+## Move 88 installer boundary (2026-08-14)
+
+`apps/backend/scripts/install_windows.ps1` keeps one staged copy/backup/move
+owner and now refuses to force-stop installed processes. It requires exactly
+one `.var/runtime/execution-owner.json` projection matching the process PID,
+executable, current workspace, port, and token; it then calls the authenticated
+`POST /owner/shutdown` route and waits for zero exact-path processes before
+replacement. A stale, missing, or ambiguous projection is a typed operational
+blocker, not permission to kill the process.
+
+PowerShell parsing passed. The live `-SkipBuild` probe first failed closed on
+an unrelated preserved owner, then passed after the exact authenticated owner
+boundary was reconciled; no process was force-stopped. The installed binary
+now matches the current source ReleaseFast SHA-256
+`85CE5E58BCDDBEBBDD6E04CA4978E8E9A2535CBA2EA50B76016841E3275D1481`; the
+previous binary remains as a timestamped `.bak`. Installed `--help`,
+`health --json`, `tools --json`, `auth status --json`, and `workspace` probes
+all exited `0`, and the catalog reported 33 tools including `ask_user` and
+`replace_in_file`. The installed owner lifecycle proof passed `8/8` clients,
+graceful shutdown, crash recovery, generation replacement, and final zero
+proof-owned processes. The final source/installed exact-path census was zero;
+an unrelated user-scoped owner is preserved rather than force-stopped when it
+exists.
+The post-retirement source graph passes `19/19` steps and `2,184/2,184` tests.
+
+## Roadmap 24 source provider probe (2026-08-14)
+
+The current source ReleaseFast binary completed a real Z.AI provider smoke
+with the exact output `RELEASE_MESH_CURRENT_OK` and exit code `0`. The
+ReleaseFast build uses pinned Zig seed `0`; two consecutive builds produced
+the same artifact. Source health
+also passed with provider `zai`, model `glm-5.2`, active subscription status,
+and the repository workspace. The session persisted `assistant_delta` seqs
+`243–244`, `assistant_response` seq `245`, and one `var1.turn_terminal.v1` at
+seq `246` with `outcome=completed`, exact usage, and no failure. Runtime state
+landed in the canonical project-local `.var/sessions` ledger after removing the
+process-only `VANTARI_HOME` override. The authenticated owner shutdown was
+accepted; final source exact-path process census was zero.
+Full evidence is in
+[`research/2026-08-14-roadmap-24-provider-probe.md`](research/2026-08-14-roadmap-24-provider-probe.md).
+
+The default environment still sets `VANTARI_HOME`, which selects the user
+runtime root before `.var`. Keep that precedence explicit in the filesystem
+owner; do not add a fallback, replay path, or repair subsystem. Installed base
+health, config validation, catalog, auth, and workspace resolution now pass.
+The current build-mode native `list_files` turn persisted tool lifecycle seqs
+`49–53` and `242–246`, response `250`, and terminal `251`; a real PTY rendered the default
+`orchestrate` mode, accepted CSI Shift+Tab, rendered `build`, and exited `0`.
+The installed frontier now also proves write/effect review, clean cancellation
+settlement, persistent Python/Bun eval, settings persistence, scheduler/owner
+replacement, and summary/event readback. DAP review, TTSR adversarial recovery,
+reference pressure, and nested hidden-window TUI launch remain explicit typed
+boundaries; no fallback or alternate owner was added.
+The installed provider-driven question proof now passes through the existing
+`ask_user`/`InputBroker`/`input/respond` owners with 11 event rows, accepted
+response evidence, exact `QUESTION_RESPONSE_OK` output, and graceful EOF exit.
+The installed explicit `build` proof passes through `read_file` and
+`write_file`, commits one write intent, and retains the `var1.tool_effect.v1`
+envelope in the session transcript. Durable proof is
+`.docs/research/2026-08-14-roadmap-24-installed-write-effect.json`.
+The real-provider question attempt did not emit `input_requested` before
+bounded cancellation; no fallback or alternate question system was added.
+Durable proof: [`research/2026-08-14-roadmap-24-installed-input-response.json`](research/2026-08-14-roadmap-24-installed-input-response.json) and [`research/2026-08-14-roadmap-24-installed-write-effect.json`](research/2026-08-14-roadmap-24-installed-write-effect.json).
+
+## Moves 81–83 YAGNI closure (2026-08-14)
+
+The checkpoint-addressed agent branch, stored session/event read models, and
+existing execution budgets already own the useful capability. No operator
+consumer justifies a public `session/fork` RPC, attention index, or per-session/
+pool quota ledger. `core/agents/service.zig` plus immutable receipts and
+`Supervisor` retain branch identity; `session/list`/`session/get` retain bounded
+discovery; `max_steps`, tool caps, `ExecutionBudget`, provider usage precision,
+and fixed-pool capacity retain execution bounds. Reopen only from measured
+demand with one owner, durable readback, and adversarial proof.
+
+The generated release manifest is
+[`research/2026-08-14-roadmap-24-release-manifest.json`](research/2026-08-14-roadmap-24-release-manifest.json).
+It records current source Debug `19/19` and `2,184/2,184`, source ReleaseFast
+SHA-256 `85CE5E58BCDDBEBBDD6E04CA4978E8E9A2535CBA2EA50B76016841E3275D1481`,
+the same installed SHA-256, and a final zero installed-process census. The
+manifest also builds ReleaseFast before hashing, runs `tools --json` in an
+isolated runtime root, and records authenticated source-owner cleanup.
+Promotion is `promotable`; the current frontier is closed with explicit typed
+boundaries recorded in
+[`research/2026-08-14-roadmap-24-completion-audit.md`](research/2026-08-14-roadmap-24-completion-audit.md).
+
+## Proactive correctness boundary — 2026-08-14
+
+Repair/replay is retired. The current system proves the real provider, tool,
+process, storage, owner, scheduler, and installed consumer paths, then fails
+closed when capability or environment evidence is absent. It does not add a
+reactive repair ledger, replay platform, hidden fallback, or detached launcher
+to turn an unproven path green. Reopen a deleted repair slice only from a
+measured consumer gap with one reusable owner and durable readback.
+
+Compact installed evidence:
+[`research/2026-08-14-roadmap-24-installed-frontier-proof.json`](research/2026-08-14-roadmap-24-installed-frontier-proof.json).

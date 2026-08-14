@@ -474,81 +474,6 @@ test "real write tools leave committed intent evidence in the owning session" {
     try std.testing.expect(std.mem.indexOf(u8, replace_output, "\"effect\":") != null);
 }
 
-test "repair candidate records ready and drift-blocked proposals without mutation" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const workspace_root = try tmpWorkspacePath(std.testing.allocator, &tmp);
-    defer std.testing.allocator.free(workspace_root);
-    var session = try VAR1.core.session_store.initSession(std.testing.allocator, workspace_root, "repair candidate");
-    defer session.deinit(std.testing.allocator);
-
-    const file_path = try VAR1.shared.fsutil.join(std.testing.allocator, &.{ workspace_root, "notes", "candidate.zig" });
-    defer std.testing.allocator.free(file_path);
-    try VAR1.shared.fsutil.writeText(file_path, "const answer = 1;\n");
-
-    const baseline = try VAR1.core.evaluation.events.sourceBaseline(std.testing.allocator);
-    defer std.testing.allocator.free(baseline);
-
-    var read_call = try makeToolCallWithId(std.testing.allocator, "call-candidate-read", "read_file", "{\"path\":\"notes/candidate.zig\"}");
-    defer read_call.deinit(std.testing.allocator);
-    const read_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, sessionExecCtx(workspace_root, session.id), read_call);
-    defer std.testing.allocator.free(read_output);
-    const tag_start = (std.mem.indexOf(u8, read_output, "#") orelse return error.TestExpectedEqual) + 1;
-    const tag_end = std.mem.indexOfScalarPos(u8, read_output, tag_start, ']') orelse return error.TestExpectedEqual;
-    const tag = read_output[tag_start..tag_end];
-    const ready_patch = try std.fmt.allocPrint(
-        std.testing.allocator,
-        "{{\"path\":\"notes/candidate.zig\",\"old_text\":\"const answer = 1;\",\"new_text\":\"const answer = 2;\",\"tag\":\"{s}\"}}",
-        .{tag},
-    );
-    defer std.testing.allocator.free(ready_patch);
-
-    const ready_args = try std.fmt.allocPrint(
-        std.testing.allocator,
-        "{{\"candidate_id\":\"candidate-ready\",\"failure_id\":\"failure-1\",\"path\":\"notes/candidate.zig\",\"operation\":\"replace_in_file\",\"patch\":{f},\"expected_source_baseline\":{f}}}",
-        .{ std.json.fmt(ready_patch, .{}), std.json.fmt(baseline, .{}) },
-    );
-    defer std.testing.allocator.free(ready_args);
-    var ready_call = try makeToolCallWithId(std.testing.allocator, "call-candidate-ready", "repair_candidate", ready_args);
-    defer ready_call.deinit(std.testing.allocator);
-    const ready_output = try VAR1.core.tool_runtime.execute(std.testing.allocator, sessionExecCtx(workspace_root, session.id), ready_call);
-    defer std.testing.allocator.free(ready_output);
-    try std.testing.expect(std.mem.indexOf(u8, ready_output, "STATUS ready") != null);
-
-    const stale_patch = try std.fmt.allocPrint(
-        std.testing.allocator,
-        "{{\"path\":\"notes/candidate.zig\",\"old_text\":\"const answer = 1;\",\"new_text\":\"const answer = 3;\",\"tag\":\"{s}\"}}",
-        .{tag},
-    );
-    defer std.testing.allocator.free(stale_patch);
-    const stale_args = try std.fmt.allocPrint(
-        std.testing.allocator,
-        "{{\"candidate_id\":\"candidate-stale\",\"failure_id\":\"failure-1\",\"path\":\"notes/candidate.zig\",\"operation\":\"replace_in_file\",\"patch\":{f},\"expected_source_baseline\":\"git:stale\"}}",
-        .{std.json.fmt(stale_patch, .{})},
-    );
-    defer std.testing.allocator.free(stale_args);
-    var stale_call = try makeToolCallWithId(std.testing.allocator, "call-candidate-stale", "repair_candidate", stale_args);
-    defer stale_call.deinit(std.testing.allocator);
-    try std.testing.expectError(
-        VAR1.core.tool_runtime.Error.RepairBaselineConflict,
-        VAR1.core.tool_runtime.execute(std.testing.allocator, sessionExecCtx(workspace_root, session.id), stale_call),
-    );
-
-    const unchanged = try VAR1.shared.fsutil.readTextAlloc(std.testing.allocator, file_path);
-    defer std.testing.allocator.free(unchanged);
-    try std.testing.expectEqualStrings("const answer = 1;\n", unchanged);
-
-    const events = try VAR1.core.session_store.readEvents(std.testing.allocator, workspace_root, session.id);
-    defer VAR1.shared.types.deinitSessionEvents(std.testing.allocator, events);
-    try std.testing.expectEqual(@as(usize, 2), events.len);
-    try std.testing.expectEqualStrings("repair_candidate", events[0].event_type);
-    try std.testing.expect(std.mem.indexOf(u8, events[0].message, "\"baseline_match\":true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, events[0].message, "const answer = 2") == null);
-    try std.testing.expectEqualStrings("repair_candidate", events[1].event_type);
-    try std.testing.expect(std.mem.indexOf(u8, events[1].message, "\"status\":\"baseline_conflict\"") != null);
-}
-
 test "append primitive preserves existing file content" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1397,7 +1322,7 @@ test "shell_exec dispatches argv and Windows shell modes through distinct comman
     }
 }
 
-test "tool execution errors expose specialized repair hints across failure classes" {
+test "tool execution errors expose specialized correction hints across failure classes" {
     const cases = [_]struct {
         tool: []const u8,
         error_name: []const u8,
@@ -1514,7 +1439,7 @@ test "catalog json exposes shell_exec command-shape and Windows query guidance" 
     try std.testing.expect(std.mem.indexOf(u8, catalog, "find/findstr") != null);
 }
 
-test "shell_exec schema error output is self-repairing before process launch" {
+test "shell_exec schema error output is normalized before process launch" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -1614,7 +1539,7 @@ test "search_files stops before execution when ix is unavailable" {
     try std.testing.expect(context.last_command == null);
 }
 
-test "agent system prompt teaches schema repair and file-tool roles" {
+test "agent system prompt teaches schema correction and file-tool roles" {
     const prompt = try VAR1.core.prompts.buildAgentSystemPrompt(std.testing.allocator, .{
         .workspace_root = ".",
     }, .{});
