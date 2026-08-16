@@ -119,3 +119,19 @@ build/Release/
 /apps/frontend/
 .playwright-mcp/
 **/*.sqlite
+
+# Vantari web frontend build artifacts
+apps/web/node_modules/
+apps/web/dist/
+apps/web/.svelte-kit/
+apps/web/test-results/
+apps/web/dev-dist/
+apps/web/coverage/
+apps/web/playwright-report/
+apps/web/storybook-static/
+apps/web/debug-storybook.log
+apps/web/static/pwa-*.png
+apps/web/static/maskable-icon-*.png
+apps/web/static/apple-touch-icon-*.png
+apps/web/static/apple-splash-*.png
+apps/web/static/favicon*.ico
