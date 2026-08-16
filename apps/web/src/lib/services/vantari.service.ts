@@ -59,6 +59,152 @@ export async function rpc<T = unknown>(method: string, params: unknown = {}): Pr
 	return payload.result as T;
 }
 
+export interface VantariProvider {
+	provider_id: string;
+	auth_type?: string;
+	wire_api?: string;
+	auth_scheme?: string;
+	model: string;
+	base_url?: string;
+	active: boolean;
+	expires_at_ms?: number | null;
+	subscription_status?: string | null;
+	credential_source?: string | null;
+}
+
+export interface VantariAgent {
+	id: string;
+	description?: string;
+	route_role?: string;
+	provider_id?: string;
+	model?: string;
+	effort?: string;
+	enabled?: boolean;
+}
+
+export interface VantariSessionSummary {
+	session_id: string;
+	status: string;
+	prompt?: string | null;
+	output?: string | null;
+	parent_session_id?: string | null;
+	display_name?: string | null;
+	agent_profile?: string | null;
+	created_at_ms: number;
+	updated_at_ms: number;
+}
+
+export interface VantariSessionMessage {
+	id?: string;
+	seq?: number;
+	role: string;
+	content: string;
+	timestamp_ms?: number;
+	reasoning?: string | null;
+}
+
+export interface VantariDetectedCredential {
+	source: string;
+	kind: string;
+	provider_id: string;
+	source_path?: string;
+	model?: string;
+	live: boolean;
+	account_hint?: string | null;
+	note?: string | null;
+}
+
+export interface VantariHealthState {
+	ok?: boolean;
+	model?: string;
+	workspace_root?: string;
+	auth_provider?: string | null;
+	log_level?: string;
+	effort?: string;
+	full_access_mode?: boolean;
+	context_window_tokens?: number;
+	agent_pool_running?: number;
+	agent_pool_max?: number;
+}
+
+/** Providers in the auth ledger plus the active provider id. */
+export async function listProviders(): Promise<{
+	active_provider: string;
+	providers: VantariProvider[];
+}> {
+	return rpc('providers/list', {});
+}
+
+/** Model catalog for one provider (or the ledger-active provider). */
+export async function listModels(providerId?: string): Promise<{
+	provider: string;
+	models: Array<{ id: string; owned_by?: string | null; context_length?: number | null }>;
+	status?: string;
+	error_message?: string | null;
+}> {
+	return rpc('models/list', providerId ? { provider_id: providerId } : {});
+}
+
+/** Agent registry: ids, descriptions, and per-agent provider/model overrides. */
+export async function listAgents(): Promise<{ agents: VantariAgent[] }> {
+	return rpc('agents/list', {});
+}
+
+/** Assign a provider and/or model override to one agent. */
+export async function configureAgent(
+	agentId: string,
+	patch: { provider_id?: string; model?: string }
+): Promise<void> {
+	await rpc('agents/configure', { agent_id: agentId, ...patch });
+}
+
+/** Set the default model on one provider's ledger record. */
+export async function setProviderModel(providerId: string, model: string): Promise<void> {
+	await rpc('providers/set-model', { provider_id: providerId, model });
+}
+
+/** Write one workspace config key through the audited config owner. */
+export async function setConfigKey(
+	section: string,
+	key: string,
+	value: string | number | boolean
+): Promise<void> {
+	await rpc('config/set', { section, key, value });
+}
+
+/** Kernel health projection (workspace, model, posture, pool pressure). */
+export async function getHealth(): Promise<VantariHealthState> {
+	return rpc('health/get', {});
+}
+
+/** Secret-free inventory of native credentials available for import. */
+export async function detectCredentials(): Promise<{
+	detected: VantariDetectedCredential[];
+}> {
+	return rpc('auth/detect', {});
+}
+
+/** Import detected native credentials by provenance source. */
+export async function importCredentials(
+	sources: string[],
+	force = false
+): Promise<{ imported: string[]; skipped: string[] }> {
+	return rpc('auth/import', { sources, force });
+}
+
+/** All sessions, newest last. Child/agent sessions carry `agent_profile`. */
+export async function listSessions(): Promise<{ sessions: VantariSessionSummary[] }> {
+	return rpc('session/list', {});
+}
+
+/** One session with its durable transcript (messages) and event spine. */
+export async function getSession(sessionId: string): Promise<{
+	session: VantariSessionSummary;
+	messages: VantariSessionMessage[];
+}> {
+	return rpc('session/get', { session_id: sessionId });
+}
+
 export interface BridgeEvent {
 	seq: number;
 	event: string;

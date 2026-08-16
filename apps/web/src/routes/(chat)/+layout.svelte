@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { ChatScreen } from '$lib/components/app';
+	import AgentsSidebar from '$lib/components/app/chat/AgentsSidebar.svelte';
 
 	let { children } = $props();
 
@@ -8,5 +9,7 @@
 </script>
 
 <ChatScreen {showCenteredEmpty} />
+
+<AgentsSidebar />
 
 {@render children?.()}
