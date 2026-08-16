@@ -54,6 +54,10 @@ const known_provider_ids = [_][]const u8{
     "ollama",
     "lm-studio",
     "vllm",
+    "opencode",
+    "opencode-go",
+    "opencode-zen",
+    "zai-coding-plan",
 };
 
 /// Normalize only the finite built-in provider namespace. Custom provider ids
@@ -165,6 +169,7 @@ pub fn apiKeyEnvironment(provider_id: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, provider_id, "openai") or std.mem.eql(u8, provider_id, "openai-compatible")) return "OPENAI_API_KEY";
     if (std.mem.eql(u8, provider_id, "anthropic")) return "ANTHROPIC_API_KEY";
     if (std.mem.eql(u8, provider_id, "openrouter")) return "OPENROUTER_API_KEY";
+    if (std.mem.eql(u8, provider_id, "opencode") or std.mem.eql(u8, provider_id, "opencode-go") or std.mem.eql(u8, provider_id, "opencode-zen")) return "OPENCODE_API_KEY";
     return null;
 }
 
@@ -174,6 +179,7 @@ pub fn defaultBaseUrl(provider_id: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, provider_id, "openai")) return "https://api.openai.com/v1";
     if (std.mem.eql(u8, provider_id, "anthropic")) return "https://api.anthropic.com";
     if (std.mem.eql(u8, provider_id, "openrouter")) return "https://openrouter.ai/api/v1";
+    if (std.mem.eql(u8, provider_id, "opencode") or std.mem.eql(u8, provider_id, "opencode-go") or std.mem.eql(u8, provider_id, "opencode-zen")) return "https://api.opencode.ai/v1";
     return null;
 }
 

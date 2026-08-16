@@ -23,6 +23,11 @@ pub const methods = struct {
     pub const providers_list = "providers/list";
     pub const models_list = "models/list";
     pub const config_set = "config/set";
+    pub const provider_model_set = "providers/set-model";
+    pub const auth_detect = "auth/detect";
+    pub const auth_import = "auth/import";
+    pub const agents_list = "agents/list";
+    pub const agents_configure = "agents/configure";
 };
 
 pub const Capabilities = struct {
@@ -41,6 +46,12 @@ pub const Capabilities = struct {
     health_get: bool = true,
     providers_list: bool = true,
     models_list: bool = true,
+    config_set: bool = true,
+    provider_model_set: bool = true,
+    auth_detect: bool = true,
+    auth_import: bool = true,
+    agents_list: bool = true,
+    agents_configure: bool = true,
     /// Advertises that events.jsonl carries a monotonic `seq` field and the
     /// event spine supports replay cursors. Clients can use seq for
     /// deterministic same-millisecond ordering (AGENTS.md §IV).
@@ -221,12 +232,72 @@ pub const ProviderSummary = struct {
     active: bool,
     expires_at_ms: ?i64 = null,
     subscription_status: ?[]const u8 = null,
+    credential_source: ?[]const u8 = null,
 };
 
 pub const ProvidersListResult = struct {
     schema: []const u8 = "var1.providers.v1",
     active_provider: []const u8,
     providers: []const ProviderSummary,
+    status: []const u8 = "ok",
+    error_message: ?[]const u8 = null,
+};
+
+/// Secret-free detected-native-credential row (mirrors core/auth/detect.zig).
+/// Never carries a token; only provenance, provider identity, and liveness.
+pub const DetectedCredential = struct {
+    source: []const u8,
+    kind: []const u8,
+    provider_id: []const u8,
+    source_path: []const u8,
+    model: []const u8 = "",
+    live: bool = false,
+    account_hint: ?[]const u8 = null,
+    note: ?[]const u8 = null,
+};
+
+pub const AuthDetectResult = struct {
+    schema: []const u8 = "var1.auth_detect.v1",
+    detected: []const DetectedCredential,
+    status: []const u8 = "ok",
+};
+
+pub const AuthImportResult = struct {
+    schema: []const u8 = "var1.auth_import.v1",
+    imported: []const []const u8,
+    skipped: []const []const u8,
+    status: []const u8 = "ok",
+    error_message: ?[]const u8 = null,
+};
+
+pub const ProviderModelSetResult = struct {
+    schema: []const u8 = "var1.provider_model_set.v1",
+    provider_id: []const u8,
+    model: []const u8,
+    status: []const u8 = "ok",
+    error_message: ?[]const u8 = null,
+};
+
+pub const AgentSummary = struct {
+    id: []const u8,
+    description: []const u8 = "",
+    route_role: []const u8 = "",
+    provider_id: []const u8 = "",
+    model: []const u8 = "",
+    effort: []const u8 = "",
+    enabled: bool = true,
+};
+
+pub const AgentsListResult = struct {
+    schema: []const u8 = "var1.agents.v1",
+    agents: []const AgentSummary,
+    status: []const u8 = "ok",
+    error_message: ?[]const u8 = null,
+};
+
+pub const AgentsConfigureResult = struct {
+    schema: []const u8 = "var1.agent_configure.v1",
+    agent_id: []const u8,
     status: []const u8 = "ok",
     error_message: ?[]const u8 = null,
 };

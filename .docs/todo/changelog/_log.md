@@ -1,5 +1,27 @@
 # Execution Log
 
+## 2026-08-16 - Provider credential import, model routing, and Models tab defect closure
+
+**Outcome:** The interrupted 2026-08-15 provider chain is complete and
+deployed. One `provider/model-name` namespace with a single-owner credential
+ladder, explicit Codex/Claude/OpenCode import with provenance and collision
+guard, per-agent provider/model overrides, and a cycle-to-lock Settings →
+Models tab. All 8 audited defects from the dead session were re-verified and
+fixed; ledger mutations now apply on the next turn without a kernel restart.
+
+- `auth detect`/`auth import` (CLI + RPC), `providers/set-model`,
+  `agents/list`/`agents/configure`, and `models/list` resolve through the
+  ledger; `refreshActiveAuthFromLedger` is the one per-turn refresh owner
+  shared by `session/send` and `models/list`.
+- Full receipt with proof and boundaries:
+  `.docs/todo/changelog/087-provider-credential-import-model-routing.md`.
+
+- Debug gate `19/19`, `2,223/2,227` passed (4 platform skips); source
+  ReleaseFast `9/9` at SHA-256 `217240A0…6663`; Linux installed binary
+  hash-equal with a live owner generation, and live `health`/`auth`/`models`
+  probes green. Anthropic/OpenCode refresh flows remain the open parity
+  residual.
+
 ## 2026-08-14 - Close current frontier after proactive YAGNI pass
 
 **Outcome:** The reactive repair/replay control plane remains deleted, and the

@@ -1,6 +1,7 @@
 const stdio_client = @import("host/stdio_client.zig");
 const stdio_rpc = @import("host/stdio_rpc.zig");
 const process_tree = @import("shared/process_tree.zig");
+const process = @import("core/tools/process.zig");
 
 // Zig 0.15 excludes tests in external modules. Keep host lifetime, RPC, and
 // process-tree tests in one source-rooted artifact so the canonical build graph
@@ -9,4 +10,5 @@ test {
     _ = stdio_client;
     _ = stdio_rpc;
     _ = process_tree;
+    _ = process;
 }

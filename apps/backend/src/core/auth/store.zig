@@ -7,6 +7,9 @@ pub const Error = error{
     InvalidAuthState,
     MissingAuth,
     MissingProvider,
+    /// An import would replace a provider record owned by a different
+    /// credential source. Preserve source identity; operator must confirm.
+    CredentialSourceCollision,
 };
 
 pub const AuthBootstrap = struct {
@@ -31,6 +34,11 @@ pub const ApiKeyProviderRecord = struct {
     api_key: []const u8,
     wire_api: types.WireApi = .auto,
     auth_scheme: ?types.AuthScheme = null,
+    /// Provenance tag identifying where this credential came from (a native
+    /// Codex/Claude/OpenCode file, an env import, or interactive login). Kept
+    /// on the record so a later import can refuse to clobber a different
+    /// source under the same wire provider id.
+    credential_source: ?[]const u8 = null,
 };
 
 /// OAuth provider data crosses the CLI/helper boundary as an owned-free view.
@@ -51,6 +59,13 @@ pub const OAuthProviderRecord = struct {
     subscription_status: ?[]const u8 = null,
     subscription_source: []const u8,
     last_verified_at_ms: i64,
+    /// Explicit header scheme. Defaults to the provider profile (e.g. Anthropic
+    /// api-key) when null; Claude Code OAuth import sets `.bearer`.
+    auth_scheme: ?types.AuthScheme = null,
+    /// Provenance tag identifying the credential source (native Claude Code
+    /// file, Codex file, env import, or interactive login). A later import
+    /// refuses to clobber a different source under the same provider id.
+    credential_source: ?[]const u8 = null,
 };
 
 pub const ResolvedAuth = struct {
@@ -128,12 +143,14 @@ pub const ProviderSummary = struct {
     active: bool,
     expires_at_ms: ?i64 = null,
     subscription_status: ?[]u8 = null,
+    credential_source: ?[]u8 = null,
 
     pub fn deinit(self: ProviderSummary, allocator: std.mem.Allocator) void {
         allocator.free(self.provider_id);
         allocator.free(self.model);
         allocator.free(self.base_url);
         if (self.subscription_status) |value| allocator.free(value);
+        if (self.credential_source) |value| allocator.free(value);
     }
 };
 
@@ -230,6 +247,8 @@ fn readProviderSummary(
     const auth_scheme = (try readOptionalAuthScheme(provider_object)) orelse profile_defaults.auth_scheme;
     var subscription_status: ?[]u8 = null;
     errdefer if (subscription_status) |value| allocator.free(value);
+    const credential_source = try cloneOptionalString(allocator, provider_object, "credential_source");
+    errdefer if (credential_source) |value| allocator.free(value);
     var expires_at_ms: ?i64 = null;
     if (auth_type == .oauth) {
         expires_at_ms = try cloneRequiredInteger(allocator, provider_object, "expires_at_ms");
@@ -250,6 +269,7 @@ fn readProviderSummary(
         .active = active,
         .expires_at_ms = expires_at_ms,
         .subscription_status = subscription_status,
+        .credential_source = credential_source,
     };
 }
 
@@ -396,6 +416,45 @@ pub fn readProviderById(allocator: std.mem.Allocator, workspace_root: []const u8
 
     if (parsed.value != .object) return Error.InvalidAuthState;
     return readProviderFromRoot(allocator, parsed.value.object, provider_id);
+}
+
+/// Read the persisted credential-source provenance for one provider id, or
+/// null when the provider is absent or carries no source tag. Import callers
+/// use this to refuse clobbering a record owned by a different source.
+pub fn readProviderSourceById(allocator: std.mem.Allocator, workspace_root: []const u8, provider_id: []const u8) !?[]u8 {
+    const path = try authFilePath(allocator, workspace_root);
+    defer allocator.free(path);
+    if (!fsutil.fileExists(path)) return Error.MissingAuth;
+
+    const content = try fsutil.readTextAlloc(allocator, path);
+    defer allocator.free(content);
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, stripUtf8Bom(content), .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return Error.InvalidAuthState;
+    const root = parsed.value.object;
+    const providers_value = root.get("providers") orelse return Error.MissingProvider;
+    if (providers_value != .object) return Error.InvalidAuthState;
+    const provider_value = providers_value.object.get(provider_id) orelse return null;
+    if (provider_value != .object) return Error.InvalidAuthState;
+    return try cloneOptionalString(allocator, provider_value.object, "credential_source");
+}
+
+/// Whether a provider record exists at all in the ledger (regardless of its
+/// source tag). Distinguishes "absent" (import freely) from "present but
+/// manual/legacy with no source tag" (import must not clobber).
+pub fn readProviderExists(allocator: std.mem.Allocator, workspace_root: []const u8, provider_id: []const u8) bool {
+    const path = authFilePath(allocator, workspace_root) catch return false;
+    defer allocator.free(path);
+    if (!fsutil.fileExists(path)) return false;
+
+    const content = fsutil.readTextAlloc(allocator, path) catch return false;
+    defer allocator.free(content);
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, stripUtf8Bom(content), .{}) catch return false;
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    const providers_value = parsed.value.object.get("providers") orelse return false;
+    if (providers_value != .object) return false;
+    return providers_value.object.get(provider_id) != null;
 }
 
 fn readProviderFromRoot(allocator: std.mem.Allocator, root: std.json.ObjectMap, provider_id: []const u8) !ResolvedAuth {
@@ -612,13 +671,22 @@ pub fn upsertOAuthProvider(
     };
 
     try putString(arena_allocator, provider, "auth_type", "oauth");
+    // A Claude Code OAuth import carries an explicit bearer scheme; interactive
+    // Anthropic api-key records keep the profile default. Preserve the record
+    // value so a wire provider can authenticate via either header scheme.
+    try putString(
+        arena_allocator,
+        provider,
+        "auth_scheme",
+        (record.auth_scheme orelse provider_profile.defaults(record.provider_id, record.base_url).auth_scheme).label(),
+    );
+    try putOptionalString(arena_allocator, provider, "credential_source", record.credential_source);
     try putString(arena_allocator, provider, "access_token", record.access_token);
     try putString(arena_allocator, provider, "refresh_token", record.refresh_token);
     try putOptionalString(arena_allocator, provider, "id_token", record.id_token);
     try putString(arena_allocator, provider, "base_url", record.base_url);
     try putString(arena_allocator, provider, "model", record.model);
     try putString(arena_allocator, provider, "wire_api", provider_profile.defaults(record.provider_id, record.base_url).wire_api.label());
-    try putString(arena_allocator, provider, "auth_scheme", provider_profile.defaults(record.provider_id, record.base_url).auth_scheme.label());
     _ = provider.orderedRemove("api_key");
     try putInteger(arena_allocator, provider, "expires_at_ms", record.expires_at_ms);
     try putOptionalString(arena_allocator, provider, "account_id", record.account_id);
@@ -714,6 +782,7 @@ pub fn upsertApiKeyProvider(
     try putString(arena_allocator, provider, "model", record.model);
     try putString(arena_allocator, provider, "wire_api", provider_profile.effectiveWireApi(record.provider_id, record.base_url, record.wire_api).label());
     try putString(arena_allocator, provider, "auth_scheme", effective_auth_scheme.label());
+    try putOptionalString(arena_allocator, provider, "credential_source", record.credential_source);
     _ = provider.orderedRemove("access_token");
     _ = provider.orderedRemove("refresh_token");
     _ = provider.orderedRemove("id_token");
@@ -747,6 +816,36 @@ pub fn selectProvider(allocator: std.mem.Allocator, workspace_root: []const u8, 
     const providers_value = root.get("providers") orelse return Error.MissingProvider;
     if (providers_value != .object or providers_value.object.get(provider_id) == null) return Error.MissingProvider;
     try putString(arena_allocator, root, "active_provider", provider_id);
+    const formatted = try std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(parsed.value, .{ .whitespace = .indent_2 })});
+    defer allocator.free(formatted);
+    try fsutil.writeText(path, formatted);
+}
+
+/// Set only the `model` field on one existing provider record without touching
+/// its credentials, active-provider state, or any unrelated provider. This is
+/// the canonical way the TUI/Models tab assigns a model to a provider — the
+/// model lives in the auth ledger, NOT the config `provider` section (which
+/// only permits `wire_api`).
+pub fn setProviderModel(allocator: std.mem.Allocator, workspace_root: []const u8, provider_id: []const u8, model: []const u8) !void {
+    if (model.len == 0) return Error.InvalidAuthState;
+    const path = try authFilePath(allocator, workspace_root);
+    defer allocator.free(path);
+    if (!fsutil.fileExists(path)) return Error.MissingAuth;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+    const content = try fsutil.readTextAlloc(allocator, path);
+    defer allocator.free(content);
+    var parsed = std.json.parseFromSlice(std.json.Value, arena_allocator, stripUtf8Bom(content), .{}) catch return Error.InvalidAuthState;
+    if (parsed.value != .object) return Error.InvalidAuthState;
+    const root = &parsed.value.object;
+    const providers_value = root.getPtr("providers") orelse return Error.MissingProvider;
+    if (providers_value.* != .object) return Error.InvalidAuthState;
+    const provider_value = providers_value.object.getPtr(provider_id) orelse return Error.MissingProvider;
+    if (provider_value.* != .object) return Error.InvalidAuthState;
+    try putString(arena_allocator, &provider_value.object, "model", model);
+    try putInteger(arena_allocator, &provider_value.object, "updated_at_ms", std.time.milliTimestamp());
     const formatted = try std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(parsed.value, .{ .whitespace = .indent_2 })});
     defer allocator.free(formatted);
     try fsutil.writeText(path, formatted);
@@ -866,4 +965,43 @@ fn writeJsonString(writer: anytype, value: []const u8) !void {
         }
     }
     try writer.writeByte('"');
+}
+
+
+const testing = std.testing;
+
+test "setProviderModel updates only the model field and preserves active provider" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer testing.allocator.free(workspace_root);
+    try upsertApiKeyProvider(testing.allocator, workspace_root, .{
+        .provider_id = "zai",
+        .base_url = "https://api.z.ai/api/coding/paas/v4",
+        .model = "glm-5.2",
+        .api_key = "k1",
+    });
+    defer removeProvider(testing.allocator, workspace_root, "zai") catch {};
+
+    // Seed a second provider so active-provider preservation is observable.
+    try upsertApiKeyProvider(testing.allocator, workspace_root, .{
+        .provider_id = "openrouter",
+        .base_url = "https://openrouter.ai/api/v1",
+        .model = "m1",
+        .api_key = "k2",
+    });
+    defer removeProvider(testing.allocator, workspace_root, "openrouter") catch {};
+
+    try setProviderModel(testing.allocator, workspace_root, "zai", "glm-5.5");
+    var zai = try readProviderById(testing.allocator, workspace_root, "zai");
+    defer zai.deinit(testing.allocator);
+    try testing.expectEqualStrings("glm-5.5", zai.model);
+    try testing.expectEqualStrings("k1", zai.api_key);
+
+    // Unrelated provider and active provider are untouched.
+    var openrouter = try readProviderById(testing.allocator, workspace_root, "openrouter");
+    defer openrouter.deinit(testing.allocator);
+    try testing.expectEqualStrings("m1", openrouter.model);
+    try testing.expectError(Error.MissingProvider, setProviderModel(testing.allocator, workspace_root, "absent", "x"));
+    try testing.expectError(Error.InvalidAuthState, setProviderModel(testing.allocator, workspace_root, "zai", ""));
 }

@@ -532,6 +532,8 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
                     "autonomy",
                     "effort",
                     "temperature",
+                    "provider_id",
+                    "model",
                 });
                 try validateOptionalAgentString(definition, "extends", 64);
                 try validateOptionalAgentString(definition, "description", 512);
@@ -541,6 +543,8 @@ fn validateDocumentShape(root: std.json.ObjectMap) !void {
                 try validateOptionalAgentString(definition, "doctrine_tags", 1024);
                 try validateOptionalAgentString(definition, "checkpoint_contract", 256);
                 try validateOptionalAgentString(definition, "effort", 64);
+                try validateOptionalAgentString(definition, "provider_id", 128);
+                try validateOptionalAgentString(definition, "model", 256);
                 _ = try optionalBool(definition, "enabled", true);
                 _ = try optionalBool(definition, "ticket_ownership", true);
                 if (definition.get("autonomy")) |autonomy| {

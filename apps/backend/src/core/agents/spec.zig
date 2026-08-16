@@ -41,6 +41,13 @@ pub const AgentSpec = struct {
     effort: []const u8 = "",
     /// Optional per-agent temperature override; -1 means VANTARI/route decides.
     temperature: f64 = -1,
+    /// Optional per-agent wire provider override (`provider/model-name`). Empty
+    /// means the role route (or active provider) decides. Provider-qualified so
+    /// a model id never collides across backends.
+    provider_id: []const u8 = "",
+    /// Optional per-agent model override, resolved against provider_id via the
+    /// single-owner router. Empty means the route/active provider model decides.
+    model: []const u8 = "",
 };
 
 pub const Registry = struct {
@@ -82,6 +89,8 @@ pub const DefinitionPatch = struct {
     autonomy: ?[]const u8 = null,
     effort: ?[]const u8 = null,
     temperature: ?f64 = null,
+    provider_id: ?[]const u8 = null,
+    model: ?[]const u8 = null,
 };
 
 pub const MutationEvidence = struct {
@@ -637,6 +646,8 @@ fn mutateConfiguredAgent(
             if (patch.autonomy) |value| try putString(arena, definition, "autonomy", value);
             if (patch.effort) |value| try putString(arena, definition, "effort", value);
             if (patch.temperature) |value| try putValue(arena, definition, "temperature", .{ .float = value });
+            if (patch.provider_id) |value| try putString(arena, definition, "provider_id", value);
+            if (patch.model) |value| try putString(arena, definition, "model", value);
         },
     }
 
@@ -708,6 +719,12 @@ fn cloneEffective(
     const effort = if (object) |value| optionalString(value, "effort", base.effort) else base.effort;
     const temperature = if (object) |value| optionalFloat(value, "temperature", base.temperature) else base.temperature;
     if (temperature != -1 and (temperature < 0 or temperature > 2)) return Error.InvalidAgentDefinition;
+    const provider_id = if (object) |value| optionalString(value, "provider_id", base.provider_id) else base.provider_id;
+    const model = if (object) |value| optionalString(value, "model", base.model) else base.model;
+    // A per-agent model without an explicit provider is still valid — the
+    // router resolves it against the role/active provider. A provider without
+    // a model falls back to that provider's default model.
+    if (provider_id.len > 128 or model.len > 256) return Error.InvalidAgentDefinition;
 
     try validateEffective(base, max_steps, max_tool_calls, max_children);
     _ = try profile_contract.resolveProfile(base.capability_profile_id);
@@ -731,6 +748,10 @@ fn cloneEffective(
     const autonomy_owned = try allocator.dupe(u8, autonomy);
     errdefer allocator.free(autonomy_owned);
     const effort_owned: []u8 = if (effort.len > 0) try allocator.dupe(u8, effort) else @constCast("");
+    const provider_owned: []u8 = if (provider_id.len > 0) try allocator.dupe(u8, provider_id) else @constCast("");
+    errdefer if (provider_id.len > 0) allocator.free(provider_owned);
+    const model_owned: []u8 = if (model.len > 0) try allocator.dupe(u8, model) else @constCast("");
+    errdefer if (model.len > 0) allocator.free(model_owned);
 
     return .{
         .id = id_owned,
@@ -750,6 +771,8 @@ fn cloneEffective(
         .autonomy = autonomy_owned,
         .effort = effort_owned,
         .temperature = temperature,
+        .provider_id = provider_owned,
+        .model = model_owned,
     };
 }
 
@@ -825,6 +848,8 @@ fn deinitOwnedSpec(allocator: std.mem.Allocator, spec: AgentSpec) void {
     allocator.free(spec.checkpoint_contract);
     allocator.free(spec.autonomy);
     if (spec.effort.len > 0) allocator.free(spec.effort);
+    if (spec.provider_id.len > 0) allocator.free(spec.provider_id);
+    if (spec.model.len > 0) allocator.free(spec.model);
 }
 
 fn hexDigest(digest: [32]u8) [64]u8 {
@@ -880,6 +905,21 @@ test "custom personas cannot escalate inherited model task capability" {
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
     defer parsed.deinit();
     try std.testing.expectError(Error.InvalidAgentDefinition, loadRegistryFromValue(std.testing.allocator, parsed.value));
+}
+
+test "custom personas may override provider and model without changing capability" {
+    const document =
+        \\{"version":1,"agents":{"definitions":{"fast_recon":{"extends":"recon","provider_id":"openrouter","model":"openrouter/deepseek/deepseek-chat"}}}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, document, .{});
+    defer parsed.deinit();
+    var registry = try loadRegistryFromValue(std.testing.allocator, parsed.value);
+    defer registry.deinit();
+    const fast = try registry.resolve("fast_recon");
+    try std.testing.expectEqualStrings("openrouter", fast.provider_id);
+    try std.testing.expectEqualStrings("openrouter/deepseek/deepseek-chat", fast.model);
+    try std.testing.expectEqual(routes.RouteRole.recon, fast.route_role);
+    try std.testing.expectEqualStrings("recon", fast.capability_profile_id);
 }
 
 test "compact eligibility snapshot omits private instruction capsules" {

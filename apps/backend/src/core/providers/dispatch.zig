@@ -33,9 +33,13 @@ pub fn completeWithTransportAndHooks(
 ) !types.CompletionResponse {
     if (config.auth_type == .oauth) {
         const provider_id = config.auth_provider orelse return openai_codex.Error.UnsupportedProviderAuth;
-        if (!std.mem.eql(u8, provider_id, "openai-codex")) return openai_codex.Error.UnsupportedProviderAuth;
-        try verifyCapabilities(.responses, request, stream_hooks);
-        return openai_codex.completeWithTransportAndHooks(allocator, config, request, transport, stream_hooks);
+        // Codex uses its dedicated Responses adapter. Other OAuth providers
+        // (e.g. Claude Code imported under `anthropic`) authenticate through
+        // the shared bearer transport and fall through to the wire_api switch.
+        if (std.mem.eql(u8, provider_id, "openai-codex")) {
+            try verifyCapabilities(.responses, request, stream_hooks);
+            return openai_codex.completeWithTransportAndHooks(allocator, config, request, transport, stream_hooks);
+        }
     }
 
     // Config default `wire_api: "auto"` resolves here against the base URL.

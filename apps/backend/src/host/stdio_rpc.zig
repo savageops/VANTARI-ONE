@@ -14,6 +14,9 @@ const tickets = @import("../core/tickets/index.zig");
 const buffer_service = @import("../core/executor/buffer.zig");
 const store = @import("../core/sessions/store.zig");
 const auth_store = @import("../core/auth/store.zig");
+const auth_detect = @import("../core/auth/detect.zig");
+const auth_import = @import("../core/auth/import.zig");
+const agent_spec = @import("../core/agents/spec.zig");
 const tools = @import("../core/tools/runtime.zig");
 const eval_tool = @import("../core/tools/builtin/eval.zig");
 const types = @import("../shared/types.zig");
@@ -864,6 +867,26 @@ fn dispatch(
         return handleConfigSet(server, params);
     }
 
+    if (std.mem.eql(u8, method_name, protocol_types.methods.provider_model_set)) {
+        return handleProviderModelSet(server, params);
+    }
+
+    if (std.mem.eql(u8, method_name, protocol_types.methods.auth_detect)) {
+        return handleAuthDetect(server);
+    }
+
+    if (std.mem.eql(u8, method_name, protocol_types.methods.auth_import)) {
+        return handleAuthImport(server, params);
+    }
+
+    if (std.mem.eql(u8, method_name, protocol_types.methods.agents_list)) {
+        return handleAgentsList(server);
+    }
+
+    if (std.mem.eql(u8, method_name, protocol_types.methods.agents_configure)) {
+        return handleAgentsConfigure(server, params);
+    }
+
     return Error.MethodNotFound;
 }
 
@@ -1028,17 +1051,26 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         selected_model = selection.model_id;
     }
     if (selected_provider_id) |provider_id| {
-        const active_provider = server.config.auth_provider orelse "openai-compatible";
-        if (!std.mem.eql(u8, provider_id, active_provider)) {
-            selected_auth = auth_store.readProviderById(
-                server.allocator,
-                server.config.workspace_root,
-                provider_id,
-            ) catch |err| switch (err) {
-                auth_store.Error.MissingProvider, auth_store.Error.MissingAuth => return Error.ProviderNotFound,
-                else => return err,
-            };
-        }
+        // An explicitly named provider is always an explicit ledger read —
+        // even when it names the snapshot's active provider. `auth/import`,
+        // `auth use`, and `providers/set-model` mutate the ledger after this
+        // kernel started; an explicit request must observe them, and a
+        // missing record is a typed failure rather than a silent fallback to
+        // the startup snapshot.
+        selected_auth = auth_store.readProviderById(
+            server.allocator,
+            server.config.workspace_root,
+            provider_id,
+        ) catch |err| switch (err) {
+            auth_store.Error.MissingProvider, auth_store.Error.MissingAuth => return Error.ProviderNotFound,
+            else => return err,
+        };
+    } else {
+        // No explicit provider: refresh the ACTIVE provider credential from
+        // the ledger so ledger mutations apply on the next turn without a
+        // restart. Env-configured workspaces without a resolvable ledger
+        // keep the startup snapshot.
+        selected_auth = refreshActiveAuthFromLedger(server.allocator, server.config.workspace_root);
     }
 
     if (next_prompt) |prompt| {
@@ -1679,6 +1711,17 @@ fn handleHealthGet(server: *Server) ![]u8 {
         .ticket_ledger_healthy = ticket_snapshot.healthy,
     });
 }
+/// Refresh the ACTIVE provider credential from the workspace auth ledger for
+/// one turn. Returns null when no ledger is resolvable (env-configured
+/// workspace) so the caller keeps the startup snapshot. Mirrors the startup
+/// ladder: whenever the workspace ledger exists its `active_provider` record
+/// wins; no bootstrap seeding or installed-path fallback runs at turn time.
+/// This is the one per-turn refresh owner shared by `session/send` and
+/// `models/list` so `auth/import`, `auth use`, and `providers/set-model`
+/// apply on the next turn without restarting the kernel.
+fn refreshActiveAuthFromLedger(allocator: std.mem.Allocator, workspace_root: []const u8) ?auth_store.ResolvedAuth {
+    return auth_store.resolveOrSeedWithInstalledAuthPath(allocator, workspace_root, null, null) catch null;
+}
 
 /// Expose configured provider identities and availability metadata without
 /// exposing API keys or OAuth tokens. Selection remains a separate
@@ -1720,6 +1763,7 @@ fn handleProvidersList(server: *Server) ![]u8 {
             .active = provider_summary.active,
             .expires_at_ms = provider_summary.expires_at_ms,
             .subscription_status = provider_summary.subscription_status,
+            .credential_source = provider_summary.credential_source,
         };
     }
 
@@ -1730,11 +1774,12 @@ fn handleProvidersList(server: *Server) ![]u8 {
 }
 
 fn handleModelsList(server: *Server, params: ?std.json.Value) ![]u8 {
-    // Optional provider switch: when provider_id is present and differs from
-    // the active provider, resolve that provider's credentials from the auth
-    // ledger's providers map. This is multi-provider routing — the operator
-    // can discover models on a non-active provider without changing the
-    // active config.
+    // Provider resolution mirrors session/send: an explicit provider_id is
+    // always an explicit ledger read, and a bare request resolves the
+    // LEDGER's active provider — never the startup snapshot — so models are
+    // discovered against the provider an import or `auth use` actually
+    // selected. Only an env-configured workspace without a ledger keeps the
+    // snapshot fields.
     var requested_provider: ?[]const u8 = null;
     if (params) |value| {
         if (value == .object) {
@@ -1742,11 +1787,7 @@ fn handleModelsList(server: *Server, params: ?std.json.Value) ![]u8 {
         }
     }
 
-    const active_provider = server.config.auth_provider orelse "openai-compatible";
-    const is_active = requested_provider == null or
-        (requested_provider != null and std.mem.eql(u8, requested_provider.?, active_provider));
-
-    var resolved_provider_id: []const u8 = active_provider;
+    var resolved_provider_id: []const u8 = server.config.auth_provider orelse "openai-compatible";
     var resolved_base_url: []const u8 = server.config.openai_base_url;
     var resolved_api_key: []const u8 = server.config.openai_api_key;
     var resolved_account_id: ?[]const u8 = server.config.auth_account_id;
@@ -1754,16 +1795,15 @@ fn handleModelsList(server: *Server, params: ?std.json.Value) ![]u8 {
     var resolved_auth: ?auth_store.ResolvedAuth = null;
     defer if (resolved_auth) |ra| ra.deinit(server.allocator);
 
-    if (!is_active) {
-        // Resolve the requested provider from the auth ledger.
+    if (requested_provider) |provider_id| {
         resolved_auth = auth_store.readProviderById(
             server.allocator,
             server.config.workspace_root,
-            requested_provider.?,
+            provider_id,
         ) catch |err| switch (err) {
             auth_store.Error.MissingProvider, auth_store.Error.MissingAuth => {
                 return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
-                    .provider = requested_provider.?,
+                    .provider = provider_id,
                     .base_url = "",
                     .models = &.{},
                     .status = "provider_not_found",
@@ -1772,7 +1812,7 @@ fn handleModelsList(server: *Server, params: ?std.json.Value) ![]u8 {
             },
             else => {
                 return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
-                    .provider = requested_provider.?,
+                    .provider = provider_id,
                     .base_url = "",
                     .models = &.{},
                     .status = "unreachable",
@@ -1780,11 +1820,18 @@ fn handleModelsList(server: *Server, params: ?std.json.Value) ![]u8 {
                 });
             },
         };
-        resolved_provider_id = resolved_auth.?.provider_id;
-        resolved_base_url = resolved_auth.?.base_url;
-        resolved_api_key = resolved_auth.?.api_key;
-        resolved_account_id = resolved_auth.?.account_id;
-        resolved_auth_scheme = resolved_auth.?.auth_scheme;
+    } else {
+        // Bare request: the ledger's active provider is authoritative. A
+        // null refresh means no resolvable ledger — the startup snapshot
+        // fields stand (env-configured workspace).
+        resolved_auth = refreshActiveAuthFromLedger(server.allocator, server.config.workspace_root);
+    }
+    if (resolved_auth) |auth| {
+        resolved_provider_id = auth.provider_id;
+        resolved_base_url = auth.base_url;
+        resolved_api_key = auth.api_key;
+        resolved_account_id = auth.account_id;
+        resolved_auth_scheme = auth.auth_scheme;
     }
 
     var discovered = models.listModelsWithAuth(
@@ -1874,6 +1921,172 @@ fn handleConfigSet(server: *Server, params: ?std.json.Value) ![]u8 {
     return std.fmt.allocPrint(server.allocator, "{{\"schema\":\"var1.config_set.v1\",\"section\":{f},\"key\":{f},\"hotload\":\"applies on next turn\"}}", .{
         std.json.fmt(section, .{}),
         std.json.fmt(key, .{}),
+    });
+}
+
+/// Set the `model` field on one provider record in the auth ledger. The
+/// canonical config `provider` section only permits `wire_api`; the model lives
+/// on the ledger record, so the Models tab mutates it here (store-owned) rather
+/// than through config/set.
+fn handleProviderModelSet(server: *Server, params: ?std.json.Value) ![]u8 {
+    const params_value = params orelse return Error.InvalidParams;
+    if (params_value != .object) return Error.InvalidParams;
+    const provider_id = blk: {
+        const v = params_value.object.get("provider_id") orelse return Error.InvalidParams;
+        if (v != .string) return Error.InvalidParams;
+        break :blk v.string;
+    };
+    const model = blk: {
+        const v = params_value.object.get("model") orelse return Error.InvalidParams;
+        if (v != .string) return Error.InvalidParams;
+        break :blk v.string;
+    };
+
+    auth_store.setProviderModel(server.allocator, server.config.workspace_root, provider_id, model) catch {
+        return Error.ExecutionFailed;
+    };
+    return renderJsonAlloc(server.allocator, protocol_types.ProviderModelSetResult{
+        .provider_id = provider_id,
+        .model = model,
+    });
+}
+
+/// Secret-free detection inventory of native Codex/Claude/OpenCode credentials.
+/// The TUI shows these as "detected, not connected" rows so the operator can
+/// import one in-panel. Never returns tokens.
+fn handleAuthDetect(server: *Server) ![]u8 {
+    var detection = auth_detect.detect(server.allocator) catch {
+        return renderJsonAlloc(server.allocator, protocol_types.AuthDetectResult{
+            .detected = &.{},
+            .status = "unavailable",
+        });
+    };
+    defer detection.deinit();
+
+    var rows = try server.allocator.alloc(protocol_types.DetectedCredential, detection.detected.len);
+    defer server.allocator.free(rows);
+    for (detection.detected, 0..) |entry, i| {
+        rows[i] = .{
+            .source = entry.source,
+            .kind = @tagName(entry.kind),
+            .provider_id = entry.provider_id,
+            .source_path = entry.source_path,
+            .model = entry.model,
+            .live = entry.live,
+            .account_hint = entry.account_hint,
+            .note = entry.note,
+        };
+    }
+    return renderJsonAlloc(server.allocator, protocol_types.AuthDetectResult{
+        .detected = rows,
+    });
+}
+
+/// Import detected native credentials into the auth ledger. Accepts an optional
+/// `sources` array and `force` flag, mirroring the CLI. Returns the provider ids
+/// imported and skipped — never a token.
+fn handleAuthImport(server: *Server, params: ?std.json.Value) ![]u8 {
+    var sources = std.array_list.Managed([]const u8).init(server.allocator);
+    defer sources.deinit();
+    var force = false;
+    if (params) |value| {
+        if (value == .object) {
+            if (value.object.get("sources")) |sources_value| {
+                if (sources_value == .array) {
+                    for (sources_value.array.items) |item| {
+                        if (item != .string) return Error.InvalidParams;
+                        try sources.append(item.string);
+                    }
+                }
+            }
+            if (value.object.get("force")) |force_value| {
+                if (force_value != .bool) return Error.InvalidParams;
+                force = force_value.bool;
+            }
+        }
+    }
+
+    var result = auth_import.importSources(server.allocator, server.config.workspace_root, sources.items, force) catch |err| {
+        return renderJsonAlloc(server.allocator, protocol_types.AuthImportResult{
+            .imported = &.{},
+            .skipped = &.{},
+            .status = "failed",
+            .error_message = switch (err) {
+                error.HomeUnavailable => "home directory unavailable",
+                error.NoSourceSelected => "no native source matched",
+                else => "import failed",
+            },
+        });
+    };
+    defer result.deinit();
+    return renderJsonAlloc(server.allocator, protocol_types.AuthImportResult{
+        .imported = result.imported,
+        .skipped = result.skipped,
+    });
+}
+
+/// Secret-free agent registry listing for the Models tab's agent-assignment
+/// cycler. Returns ids, descriptions, and any per-agent provider/model/effort
+/// override so the tab can show what each agent currently runs on.
+fn handleAgentsList(server: *Server) ![]u8 {
+    var registry = agent_spec.loadRegistry(server.allocator, server.config.workspace_root) catch {
+        return renderJsonAlloc(server.allocator, protocol_types.AgentsListResult{
+            .agents = &.{},
+            .status = "unavailable",
+        });
+    };
+    defer registry.deinit();
+
+    var summaries = try server.allocator.alloc(protocol_types.AgentSummary, registry.all().len);
+    defer server.allocator.free(summaries);
+    for (registry.all(), 0..) |spec, i| {
+        summaries[i] = .{
+            .id = spec.id,
+            .description = spec.description,
+            .route_role = spec.route_role.label(),
+            .provider_id = spec.provider_id,
+            .model = spec.model,
+            .effort = spec.effort,
+            .enabled = true,
+        };
+    }
+    return renderJsonAlloc(server.allocator, protocol_types.AgentsListResult{
+        .agents = summaries,
+    });
+}
+
+/// Assign a provider_id and/or model to one agent via the agent registry
+/// owner (`upsertConfiguredAgent`). This is the canonical mutation for
+/// per-agent model overrides — config/set cannot write nested agent
+/// definitions, and the config `provider` section only permits `wire_api`.
+fn handleAgentsConfigure(server: *Server, params: ?std.json.Value) ![]u8 {
+    const params_value = params orelse return Error.InvalidParams;
+    if (params_value != .object) return Error.InvalidParams;
+    const agent_id = blk: {
+        const v = params_value.object.get("agent_id") orelse return Error.InvalidParams;
+        if (v != .string) return Error.InvalidParams;
+        break :blk v.string;
+    };
+    var patch = agent_spec.DefinitionPatch{ .id = agent_id };
+    if (params_value.object.get("provider_id")) |v| {
+        if (v != .string) return Error.InvalidParams;
+        patch.provider_id = v.string;
+    }
+    if (params_value.object.get("model")) |v| {
+        if (v != .string) return Error.InvalidParams;
+        patch.model = v.string;
+    }
+
+    var evidence = agent_spec.upsertConfiguredAgent(server.allocator, server.config.workspace_root, patch) catch {
+        return renderJsonAlloc(server.allocator, protocol_types.AgentsConfigureResult{
+            .agent_id = agent_id,
+            .status = "rejected",
+            .error_message = "agent mutation rejected by the registry owner",
+        });
+    };
+    defer evidence.deinit(server.allocator);
+    return renderJsonAlloc(server.allocator, protocol_types.AgentsConfigureResult{
+        .agent_id = agent_id,
     });
 }
 
@@ -3174,4 +3387,253 @@ test "session/cancel closes stale running sessions without live owner" {
     try std.testing.expect(latest_event != null);
     try std.testing.expectEqualStrings(protocol_events.turn_terminal_event_type, latest_event.?.event_type);
     try std.testing.expect(std.mem.indexOf(u8, latest_event.?.message, "no active kernel execution owner") != null);
+}
+
+/// Build a request payload for the kernel RPC dispatch path.
+fn rpcRequest(method: []const u8, params: []const u8) ![]u8 {
+    return std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"t\",\"method\":\"{s}\",\"params\":{s}}}",
+        .{ method, params },
+    );
+}
+
+test "providers/set-model mutates only the ledger model via dispatch" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    // Seed a provider in the ledger.
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "zai",
+        .base_url = "https://api.z.ai/api/coding/paas/v4",
+        .model = "glm-5.2",
+        .api_key = "k1",
+    });
+    defer auth_store.removeProvider(std.testing.allocator, workspace_root, "zai") catch {};
+
+    const request = try rpcRequest(protocol_types.methods.provider_model_set, "{\"provider_id\":\"zai\",\"model\":\"glm-5.5\"}");
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"ok\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"model\":\"glm-5.5\"") != null);
+
+    var auth = try auth_store.readProviderById(std.testing.allocator, workspace_root, "zai");
+    defer auth.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("glm-5.5", auth.model);
+    try std.testing.expectEqualStrings("k1", auth.api_key);
+}
+
+test "providers/set-model returns a rejection envelope for a missing provider" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    const request = try rpcRequest(protocol_types.methods.provider_model_set, "{\"provider_id\":\"absent\",\"model\":\"m\"}");
+    defer std.testing.allocator.free(request);
+    const response = try processRequest(&server, request);
+    // The handler raises ExecutionFailed; processRequest renders a JSON-RPC
+    // error frame (never a fake ok status).
+    defer if (response) |value| std.testing.allocator.free(value);
+    try std.testing.expect(response != null);
+    if (response) |value| {
+        try std.testing.expect(std.mem.indexOf(u8, value, "\"error\"") != null);
+        try std.testing.expect(std.mem.indexOf(u8, value, "\"status\":\"ok\"") == null);
+    }
+}
+
+test "agents/list dispatch returns the loaded registry ids" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    // Seed a minimal config so the agent registry loads (not just built-ins).
+    const config_path = try config_file.ensure(std.testing.allocator, workspace_root);
+    defer std.testing.allocator.free(config_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = config_path, .data = "{\"version\":1}\n" });
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    const request = try rpcRequest(protocol_types.methods.agents_list, "{}");
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"ok\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"id\":\"recon\"") != null);
+}
+
+test "agents/configure assigns provider and model through the registry owner" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    const config_path = try config_file.ensure(std.testing.allocator, workspace_root);
+    defer std.testing.allocator.free(config_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = config_path, .data = "{\"version\":1}\n" });
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    const request = try rpcRequest(protocol_types.methods.agents_configure,
+        "{\"agent_id\":\"recon\",\"provider_id\":\"openrouter\",\"model\":\"openrouter/deepseek/deepseek-chat\"}");
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"ok\"") != null);
+
+    // Read the agent back from the registry.
+    var registry = try agent_spec.loadRegistry(std.testing.allocator, workspace_root);
+    defer registry.deinit();
+    const recon = try registry.resolve("recon");
+    try std.testing.expectEqualStrings("openrouter", recon.provider_id);
+    try std.testing.expectEqualStrings("openrouter/deepseek/deepseek-chat", recon.model);
+}
+
+test "auth/detect dispatch returns an ok envelope (secret-free)" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    const request = try rpcRequest(protocol_types.methods.auth_detect, "{}");
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"ok\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"detected\":[") != null);
+    // Never leaks a token into the projection.
+    try std.testing.expect(std.mem.indexOf(u8, response, "access_token") == null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "refresh_token") == null);
+}
+
+test "auth/import dispatch returns a structured result envelope" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    const request = try rpcRequest(protocol_types.methods.auth_import, "{\"sources\":[\"codex\"]}");
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+    // Must be a structured envelope (imported/skipped arrays), never a bare
+    // transport error — even when the host has no codex file, the TUI reads
+    // this to decide success.
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"imported\":[") != null);
+}
+
+test "models/list resolves the ledger active provider, not the startup snapshot" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    // An import-style upsert switches the ledger active provider to
+    // anthropic while the kernel snapshot still names the startup provider.
+    // The unroutable loopback base URL keeps discovery offline; the envelope
+    // must still name the LEDGER provider, proving resolution provenance.
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "anthropic",
+        .base_url = "http://127.0.0.1:2/v1",
+        .model = "claude-sonnet-4-5",
+        .api_key = "k2",
+    });
+    defer auth_store.removeProvider(std.testing.allocator, workspace_root, "anthropic") catch {};
+
+    const request = try rpcRequest(protocol_types.methods.models_list, "{}");
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"provider\":\"anthropic\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"base_url\":\"http://127.0.0.1:2/v1\"") != null);
+    // The stale snapshot provider must not leak into the resolution.
+    try std.testing.expect(std.mem.indexOf(u8, response, "127.0.0.1:1234") == null);
+}
+
+test "models/list keeps the startup snapshot when no ledger exists" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    const request = try rpcRequest(protocol_types.methods.models_list, "{}");
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+    // Env-configured workspace: the snapshot fields stand (unroutable test
+    // base URL fails discovery, but against the snapshot provider).
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"provider\":\"openai-compatible\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "127.0.0.1:1234") != null);
+}
+
+test "session/send explicit provider equal to the snapshot active still reads the ledger" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "explicit active provider", .{});
+    defer session.deinit(std.testing.allocator);
+
+    // The snapshot's active provider is absent from the ledger: the explicit
+    // request must fail closed as ProviderNotFound instead of silently
+    // proceeding on startup-snapshot credentials.
+    const request = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-send-explicit\",\"method\":\"session/send\",\"params\":{{\"session_id\":\"{s}\",\"prompt\":\"hi\",\"provider_id\":\"openai-compatible\"}}}}",
+        .{session.id},
+    );
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"error\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "Provider not found") != null);
+    // No turn was attempted on snapshot credentials.
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"session\"") == null);
 }

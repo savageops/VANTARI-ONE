@@ -1,11 +1,15 @@
 {
   "type": "workspace-record",
   "schema": "var1.workspace.v1",
-  "updated": "2026-08-14",
+  "updated": "2026-08-16",
   "workspace_root": "E:/Workspaces/01_Projects/01_Github/VANTARI-ONE",
   "live_code_lane": "apps/backend",
-  "vendored_runtime_dependencies": ["packages/tui"],
-  "local_untracked_prototypes": ["apps/frontend"],
+  "vendored_runtime_dependencies": [
+    "packages/tui"
+  ],
+  "local_untracked_prototypes": [
+    "apps/frontend"
+  ],
   "runtime_root": ".var",
   "canonical_records": {
     "contract": "AGENTS.md",
@@ -139,7 +143,17 @@
     "resolver": "apps/backend/src/shared/fsutil.zig:resolveWithAccessMode",
     "execution_projection": "apps/backend/src/core/tools/module.zig:ExecutionContext.full_access_mode",
     "child_handoff": "apps/backend/src/core/agents/supervisor.zig:childExecutionContext",
-    "covered_tools": ["read_file", "write_file", "append_file", "replace_in_file", "list_files", "search_files", "lsp_definition", "lsp_references", "shell_exec"],
+    "covered_tools": [
+      "read_file",
+      "write_file",
+      "append_file",
+      "replace_in_file",
+      "list_files",
+      "search_files",
+      "lsp_definition",
+      "lsp_references",
+      "shell_exec"
+    ],
     "runtime_state_remains_canonical": true
   },
   "proof": {
@@ -209,12 +223,12 @@
     "active_installed_processes_preserved": []
   },
   "wip": {
-      "021": "021a-f and parent archived; auth chain closed; no active frontier",
+    "021": "021a-f and parent archived; auth chain closed; no active frontier",
     "035": "035a-h and parent archived; provider/cost chain closed",
     "036": "036a-h and parent archived; findings 10, 11, and 13 closed; moves 21-31 and 38-40 closed; external-effect certainty remains a separate frontier",
     "PLUG": "parent and PLUGa-h archived as superseded by Move40 deferred-delete; no active plugin runtime frontier",
-    "TUI": "Moves46-52 and current input owner closed; Move52a/57b root interactive input uses the crash-safe settings-style review panel; installed provider-driven response passes in all four prompt modes; direct noninteractive launch remains a typed host boundary"
-    ,"sandbox": "Move53 closed by deleting the duplicate-mode idea; reopen only with a verified Windows-native/container execution backend and lifecycle proof",
+    "TUI": "Moves46-52 and current input owner closed; Move52a/57b root interactive input uses the crash-safe settings-style review panel; installed provider-driven response passes in all four prompt modes; direct noninteractive launch remains a typed host boundary",
+    "sandbox": "Move53 closed by deleting the duplicate-mode idea; reopen only with a verified Windows-native/container execution backend and lifecycle proof",
     "Move55a": "current: chat log posture and prompt-mode route selection remain one owner; installed prompt-mode/question/settings proof passes",
     "Moves56-58": "current: persistent Python/Bun eval and shared process supervisor remain one owner; installed set/get and teardown proof passes",
     "Move57a": "current: finite renderer-backed theme/status policy persists through config/set; installed settings proof passes; arbitrary editor/menu registry remains deferred",
@@ -224,8 +238,8 @@
     "Moves72-80": "retired/delete-complete after owner census and current consumer audit; repair/replay runtime APIs, candidate tool, evaluator, rollback, regression, and cold-start reconciliation were removed; historical receipts remain provenance only; current source graph 19/19 and 2,184/2,184; installed base probes pass",
     "Move84": "deferred-delete: unconnected CounterRegister and zero-valued VAR1 stats surface removed; the retired token is rejected before provider dispatch; reopen requires a measured bottleneck, one canonical owner, explicit operator consumer, and durable readback; current source graph 19/19 and 2,184/2,184; source ReleaseFast SHA-256 85CE5E58BCDDBEBBDD6E04CA4978E8E9A2535CBA2EA50B76016841E3275D1481",
     "Move85": "source-complete delete: unused ScopedArena/quota shell, export, and dead turn-loop lifecycle calls removed; no runtime allocator quota consumer or measured pressure existed and no consumer-facing capability was removed; current source graph 19/19 and 2,184/2,184; source ReleaseFast SHA-256 85CE5E58BCDDBEBBDD6E04CA4978E8E9A2535CBA2EA50B76016841E3275D1481; installed base probes pass",
-    "Move89": "closed/current boundary: installed frontier proof covers provider streaming, native write/effect, all-mode input, Python/Bun eval, cancellation, owner/scheduler lifecycle, summary/event readback, settings, and cleanup; fresh orchestrate input and build read/write/effect artifacts cover the retained consumer paths; DAP review, TTSR recovery, reference shell, and nested hidden-TUI launch remain explicit typed boundaries with no fallback",
-    "Move90": "promotable: write-release-manifest.ps1 records pinned Zig seed 0, fresh source Debug 19/19 and 2,184/2,184, source tools --json capability probe, equal source/installed SHA-256 85CE5E58BCDDBEBBDD6E04CA4978E8E9A2535CBA2EA50B76016841E3275D1481, current frontier evidence, required docs, and final zero process census",
+    "Move89": "closed/current boundary: source provider smoke and installed frontier proof cover provider streaming, native write/effect, all-mode input, Python/Bun eval, cancellation, owner/scheduler lifecycle, summary/event readback, settings, and cleanup; fresh orchestrate input and build read/write/effect artifacts cover the retained consumer paths; DAP review, TTSR recovery, reference shell, and nested hidden-TUI launch remain explicit typed boundaries; no fallback",
+    "Move90": "promotable release manifest at .docs/research/2026-08-14-roadmap-24-release-manifest.json records current ReleaseFast build with pinned Zig seed 0, equal source/installed SHA-256 85CE5E58BCDDBEBBDD6E04CA4978E8E9A2535CBA2EA50B76016841E3275D1481, 19/19 steps, 2184/2184 tests, source capability cleanup, current frontier evidence, required-doc hashes, and final zero process census",
     "Move58": "current shared core/tools/process.zig owner for shell and persistent eval children; installed set/get and teardown pass",
     "Move59": "current session-owned DAP lifecycle over PersistentProcess with exact framing and seven sockets; installed review gate fails closed before adapter start",
     "Move64": "current ticket-only work lifecycle; duplicate lifecycle tools and generic docs-sync writer removed; installed summary/event readback passes",
@@ -235,26 +249,25 @@
     "Move69": "current typed context-compile diagnostics and compiler-only overflow rebuild; installed event readback passes and no repair ledger exists",
     "Move70": "current receipt-addressed child context projection through the existing compiler/session/Supervisor/mailbox owners; installed session readback passes",
     "Move88": "complete Windows installer owner boundary; exact-path lock handling requires one current authenticated owner projection, uses /owner/shutdown, verifies zero exact-path processes before staged replacement, and refuses stale/missing/ambiguous projection without force-stop; exact owner gate reconciled, install passed, prior binary retained as timestamped .bak, source/installed SHA-256 match 85CE5E58BCDDBEBBDD6E04CA4978E8E9A2535CBA2EA50B76016841E3275D1481, installed base probes passed, current lifecycle proof passed 8/8 clients, and final source/installed census was zero",
-    "Move89": "closed/current boundary: source provider smoke and installed frontier proof cover provider streaming, native write/effect, all-mode input, Python/Bun eval, cancellation, owner/scheduler lifecycle, summary/event readback, settings, and cleanup; fresh orchestrate input and build read/write/effect artifacts cover the retained consumer paths; DAP review, TTSR recovery, reference shell, and nested hidden-TUI launch remain explicit typed boundaries; no fallback",
-    "Move90": "promotable release manifest at .docs/research/2026-08-14-roadmap-24-release-manifest.json records current ReleaseFast build with pinned Zig seed 0, equal source/installed SHA-256 85CE5E58BCDDBEBBDD6E04CA4978E8E9A2535CBA2EA50B76016841E3275D1481, 19/19 steps, 2184/2184 tests, source capability cleanup, current frontier evidence, required-doc hashes, and final zero process census",
     "Move61": "current adapter-backed provider capability probe at dispatch; streaming, native tools, and context-overflow are explicit, Responses reports responses_api, unresolved auto fails closed; installed provider/model selection fails closed with MissingAuth",
-    "OAuth": "Codex OAuth is closed; Anthropic and OpenCode OAuth remain provider-parity gaps owned by the auth/provider slice"
+    "OAuth": "Codex OAuth is closed; Claude Code and OpenCode credentials import explicitly through auth detect/import with provenance and collision guard (2026-08-16, receipt 087); Anthropic/OpenCode refresh flows remain provider-parity gaps owned by the auth/provider slice"
   },
   "residuals": [
     "Both test-isolation incidents, 877 older context-poison fixtures, and legacy backend owners are repaired reversibly; quarantine/archive manifests and rollback paths remain retained evidence.",
     "The fixed agent pool survives presentation detach in one source and installed owner tree; scheduler leadership and ticket claim/lease/child admission are process-exclusive; assignment is ledger-only and has no config policy branch. Source and installed Windows lifecycle meshes close exact tree death, generation replacement, same-session resume, nested direct/group/parent delivery, terminal settlement, cold readback, and zero-process cleanup. Arbitrary external-effect certainty remains a separate gate.",
     "The tracked TUI consumes exact stored event seq and the in-process 100-way mesh is closed; ignored browser routes keep a compatibility transport SSE id, and multi-process writer ownership remains coupled to scheduler/claim arbitration.",
     "Current source and installed ReleaseFast SHA-256 both equal after pinned Zig seed 0 builds 85CE5E58BCDDBEBBDD6E04CA4978E8E9A2535CBA2EA50B76016841E3275D1481. The current source graph is 19/19 and 2,184/2,184 after the Moves72-80, Move84, and Move85 delete decisions; historical repair/replay and telemetry receipts remain provenance only. The retired stats token is rejected before provider dispatch. Installed help, health, tools, auth, workspace, provider, input, eval, write/effect, cancellation, scheduler, and readback proofs pass; DAP review, TTSR recovery, reference pressure, and hidden-TUI launch remain explicit typed boundaries. No fallback or alternate repair system was added.",
-    "Move 53 is not a sandbox claim: current host execution remains bounded by capability profiles and path scope until a real isolation backend is installed and proven."
-    ,"Move55a current: runtime.log_level and prompt_modes remain one source owner; installed prompt-mode/question/settings proof passes."
-    ,"Runtime theme and menu-position settings are deferred until the TUI renderer consumes a typed palette/layout owner; inert config is intentionally absent."
-    ,"Moves56-58 current: persistent Python/Bun eval, definition-owned availability, and shared process-supervisor timeout/drain/tree receipts pass installed proof."
-    ,"OAuth parity is partial: Codex OAuth is proven, while Anthropic and OpenCode login/refresh flows remain unimplemented and must reuse the existing auth/provider owners."
-    ,"Move57b current: the root question panel, malformed-request recovery, lifecycle cleanup, and shared idle/streaming key boundary pass source and installed provider-mode proof; visual terminal capture remains a host-boundary item."
-    ,"Move59 current boundary: the session-owned DAP lifecycle, exact frame reader, risk-correct sockets, and shared process teardown pass source proof; installed dispatch fails closed at unknown_high_impact review before adapter start."
-    ,"Move65 current: the provider request carries native tool schemas as the model API while the operator catalog and demand-loaded guidance remain explicit; installed native-tool/prompt-mode proof passes."
-    ,"Move66 current: context.prompt_budget_tokens and the prompt-owned behavior matrix pass source tests; estimated accounting remains explicitly estimated and installed provider/tool turns pass."
-    ,"Move67 current: stable message IDs and explicit compaction ranges remain owned by the session/context ledgers; installed summary/event readback passes and automatic compaction remains gated."
-    ,"Move69 current: typed context-compile diagnostics and compiler-only overflow rebuild pass source tests; installed event readback confirms the existing spine and no repair ledger."
+    "Move 53 is not a sandbox claim: current host execution remains bounded by capability profiles and path scope until a real isolation backend is installed and proven.",
+    "Move55a current: runtime.log_level and prompt_modes remain one source owner; installed prompt-mode/question/settings proof passes.",
+    "Runtime theme and menu-position settings are deferred until the TUI renderer consumes a typed palette/layout owner; inert config is intentionally absent.",
+    "Moves56-58 current: persistent Python/Bun eval, definition-owned availability, and shared process-supervisor timeout/drain/tree receipts pass installed proof.",
+    "OAuth parity is partial: Codex OAuth is proven, while Anthropic and OpenCode login/refresh flows remain unimplemented and must reuse the existing auth/provider owners.",
+    "Move57b current: the root question panel, malformed-request recovery, lifecycle cleanup, and shared idle/streaming key boundary pass source and installed provider-mode proof; visual terminal capture remains a host-boundary item.",
+    "Move59 current boundary: the session-owned DAP lifecycle, exact frame reader, risk-correct sockets, and shared process teardown pass source proof; installed dispatch fails closed at unknown_high_impact review before adapter start.",
+    "Move65 current: the provider request carries native tool schemas as the model API while the operator catalog and demand-loaded guidance remain explicit; installed native-tool/prompt-mode proof passes.",
+    "Move66 current: context.prompt_budget_tokens and the prompt-owned behavior matrix pass source tests; estimated accounting remains explicitly estimated and installed provider/tool turns pass.",
+    "Move67 current: stable message IDs and explicit compaction ranges remain owned by the session/context ledgers; installed summary/event readback passes and automatic compaction remains gated.",
+    "Move69 current: typed context-compile diagnostics and compiler-only overflow rebuild pass source tests; installed event readback confirms the existing spine and no repair ledger.",
+    "2026-08-16 provider chain: credential import, single-owner model routing, per-agent overrides, and the Settings Models tab are source-proven (Debug 19/19, 2,223/2,227) and deployed on this Linux workstation at installed SHA-256 217240A0050B07579A3B31B8A52B95E182532A83376DF942BFE25D5C6EC86663 with live owner health/auth/models probes; per-turn ledger refresh applies set-model/import/use on the next turn; Anthropic/OpenCode refresh flows remain open; Windows-native promotion of this chain is unclaimed"
   ]
 }

@@ -21,6 +21,7 @@ pub const section_names = [_][]const u8{
     "runtime",
     "tui",
     "provider",
+    "models",
     "agent_routes",
     "agents",
     "context",
@@ -29,6 +30,131 @@ pub const section_names = [_][]const u8{
     "buffer",
     "memory",
     "environment",
+};
+
+/// A reusable "cycle instead of type" selection engine. Any constrained
+/// setting (model, provider, agent, theme, log_level, status_bar_position)
+/// renders its options here; Left/Right cycle, Enter locks the highlighted
+/// option. This is the single mechanic replacing free-text input across
+/// settings — one engine, no per-field typing.
+pub const Picker = struct {
+    /// Display label for each option (owned).
+    labels: std.ArrayList([]u8) = .{},
+    /// Optional stable value for each option, distinct from the label when
+    /// the label is a human description (e.g. provider "OpenCode" → "opencode").
+    values: std.ArrayList([]u8) = .{},
+    cursor: usize = 0,
+    active: bool = false,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) Picker {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *Picker) void {
+        for (self.labels.items) |item| self.allocator.free(item);
+        self.labels.deinit(self.allocator);
+        for (self.values.items) |item| self.allocator.free(item);
+        self.values.deinit(self.allocator);
+    }
+
+    pub fn clear(self: *Picker) void {
+        for (self.labels.items) |item| self.allocator.free(item);
+        self.labels.clearRetainingCapacity();
+        for (self.values.items) |item| self.allocator.free(item);
+        self.values.clearRetainingCapacity();
+        self.cursor = 0;
+        self.active = false;
+    }
+
+    pub fn add(self: *Picker, label_text: []const u8, value_text: []const u8) !void {
+        try self.labels.append(self.allocator, try self.allocator.dupe(u8, label_text));
+        try self.values.append(self.allocator, try self.allocator.dupe(u8, value_text));
+    }
+
+    pub fn itemCount(self: *const Picker) usize {
+        return self.labels.items.len;
+    }
+
+    pub fn label(self: *const Picker) []const u8 {
+        if (self.cursor >= self.labels.items.len) return "";
+        return self.labels.items[self.cursor];
+    }
+
+    pub fn value(self: *const Picker) []const u8 {
+        if (self.cursor >= self.values.items.len) return "";
+        return self.values.items[self.cursor];
+    }
+
+    pub fn move(self: *Picker, direction: i8) void {
+        const count = self.labels.items.len;
+        if (count == 0) return;
+        if (direction < 0) {
+            self.cursor = if (self.cursor == 0) count - 1 else self.cursor - 1;
+        } else {
+            self.cursor = (self.cursor + 1) % count;
+        }
+    }
+
+    /// Find the index of the option whose value matches `value`, or null.
+    pub fn indexOfValue(self: *const Picker, needle: []const u8) ?usize {
+        for (self.values.items, 0..) |candidate, index| {
+            if (std.mem.eql(u8, candidate, needle)) return index;
+        }
+        return null;
+    }
+};
+
+/// Mode state for the Models tab. A layered selection: provider → model →
+/// (assign to active provider or an agent). Each layer reuses the Picker
+/// engine so the whole flow is cycle-to-lock, never typing.
+pub const ModelsState = struct {
+    mode: enum { providers, models, assign } = .providers,
+    providers: Picker,
+    models: Picker,
+    /// Assign-target picker. Index 0 is always the active provider; indices
+    /// 1..N are the agents (from `agent_ids`). Rebuilt on each assign entry.
+    agents: Picker,
+    /// The real agent ids from agents/list, kept separately so the assign
+    /// picker can be rebuilt (active provider + agents) without losing them.
+    agent_ids: std.ArrayList([]u8) = .{},
+    /// Provider id the current model list was pulled from (for assignment).
+    active_provider_id: []u8 = "",
+    loaded_provider_id: []u8 = "",
+    status_message: ?[]u8 = null,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) ModelsState {
+        return .{
+            .providers = Picker.init(allocator),
+            .models = Picker.init(allocator),
+            .agents = Picker.init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *ModelsState) void {
+        self.providers.deinit();
+        self.models.deinit();
+        self.agents.deinit();
+        for (self.agent_ids.items) |id| self.allocator.free(id);
+        self.agent_ids.deinit(self.allocator);
+        if (self.active_provider_id.len > 0) self.allocator.free(self.active_provider_id);
+        if (self.loaded_provider_id.len > 0) self.allocator.free(self.loaded_provider_id);
+        if (self.status_message) |msg| self.allocator.free(msg);
+    }
+
+    pub fn setStatus(self: *ModelsState, message: []const u8) !void {
+        if (self.status_message) |msg| self.allocator.free(msg);
+        self.status_message = try self.allocator.dupe(u8, message);
+    }
+
+    /// Free and clear the status line. Direct `status_message = null` would
+    /// leak the previous heap message; every transition goes through here.
+    pub fn clearStatus(self: *ModelsState) void {
+        if (self.status_message) |msg| self.allocator.free(msg);
+        self.status_message = null;
+    }
 };
 
 pub const SettingsState = struct {
@@ -43,6 +169,9 @@ pub const SettingsState = struct {
     entries: std.ArrayList(ConfigEntry) = .{},
     status_message: ?[]u8 = null,
     config_changed: bool = false,
+    /// Models-tab state (providers → models → assign). Populated lazily when
+    /// the models section is opened; uses the shared Picker engine.
+    models_state: ?ModelsState = null,
 
     pub const ConfigEntry = struct {
         key: []u8,
@@ -71,6 +200,7 @@ pub const SettingsState = struct {
         self.entries.deinit(self.allocator);
         self.edit_buffer.deinit(self.allocator);
         if (self.status_message) |msg| self.allocator.free(msg);
+        if (self.models_state) |*ms| ms.deinit();
     }
 
     /// Replace the operator-facing status line without leaking the previous
@@ -88,8 +218,35 @@ pub const SettingsState = struct {
         return changed;
     }
 
+
+    /// Move to an adjacent section and load its surface through one owner.
+    /// The models section is RPC-backed (`loadModels`); every other section
+    /// loads its config entries. Returns false at a boundary (no movement,
+    /// no reload). Consolidating this keeps keyboard paths — the generic
+    /// handler and the models overlay — from diverging on what entering the
+    /// models section loads.
+    fn changeSection(self: *SettingsState, direction: i8, rpc_client: anytype) !bool {
+        const before = self.section_cursor;
+        if (direction < 0) {
+            if (self.section_cursor > 0) self.section_cursor -= 1;
+        } else {
+            if (self.section_cursor < section_names.len - 1) self.section_cursor += 1;
+        }
+        if (self.section_cursor == before) return false;
+        if (std.mem.eql(u8, section_names[self.section_cursor], "models")) {
+            try self.loadModels(rpc_client);
+        } else {
+            try self.loadSection();
+        }
+        return true;
+    }
     /// Load the config entries for the current section from disk.
     pub fn loadSection(self: *SettingsState) !void {
+        // The models section is not a config section; it is an RPC-backed
+        // picker over providers/models/agents. loadModels() (client-aware)
+        // populates it; the generic loader leaves it to the models draw path.
+        if (std.mem.eql(u8, section_names[self.section_cursor], "models")) return;
+
         for (self.entries.items) |entry| {
             self.allocator.free(entry.key);
             self.allocator.free(entry.value_text);
@@ -193,6 +350,441 @@ pub const SettingsState = struct {
         });
     }
 
+    /// Populate the models tab from kernel RPC surfaces: connected providers
+    /// (providers/list), detected-but-unconnected natives (auth/detect), and
+    /// the agent registry (agents/list) for assignment. All read-only; the
+    /// operator triggers the single mutating actions (import, set-model,
+    /// assign) explicitly.
+    pub fn loadModels(self: *SettingsState, rpc_client: anytype) !void {
+        if (self.models_state == null) self.models_state = ModelsState.init(self.allocator);
+        const models = &self.models_state.?;
+        models.providers.clear();
+        models.models.clear();
+        models.agents.clear();
+
+        // Agents for the assignment cycler.
+        {
+            for (models.agent_ids.items) |id| self.allocator.free(id);
+            models.agent_ids.clearRetainingCapacity();
+            const call = rpc_client.call(protocol.methods.agents_list, "{}") catch null;
+            if (call) |*c| {
+                defer c.deinit(self.allocator);
+                if (c.error_json == null) {
+                    if (c.result_json) |result_json| {
+                        var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, result_json, .{ .ignore_unknown_fields = true }) catch null;
+                        if (parsed) |*p| {
+                            defer p.deinit();
+                            if (p.value == .object) {
+                                if (p.value.object.get("agents")) |agents_value| {
+                                    if (agents_value == .array) {
+                                        for (agents_value.array.items) |agent_item| {
+                                            if (agent_item != .object) continue;
+                                            const id = agent_item.object.get("id") orelse continue;
+                                            if (id != .string) continue;
+                                            try models.agent_ids.append(self.allocator, try self.allocator.dupe(u8, id.string));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Connected providers + their current model.
+        {
+            const call = rpc_client.call(protocol.methods.providers_list, "{}") catch null;
+            if (call) |*c| {
+                defer c.deinit(self.allocator);
+                if (c.error_json == null) {
+                    if (c.result_json) |result_json| {
+                        var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, result_json, .{ .ignore_unknown_fields = true }) catch null;
+                        if (parsed) |*p| {
+                            defer p.deinit();
+                            if (p.value == .object) {
+                                if (p.value.object.get("active_provider")) |active| {
+                                    if (active == .string) {
+                                        if (models.active_provider_id.len > 0) self.allocator.free(models.active_provider_id);
+                                        models.active_provider_id = try self.allocator.dupe(u8, active.string);
+                                    }
+                                }
+                                if (p.value.object.get("providers")) |providers_value| {
+                                    if (providers_value == .array) {
+                                        for (providers_value.array.items) |provider_item| {
+                                            if (provider_item != .object) continue;
+                                            const provider_id = provider_item.object.get("provider_id") orelse continue;
+                                            if (provider_id != .string) continue;
+                                            if (provider_item.object.get("model")) |model_value| {
+                                                if (model_value == .string and model_value.string.len > 0) {
+                                                    const label = try std.fmt.allocPrint(self.allocator, "{s} ({s})", .{ provider_id.string, model_value.string });
+                                                    defer self.allocator.free(label);
+                                                    try models.providers.add(label, provider_id.string);
+                                                    continue;
+                                                }
+                                            }
+                                            try models.providers.add(provider_id.string, provider_id.string);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Detected-but-unconnected native credentials (secret-free).
+        {
+            const call = rpc_client.call(protocol.methods.auth_detect, "{}") catch null;
+            if (call) |*c| {
+                defer c.deinit(self.allocator);
+                if (c.error_json == null) {
+                    if (c.result_json) |result_json| {
+                        var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, result_json, .{ .ignore_unknown_fields = true }) catch null;
+                        if (parsed) |*p| {
+                            defer p.deinit();
+                            if (p.value == .object) {
+                                if (p.value.object.get("detected")) |detected_value| {
+                                    if (detected_value == .array) {
+                                        for (detected_value.array.items) |entry| {
+                                            if (entry != .object) continue;
+                                            const provider_id = entry.object.get("provider_id") orelse continue;
+                                            const live = entry.object.get("live") orelse continue;
+                                            if (provider_id != .string or live != .bool) continue;
+                                            // Already connected (in providers) is
+                                            // shown by the providers row above.
+                                            if (models.providers.indexOfValue(provider_id.string) != null) continue;
+                                            if (!live.bool) continue;
+                                            const source = entry.object.get("source") orelse continue;
+                                            if (source != .string) continue;
+                                            const label = try std.fmt.allocPrint(self.allocator, "{s} (detected: {s}, press Enter to connect)", .{ provider_id.string, source.string });
+                                            defer self.allocator.free(label);
+                                            // auth/import matches PROVENANCE source names
+                                            // (claude/codex/opencode), not provider ids, so
+                                            // the picker value is the source name while the
+                                            // label keeps the human provider id.
+                                            try models.providers.add(label, source.string);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle a key while the models tab is active. Routes provider/model/assign
+    /// picker navigation and the explicit mutations.
+    pub fn handleModelsKey(self: *SettingsState, key_event: anytype, rpc_client: anytype) !bool {
+        const models = &self.models_state.?;
+        const key = key_event;
+
+        // Esc walks back up the layered picker, then out of models entirely.
+        if (key.matches(tui.Key.escape, .{})) {
+            if (models.mode != .providers) {
+                models.mode = .providers;
+                models.models.clear();
+                models.clearStatus();
+            } else {
+                self.open = false;
+            }
+            return true;
+        }
+        // Tab / Shift-Tab keep section navigation even while the models overlay
+        // owns keys, so the operator can leave the tab without Esc. The same
+        // section-change owner the generic handler uses loads the destination
+        // surface — including models when the cursor wraps onto it.
+        if (key.matches(tui.Key.tab, .{ .shift = true })) {
+            _ = try self.changeSection(-1, rpc_client);
+            return true;
+        }
+        if (key.matches(tui.Key.tab, .{})) {
+            _ = try self.changeSection(1, rpc_client);
+            return true;
+        }
+
+        switch (models.mode) {
+            .providers => {
+                if (key.matches(tui.Key.up, .{})) {
+                    models.providers.move(-1);
+                    return true;
+                }
+                if (key.matches(tui.Key.down, .{})) {
+                    models.providers.move(1);
+                    return true;
+                }
+                if (key.matches(tui.Key.left, .{})) {
+                    models.providers.move(-1);
+                    return true;
+                }
+                if (key.matches(tui.Key.right, .{})) {
+                    models.providers.move(1);
+                    return true;
+                }
+                if (key.matches(tui.Key.enter, .{})) {
+                    const provider_id = models.providers.value();
+                    if (provider_id.len == 0) return true;
+                    // Connected providers are in providers/list; detected-only
+                    // rows are marked "(detected: ...)" and import on Enter.
+                    if (std.mem.indexOf(u8, models.providers.label(), "detected:") != null) {
+                        try self.importDetectedSource(rpc_client, provider_id);
+                        return true;
+                    }
+                    try self.pullModelsForProvider(rpc_client, provider_id);
+                    return true;
+                }
+                return false;
+            },
+            .models => {
+                if (key.matches(tui.Key.up, .{})) {
+                    models.models.move(-1);
+                    return true;
+                }
+                if (key.matches(tui.Key.down, .{})) {
+                    models.models.move(1);
+                    return true;
+                }
+                if (key.matches(tui.Key.left, .{})) {
+                    models.models.move(-1);
+                    return true;
+                }
+                if (key.matches(tui.Key.right, .{})) {
+                    models.models.move(1);
+                    return true;
+                }
+                if (key.matches(tui.Key.enter, .{})) {
+                    const model = models.models.value();
+                    if (model.len == 0) return true;
+                    // Rebuild the assign picker: index 0 = the provider the
+                    // model list was pulled from (set-model writes THAT
+                    // provider's ledger record), then every agent. The label
+                    // must name the provider the commit will actually write —
+                    // "(active provider)" only when it really is the ledger's
+                    // active provider, never as a blanket caption.
+                    models.agents.clear();
+                    const target_provider = models.loaded_provider_id;
+                    const is_active_target = models.active_provider_id.len > 0 and
+                        std.mem.eql(u8, target_provider, models.active_provider_id);
+                    const provider_label = if (is_active_target)
+                        try std.fmt.allocPrint(self.allocator, "{s} (active provider)", .{target_provider})
+                    else
+                        try std.fmt.allocPrint(self.allocator, "{s} (provider)", .{target_provider});
+                    defer self.allocator.free(provider_label);
+                    try models.agents.add(provider_label, target_provider);
+                    for (models.agent_ids.items) |agent_id| {
+                        try models.agents.add(agent_id, agent_id);
+                    }
+                    models.mode = .assign;
+                    models.clearStatus();
+                    return true;
+                }
+                return false;
+            },
+            .assign => {
+                // Left/Right cycle between "active provider" and each agent.
+                // The first picker entry is the active provider; the rest are
+                // agents from the loaded registry.
+                if (key.matches(tui.Key.left, .{})) {
+                    models.agents.move(-1);
+                    return true;
+                }
+                if (key.matches(tui.Key.right, .{})) {
+                    models.agents.move(1);
+                    return true;
+                }
+                if (key.matches(tui.Key.up, .{})) {
+                    models.agents.move(-1);
+                    return true;
+                }
+                if (key.matches(tui.Key.down, .{})) {
+                    models.agents.move(1);
+                    return true;
+                }
+                if (key.matches(tui.Key.enter, .{})) {
+                    try self.commitModelAssignment(rpc_client);
+                    return true;
+                }
+                return false;
+            },
+        }
+    }
+
+    fn pullModelsForProvider(self: *SettingsState, rpc_client: anytype, provider_id: []const u8) !void {
+        const models = &self.models_state.?;
+        models.models.clear();
+        models.clearStatus();
+        if (models.loaded_provider_id.len > 0) self.allocator.free(models.loaded_provider_id);
+        models.loaded_provider_id = try self.allocator.dupe(u8, provider_id);
+
+        const params = try std.fmt.allocPrint(self.allocator, "{{\"provider_id\":{f}}}", .{std.json.fmt(provider_id, .{})});
+        defer self.allocator.free(params);
+        const call = rpc_client.call(protocol.methods.models_list, params) catch {
+            try models.setStatus("Error: models/list RPC failed");
+            return;
+        };
+        defer call.deinit(self.allocator);
+        if (call.error_json != null) {
+            try models.setStatus("Error: models/list rejected");
+            return;
+        }
+        const result_json = call.result_json orelse {
+            try models.setStatus("Error: malformed models/list response");
+            return;
+        };
+        var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, result_json, .{ .ignore_unknown_fields = true }) catch {
+            try models.setStatus("Error: malformed models/list response");
+            return;
+        };
+        defer parsed.deinit();
+        if (parsed.value != .object) return;
+        if (parsed.value.object.get("status")) |status| {
+            if (status == .string and !std.mem.eql(u8, status.string, "ok")) {
+                const message = parsed.value.object.get("error_message") orelse return;
+                if (message == .string) try models.setStatus(message.string);
+                return;
+            }
+        }
+        if (parsed.value.object.get("models")) |models_value| {
+            if (models_value == .array) {
+                for (models_value.array.items) |model_item| {
+                    if (model_item != .object) continue;
+                    const id = model_item.object.get("id") orelse continue;
+                    if (id != .string) continue;
+                    if (model_item.object.get("context_length")) |ctx| {
+                        if (ctx == .integer) {
+                            const label = try std.fmt.allocPrint(self.allocator, "{s} (ctx {d})", .{ id.string, ctx.integer });
+                            defer self.allocator.free(label);
+                            try models.models.add(label, id.string);
+                            continue;
+                        }
+                    }
+                    try models.models.add(id.string, id.string);
+                }
+            }
+        }
+        if (models.models.itemCount() == 0) {
+            try models.setStatus("No models reported by this provider");
+            return;
+        }
+        models.mode = .models;
+    }
+
+    /// Return whether a mutation RPC's result envelope reports `status:"ok"`.
+    /// Handlers return owner rejections as `{status:"rejected"/"failed",
+    /// error_message}` envelopes (not transport errors), so callers must read
+    /// the status. Parses the body and compares inside the tree lifetime.
+    fn mutationSucceeded(self: *SettingsState, call: anytype) bool {
+        if (call.error_json != null) return false;
+        const result_json = call.result_json orelse return false;
+        var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, result_json, .{ .ignore_unknown_fields = true }) catch return false;
+        defer parsed.deinit();
+        if (parsed.value != .object) return false;
+        const status = parsed.value.object.get("status") orelse return false;
+        if (status != .string) return false;
+        return std.mem.eql(u8, status.string, "ok");
+    }
+
+    fn importDetectedSource(self: *SettingsState, rpc_client: anytype, provider_id: []const u8) !void {
+        const models = &self.models_state.?;
+        const params = try std.fmt.allocPrint(self.allocator, "{{\"sources\":[{f}]}}", .{std.json.fmt(provider_id, .{})});
+        defer self.allocator.free(params);
+        const call = rpc_client.call(protocol.methods.auth_import, params) catch {
+            try models.setStatus("Error: auth/import RPC failed");
+            return;
+        };
+        defer call.deinit(self.allocator);
+        if (!self.mutationSucceeded(call)) {
+            try models.setStatus("Error: import rejected");
+            return;
+        }
+        // The import envelope reports ok even when the source-collision guard
+        // skipped everything; report the actual per-provider outcome instead
+        // of claiming success. imported/skipped are provider ids, never
+        // tokens.
+        var imported_count: usize = 0;
+        var skipped_count: usize = 0;
+        if (call.result_json) |result_json| {
+            if (std.json.parseFromSlice(std.json.Value, self.allocator, result_json, .{ .ignore_unknown_fields = true })) |parsed| {
+                defer parsed.deinit();
+                if (parsed.value == .object) {
+                    if (parsed.value.object.get("imported")) |value| {
+                        if (value == .array) imported_count = value.array.items.len;
+                    }
+                    if (parsed.value.object.get("skipped")) |value| {
+                        if (value == .array) skipped_count = value.array.items.len;
+                    }
+                }
+            } else |_| {}
+        }
+        if (imported_count == 0 and skipped_count > 0) {
+            try models.setStatus("Skipped: provider already owned by another credential source. Force with `vantari auth import --force`.");
+            return;
+        }
+        if (imported_count == 0) {
+            try models.setStatus("Nothing imported: no live credential matched this source.");
+            return;
+        }
+        try models.setStatus("Imported. Applies on the next turn.");
+        try self.loadModels(rpc_client);
+    }
+
+    fn commitModelAssignment(self: *SettingsState, rpc_client: anytype) !void {
+        const models = &self.models_state.?;
+        const model = models.models.value();
+        if (model.len == 0) return;
+
+        // The assign picker has index 0 = active provider, 1..N = agents.
+        // Derive the target from the cursor so Left/Right reaches agents.
+        if (models.agents.cursor == 0) {
+            const provider_id = models.loaded_provider_id;
+            if (provider_id.len == 0) return;
+            const params = try std.fmt.allocPrint(self.allocator, "{{\"provider_id\":{f},\"model\":{f}}}", .{
+                std.json.fmt(provider_id, .{}),
+                std.json.fmt(model, .{}),
+            });
+            defer self.allocator.free(params);
+            const call = rpc_client.call(protocol.methods.provider_model_set, params) catch {
+                try models.setStatus("Error: set-model RPC failed");
+                return;
+            };
+            defer call.deinit(self.allocator);
+            if (!self.mutationSucceeded(call)) {
+                try models.setStatus("Error: set-model rejected");
+                return;
+            }
+            const message = try std.fmt.allocPrint(self.allocator, "Model set for {s}: {s}. Applies on the next turn.", .{ provider_id, model });
+            defer self.allocator.free(message);
+            try models.setStatus(message);
+        } else {
+            const agent_id = models.agents.value();
+            if (agent_id.len == 0) return;
+            // Include the provider the model was pulled from so a model
+            // discovered on a non-active provider configures a usable
+            // provider/model pair on the agent.
+            const params = try std.fmt.allocPrint(self.allocator, "{{\"agent_id\":{f},\"provider_id\":{f},\"model\":{f}}}", .{
+                std.json.fmt(agent_id, .{}),
+                std.json.fmt(models.loaded_provider_id, .{}),
+                std.json.fmt(model, .{}),
+            });
+            defer self.allocator.free(params);
+            const call = rpc_client.call(protocol.methods.agents_configure, params) catch {
+                try models.setStatus("Error: agent configure RPC failed");
+                return;
+            };
+            defer call.deinit(self.allocator);
+            if (!self.mutationSucceeded(call)) {
+                try models.setStatus("Error: agent assignment rejected");
+                return;
+            }
+            try models.setStatus("Assigned to agent. Hot-loads on the next agents snapshot.");
+        }
+        self.config_changed = true;
+        models.mode = .providers;
+    }
+
     /// Save the currently-edited entry via config/set RPC.
     pub fn saveCurrentEntry(self: *SettingsState, rpc_client: anytype) !void {
         if (self.entry_cursor >= self.entries.items.len) return;
@@ -240,6 +832,10 @@ pub const SettingsState = struct {
     /// Handle a key press. Returns true if the key was consumed.
     pub fn handleKey(self: *SettingsState, key_event: anytype, rpc_client: anytype) !bool {
         const key = key_event;
+        // The models section is RPC-backed; route all keys to its picker.
+        if (std.mem.eql(u8, section_names[self.section_cursor], "models")) {
+            return self.handleModelsKey(key, rpc_client);
+        }
         // Esc — cancel edit or close panel.
         if (key.matches(tui.Key.escape, .{})) {
             if (self.editing) {
@@ -262,19 +858,34 @@ pub const SettingsState = struct {
             // Accept printable characters into the edit buffer.
             return false; // Let the TUI's text input handler handle char input.
         }
-        // Section navigation.
-        if (key.matches(tui.Key.left, .{}) or key.matches(tui.Key.tab, .{ .shift = true })) {
-            if (self.section_cursor > 0) {
-                self.section_cursor -= 1;
-                try self.loadSection();
+        // Left/Right cycle a constrained (enum) entry immediately — the same
+        // no-typing mechanic the models tab uses. When the selected entry is
+        // unconstrained, Left/Right falls through to section navigation.
+        if (key.matches(tui.Key.left, .{}) or key.matches(tui.Key.right, .{})) {
+            if (self.entry_cursor < self.entries.items.len) {
+                const entry = self.entries.items[self.entry_cursor];
+                if (entry.is_log_level or entry.is_theme or entry.is_status_bar_position) {
+                    const direction: i8 = if (key.matches(tui.Key.left, .{})) -1 else 1;
+                    const next = nextEnumValue(entry, direction);
+                    self.edit_buffer.clearRetainingCapacity();
+                    try self.edit_buffer.appendSlice(self.allocator, next);
+                    try self.saveCurrentEntry(rpc_client);
+                    self.edit_buffer.clearRetainingCapacity();
+                    try self.loadSection();
+                    return true;
+                }
             }
+        }
+        // Section navigation. Tab / Shift-Tab always move sections; Left/Right
+        // also move sections when the selected entry is not a constrained enum.
+        // `changeSection` owns the destination load, including the RPC-backed
+        // models surface, so every keyboard path loads the same thing.
+        if (key.matches(tui.Key.left, .{}) or key.matches(tui.Key.tab, .{ .shift = true })) {
+            _ = try self.changeSection(-1, rpc_client);
             return true;
         }
         if (key.matches(tui.Key.right, .{}) or key.matches(tui.Key.tab, .{})) {
-            if (self.section_cursor < section_names.len - 1) {
-                self.section_cursor += 1;
-                try self.loadSection();
-            }
+            _ = try self.changeSection(1, rpc_client);
             return true;
         }
         // Entry navigation.
@@ -366,6 +977,11 @@ pub fn drawSettings(win: tui.Window, state: *SettingsState) void {
         .{ .row_offset = 2 },
     );
 
+    if (std.mem.eql(u8, section_names[state.section_cursor], "models")) {
+        drawModels(win, state);
+        return;
+    }
+
     // Entries. Reserve the final two rows for status and navigation help,
     // and stop by row rather than by entry count because each help line also
     // consumes a terminal row.
@@ -434,6 +1050,93 @@ pub fn drawSettings(win: tui.Window, state: *SettingsState) void {
     );
 }
 
+/// Render the Models tab: a layered picker over providers → models → assign
+/// target. Each layer reuses the Picker engine; Left/Right (and Up/Down) cycle,
+/// Enter locks, Esc walks back up.
+fn drawModels(win: tui.Window, state: *SettingsState) void {
+    // Every print is single-line (`.wrap = .none`): the default `.grapheme`
+    // wrap would push long provider/model labels onto the next picker row and
+    // corrupt the layered list layout on narrow terminals.
+    const models = state.models_state orelse {
+        _ = win.print(
+            &.{.{ .text = "Loading providers…", .style = .{ .bg = Color.bg, .fg = Color.dim } }},
+            .{ .col_offset = 2, .row_offset = 3, .wrap = .none },
+        );
+        return;
+    };
+
+    var row: usize = 3;
+    const picker: *const Picker = switch (models.mode) {
+        .providers => &models.providers,
+        .models => &models.models,
+        .assign => &models.agents,
+    };
+    const mode_title = switch (models.mode) {
+        .providers => "Providers (connected + detected):",
+        .models => "Models:",
+        .assign => "Assign to (provider default or an agent):",
+    };
+
+    _ = win.print(
+        &.{.{ .text = mode_title, .style = .{ .bg = Color.bg, .fg = Color.fg } }},
+        .{ .col_offset = 2, .row_offset = @intCast(row), .wrap = .none },
+    );
+    row += 1;
+
+    if (picker.itemCount() == 0) {
+        _ = win.print(
+            &.{.{ .text = "  (none)", .style = .{ .bg = Color.bg, .fg = Color.dim } }},
+            .{ .col_offset = 4, .row_offset = @intCast(row), .wrap = .none },
+        );
+        row += 1;
+    } else {
+        const start = if (picker.cursor >= 8) picker.cursor - 7 else 0;
+        const visible = @min(@as(usize, 8), picker.itemCount() - start);
+        for (0..visible) |offset| {
+            const index = start + offset;
+            const is_selected = index == picker.cursor;
+            const label = picker.labels.items[index];
+            const row_text = std.fmt.allocPrint(state.allocator, "{s}{s}", .{ if (is_selected) "→ " else "  ", label }) catch {
+                row += 1;
+                continue;
+            };
+            defer state.allocator.free(row_text);
+            _ = win.print(
+                &.{.{ .text = row_text, .style = if (is_selected)
+                    .{ .bold = true, .bg = Color.bg, .fg = Color.accent }
+                else
+                    .{ .bg = Color.bg, .fg = Color.fg } }},
+                .{ .col_offset = 2, .row_offset = @intCast(row), .wrap = .none },
+            );
+            row += 1;
+        }
+    }
+
+    if (models.mode == .models and models.loaded_provider_id.len > 0) {
+        _ = win.print(
+            &.{.{ .text = models.loaded_provider_id, .style = .{ .bg = Color.bg, .fg = Color.dim } }},
+            .{ .col_offset = 30, .row_offset = 4, .wrap = .none },
+        );
+    }
+
+    if (models.status_message) |msg| {
+        _ = win.print(
+            &.{.{ .text = msg, .style = .{ .bg = Color.bg, .fg = Color.success } }},
+            .{ .col_offset = 2, .row_offset = @intCast(win.height -| 2), .wrap = .none },
+        );
+    }
+
+    const hint = switch (models.mode) {
+        .providers => "↑/↓/←/→ cycle  Enter: connect/import or show models  Esc back",
+        .models => "↑/↓/←/→ cycle model  Enter: assign  Esc back",
+        .assign => "←/→ cycle target  Enter: lock in  Esc back",
+    };
+    _ = win.print(
+        &.{.{ .text = hint, .style = .{ .bg = Color.bg, .fg = Color.dim } }},
+        .{ .col_offset = 2, .row_offset = @intCast(win.height -| 1), .wrap = .none },
+    );
+}
+
 fn nextLogLevel(value: []const u8) []const u8 {
     if (std.mem.eql(u8, value, "silent")) return "normal";
     if (std.mem.eql(u8, value, "normal")) return "full";
@@ -449,6 +1152,32 @@ fn nextTheme(value: []const u8) []const u8 {
 
 fn nextStatusBarPosition(value: []const u8) []const u8 {
     return if (std.mem.eql(u8, value, "bottom")) "top" else "bottom";
+}
+
+/// Cycle a constrained setting's value one step in `direction` (-1 prev,
+/// +1 next). Each family keeps a stable ring so Left/Right wraps deterministically.
+fn nextEnumValue(entry: SettingsState.ConfigEntry, direction: i8) []const u8 {
+    if (entry.is_log_level) {
+        if (direction < 0) {
+            if (std.mem.eql(u8, entry.value_text, "silent")) return "full";
+            if (std.mem.eql(u8, entry.value_text, "normal")) return "silent";
+            return "normal";
+        }
+        return nextLogLevel(entry.value_text);
+    }
+    if (entry.is_status_bar_position) {
+        return nextStatusBarPosition(entry.value_text);
+    }
+    if (entry.is_theme) {
+        if (direction < 0) {
+            if (std.mem.eql(u8, entry.value_text, "vantari")) return "amber";
+            if (std.mem.eql(u8, entry.value_text, "midnight")) return "vantari";
+            if (std.mem.eql(u8, entry.value_text, "high_contrast")) return "midnight";
+            return "high_contrast";
+        }
+        return nextTheme(entry.value_text);
+    }
+    return entry.value_text;
 }
 
 const Color = struct {
@@ -504,11 +1233,12 @@ test "settings falls back to defaults when workspace config is unavailable" {
     try std.testing.expectEqualStrings("Using defaults: workspace config is unavailable", state.status_message.?);
 }
 
-test "section_names has 11 entries" {
-    try std.testing.expectEqual(@as(usize, 11), section_names.len);
+test "section_names has 12 entries with models tab" {
+    try std.testing.expectEqual(@as(usize, 12), section_names.len);
     try std.testing.expectEqualStrings("runtime", section_names[0]);
     try std.testing.expectEqualStrings("tui", section_names[1]);
-    try std.testing.expectEqualStrings("environment", section_names[10]);
+    try std.testing.expectEqualStrings("models", section_names[3]);
+    try std.testing.expectEqualStrings("environment", section_names[11]);
 }
 
 test "valueToString converts types" {
@@ -643,8 +1373,11 @@ test "settings accepts newer values with older help metadata" {
 
 const SettingsTestResult = struct {
     error_json: ?[]const u8 = null,
+    result_json: ?[]u8 = null,
 
-    fn deinit(_: SettingsTestResult, _: std.mem.Allocator) void {}
+    fn deinit(self: SettingsTestResult, allocator: std.mem.Allocator) void {
+        if (self.result_json) |value| allocator.free(value);
+    }
 };
 
 const SettingsSuccessClient = struct {
@@ -777,4 +1510,385 @@ test "settings timeout is visible and remains closable" {
     try std.testing.expectEqualStrings("Error: config/set timed out", state.status_message.?);
     try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = tui.Key.escape }, &client));
     try std.testing.expect(!state.open);
+}
+
+/// Fake RPC client for the Models tab. Returns canned providers, models, and
+/// agents; records the last mutation it observed.
+const ModelsTestClient = struct {
+    mutation: ?[]u8 = null,
+    import_params: ?[]u8 = null,
+    /// When set, providers/list also reports this connected NON-active
+    /// provider so tests can pull models from a provider other than the
+    /// active one.
+    second_provider: ?[]const u8 = null,
+    /// When true, auth/import reports the collision-guard outcome: nothing
+    /// imported, one provider skipped.
+    import_skipped: bool = false,
+
+    fn deinit(self: *ModelsTestClient) void {
+        if (self.mutation) |value| std.testing.allocator.free(value);
+        if (self.import_params) |value| std.testing.allocator.free(value);
+    }
+
+    fn call(self: *ModelsTestClient, method: []const u8, params: []const u8) anyerror!SettingsTestResult {
+        if (std.mem.eql(u8, method, protocol.methods.auth_import)) {
+            self.import_params = try std.testing.allocator.dupe(u8, params);
+            if (self.import_skipped) {
+                return .{ .result_json = try std.testing.allocator.dupe(u8,
+                    \\{"status":"ok","imported":[],"skipped":["anthropic"]}
+                ) };
+            }
+            return .{ .result_json = try std.testing.allocator.dupe(u8,
+                \\{"status":"ok","imported":["anthropic"],"skipped":[]}
+            ) };
+        }
+        if (std.mem.eql(u8, method, protocol.methods.providers_list)) {
+            if (self.second_provider) |provider_id| {
+                const rendered = try std.fmt.allocPrint(std.testing.allocator,
+                    \\{{"active_provider":"zai","providers":[{{"provider_id":"zai","model":"glm-5.2","base_url":"https://api.z.ai/api/coding/paas/v4"}},{{"provider_id":"{s}","model":"m-1","base_url":"https://example.invalid/v1"}}]}}
+                , .{provider_id});
+                return .{ .result_json = rendered };
+            }
+            return .{ .result_json = try std.testing.allocator.dupe(u8,
+                \\{"active_provider":"zai","providers":[{"provider_id":"zai","model":"glm-5.2","base_url":"https://api.z.ai/api/coding/paas/v4"}]}
+            ) };
+        }
+        if (std.mem.eql(u8, method, protocol.methods.agents_list)) {
+            return .{ .result_json = try std.testing.allocator.dupe(u8,
+                \\{"agents":[{"id":"recon","description":"Recon"}]}
+            ) };
+        }
+        if (std.mem.eql(u8, method, protocol.methods.auth_detect)) {
+            return .{ .result_json = try std.testing.allocator.dupe(u8,
+                \\{"detected":[{"provider_id":"anthropic","source":"claude","live":true}]}
+            ) };
+        }
+        if (std.mem.eql(u8, method, protocol.methods.models_list)) {
+            return .{ .result_json = try std.testing.allocator.dupe(u8,
+                \\{"status":"ok","models":[{"id":"glm-5.5","context_length":128000}]}
+            ) };
+        }
+        if (std.mem.eql(u8, method, protocol.methods.provider_model_set) or
+            std.mem.eql(u8, method, protocol.methods.agents_configure))
+        {
+            self.mutation = try std.testing.allocator.dupe(u8, params);
+            return .{ .result_json = try std.testing.allocator.dupe(u8, "{\"status\":\"ok\"}") };
+        }
+        return .{ .result_json = try std.testing.allocator.dupe(u8, "{}") };
+    }
+};
+
+test "settings cycles constrained entries with left/right arrows" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var state = SettingsState.init(allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    state.section_cursor = 1; // tui section (theme, status_bar_position)
+    try state.loadSection();
+    try selectRuntimeEntry(&state, "theme");
+
+    var client = SettingsSuccessClient{};
+    // Right arrow cycles theme vantari → midnight.
+    try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = tui.Key.right }, &client));
+    try std.testing.expect(client.saw_tui_theme);
+    try std.testing.expect(state.takeConfigChanged());
+}
+
+test "models tab cycles models with left/right arrows and preserves tab nav" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+
+    var state = SettingsState.init(std.testing.allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    for (section_names, 0..) |name, index| {
+        if (std.mem.eql(u8, name, "models")) {
+            state.section_cursor = index;
+            break;
+        }
+    }
+    var client = ModelsTestClient{};
+    defer client.deinit();
+    try state.loadModels(&client);
+    const models = &state.models_state.?;
+    const Mode = @TypeOf(models.mode);
+
+    // Enter provider → models mode.
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
+    try std.testing.expectEqual(Mode.models, models.mode);
+
+    // Right arrow cycles within models (single model: wraps to itself).
+    try std.testing.expect(try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.right }, &client));
+    try std.testing.expectEqualStrings("glm-5.5", models.models.value());
+
+    // Shift-Tab leaves the models overlay to the previous section.
+    const shift_tab = tui.Key{ .codepoint = tui.Key.tab, .mods = .{ .shift = true } };
+    try std.testing.expect(try state.handleModelsKey(shift_tab, &client));
+    try std.testing.expectEqualStrings("provider", section_names[state.section_cursor]);
+}
+
+test "models tab passes the provenance source name to auth import for detected rows" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+
+    var state = SettingsState.init(std.testing.allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    for (section_names, 0..) |name, index| {
+        if (std.mem.eql(u8, name, "models")) {
+            state.section_cursor = index;
+            break;
+        }
+    }
+    var client = ModelsTestClient{};
+    defer client.deinit();
+    try state.loadModels(&client);
+    const models = &state.models_state.?;
+    const Mode = @TypeOf(models.mode);
+
+    // Providers: zai (index 0) + anthropic detected (index 1). The detected
+    // row's picker value is the PROVENANCE source ("claude"), not the
+    // provider id ("anthropic") — auth/import matches source names.
+    try std.testing.expectEqual(@as(usize, 2), models.providers.itemCount());
+    models.providers.cursor = 1;
+    try std.testing.expectEqualStrings("claude", models.providers.value());
+
+    // Enter on the detected row imports the source, then reloads.
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
+    try std.testing.expect(client.import_params != null);
+    try std.testing.expect(std.mem.indexOf(u8, client.import_params.?, "\"claude\"") != null);
+    try std.testing.expectEqual(Mode.providers, models.mode);
+}
+
+test "picker cycles and locks without typing" {
+    var picker = Picker.init(std.testing.allocator);
+    defer picker.deinit();
+    try picker.add("OpenCode", "opencode");
+    try picker.add("Codex", "openai-codex");
+    try picker.add("Anthropic", "anthropic");
+    try std.testing.expectEqual(@as(usize, 3), picker.itemCount());
+    try std.testing.expectEqualStrings("opencode", picker.value());
+    picker.move(1);
+    try std.testing.expectEqualStrings("openai-codex", picker.value());
+    picker.move(1);
+    try std.testing.expectEqualStrings("anthropic", picker.value());
+    picker.move(1);
+    try std.testing.expectEqualStrings("opencode", picker.value()); // wraps
+    picker.move(-1);
+    try std.testing.expectEqualStrings("anthropic", picker.value());
+    try std.testing.expectEqual(@as(?usize, 1), picker.indexOfValue("openai-codex"));
+}
+
+test "models tab loads providers detected and agents and assigns to an agent" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+
+    var state = SettingsState.init(std.testing.allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    // Pin to the models section and load via the seam.
+    for (section_names, 0..) |name, index| {
+        if (std.mem.eql(u8, name, "models")) {
+            state.section_cursor = index;
+            break;
+        }
+    }
+    var client = ModelsTestClient{};
+    defer client.deinit();
+    try state.loadModels(&client);
+    try std.testing.expect(state.models_state != null);
+    const models = &state.models_state.?;
+    const Mode = @TypeOf(models.mode);
+
+    // Providers: zai (connected) + anthropic (detected).
+    try std.testing.expectEqual(@as(usize, 2), models.providers.itemCount());
+    try std.testing.expectEqualStrings("zai", models.providers.value());
+
+    // Enter on connected provider pulls models.
+    try std.testing.expect(try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client));
+    try std.testing.expectEqual(Mode.models, models.mode);
+    try std.testing.expectEqual(@as(usize, 1), models.models.itemCount());
+    try std.testing.expectEqualStrings("glm-5.5", models.models.value());
+
+    // Enter on model → assign mode, index 0 = active provider, index 1 = agent.
+    try std.testing.expect(try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client));
+    try std.testing.expectEqual(Mode.assign, models.mode);
+    try std.testing.expectEqual(@as(usize, 2), models.agents.itemCount());
+
+    // Cycle right to the agent and lock in.
+    try std.testing.expect(try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.right }, &client));
+    try std.testing.expectEqualStrings("recon", models.agents.value());
+    try std.testing.expect(try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client));
+    try std.testing.expect(client.mutation != null);
+    try std.testing.expect(std.mem.indexOf(u8, client.mutation.?, "\"agent_id\":\"recon\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, client.mutation.?, "\"provider_id\":\"zai\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, client.mutation.?, "\"model\":\"glm-5.5\"") != null);
+    // Returns to providers mode after committing.
+    try std.testing.expectEqual(Mode.providers, models.mode);
+}
+
+test "models tab assigns to the active provider at cursor 0" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+
+    var state = SettingsState.init(std.testing.allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    for (section_names, 0..) |name, index| {
+        if (std.mem.eql(u8, name, "models")) {
+            state.section_cursor = index;
+            break;
+        }
+    }
+    var client = ModelsTestClient{};
+    defer client.deinit();
+    try state.loadModels(&client);
+    const models = &state.models_state.?;
+
+    // providers → models → assign (cursor stays 0 = active provider).
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
+    try std.testing.expectEqual(@as(usize, 0), models.agents.cursor);
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
+    try std.testing.expect(client.mutation != null);
+    try std.testing.expect(std.mem.indexOf(u8, client.mutation.?, "\"provider_id\":\"zai\"") != null);
+}
+
+test "tab into the models section loads its picker surface" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+
+    var state = SettingsState.init(std.testing.allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    // Start on the section before models.
+    for (section_names, 0..) |name, index| {
+        if (std.mem.eql(u8, name, "models")) {
+            state.section_cursor = index - 1;
+            break;
+        }
+    }
+    try state.loadSection();
+
+    var client = ModelsTestClient{};
+    defer client.deinit();
+    // One Tab crossing into models must load the RPC-backed surface, not the
+    // generic config entries.
+    try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = tui.Key.tab }, &client));
+    try std.testing.expectEqualStrings("models", section_names[state.section_cursor]);
+    try std.testing.expect(state.models_state != null);
+    try std.testing.expect(state.models_state.?.providers.itemCount() > 0);
+}
+
+test "models status transitions free the previous message" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+
+    var state = SettingsState.init(std.testing.allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    for (section_names, 0..) |name, index| {
+        if (std.mem.eql(u8, name, "models")) {
+            state.section_cursor = index;
+            break;
+        }
+    }
+    var client = ModelsTestClient{};
+    defer client.deinit();
+    try state.loadModels(&client);
+    const models = &state.models_state.?;
+    const Mode = @TypeOf(models.mode);
+
+    // A status line exists, then every clearing transition (Esc back from
+    // models mode, a fresh pull) must free it — leaks fail the test
+    // allocator at deinit.
+    try models.setStatus("previous message that must be freed");
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
+    try std.testing.expectEqual(Mode.models, models.mode);
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.escape }, &client);
+    try std.testing.expectEqual(Mode.providers, models.mode);
+    try std.testing.expect(models.status_message == null);
+}
+
+test "assign row names the provider the commit writes" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+
+    var state = SettingsState.init(std.testing.allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    for (section_names, 0..) |name, index| {
+        if (std.mem.eql(u8, name, "models")) {
+            state.section_cursor = index;
+            break;
+        }
+    }
+    var client = ModelsTestClient{ .second_provider = "openrouter" };
+    defer client.deinit();
+    try state.loadModels(&client);
+    const models = &state.models_state.?;
+    const Mode = @TypeOf(models.mode);
+
+    // zai (active) + openrouter (connected, non-active). Pull models from
+    // openrouter: the assign row 0 must name openrouter — never the active
+    // provider zai — and the commit must write openrouter.
+    models.providers.cursor = 1;
+    try std.testing.expectEqualStrings("openrouter", models.providers.value());
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
+    try std.testing.expectEqual(Mode.models, models.mode);
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
+    try std.testing.expectEqual(Mode.assign, models.mode);
+    try std.testing.expect(std.mem.indexOf(u8, models.agents.label(), "openrouter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, models.agents.label(), "zai") == null);
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
+    try std.testing.expect(client.mutation != null);
+    try std.testing.expect(std.mem.indexOf(u8, client.mutation.?, "\"provider_id\":\"openrouter\"") != null);
+}
+
+test "import reports skipped sources instead of claiming success" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+
+    var state = SettingsState.init(std.testing.allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    for (section_names, 0..) |name, index| {
+        if (std.mem.eql(u8, name, "models")) {
+            state.section_cursor = index;
+            break;
+        }
+    }
+    var client = ModelsTestClient{ .import_skipped = true };
+    defer client.deinit();
+    try state.loadModels(&client);
+    const models = &state.models_state.?;
+
+    // The detected row (index 1) triggers import; the collision guard
+    // skipped everything and the status must say so.
+    models.providers.cursor = 1;
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
+    try std.testing.expect(models.status_message != null);
+    try std.testing.expect(std.mem.indexOf(u8, models.status_message.?, "Skipped") != null);
+    try std.testing.expect(std.mem.indexOf(u8, models.status_message.?, "Imported") == null);
 }

@@ -481,6 +481,8 @@ fn renderEligibilitySnapshot(
                 .max_tool_calls = spec.max_tool_calls,
                 .execution_kind = spec.execution_kind,
                 .capability_profile_id = spec.capability_profile_id,
+                .provider_id = optionalAgentProvider(spec),
+                .model = optionalAgentModel(spec),
             }) catch |err| {
                 if (err == error.OutOfMemory) return err;
                 try unavailable.append(.{ .id = spec.id, .reason = "route_unavailable" });
@@ -567,6 +569,8 @@ fn launchTicket(
         .max_tool_calls = spec.max_tool_calls,
         .execution_kind = spec.execution_kind,
         .capability_profile_id = spec.capability_profile_id,
+        .provider_id = optionalAgentProvider(spec),
+        .model = optionalAgentModel(spec),
     }) catch |err| {
         std.heap.page_allocator.destroy(route);
         route_owned = false;
@@ -955,6 +959,8 @@ fn launchBatch(
             .max_tool_calls = spec.max_tool_calls,
             .execution_kind = spec.execution_kind,
             .capability_profile_id = spec.capability_profile_id,
+            .provider_id = optionalAgentProvider(spec),
+            .model = optionalAgentModel(spec),
         }) catch |err| {
             std.heap.page_allocator.destroy(template);
             return err;
@@ -1820,6 +1826,18 @@ fn markSessionAdmissionFailed(workspace_root: []const u8, session_id: []const u8
 
 fn hasText(value: []const u8) bool {
     return std.mem.trim(u8, value, " \t\r\n").len > 0;
+}
+
+/// Return the spec's per-agent provider override as an optional route input,
+/// or null when the agent leaves provider selection to the role/active path.
+fn optionalAgentProvider(spec: agent_spec.AgentSpec) ?[]const u8 {
+    return if (hasText(spec.provider_id)) spec.provider_id else null;
+}
+
+/// Return the spec's per-agent model override as an optional route input,
+/// or null when the agent leaves model selection to the role/active path.
+fn optionalAgentModel(spec: agent_spec.AgentSpec) ?[]const u8 {
+    return if (hasText(spec.model)) spec.model else null;
 }
 
 fn ticketSessionId(allocator: std.mem.Allocator, role: []const u8, identity: []const u8) ![]u8 {

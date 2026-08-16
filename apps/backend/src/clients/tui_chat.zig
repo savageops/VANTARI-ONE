@@ -1803,27 +1803,74 @@ fn reportCommandFailure(state: *ChatState, err: anyerror) void {
     state.add(.system, message) catch {};
 }
 
-/// One-shot model switch. Calls config/set to write runtime.openai_model.
+/// The model command is a shortcut to the Settings → Models tab (providers →
+/// models → assign) rather than a typed one-shot. With no argument it opens
+/// the overlay already focused on the models section so the operator can
+/// cycle-and-lock instead of typing a model id. A typed argument is honored
+/// through the canonical ledger owner (`providers/set-model` on the ledger's
+/// active provider) — never silently discarded.
 fn cmdModel(state: *ChatState, args: []const u8) anyerror!commands.CommandResult {
     const allocator = state.allocator;
-    if (args.len == 0) {
-        // Show current model.
-        const msg = try std.fmt.allocPrint(allocator, "Current model: {s}. Use /model <name> to switch.", .{state.model});
+    const trimmed = std.mem.trim(u8, args, " \t");
+    if (trimmed.len > 0) {
+        const provider_id = (try resolveActiveProviderId(state)) orelse {
+            try state.add(.system, "Error: no active provider in the auth ledger; open /model without arguments to connect one.");
+            return .handled;
+        };
+        defer allocator.free(provider_id);
+        const params = try std.fmt.allocPrint(allocator, "{{\"provider_id\":{f},\"model\":{f}}}", .{
+            std.json.fmt(provider_id, .{}),
+            std.json.fmt(trimmed, .{}),
+        });
+        defer allocator.free(params);
+        const call = state.client.call(protocol.methods.provider_model_set, params) catch {
+            try state.add(.system, "Error: providers/set-model RPC failed");
+            return .handled;
+        };
+        defer call.deinit(allocator);
+        if (call.error_json != null) {
+            try state.add(.system, "Error: providers/set-model rejected");
+            return .handled;
+        }
+        const msg = try std.fmt.allocPrint(allocator, "Model set for {s}: {s}. Applies on the next turn.", .{ provider_id, trimmed });
         defer allocator.free(msg);
         try state.add(.system, msg);
         return .handled;
     }
-    const params = try std.fmt.allocPrint(allocator, "{{\"section\":\"runtime\",\"key\":\"openai_model\",\"value\":\"{s}\"}}", .{args});
-    defer allocator.free(params);
-    const call = state.client.call(protocol.methods.config_set, params) catch {
-        try state.add(.system, "Error: config/set RPC failed");
-        return .handled;
+
+    // No argument: open the settings overlay pinned to the Models section.
+    if (state.settings_state == null) {
+        state.settings_state = settings_view.SettingsState.init(state.allocator, state.workspace_root);
+    }
+    const ss = &state.settings_state.?;
+    for (settings_view.section_names, 0..) |name, index| {
+        if (std.mem.eql(u8, name, "models")) {
+            ss.section_cursor = index;
+            break;
+        }
+    }
+    ss.open = true;
+    ss.loadModels(state.client) catch {
+        ss.setStatusMessage("Models tab could not be loaded; persisted values were unavailable.") catch {};
     };
-    defer call.deinit(allocator);
-    const msg = try std.fmt.allocPrint(allocator, "Model set to {s}. Applies on next turn.", .{args});
-    defer allocator.free(msg);
-    try state.add(.system, msg);
     return .handled;
+}
+
+/// The ledger's active provider id for one-shot model commands. Returns null
+/// when the ledger is missing or malformed — callers fail visibly rather than
+/// guessing a provider.
+fn resolveActiveProviderId(state: *ChatState) !?[]u8 {
+    const allocator = state.allocator;
+    const call = state.client.call(protocol.methods.providers_list, "{}") catch return null;
+    defer call.deinit(allocator);
+    if (call.error_json != null) return null;
+    const result_json = call.result_json orelse return null;
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, result_json, .{ .ignore_unknown_fields = true }) catch return null;
+    defer parsed.deinit();
+    if (parsed.value != .object) return null;
+    const active = parsed.value.object.get("active_provider") orelse return null;
+    if (active != .string or active.string.len == 0) return null;
+    return try allocator.dupe(u8, active.string);
 }
 
 /// One-shot effort switch. Validates against allowed levels.

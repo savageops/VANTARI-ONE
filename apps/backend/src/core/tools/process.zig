@@ -319,7 +319,11 @@ pub const PersistentProcess = struct {
         const reader = try allocator.create(LineReader);
         reader.* = LineReader.init(allocator, stdout, max_bytes);
         errdefer {
-            self.stdout = reader.file;
+            // On error before child termination the handle is still the live
+            // stdout, so hand it back to the process. Once terminateChild has
+            // run it closes self.stdout (which is reader.file) and nulls it,
+            // so the orphaned reader must not reattach or reclose a dead pipe.
+            if (self.active) self.stdout = reader.file;
             reader.output.deinit();
             allocator.destroy(reader);
         }
@@ -337,12 +341,16 @@ pub const PersistentProcess = struct {
             // Windows a bounded escape from inherited/blocked pipe reads.
             reader.file.close();
             const pipes_drained = joinReader(thread);
+            // Allocate before freeing the reader: an allocation error must
+            // still unwind through the errdefer over a live reader, never a
+            // freed one.
+            const empty = try allocator.dupe(u8, "");
             if (pipes_drained) {
                 reader.output.deinit();
                 allocator.destroy(reader);
             }
             return .{
-                .line = try allocator.dupe(u8, ""),
+                .line = empty,
                 .timed_out = true,
                 .termination = .{
                     .termination_requested = termination.termination_requested,
@@ -357,14 +365,10 @@ pub const PersistentProcess = struct {
         self.stdout = reader.file;
 
         if (reader.read_error) |err| {
-            reader.output.deinit();
-            allocator.destroy(reader);
             _ = self.terminateChild();
             return err;
         }
         if (!reader.saw_newline) {
-            reader.output.deinit();
-            allocator.destroy(reader);
             _ = self.terminateChild();
             return error.ProcessPipeClosed;
         }
@@ -397,7 +401,11 @@ pub const PersistentProcess = struct {
         const reader = try allocator.create(FrameReader);
         reader.* = FrameReader.init(allocator, stdout, max_bytes, max_frame_bytes);
         errdefer {
-            self.stdout = reader.file;
+            // On error before child termination the handle is still the live
+            // stdout, so hand it back to the process. Once terminateChild has
+            // run it closes self.stdout (which is reader.file) and nulls it,
+            // so the orphaned reader must not reattach or reclose a dead pipe.
+            if (self.active) self.stdout = reader.file;
             reader.output.deinit();
             allocator.destroy(reader);
         }
@@ -413,12 +421,16 @@ pub const PersistentProcess = struct {
             const termination = self.terminateChild();
             reader.file.close();
             const pipes_drained = joinReader(thread);
+            // Allocate before freeing the reader: an allocation error must
+            // still unwind through the errdefer over a live reader, never a
+            // freed one.
+            const empty = try allocator.dupe(u8, "");
             if (pipes_drained) {
                 reader.output.deinit();
                 allocator.destroy(reader);
             }
             return .{
-                .frame = try allocator.dupe(u8, ""),
+                .frame = empty,
                 .timed_out = true,
                 .termination = .{
                     .termination_requested = termination.termination_requested,
@@ -433,14 +445,10 @@ pub const PersistentProcess = struct {
         self.stdout = reader.file;
 
         if (reader.read_error) |err| {
-            reader.output.deinit();
-            allocator.destroy(reader);
             _ = self.terminateChild();
             return err;
         }
         if (!reader.saw_frame) {
-            reader.output.deinit();
-            allocator.destroy(reader);
             _ = self.terminateChild();
             return error.ProcessPipeClosed;
         }
@@ -553,6 +561,39 @@ fn joinReader(thread: std.Thread) bool {
 
 fn timeoutToNs(timeout_ms: usize) u64 {
     return @as(u64, @intCast(timeout_ms)) * std.time.ns_per_ms;
+}
+
+// Spawn a child that exits immediately without writing stdout, then confirm
+// both readers surface ProcessPipeClosed without a double-free (the errdefer
+// must not reattach or reclose the handle terminateChild already closed).
+test "persistent readers surface a closed pipe without double-free" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+
+    {
+        var proc = try PersistentProcess.spawn(allocator, ".", &.{ "true" });
+        defer proc.deinit();
+        const result = proc.readLine(allocator, 5_000, 1024) catch |err| blk: {
+            try std.testing.expectEqual(error.ProcessPipeClosed, err);
+            break :blk @as(?PersistentReadResult, null);
+        };
+        if (result) |r| r.deinit(allocator);
+        try std.testing.expect(!proc.active);
+    }
+
+    {
+        var proc = try PersistentProcess.spawn(allocator, ".", &.{ "true" });
+        defer proc.deinit();
+        const result = proc.readContentLengthFrame(allocator, 5_000, 1024, 1024) catch |err| blk: {
+            try std.testing.expectEqual(error.ProcessPipeClosed, err);
+            break :blk @as(?PersistentFrameReadResult, null);
+        };
+        if (result) |r| r.deinit(allocator);
+        try std.testing.expect(!proc.active);
+    }
 }
 
 /// Run one bounded command through the canonical tool process owner. Why:

@@ -8,6 +8,23 @@ pub const AuthAction = union(enum) {
     login: LoginOptions,
     logout: []const u8,
     use: []const u8,
+    detect,
+    import: ImportOptions,
+};
+
+/// Options for importing a detected native credential into the auth ledger.
+/// `sources` points into `source_array[0..source_count]` — a fixed inline
+/// buffer so the parser (which has no allocator) never returns a dangling
+/// slice. The arg strings themselves live in the process argv, so the array
+/// of pointers is what must survive the return.
+pub const ImportOptions = struct {
+    source_array: [3][]const u8 = .{ "", "", "" },
+    source_count: usize = 0,
+    force: bool = false,
+
+    pub fn sources(self: *const ImportOptions) []const []const u8 {
+        return self.source_array[0..self.source_count];
+    }
 };
 
 /// Provider-scoped login options. API keys enter through stdin or an explicitly
@@ -40,6 +57,8 @@ pub const help_text =
     \\  VAR1 auth login <provider-id> --base-url <url> --model <id> --auth-scheme none [--wire-api <api>] [--json]
     \\  VAR1 auth logout <provider-id>
     \\  VAR1 auth use <provider-id>
+    \\  VAR1 auth detect [--json]
+    \\  VAR1 auth import [codex|claude|opencode]... [--force] [--json]
     \\
     \\Flags:
     \\  --json                    Emit secret-free machine-readable auth status.
@@ -50,6 +69,13 @@ pub const help_text =
     \\  openai, anthropic,        API-key providers; OpenRouter and custom
     \\  openrouter                 OpenAI-compatible endpoints use the same path.
     \\
+    \\Discovery:
+    \\  auth detect                List native Codex/Claude/OpenCode credentials
+    \\                             already present on this machine (never tokens).
+    \\  auth import [sources...]   Copy a detected native credential into the
+    \\                             auth ledger. Sources: codex, claude, opencode.
+    \\                             Refuses to overwrite a provider owned by a
+    \\                             different source unless --force.
     \\Status never prints API keys, access tokens, or refresh tokens. Login prints
     \\the provider authorization URL and accepts a pasted redirect/code fallback;
     \\a `none` auth scheme may omit a key source entirely.
@@ -78,6 +104,43 @@ pub fn parseArguments(iter: *std.process.ArgIterator) !ParsedAuthArguments {
             return error.InvalidArgs;
         }
         parsed.options.action = .status;
+        return parsed;
+    }
+
+    if (std.mem.eql(u8, action, "detect")) {
+        while (iter.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--json")) {
+                parsed.options.json_output = true;
+                continue;
+            }
+            if (isHelpFlag(arg)) {
+                parsed.help_requested = true;
+                continue;
+            }
+            return error.InvalidArgs;
+        }
+        parsed.options.action = .detect;
+        return parsed;
+    }
+
+    if (std.mem.eql(u8, action, "import")) {
+        var options = ImportOptions{};
+        while (iter.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--json")) {
+                parsed.options.json_output = true;
+            } else if (std.mem.eql(u8, arg, "--force")) {
+                options.force = true;
+            } else if (isHelpFlag(arg)) {
+                parsed.help_requested = true;
+            } else if (std.mem.eql(u8, arg, "codex") or std.mem.eql(u8, arg, "claude") or std.mem.eql(u8, arg, "opencode")) {
+                if (options.source_count == options.source_array.len) return error.InvalidArgs;
+                options.source_array[options.source_count] = arg;
+                options.source_count += 1;
+            } else {
+                return error.InvalidArgs;
+            }
+        }
+        parsed.options.action = .{ .import = options };
         return parsed;
     }
 

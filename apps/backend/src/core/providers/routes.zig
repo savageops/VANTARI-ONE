@@ -3,6 +3,7 @@ const auth_store = @import("../auth/store.zig");
 const config_file = @import("../config/file.zig");
 const profile_contract = @import("../agents/profile.zig");
 const provider_profile = @import("profile.zig");
+const model_router = @import("router.zig");
 const types = @import("../../shared/types.zig");
 
 pub const Error = error{
@@ -76,6 +77,10 @@ pub const ResolveBudget = struct {
     max_tool_calls: usize,
     execution_kind: ?ExecutionKind = null,
     capability_profile_id: ?[]const u8 = null,
+    /// Optional per-agent provider/model override (agent beats role beats active).
+    /// Provider-qualified so a model id never collides across backends.
+    provider_id: ?[]const u8 = null,
+    model: ?[]const u8 = null,
 };
 
 pub const ResolvedRoute = struct {
@@ -171,24 +176,58 @@ pub fn resolve(
 
     var selected_auth: ?auth_store.ResolvedAuth = null;
     defer if (selected_auth) |value| value.deinit(allocator);
-    var selected_provider_id: ?[]const u8 = if (override.provider_id) |provider_id| blk: {
+    // Precedence: per-agent (budget) beats role override beats active provider.
+    var selected_provider_id: ?[]const u8 = if (budget.provider_id) |provider_id| blk: {
+        if (!hasText(provider_id)) return Error.InvalidRoute;
+        break :blk provider_profile.canonicalProviderId(provider_id);
+    } else if (override.provider_id) |provider_id| blk: {
         if (!hasText(provider_id)) return Error.InvalidRoute;
         break :blk provider_profile.canonicalProviderId(provider_id);
     } else null;
-    var model_override: ?[]const u8 = override.model;
+    var model_override: ?[]const u8 = budget.model orelse override.model;
     if (model_override) |model_ref| {
         const selection = provider_profile.resolveModelSelection(model_ref, selected_provider_id);
         selected_provider_id = selection.provider_id orelse selected_provider_id;
         model_override = selection.model_id;
     }
+    // Single-owner router: ledger record → environment API key. When a
+    // provider is named, resolve its credential here; an unqualified model
+    // with no provider keeps the active-provider path below.
     if (selected_provider_id) |provider_id| {
-        selected_auth = try auth_store.readProviderById(allocator, parent.workspace_root, provider_id);
+        // An explicitly named provider with no resolvable credential is a
+        // hard route failure — never silently fall back to the active provider.
+        var resolved = model_router.resolve(allocator, parent.workspace_root, model_override orelse "", provider_id) catch |err| switch (err) {
+            model_router.Error.NoProviderSelected => null,
+            else => return err,
+        };
+        if (resolved) |*model| {
+            defer model.deinit(allocator);
+            // Transfer the credential out of the router result (null the
+            // optional so its deinit does not free the slices we now own).
+            if (model.auth) |*auth| {
+                selected_auth = auth.*;
+                model.auth = null;
+            }
+        }
+    } else {
+        // Unqualified model override with no provider: try the router against
+        // the active provider so a provider-prefixed model still resolves.
+        if (model_override) |model_ref| {
+            var resolved = model_router.resolve(allocator, parent.workspace_root, model_ref, null) catch null;
+            if (resolved) |*model| {
+                defer model.deinit(allocator);
+                if (model.auth) |*auth| {
+                    selected_auth = auth.*;
+                    model.auth = null;
+                }
+            }
+        }
     }
 
     const base_url = if (selected_auth) |value| value.base_url else parent.openai_base_url;
     const api_key = if (selected_auth) |value| value.api_key else parent.openai_api_key;
     const provider_id = if (selected_auth) |value| value.provider_id else parent.auth_provider orelse "active";
-    const provider_model = if (selected_auth) |value| value.model else parent.openai_model;
+    const provider_model = if (selected_auth) |value| (if (value.model.len > 0) value.model else parent.openai_model) else parent.openai_model;
     const auth_type = if (selected_auth) |value| value.auth_type else parent.auth_type;
     const auth_scheme = if (selected_auth) |value| value.auth_scheme else parent.auth_scheme;
     const auth_account_id = if (selected_auth) |value| value.account_id else parent.auth_account_id;

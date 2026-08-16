@@ -2,6 +2,8 @@ const std = @import("std");
 const agents = @import("../core/agents/service.zig");
 const cli_auth = @import("cli_auth.zig");
 const auth_store = @import("../core/auth/store.zig");
+const auth_detect = @import("../core/auth/detect.zig");
+const auth_import = @import("../core/auth/import.zig");
 const openai_codex = @import("../core/auth/openai_codex.zig");
 const config = @import("../core/config/resolver.zig");
 const config_file = @import("../core/config/file.zig");
@@ -1581,6 +1583,116 @@ fn executeAuthCommand(
                 try executeApiKeyLogin(allocator, workspace_root, login, options.json_output);
             }
         },
+        .detect => {
+            try executeAuthDetect(allocator, options.json_output);
+        },
+        .import => |import_options| {
+            try executeAuthImport(allocator, workspace_root, import_options, options.json_output);
+        },
+    }
+}
+
+/// Render the secret-free detection inventory. Detected native credentials are
+/// reported as present/live/expired with their source and provider — never a
+/// token — so the operator can decide whether to import.
+fn executeAuthDetect(allocator: std.mem.Allocator, json_output: bool) !void {
+    var detection = try auth_detect.detect(allocator);
+    defer detection.deinit();
+
+    if (json_output) {
+        var rows = std.array_list.Managed(struct {
+            source: []const u8,
+            kind: []const u8,
+            provider_id: []const u8,
+            model: []const u8,
+            source_path: []const u8,
+            live: bool,
+            account_hint: ?[]const u8 = null,
+            note: ?[]const u8 = null,
+        }).init(allocator);
+        defer rows.deinit();
+        for (detection.detected) |entry| {
+            rows.append(.{
+                .source = entry.source,
+                .kind = @tagName(entry.kind),
+                .provider_id = entry.provider_id,
+                .model = entry.model,
+                .source_path = entry.source_path,
+                .live = entry.live,
+                .account_hint = entry.account_hint,
+                .note = entry.note,
+            }) catch return error.OutOfMemory;
+        }
+        const rendered = try renderJsonAlloc(allocator, .{ .detected = rows.items });
+        defer allocator.free(rendered);
+        try writeStdout(rendered);
+        try writeStdout("\n");
+        return;
+    }
+
+    if (detection.detected.len == 0) {
+        try writeStdout("no native credentials detected\n");
+        return;
+    }
+    for (detection.detected) |entry| {
+        try writeStdout("source=");
+        try writeStdout(entry.source);
+        try writeStdout(" provider=");
+        try writeStdout(entry.provider_id);
+        if (entry.model.len > 0) {
+            try writeStdout(" model=");
+            try writeStdout(entry.model);
+        }
+        try writeStdout(" ");
+        try writeStdout(if (entry.live) "live" else "invalid");
+        if (entry.account_hint) |hint| {
+            try writeStdout(" account=");
+            try writeStdout(hint);
+        }
+        if (entry.note) |note| {
+            try writeStdout(" (");
+            try writeStdout(note);
+            try writeStdout(")");
+        }
+        try writeStdout("\n");
+    }
+    try writeStdout("run `VAR1 auth import` to copy a detected credential into the ledger\n");
+}
+
+/// Import detected native credentials into the auth ledger, honoring the
+/// source-collision guard. Reports the provider ids written and skipped.
+fn executeAuthImport(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    import_options: cli_auth.ImportOptions,
+    json_output: bool,
+) !void {
+    var result = try auth_import.importSources(allocator, workspace_root, import_options.sources(), import_options.force);
+    defer result.deinit();
+
+    if (json_output) {
+        const rendered = try renderJsonAlloc(allocator, .{
+            .imported = result.imported,
+            .skipped = result.skipped,
+        });
+        defer allocator.free(rendered);
+        try writeStdout(rendered);
+        try writeStdout("\n");
+        return;
+    }
+    if (result.imported.len == 0 and result.skipped.len == 0) {
+        try writeStdout("nothing to import\n");
+        return;
+    }
+    for (result.imported) |provider_id| {
+        try writeStdout("imported provider: ");
+        try writeStdout(provider_id);
+        try writeStdout("\n");
+    }
+    for (result.skipped) |provider_id| {
+        try writeStdout("skipped (owned by another source): ");
+        try writeStdout(provider_id);
+        try writeStdout("\n");
     }
 }
 
