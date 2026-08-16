@@ -938,11 +938,10 @@ pub const SettingsState = struct {
         return false;
     }
 };
-
 const tui = @import("tui");
-
-/// Render the settings overlay to the root window.
-pub fn drawSettings(win: tui.Window, state: *SettingsState) void {
+/// Render the settings overlay to the root window. `frame_allocator` owns
+/// every string Vaxis borrows from this frame until `vx.render` completes.
+pub fn drawSettings(win: tui.Window, state: *SettingsState, frame_allocator: std.mem.Allocator) void {
     win.fill(.{ .style = .{ .bg = Color.bg } });
 
     // Header.
@@ -978,7 +977,7 @@ pub fn drawSettings(win: tui.Window, state: *SettingsState) void {
     );
 
     if (std.mem.eql(u8, section_names[state.section_cursor], "models")) {
-        drawModels(win, state);
+        drawModels(win, state, frame_allocator);
         return;
     }
 
@@ -1052,8 +1051,10 @@ pub fn drawSettings(win: tui.Window, state: *SettingsState) void {
 
 /// Render the Models tab: a layered picker over providers → models → assign
 /// target. Each layer reuses the Picker engine; Left/Right (and Up/Down) cycle,
-/// Enter locks, Esc walks back up.
-fn drawModels(win: tui.Window, state: *SettingsState) void {
+/// Enter locks, Esc walks back up. Every formatted row string comes from the
+/// frame allocator: Vaxis cells BORROW printed text until `vx.render`, so a
+/// per-row alloc/free here segfaults the render after the models list grows.
+fn drawModels(win: tui.Window, state: *SettingsState, frame_allocator: std.mem.Allocator) void {
     // Every print is single-line (`.wrap = .none`): the default `.grapheme`
     // wrap would push long provider/model labels onto the next picker row and
     // corrupt the layered list layout on narrow terminals.
@@ -1096,11 +1097,10 @@ fn drawModels(win: tui.Window, state: *SettingsState) void {
             const index = start + offset;
             const is_selected = index == picker.cursor;
             const label = picker.labels.items[index];
-            const row_text = std.fmt.allocPrint(state.allocator, "{s}{s}", .{ if (is_selected) "→ " else "  ", label }) catch {
+            const row_text = std.fmt.allocPrint(frame_allocator, "{s}{s}", .{ if (is_selected) "→ " else "  ", label }) catch {
                 row += 1;
                 continue;
             };
-            defer state.allocator.free(row_text);
             _ = win.print(
                 &.{.{ .text = row_text, .style = if (is_selected)
                     .{ .bold = true, .bg = Color.bg, .fg = Color.accent }

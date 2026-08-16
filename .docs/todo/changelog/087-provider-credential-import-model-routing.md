@@ -121,3 +121,52 @@ All were re-verified against source and fixed:
   not by a spent token.
 - Windows-native installed promotion of this chain remains unclaimed; the
   Linux workstation deployment above is the only installed proof.
+
+## Live installed-TUI proof (2026-08-16, addendum)
+
+Driving the installed binary in a real PTY against the live owner found and
+fixed two further defects, then proved every surface interactively:
+
+- **config/set could not create a missing section.** The operator's live
+  config predated the `tui` section, so every theme/status-bar write failed
+  ("Error: config/set rejected" in the overlay). `writeConfigKey` now creates
+  a KNOWN missing section object (bounded to the compiled template's section
+  list) before mutating; post-mutation document validation still guards the
+  write. Regression: "config set creates a known section missing from a
+  legacy document" (including the unknown-section refusal).
+- **The Models tab segfaulted the TUI.** `drawModels` printed per-row
+  `allocPrint` strings and freed them immediately; Vaxis cells BORROW printed
+  text until `vx.render`, so the render read freed pages (deterministic
+  SIGSEGV in `InternalScreen.writeCell`'s memcpy, stack captured under a
+  Debug build). The settings overlay now draws from the same frame arena the
+  question modal uses (`drawSettings(win, state, frame_allocator)`), keeping
+  every borrowed string alive past the render boundary — the contract
+  AGENTS.md §IV already states for question text.
+
+Interactive proofs on the redeployed ReleaseFast
+(`8589C61832E4FCEA…`, owner generation fresh):
+
+- `/help` command registry, `/status`, `/settings` overlay with all runtime
+  values (max_steps 4096, tool budgets, full_access_mode false, …).
+- `runtime.log_level` enum cycle + persistence (silent→normal→…→silent via
+  arrow keys, file readback each step) and ring restore.
+- `tui.theme` cycle + persistence (vantari→midnight→…→amber→…→vantari,
+  exercising the new missing-section creation) and `status_bar_position`
+  bottom→top→bottom, both restored to operator defaults afterward.
+- `/model` opens the Models tab: connected `zai (glm-5.2)` plus detected
+  native rows (`openai-codex (gpt-5.4-mini)`, `zai-coding-plan`, `opencode`,
+  `opencode-go`; expired claude correctly hidden); Enter pulls the live
+  glm-4.5…glm-5.3 catalog from Z.AI; Enter on glm-5.2 opens the assign
+  picker (`zai (active provider)` + recon/planner/spec/implementer/
+  doc_writer); Enter commits `Model set for zai: glm-5.2. Applies on the
+  next turn.` with the ledger readback confirming the write.
+- `/model glm-5.2` typed path sets the active provider's ledger model with
+  the honest system message.
+- Tab traversal reaches every section including the tail
+  (agent_routes…environment; environment entries render VANTARI_WORKSPACE
+  and MAX_STEPS), and `/exit` terminates cleanly.
+- Operator state restored after proof: `tui` section and `runtime.log_level`
+  removed from the config (both absent pre-test, compiled defaults apply);
+  both workspace owners (vantari + clicloud) left running healthy.
+
+Gate after both fixes: Debug `19/19`, `2,225/2,229` passed, 4 platform skips.

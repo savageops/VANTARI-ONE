@@ -145,10 +145,29 @@ pub fn writeConfigKey(
     defer parsed.deinit();
 
     if (parsed.value != .object) return Error.InvalidConfig;
-    const root = parsed.value.object;
+    const root = &parsed.value.object;
 
-    // Navigate to the section.
-    const section_obj = root.getPtr(section) orelse return Error.InvalidConfig;
+    // Navigate to the section. Legacy documents may predate a section (for
+    // example an older config without `tui`); a mutation into a KNOWN
+    // section creates that section object rather than failing, so the
+    // settings surface can persist a value the compiled template knows. The
+    // post-mutation document validation below still guards the result.
+    const known_sections = [_][]const u8{
+        "runtime", "tui", "provider", "agent_routes", "agents", "context",
+        "prompts", "draft", "buffer", "memory", "environment",
+    };
+    var section_known = false;
+    for (known_sections) |candidate| {
+        if (std.mem.eql(u8, candidate, section)) {
+            section_known = true;
+            break;
+        }
+    }
+    const section_obj = root.getPtr(section) orelse blk: {
+        if (!section_known) return Error.InvalidConfig;
+        try root.put(section, .{ .object = std.json.ObjectMap.init(parsed.arena.allocator()) });
+        break :blk root.getPtr(section).?;
+    };
     if (section_obj.* != .object) return Error.InvalidConfig;
 
     // Mutate the key within the section. The ObjectMap uses the parsed
@@ -920,6 +939,31 @@ test "config set persists a typed boolean through the canonical file owner" {
     var policy = try loadRuntimePolicy(std.testing.allocator, workspace);
     defer policy.deinit(std.testing.allocator);
     try std.testing.expect(policy.full_access_mode);
+}
+
+test "config set creates a known section missing from a legacy document" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/workspace", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace);
+
+    // A legacy document that predates the tui section: the settings surface
+    // still renders the theme row from compiled defaults, so a mutation must
+    // create the section instead of failing the whole write.
+    const config_path = try ensure(std.testing.allocator, workspace);
+    defer std.testing.allocator.free(config_path);
+    try std.fs.cwd().writeFile(.{
+        .sub_path = config_path,
+        .data = "{\n  \"version\": 1,\n  \"runtime\": {\"max_steps\": 4096}\n}\n",
+    });
+
+    try writeConfigKey(std.testing.allocator, workspace, "tui", "theme", .{ .string = "midnight" });
+    const policy = try loadTuiPolicy(std.testing.allocator, workspace);
+    try std.testing.expectEqual(TuiTheme.midnight, policy.theme);
+
+    // Unknown sections are still refused — section creation is bounded to
+    // the compiled template's known sections.
+    try std.testing.expectError(Error.InvalidConfig, writeConfigKey(std.testing.allocator, workspace, "telepathy", "mode", .{ .string = "on" }));
 }
 
 test "config environment values override runtime defaults and wire api is typed" {

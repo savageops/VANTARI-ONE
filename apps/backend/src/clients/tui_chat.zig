@@ -2538,10 +2538,12 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
     // Settings overlay — when open, render full-screen instead of normal layout.
     if (state.settings_state) |*ss| {
         if (ss.open) {
-            settings_view.drawSettings(root, ss);
+            settings_view.drawSettings(root, ss, frame_allocator);
             // Settings paints the same Vaxis frame as the chat view. It must
             // go through the normal render boundary or the operator sees the
-            // old frame and the panel appears frozen after the command.
+            // old frame and the panel appears frozen after the command. The
+            // frame arena keeps every Vaxis-borrowed settings string alive
+            // until this render completes.
             try vx.render(writer);
             try writer.flush();
             return;

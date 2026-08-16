@@ -22,6 +22,26 @@ fixed; ledger mutations now apply on the next turn without a kernel restart.
   probes green. Anthropic/OpenCode refresh flows remain the open parity
   residual.
 
+## 2026-08-16 - Live installed-TUI proof closes two more defects
+
+**Outcome:** PTY-driving the installed TUI against the live owner proved
+every settings/models surface interactively and exposed two real defects,
+both fixed and redeployed the same day: `config/set` now creates a known
+missing section (the operator's legacy config predated `tui`, making every
+theme/status-bar write fail), and the Models tab no longer segfaults the
+render (Vaxis-borrowed row strings now come from the frame arena and survive
+`vx.render`, per the AGENTS.md §IV borrow contract).
+
+- Live interactive proofs: enum cycles with file persistence for
+  `runtime.log_level`, `tui.theme`, `tui.status_bar_position` (all restored
+  to operator defaults after); `/model` Models tab with connected + detected
+  provider rows; live glm catalog pull; assign-picker with honest labeling;
+  commit through `providers/set-model` with ledger readback; typed
+  `/model <name>` path; full 12-section Tab traversal; clean `/exit`.
+- Debug gate `19/19`, `2,225/2,229`; deployed ReleaseFast `8589C618…`.
+- Receipt addendum:
+  `.docs/todo/changelog/087-provider-credential-import-model-routing.md`.
+
 ## 2026-08-14 - Close current frontier after proactive YAGNI pass
 
 **Outcome:** The reactive repair/replay control plane remains deleted, and the
