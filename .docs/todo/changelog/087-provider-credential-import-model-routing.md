@@ -170,3 +170,22 @@ Interactive proofs on the redeployed ReleaseFast
   both workspace owners (vantari + clicloud) left running healthy.
 
 Gate after both fixes: Debug `19/19`, `2,225/2,229` passed, 4 platform skips.
+
+## Native model surface (2026-08-16, second addendum)
+
+Operator report: after importing native credentials, the Models tab showed
+"provider returned a non-200 response" (Codex) and "provider returned an
+unexpected model list shape" (OpenCode). Root cause: blind HTTP discovery of
+`{base_url}/models` — the Codex Responses backend has no such route and the
+OpenCode gateway answers 200 with a plain-text "Not Found" body.
+
+`models.zig` now owns the boundary: `openai-codex` and the `opencode` family
+(`opencode`, `opencode-go`, `opencode-zen`, `zai-coding-plan`) have no
+OpenAI-compatible catalog; their credential's configured model IS the catalog
+(`nativeModels`, no network, `context_from_native_surface = true`, family
+fallbacks gpt-5.4-mini / opencode-go). Catalog providers keep HTTP discovery.
+
+Live owner-RPC proof on deployed ReleaseFast `AEE2EFEFE…`:
+openai-codex → ok gpt-5.4-mini; opencode/opencode-go/zai-coding-plan → ok
+opencode-go (native); zai → ok live glm catalog (HTTP). Gate: Debug `19/19`,
+`2,228/2,232`, 4 platform skips. Commit `cebff3b`.
