@@ -15,10 +15,10 @@ import type { ApiVantariServerProps } from '$lib/types/api';
 const BRIDGE_ORIGIN: string =
 	(import.meta.env.VITE_VANTARI_BRIDGE as string | undefined) ?? 'http://127.0.0.1:18833';
 const BRIDGE_TOKEN_HEADER = 'x-var1-bridge-token';
-
 let bridgeToken: string | null = null;
 let tokenPromise: Promise<string> | null = null;
 let rpcId = 0;
+
 /** Resolve (and cache) the bridge token via the unauthenticated health handshake. */
 export function ensureBridgeToken(): Promise<string> {
 	if (bridgeToken) return Promise.resolve(bridgeToken);
@@ -38,17 +38,48 @@ export function ensureBridgeToken(): Promise<string> {
 	return tokenPromise;
 }
 
-/** One JSON-RPC call through the browser lane. Throws on JSON-RPC errors. */
-export async function rpc<T = unknown>(method: string, params: unknown = {}): Promise<T> {
-	const token = await ensureBridgeToken();
-	const response = await fetch(`${BRIDGE_ORIGIN}/rpc`, {
-		body: JSON.stringify({ jsonrpc: '2.0', id: `web-${++rpcId}`, method, params }),
+/** Drop the cached token after an owner restart (new generation, new token). */
+function invalidateBridgeToken(): void {
+	bridgeToken = null;
+	tokenPromise = null;
+}
+
+/** Test seam: reset the cached token without reaching for module internals. */
+export function invalidateBridgeTokenForTests(): void {
+	invalidateBridgeToken();
+}
+
+async function rpcWithToken<T>(
+	token: string,
+	method: string,
+	params: unknown,
+	id: number
+): Promise<Response> {
+	return fetch(`${BRIDGE_ORIGIN}/rpc`, {
+		body: JSON.stringify({ jsonrpc: '2.0', id: `web-${id}`, method, params }),
 		headers: {
 			'content-type': 'application/json',
 			[BRIDGE_TOKEN_HEADER]: token
 		},
 		method: 'POST'
 	});
+}
+
+/**
+ * One JSON-RPC call through the browser lane. An unauthorized answer means
+ * the owner restarted with a new generation: the cached token is dropped,
+ * the handshake reruns, and the call retries exactly once before failing.
+ * Throws on JSON-RPC errors.
+ */
+export async function rpc<T = unknown>(method: string, params: unknown = {}): Promise<T> {
+	const id = ++rpcId;
+	let token = await ensureBridgeToken();
+	let response = await rpcWithToken<T>(token, method, params, id);
+	if (response.status === 401) {
+		invalidateBridgeToken();
+		token = await ensureBridgeToken();
+		response = await rpcWithToken<T>(token, method, params, id);
+	}
 	if (!response.ok) {
 		throw new Error(`bridge rpc ${method} failed: ${response.status}`);
 	}
@@ -353,22 +384,39 @@ export function mapModelsToList(list: VantariModelsList): {
 }
 
 /**
- * Session state for the chat lane. The UI resends the full message history
- * on every turn; VANTARI owns its own transcript, so only the latest user
- * message crosses the bridge and one bridge session serves the page.
+ * Per-conversation session state. The UI resends its full message history
+ * every turn and tracks conversations by id; VANTARI owns the durable
+ * transcript, so exactly the latest user message crosses the bridge and
+ * each UI conversation maps to its own kernel session. Event cursors are
+ * tracked per session so a switch or concurrent turn cannot replay another
+ * conversation's deltas.
  */
-let chatSessionId: string | null = null;
-let eventCursor = 0;
+const conversationSessions = new Map<string, { session_id: string; event_cursor: number }>();
 
-export async function ensureChatSession(): Promise<string> {
-	if (chatSessionId) return chatSessionId;
+export async function ensureChatSession(conversationId: string | null): Promise<string> {
+	const key = conversationId ?? 'default';
+	const existing = conversationSessions.get(key);
+	if (existing) return existing.session_id;
 	const result = await rpc<{ session_id?: string; session?: { session_id?: string } }>(
 		'session/create',
 		{ prompt: 'web session' }
 	);
-	chatSessionId = result?.session_id ?? result?.session?.session_id ?? null;
-	if (!chatSessionId) throw new Error('session/create returned no session id');
-	return chatSessionId;
+	const session_id = result?.session_id ?? result?.session?.session_id ?? null;
+	if (!session_id) throw new Error('session/create returned no session id');
+	conversationSessions.set(key, { session_id, event_cursor: 0 });
+	return session_id;
+}
+
+export function conversationEventCursor(conversationId: string | null): {
+	session_id: string;
+	event_cursor: number;
+} | null {
+	return conversationSessions.get(conversationId ?? 'default') ?? null;
+}
+
+function advanceConversationCursor(conversationId: string | null, seq: number): void {
+	const entry = conversationSessions.get(conversationId ?? 'default');
+	if (entry && seq > entry.event_cursor) entry.event_cursor = seq;
 }
 
 function sseFrame(payload: unknown, id?: string | number): string {
@@ -379,6 +427,7 @@ interface ChatRequestBody {
 	messages?: Array<{ role: string; content: unknown }>;
 	model?: string;
 	stream?: boolean;
+	conversation_id?: string | null;
 	[k: string]: unknown;
 }
 
@@ -413,7 +462,12 @@ function lastUserText(body: ChatRequestBody): string {
  *   turn_terminal            -> finish_reason "stop" + [DONE]
  */
 export async function vantariChatFetch(requestBody: ChatRequestBody): Promise<Response> {
-	const sessionId = await ensureChatSession();
+	const conversationId =
+		typeof requestBody.conversation_id === 'string' ? requestBody.conversation_id : null;
+	await ensureChatSession(conversationId);
+	const sessionState = conversationEventCursor(conversationId);
+	const sessionId = sessionState?.session_id
+		?? (await ensureChatSession(conversationId));
 	const completionId = `vantari-${sessionId.slice(-8)}-${Date.now()}`;
 	const prompt = lastUserText(requestBody);
 	if (!prompt.trim()) {
@@ -441,8 +495,10 @@ export async function vantariChatFetch(requestBody: ChatRequestBody): Promise<Re
 			try {
 				while (!finished) {
 					let event: BridgeEvent | null = null;
+					const cursorEntry = conversationEventCursor(conversationId);
+					const pollFrom = sessionState && cursorEntry ? cursorEntry.event_cursor : 0;
 					try {
-						event = await pollEvent(eventCursor, 1000);
+						event = await pollEvent(pollFrom, 1000);
 					} catch {
 						// transient poll failure: keep the loop alive while the
 						// turn is still running
@@ -455,7 +511,7 @@ export async function vantariChatFetch(requestBody: ChatRequestBody): Promise<Re
 						}
 						continue;
 					}
-					eventCursor = event.seq;
+					advanceConversationCursor(conversationId, event.seq);
 					const data = event.data ?? {};
 					if (data.session_id && data.session_id !== sessionId) continue;
 

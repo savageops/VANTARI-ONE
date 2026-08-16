@@ -3624,3 +3624,37 @@ hash mismatch. Research and receipt:
 2026-08-14 - Pin the ReleaseFast Zig build seed to `0` after proving random dependency traversal made repeated artifacts differ; two fixed-seed builds now equal `A7D01B37DBB3F954CF93F534CC04E9E662B86F34F19E4C2192EA302208515806`, the manifest is promotable at `19/19` and `2,184/2,184`, and installed proofs pass with zero exact-path processes.
 2026-08-14 - Move root orchestration ownership from persistent `agents.orchestrator_only` config to the existing `PromptMode`: Shift+Tab and CLI `--prompt-mode` derive the root catalog/dispatch posture, `orchestrate` remains the default, child profiles remain unchanged, and old config files stay readable but inert. Installed PTY and build-mode `list_files` proof passed on SHA-256 `A7D01B37DBB3F954CF93F534CC04E9E662B86F34F19E4C2192EA302208515806`.
 2026-08-14 - Refresh the prompt-mode owner proof after the formatter: current source and installed ReleaseFast SHA-256 match `59E150343A206A465ACACBB7E3F5466BDD052E4C8F4426C599AFB6D25A24FC8E`; Debug `19/19` and `2,184/2,184`, ReleaseFast `9/9`, installed build/orchestrate turns, two native `list_files` lifecycles, and the promotable release manifest all read back cleanly with zero final processes. Move 89 remains partial only at the named provider write/cancel/question and hidden-window boundaries.
+
+## 2026-08-16 - Kernel-served web client replaces the external static host
+
+**Outcome:** The HTTP bridge now owns the web client end to end. The same
+loopback surface that serves /rpc and /events serves the built SvelteKit
+dist from `<workspace>/apps/web/dist`: root serves the SPA entry, hashed
+assets serve with correct MIME types, extension-less deep links redirect
+(307) to their hash-router anchor so every shareable URL resolves, and
+traversal/encoded-traversal paths fail closed before touching the
+filesystem. Workspaces without a built dist keep the API-only banner —
+serving is enabled purely by directory presence. The interim `npx serve`
+host is gone.
+
+- The web app's management surface moved from the overlay hack back to a
+  real `/vantari` route (bookmarkable, shareable); the agents rail
+  navigates to it.
+- `rpc()` gained owner-restart resilience: a 401 drops the cached bridge
+  token, reruns the health handshake, and retries exactly once before
+  failing — proven by unit tests with mocked fetch sequences.
+- Chat sessions are now per-conversation (Map keyed by conversation id)
+  with per-session event cursors, so switching conversations cannot replay
+  another one's deltas.
+- Fixed en route: the redirect `location` slice was freed before
+  `respond()` read it (use-after-free crashed the live owner on the first
+  deep link); Response now owns the location and deinit frees it.
+
+- Gates: backend Debug `19/19`, `2,228/2,232` (4 platform skips), with
+  three new bridge tests (assets+MIME, deep-link redirect, traversal
+  rejection + API-only fallback). Frontend `svelte-check` 0 errors,
+  `640/640` unit tests including 7 new bridge-service tests.
+- Deployed ReleaseFast `CCA9D8E7…`; live proof on the bridge origin only:
+  root 200 HTML, `/vantari` 307→`/#/vantari` rendering the management
+  page, assets 200 with correct content types, traversal 404, and a
+  streamed chat turn (`KERNEL_SERVED_OK`) with reasoning separated.

@@ -351,7 +351,10 @@ export class ChatService {
 			// bridge adapter from the kernel's event lane (session/send +
 			// assistant_delta -> chat.completion.chunk), so the existing
 			// stream consumer below reads it unchanged.
-			const response = await vantariChatFetch(requestBody);
+			const response = await vantariChatFetch({
+				...requestBody,
+				conversation_id: conversationId ?? null
+			});
 
 			if (!response.ok) {
 				// a rejected request (including one cancelled by a stop during the model load)

@@ -388,7 +388,7 @@ test "web route exposes bridge root text instead of embedded workbench html" {
 
     try std.testing.expectEqual(std.http.Status.ok, response.status);
     try std.testing.expect(std.mem.indexOf(u8, response.body, "VAR1 HTTP bridge ready.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, response.body, "apps/frontend/var1-client") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.body, "apps/web") != null);
     try std.testing.expect(std.mem.indexOf(u8, response.body, "VAR1 Workbench") == null);
 }
 

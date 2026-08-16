@@ -4,12 +4,14 @@ const owner_state = @import("owner_state.zig");
 const protocol_types = @import("../shared/protocol/types.zig");
 const provider = @import("../core/providers/openai_compatible.zig");
 const stdio_rpc = @import("stdio_rpc.zig");
+const fsutil = @import("../shared/fsutil.zig");
 const types = @import("../shared/types.zig");
 
 const max_request_body_bytes = 256 * 1024;
 const connection_read_buffer_size = 16 * 1024;
 const connection_write_buffer_size = 16 * 1024;
 const max_active_connections: usize = 64;
+const max_web_asset_bytes = 64 * 1024 * 1024;
 const sse_poll_timeout_ms: usize = 1000;
 pub const test_bridge_token = "test-bridge-token";
 pub const test_owner_token = "test-owner-token";
@@ -241,9 +243,13 @@ const Response = struct {
     body: []u8,
     cors_origin: []const u8 = bridge_access.default_cors_origin,
     shutdown: bool = false,
+    /// Owned redirect target; freed by deinit so no caller-facing slice
+    /// dangles after the routing function returns.
+    location: ?[]u8 = null,
 
     pub fn deinit(self: Response, allocator: std.mem.Allocator) void {
         allocator.free(self.body);
+        if (self.location) |value| allocator.free(value);
     }
 };
 
@@ -449,13 +455,13 @@ fn routeBridge(
         return jsonErrorResponseWithCors(allocator, .unauthorized, "BridgeTokenRequired", cors_origin);
     }
 
-    if (method == .GET and std.mem.eql(u8, path, "/")) {
-        return .{
-            .status = .ok,
-            .content_type = "text/plain; charset=utf-8",
-            .body = try allocator.dupe(u8, "VAR1 HTTP bridge ready. Use POST /rpc, GET /events, or the external client in apps/frontend/var1-client.\n"),
-            .cors_origin = cors_origin,
-        };
+
+    if (method == .GET and std.mem.eql(u8, path, "/api/health")) {
+        const result_json = try callKernelResult(allocator, bridge, protocol_types.methods.health_get, "{}");
+        defer allocator.free(result_json);
+        const health_json = try bridge_access.redactAndAttachHandshake(allocator, result_json, bridge.bridgeToken());
+        defer allocator.free(health_json);
+        return jsonResponseWithCors(allocator, .ok, health_json, cors_origin);
     }
 
     if (method == .POST and std.mem.eql(u8, path, "/rpc")) {
@@ -469,13 +475,20 @@ fn routeBridge(
         response.cors_origin = cors_origin;
         return response;
     }
-
-    if (method == .GET and std.mem.eql(u8, path, "/api/health")) {
-        const result_json = try callKernelResult(allocator, bridge, protocol_types.methods.health_get, "{}");
-        defer allocator.free(result_json);
-        const health_json = try bridge_access.redactAndAttachHandshake(allocator, result_json, bridge.bridgeToken());
-        defer allocator.free(health_json);
-        return jsonResponseWithCors(allocator, .ok, health_json, cors_origin);
+    if (method == .GET and std.mem.eql(u8, path, "/")) {
+        // When a built web client exists, the bridge root IS the app. The
+        // plain-text banner remains the API-only hint for workspaces
+        // without a frontend build.
+        if (try webDistDir(allocator, bridge.workspace_root)) |dist_dir| {
+            allocator.free(dist_dir);
+            return serveWebAsset(allocator, bridge.workspace_root, "/", "/", cors_origin);
+        }
+        return .{
+            .status = .ok,
+            .content_type = "text/plain; charset=utf-8",
+            .body = try allocator.dupe(u8, "VAR1 HTTP bridge ready. Use POST /rpc, GET /events, or the web client under apps/web when built.\n"),
+            .cors_origin = cors_origin,
+        };
     }
 
     if (method == .GET and std.mem.eql(u8, path, "/owner/health")) {
@@ -520,7 +533,130 @@ fn routeBridge(
         return response;
     }
 
+    // The web client is a kernel-served surface: the same loopback bridge
+    // that owns /rpc and /events also serves its built assets from the
+    // conventional dist directory next to the workspace. One origin, one
+    // host, no external static server. The app uses a hash router, so
+    // path-style deep links redirect to their hash-anchor form and every
+    // shareable URL resolves.
+    if (method == .GET) {
+        return serveWebAsset(allocator, bridge.workspace_root, target, path, cors_origin);
+    }
+
     return jsonErrorResponseWithCors(allocator, .not_found, "NotFound", cors_origin);
+}
+
+/// Conventional web client dist location: `<workspace>/apps/web/dist`.
+/// Serving is enabled purely by directory presence — workspaces without a
+/// built frontend keep today's API-only behavior.
+fn webDistDir(allocator: std.mem.Allocator, workspace_root: []const u8) !?[]u8 {
+    const dir = try fsutil.join(allocator, &.{ workspace_root, "apps", "web", "dist" });
+    errdefer allocator.free(dir);
+    var directory = std.fs.cwd().openDir(dir, .{}) catch {
+        allocator.free(dir);
+        return null;
+    };
+    directory.close();
+    return dir;
+}
+
+fn contentTypeForPath(path: []const u8) []const u8 {
+    const last_slash = std.mem.lastIndexOfScalar(u8, path, '/') orelse 0;
+    const name = path[last_slash..];
+    const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return "application/octet-stream";
+    const extension = name[dot + 1 ..];
+    const table = [_]struct { extension: []const u8, content_type: []const u8 }{
+        .{ .extension = "html", .content_type = "text/html; charset=utf-8" },
+        .{ .extension = "js", .content_type = "text/javascript; charset=utf-8" },
+        .{ .extension = "css", .content_type = "text/css; charset=utf-8" },
+        .{ .extension = "json", .content_type = "application/json" },
+        .{ .extension = "svg", .content_type = "image/svg+xml" },
+        .{ .extension = "png", .content_type = "image/png" },
+        .{ .extension = "ico", .content_type = "image/x-icon" },
+        .{ .extension = "webmanifest", .content_type = "application/manifest+json" },
+        .{ .extension = "txt", .content_type = "text/plain; charset=utf-8" },
+        .{ .extension = "wasm", .content_type = "application/wasm" },
+        .{ .extension = "woff2", .content_type = "font/woff2" },
+        .{ .extension = "webp", .content_type = "image/webp" },
+    };
+    for (table) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.extension, extension)) return entry.content_type;
+    }
+    return "application/octet-stream";
+}
+
+fn readWebAsset(allocator: std.mem.Allocator, dist_dir: []const u8, relative: []const u8) !?[]u8 {
+    const full = try fsutil.join(allocator, &.{ dist_dir, relative });
+    defer allocator.free(full);
+    const content = std.fs.cwd().readFileAlloc(allocator, full, max_web_asset_bytes) catch |err| switch (err) {
+        error.FileNotFound, error.IsDir => return null,
+        error.FileTooBig => return error.FileTooBig,
+        else => return err,
+    };
+    return content;
+}
+
+fn serveWebAsset(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    target: []const u8,
+    path: []const u8,
+    cors_origin: []const u8,
+) !Response {
+    // Containment first: no traversal, no encoded traversal, no absolute or
+    // dot-segment escapes reach the filesystem.
+    if (std.mem.indexOf(u8, path, "..") != null) {
+        return jsonErrorResponseWithCors(allocator, .not_found, "NotFound", cors_origin);
+    }
+    if (std.ascii.indexOfIgnoreCase(path, "%2e") != null) {
+        return jsonErrorResponseWithCors(allocator, .not_found, "NotFound", cors_origin);
+    }
+
+    const dist_dir = (try webDistDir(allocator, workspace_root)) orelse {
+        return jsonErrorResponseWithCors(allocator, .not_found, "NotFound", cors_origin);
+    };
+    defer allocator.free(dist_dir);
+
+    const relative = if (path.len > 1) path[1..] else "index.html";
+    const last_segment = std.mem.lastIndexOfScalar(u8, relative, '/') orelse 0;
+    const looks_like_file = std.mem.indexOfScalar(u8, relative[last_segment..], '.') != null;
+
+    if (looks_like_file) {
+        if (try readWebAsset(allocator, dist_dir, relative)) |content| {
+            return .{
+                .status = .ok,
+                .content_type = contentTypeForPath(relative),
+                .body = content,
+                .cors_origin = cors_origin,
+            };
+        }
+        // A missing file request (broken hash, stale asset) is a real 404 —
+        // the SPA cannot recover a hashed asset reference.
+        return jsonErrorResponseWithCors(allocator, .not_found, "NotFound", cors_origin);
+    }
+
+    if (std.mem.eql(u8, path, "/")) {
+        // The root serves the SPA entry directly.
+        if (try readWebAsset(allocator, dist_dir, "index.html")) |content| {
+            return .{
+                .status = .ok,
+                .content_type = "text/html; charset=utf-8",
+                .body = content,
+                .cors_origin = cors_origin,
+            };
+        }
+        return jsonErrorResponseWithCors(allocator, .not_found, "NotFound", cors_origin);
+    }
+
+    // the shareable path form to its hash-anchor form with a redirect. The
+    // Response owns the location slice; deinit frees it after respond.
+    return .{
+        .status = .temporary_redirect,
+        .content_type = "text/plain; charset=utf-8",
+        .body = try allocator.dupe(u8, ""),
+        .cors_origin = cors_origin,
+        .location = try std.fmt.allocPrint(allocator, "/#{s}", .{target}),
+    };
 }
 
 fn forwardRpcRequest(
@@ -629,10 +765,26 @@ fn respond(request: *std.http.Server.Request, response: Response) !void {
         .{ .name = "access-control-allow-methods", .value = "GET,POST,OPTIONS" },
         .{ .name = "x-content-type-options", .value = "nosniff" },
     };
+    if (response.location) |location| {
+        const redirect_headers = [_]std.http.Header{
+            .{ .name = "content-type", .value = response.content_type },
+            .{ .name = "cache-control", .value = "no-store" },
+            .{ .name = "access-control-allow-origin", .value = response.cors_origin },
+            .{ .name = "access-control-allow-headers", .value = "content-type,last-event-id,x-var1-bridge-token" },
+            .{ .name = "access-control-allow-methods", .value = "GET,POST,OPTIONS" },
+            .{ .name = "x-content-type-options", .value = "nosniff" },
+            .{ .name = "location", .value = location },
+        };
+        try request.respond(response.body, .{
+            .status = response.status,
+            .extra_headers = redirect_headers[0..],
+        });
+        return;
+    }
 
     try request.respond(response.body, .{
         .status = response.status,
-        .extra_headers = &headers,
+        .extra_headers = headers[0..],
     });
 }
 
@@ -789,4 +941,116 @@ fn localKernelDeinit(ctx: ?*anyopaque, allocator: std.mem.Allocator) void {
     var client: *stdio_rpc.ChildClient = @ptrCast(@alignCast(ctx.?));
     client.deinit();
     allocator.destroy(client);
+}
+
+const testing = std.testing;
+
+fn writeWebFixture(root: []const u8) !void {
+    var dir = try std.fs.cwd().makeOpenPath(root, .{});
+    defer dir.close();
+    try dir.makePath("apps/web/dist/_app/immutable");
+    try dir.writeFile(.{ .sub_path = "apps/web/dist/index.html", .data = "<!doctype html><title>web</title>" });
+    try dir.writeFile(.{
+        .sub_path = "apps/web/dist/_app/immutable/bundle.js",
+        .data = "console.log('bundle')",
+    });
+    try dir.writeFile(.{ .sub_path = "apps/web/dist/icon.png", .data = "\x89PNG" });
+}
+
+fn testBridgeWithWorkspace(workspace: []const u8) Bridge {
+    return .initWithKernel(testing.allocator, .{
+        .context = null,
+        .callFn = struct {
+            fn call(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8, _: []const u8) anyerror!stdio_rpc.RpcCallResult {
+                return error.KernelUnavailable;
+            }
+        }.call,
+        .waitNotificationAfterFn = struct {
+            fn wait(_: ?*anyopaque, _: std.mem.Allocator, _: u64, _: usize) anyerror!?stdio_rpc.Notification {
+                return null;
+            }
+        }.wait,
+    }, workspace);
+}
+
+test "bridge serves the web client root and assets from the dist directory" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(root);
+    try writeWebFixture(root);
+
+    var bridge = testBridgeWithWorkspace(root);
+
+    var root_response = try routeWithOwnerAccess(testing.allocator, &bridge, .GET, "/", "", null, null, null);
+    defer root_response.deinit(testing.allocator);
+    try testing.expectEqual(std.http.Status.ok, root_response.status);
+    try testing.expect(std.mem.startsWith(u8, root_response.body, "<!doctype html>"));
+    try testing.expectEqualStrings("text/html; charset=utf-8", root_response.content_type);
+
+    var asset_response = try routeWithOwnerAccess(
+        testing.allocator,
+        &bridge,
+        .GET,
+        "/_app/immutable/bundle.js",
+        "",
+        null,
+        null,
+        null
+    );
+    defer asset_response.deinit(testing.allocator);
+    try testing.expectEqual(std.http.Status.ok, asset_response.status);
+    try testing.expectEqualStrings("text/javascript; charset=utf-8", asset_response.content_type);
+
+    var icon_response = try routeWithOwnerAccess(testing.allocator, &bridge, .GET, "/icon.png", "", null, null, null);
+    defer icon_response.deinit(testing.allocator);
+    try testing.expectEqualStrings("image/png", icon_response.content_type);
+}
+
+test "bridge resolves client-route deep links to the hash router and 404s missing assets" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(root);
+    try writeWebFixture(root);
+
+    var bridge = testBridgeWithWorkspace(root);
+
+    var deep = try routeWithOwnerAccess(testing.allocator, &bridge, .GET, "/settings/agentic", "", null, null, null);
+    defer deep.deinit(testing.allocator);
+    try testing.expectEqual(std.http.Status.temporary_redirect, deep.status);
+    try testing.expectEqualStrings("/#/settings/agentic", deep.location.?);
+
+    var missing = try routeWithOwnerAccess(testing.allocator, &bridge, .GET, "/_app/immutable/absent.js", "", null, null, null);
+    defer missing.deinit(testing.allocator);
+    try testing.expectEqual(std.http.Status.not_found, missing.status);
+}
+
+test "bridge rejects traversal and stays api-only without a dist directory" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(root);
+    try writeWebFixture(root);
+
+    var bridge = testBridgeWithWorkspace(root);
+
+    var traversal = try routeWithOwnerAccess(testing.allocator, &bridge, .GET, "/../secret.txt", "", null, null, null);
+    defer traversal.deinit(testing.allocator);
+    try testing.expectEqual(std.http.Status.not_found, traversal.status);
+
+    var encoded = try routeWithOwnerAccess(testing.allocator, &bridge, .GET, "/%2e%2e/secret", "", null, null, null);
+    defer encoded.deinit(testing.allocator);
+    try testing.expectEqual(std.http.Status.not_found, encoded.status);
+
+    // A workspace without apps/web/dist keeps the API-only banner root.
+    var empty = std.testing.tmpDir(.{});
+    defer empty.cleanup();
+    const empty_root = try empty.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(empty_root);
+    var api_bridge = testBridgeWithWorkspace(empty_root);
+    var banner = try routeWithOwnerAccess(testing.allocator, &api_bridge, .GET, "/", "", null, null, null);
+    defer banner.deinit(testing.allocator);
+    try testing.expectEqual(std.http.Status.ok, banner.status);
+    try testing.expect(std.mem.indexOf(u8, banner.body, "bridge ready") != null);
 }

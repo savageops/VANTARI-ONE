@@ -6,7 +6,7 @@
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { getSession, type VantariSessionMessage } from '$lib/services/vantari.service';
 	import { vantariStore } from '$lib/stores/vantari.svelte';
-	import VantariPanelSheet from './VantariPanelSheet.svelte';
+	import { goto } from '$app/navigation';
 	/**
 	 * Agents panel: the kernel's specialist registry on the right edge of the
 	 * chat. Clicking an agent resolves its latest session (sessions carry
@@ -16,8 +16,7 @@
 	 */
 
 	let open = $state(false);
-	let manageOpen = $state(false);
-	let selectedAgent = $state<string | null>(null);
+		let selectedAgent = $state<string | null>(null);
 	let transcript = $state<VantariSessionMessage[]>([]);
 	let transcriptStatus = $state<string | null>(null);
 	let loadingTranscript = $state(false);
@@ -103,7 +102,7 @@
 					variant="ghost"
 					size="sm"
 					class="text-xs"
-					onclick={() => (manageOpen = true)}
+					onclick={() => goto('/vantari')}
 					aria-label="Manage providers and agents"
 				>
 					Manage
@@ -178,6 +177,4 @@
 			</ScrollArea>
 		</div>
 	</aside>
-
-	<VantariPanelSheet bind:open={manageOpen} />
 {/if}

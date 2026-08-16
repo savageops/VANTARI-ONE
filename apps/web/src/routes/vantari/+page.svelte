@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { RefreshCw, X } from '@lucide/svelte';
+	import { ArrowLeft, RefreshCw } from '@lucide/svelte';
+	import { goto } from '$app/navigation';
+	import { ActionIcon } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import { Label } from '$lib/components/ui/label';
@@ -8,7 +10,6 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { vantariStore } from '$lib/stores/vantari.svelte';
 
-	let { open = $bindable(false) } = $props();
 
 	let logLevel = $state('silent');
 	let effort = $state('medium');
@@ -91,13 +92,12 @@
 		busy = null;
 	}
 
-	onMount(() => {
-		if (open) void load();
-	});
+onMount(load);
 </script>
 
-<div class="flex flex-col gap-5">
+<div class="mx-auto flex max-w-4xl flex-col gap-6 p-6">
 	<header class="flex items-center gap-3">
+		<ActionIcon icon={ArrowLeft} tooltip="Back to chat" onclick={() => goto('/')} />
 		<div>
 			<h1 class="text-lg font-semibold">Vantari</h1>
 			<p class="text-xs text-muted-foreground">
@@ -115,14 +115,6 @@
 			{#if vantariStore.error}
 				<span class="text-xs text-destructive">{vantariStore.error}</span>
 			{/if}
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				onclick={() => (open = false)}
-				aria-label="Close panel"
-			>
-				<X class="size-4" />
-			</Button>
 			<Button variant="outline" size="sm" onclick={load} disabled={busy === 'refresh'}>
 				<RefreshCw class="size-4" />Refresh
 			</Button>
