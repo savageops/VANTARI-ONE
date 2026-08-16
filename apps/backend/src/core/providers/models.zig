@@ -116,6 +116,68 @@ pub fn detectContextWindowForModel(list: ModelsList, model_id: []const u8) ?u64 
     return null;
 }
 
+/// Provider families whose gateway exposes no OpenAI-compatible /models
+/// surface: the Codex Responses backend answers /models with a non-200, and
+/// the OpenCode gateway answers 200 with a plain-text "Not Found" body. A
+/// plain HTTP discovery against them surfaces transport-shape errors in the
+/// Models tab ("non-200 response" / "unexpected model list shape"). Their
+/// model list is NATIVE instead: the credential's configured model is the
+/// known-good id (Codex additionally carries the adapter's fixed descriptor
+/// default), so discovery returns it without a network round-trip and marks
+/// `context_from_native_surface`.
+pub fn hasNativeModelSurface(provider_id: []const u8) bool {
+    const native_providers = [_][]const u8{
+        "openai-codex", "opencode", "opencode-go", "opencode-zen", "zai-coding-plan",
+    };
+    for (native_providers) |candidate| {
+        if (std.mem.eql(u8, candidate, provider_id)) return true;
+    }
+    return false;
+}
+
+/// Family default when the credential carries no model: the Codex adapter's
+/// fixed descriptor model, and the OpenCode gateway's import default.
+fn nativeModelFallback(provider_id: []const u8) []const u8 {
+    if (std.mem.eql(u8, provider_id, "openai-codex")) return "gpt-5.4-mini";
+    return "opencode-go";
+}
+
+/// The native model list for a no-catalog provider. One descriptor — the
+/// configured model or the family default — with no network I/O.
+pub fn nativeModels(
+    allocator: std.mem.Allocator,
+    provider_id: []const u8,
+    base_url: []const u8,
+    configured_model: ?[]const u8,
+) Error!ModelsList {
+    const model = if (configured_model) |value|
+        (if (value.len > 0) value else nativeModelFallback(provider_id))
+    else
+        nativeModelFallback(provider_id);
+
+    const id = try allocator.dupe(u8, model);
+    errdefer allocator.free(id);
+    const owned_by = try allocator.dupe(u8, provider_id);
+    errdefer allocator.free(owned_by);
+    const raw_json = try std.fmt.allocPrint(allocator, "{{\"id\":\"{s}\",\"native_surface\":true}}", .{model});
+    errdefer allocator.free(raw_json);
+    const descriptors = try allocator.alloc(ModelDescriptor, 1);
+    errdefer allocator.free(descriptors);
+    descriptors[0] = .{
+        .id = id,
+        .owned_by = owned_by,
+        .context_length = null,
+        .raw_json = raw_json,
+    };
+
+    return .{
+        .provider_id = try allocator.dupe(u8, provider_id),
+        .base_url = try allocator.dupe(u8, base_url),
+        .models = descriptors,
+        .context_from_native_surface = true,
+    };
+}
+
 fn parseModelsData(allocator: std.mem.Allocator, body: []const u8) Error![]ModelDescriptor {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{
         .ignore_unknown_fields = true,
@@ -282,6 +344,37 @@ const ParsedModelEntry = struct {
     owned_by: ?[]const u8 = null,
     context_length: ?u64 = null,
 };
+
+test "native model surface covers the no-catalog provider families" {
+    const native = [_][]const u8{ "openai-codex", "opencode", "opencode-go", "opencode-zen", "zai-coding-plan" };
+    for (native) |provider_id| {
+        try std.testing.expect(hasNativeModelSurface(provider_id));
+    }
+    // Catalog providers keep HTTP discovery.
+    try std.testing.expect(!hasNativeModelSurface("zai"));
+    try std.testing.expect(!hasNativeModelSurface("anthropic"));
+    try std.testing.expect(!hasNativeModelSurface("openrouter"));
+    try std.testing.expect(!hasNativeModelSurface("lmstudio"));
+}
+
+test "native models return the configured model without network and fall back per family" {
+    // Configured model wins; unroutable base URL proves no HTTP occurred.
+    var configured = try nativeModels(std.testing.allocator, "opencode", "http://127.0.0.1:1/v1", "opencode/glm-4.7");
+    defer configured.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), configured.models.len);
+    try std.testing.expectEqualStrings("opencode/glm-4.7", configured.models[0].id);
+    try std.testing.expect(configured.context_from_native_surface);
+
+    // Codex falls back to the adapter descriptor model.
+    var codex = try nativeModels(std.testing.allocator, "openai-codex", "https://chatgpt.com/backend-api", null);
+    defer codex.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("gpt-5.4-mini", codex.models[0].id);
+
+    // Empty configured model falls back to the OpenCode import default.
+    var fallback = try nativeModels(std.testing.allocator, "zai-coding-plan", "https://api.opencode.ai/v1", "");
+    defer fallback.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("opencode-go", fallback.models[0].id);
+}
 
 test "models parser handles LM Studio shape with missing created and no context_length" {
     const body =

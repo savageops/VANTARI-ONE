@@ -1826,51 +1826,73 @@ fn handleModelsList(server: *Server, params: ?std.json.Value) ![]u8 {
         // fields stand (env-configured workspace).
         resolved_auth = refreshActiveAuthFromLedger(server.allocator, server.config.workspace_root);
     }
+    var resolved_model: []const u8 = "";
     if (resolved_auth) |auth| {
         resolved_provider_id = auth.provider_id;
         resolved_base_url = auth.base_url;
         resolved_api_key = auth.api_key;
         resolved_account_id = auth.account_id;
         resolved_auth_scheme = auth.auth_scheme;
+        resolved_model = auth.model;
     }
 
-    var discovered = models.listModelsWithAuth(
-        server.allocator,
-        resolved_base_url,
-        resolved_api_key,
-        resolved_account_id,
-        resolved_provider_id,
-        resolved_auth_scheme,
-    ) catch |err| switch (err) {
-        models.Error.Unreachable => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
-            .provider = resolved_provider_id,
-            .base_url = resolved_base_url,
-            .models = &.{},
-            .status = "unreachable",
-            .error_message = "provider offline or connection refused",
-        }),
-        models.Error.BadStatus => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
-            .provider = resolved_provider_id,
-            .base_url = resolved_base_url,
-            .models = &.{},
-            .status = "bad_status",
-            .error_message = "provider returned a non-200 response",
-        }),
-        models.Error.MalformedResponse => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
-            .provider = resolved_provider_id,
-            .base_url = resolved_base_url,
-            .models = &.{},
-            .status = "malformed",
-            .error_message = "provider returned an unexpected model list shape",
-        }),
-        else => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
-            .provider = resolved_provider_id,
-            .base_url = resolved_base_url,
-            .models = &.{},
-            .status = "unreachable",
-            .error_message = "unexpected discovery failure",
-        }),
-    };
+    // Native-surface providers (Codex Responses backend, OpenCode gateway)
+    // have no OpenAI-compatible /models catalog; HTTP discovery would only
+    // surface transport-shape errors. Their configured model IS the catalog.
+    const native_surface = models.hasNativeModelSurface(resolved_provider_id);
+    var discovered = if (native_surface)
+        models.nativeModels(
+            server.allocator,
+            resolved_provider_id,
+            resolved_base_url,
+            if (resolved_model.len > 0) resolved_model else null,
+        ) catch |err| switch (err) {
+            else => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
+                .provider = resolved_provider_id,
+                .base_url = resolved_base_url,
+                .models = &.{},
+                .status = "unreachable",
+                .error_message = "unexpected discovery failure",
+            }),
+        }
+    else
+        models.listModelsWithAuth(
+            server.allocator,
+            resolved_base_url,
+            resolved_api_key,
+            resolved_account_id,
+            resolved_provider_id,
+            resolved_auth_scheme,
+        ) catch |err| switch (err) {
+            models.Error.Unreachable => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
+                .provider = resolved_provider_id,
+                .base_url = resolved_base_url,
+                .models = &.{},
+                .status = "unreachable",
+                .error_message = "provider offline or connection refused",
+            }),
+            models.Error.BadStatus => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
+                .provider = resolved_provider_id,
+                .base_url = resolved_base_url,
+                .models = &.{},
+                .status = "bad_status",
+                .error_message = "provider returned a non-200 response",
+            }),
+            models.Error.MalformedResponse => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
+                .provider = resolved_provider_id,
+                .base_url = resolved_base_url,
+                .models = &.{},
+                .status = "malformed",
+                .error_message = "provider returned an unexpected model list shape",
+            }),
+            else => return renderJsonAlloc(server.allocator, protocol_types.ModelsListResult{
+                .provider = resolved_provider_id,
+                .base_url = resolved_base_url,
+                .models = &.{},
+                .status = "unreachable",
+                .error_message = "unexpected discovery failure",
+            }),
+        };
     defer discovered.deinit(server.allocator);
 
     var summaries = try server.allocator.alloc(protocol_types.ModelSummary, discovered.models.len);
@@ -3636,4 +3658,38 @@ test "session/send explicit provider equal to the snapshot active still reads th
     try std.testing.expect(std.mem.indexOf(u8, response, "Provider not found") != null);
     // No turn was attempted on snapshot credentials.
     try std.testing.expect(std.mem.indexOf(u8, response, "\"session\"") == null);
+}
+
+test "models/list uses the native surface for no-catalog providers without network" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    // The OpenCode gateway answers /models with 200 + plain-text "Not Found"
+    // and the Codex backend answers non-200; the unroutable loopback base
+    // URL proves discovery makes NO network call — the native configured
+    // model is the catalog.
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "opencode",
+        .base_url = "http://127.0.0.1:1/v1",
+        .model = "opencode/glm-4.7",
+        .api_key = "k1",
+        .credential_source = "opencode",
+    });
+    defer auth_store.removeProvider(std.testing.allocator, workspace_root, "opencode") catch {};
+
+    const request = try rpcRequest(protocol_types.methods.models_list, "{\"provider_id\":\"opencode\"}");
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"ok\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"id\":\"opencode/glm-4.7\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"context_from_native_surface\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"error_message\":null") != null);
 }
