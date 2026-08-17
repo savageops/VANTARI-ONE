@@ -1,5 +1,27 @@
 # Execution Log
 
+## 2026-08-16 - TUI performance caching and settings correctness
+
+**Outcome:** Four parallel audits (render path, event path, renderer
+internals, UX bugs) surfaced 30+ issues; the highest-impact performance
+and correctness fixes landed together.
+
+- Transcript row cache: drawTranscript reuses wrapped rows unless
+  message count, last-message byte length, width, or reasoning presence
+  changed — steady-state frames do zero wrapping work. Footer meta
+  cache: the 6+ allocPrint formatting cascade runs only when an input
+  changes. Skip-flag generation counter replaces the per-render
+  full-screen bool reset in the vendored renderer.
+- loadSection clears editing state (mid-edit section switches no longer
+  write stale text under the wrong key — data corruption fix) and
+  preserves entry_cursor by key match. changeSection wraps the section
+  ring at both boundaries, frees stale save hints, and model
+  assignments reload provider labels immediately.
+
+- Live proof on deployed ReleaseFast `1755B4B2…`: boot 1.1s, cursor
+  stays on log_level across repeated cycles, ring wraps both ways,
+  ghost-edit leaves no stale values. Debug `19/19`, `2,232/2,236`.
+
 ## 2026-08-16 - Provider credential import, model routing, and Models tab defect closure
 
 **Outcome:** The interrupted 2026-08-15 provider chain is complete and
