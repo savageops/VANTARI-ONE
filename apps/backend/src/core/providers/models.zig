@@ -1,8 +1,8 @@
 const std = @import("std");
 const provider = @import("openai_compatible.zig");
+const models_snapshot = @import("models_snapshot.zig");
 const provider_profile = @import("profile.zig");
 const types = @import("../../shared/types.zig");
-
 /// Model discovery for OpenAI-compatible providers (LM Studio, llama.cpp,
 /// vLLM, Ollama, OpenRouter, z.ai, ...). One GET to {base_url}/v1/models
 /// returns the live model list. For LM Studio, the OpenAI-compat surface
@@ -116,34 +116,272 @@ pub fn detectContextWindowForModel(list: ModelsList, model_id: []const u8) ?u64 
     return null;
 }
 
-/// Provider families whose gateway exposes no OpenAI-compatible /models
-/// surface: the Codex Responses backend answers /models with a non-200, and
-/// the OpenCode gateway answers 200 with a plain-text "Not Found" body. A
-/// plain HTTP discovery against them surfaces transport-shape errors in the
-/// Models tab ("non-200 response" / "unexpected model list shape"). Their
-/// model list is NATIVE instead: the credential's configured model is the
-/// known-good id (Codex additionally carries the adapter's fixed descriptor
-/// default), so discovery returns it without a network round-trip and marks
-/// `context_from_native_surface`.
-pub fn hasNativeModelSurface(provider_id: []const u8) bool {
-    const native_providers = [_][]const u8{
-        "openai-codex", "opencode", "opencode-go", "opencode-zen", "zai-coding-plan",
+/// One family, three catalog sources with one precedence. Provider
+/// identity is an attribute of a model (ACP lesson), never a separate
+/// surface per provider:
+///
+///   1. LIVE — the family's real discovery endpoint:
+///        OpenAI-compatible gateways  {base}/v1/models   (listModelsWithAuth)
+///        Codex (ChatGPT OAuth)       {base}/codex/models  listCodexModels
+///        OpenCode Zen gateway        https://api.opencode.ai/zen/v1/models
+///        Anthropic                   {base}/v1/models with x-api-key headers
+///   2. SNAPSHOT — the vendored models.dev subset (models_snapshot.zig):
+///      answers "what exists" with real context limits when the gateway
+///      has no models endpoint (Codex API-key path, opencode base URL)
+///      or is unreachable.
+///   3. CONFIGURED — the credential's model as a single-entry catalog
+///      (nativeModels). Last resort only.
+const DiscoveryFamily = enum {
+    openai_compatible,
+    codex_backend,
+    anthropic,
+};
+
+fn discoveryFamilyFor(provider_id: []const u8, base_url: []const u8) DiscoveryFamily {
+    if (std.mem.eql(u8, provider_id, "openai-codex")) return .codex_backend;
+    if (provider_profile.isAnthropic(provider_id, base_url)) return .anthropic;
+    return .openai_compatible;
+}
+
+/// Reverse-engineered Codex model discovery. The ChatGPT backend serves
+/// `GET {base}/codex/models` (Bearer + ChatGPT-Account-ID headers) with
+/// `{models: [{slug, display_name, context_window, visibility, …}]}`.
+/// Only visibility=="list" entries are operator-selectable; codex-rs
+/// applies the same filter. The API-key path has NO codex models surface
+/// (openai/codex#3716) — callers fall back to the snapshot.
+pub fn listCodexModels(
+    allocator: std.mem.Allocator,
+    base_url: []const u8,
+    access_token: []const u8,
+    account_id: ?[]const u8,
+    provider_id: []const u8,
+) Error!ModelsList {
+    const trimmed = std.mem.trimRight(u8, base_url, "/");
+    const codex_base = if (std.mem.endsWith(u8, trimmed, "/codex"))
+        trimmed
+    else
+        std.fmt.allocPrint(allocator, "{s}/codex", .{trimmed}) catch return Error.OutOfMemory;
+    defer if (!std.mem.eql(u8, codex_base, trimmed)) allocator.free(codex_base);
+
+    const url = std.fmt.allocPrint(allocator, "{s}/models?client_version=var1", .{codex_base}) catch return Error.OutOfMemory;
+    defer allocator.free(url);
+
+    const headers = provider.RequestHeaders{
+        .auth_scheme = .bearer,
+        .account_id = account_id,
     };
-    for (native_providers) |candidate| {
-        if (std.mem.eql(u8, candidate, provider_id)) return true;
+    const body = provider.httpGetWithHeaders(allocator, url, access_token, headers) catch |err| switch (err) {
+        provider.Error.BadStatus => return Error.BadStatus,
+        else => return Error.Unreachable,
+    };
+    defer allocator.free(body);
+
+    return parseCodexModelsData(allocator, body, provider_id, base_url);
+}
+
+const CodexModelEntry = struct {
+    slug: []const u8,
+    display_name: ?[]const u8 = null,
+    context_window: ?u64 = null,
+};
+
+fn parseCodexModelsData(
+    allocator: std.mem.Allocator,
+    body: []const u8,
+    provider_id: []const u8,
+    base_url: []const u8,
+) Error!ModelsList {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{
+        .ignore_unknown_fields = true,
+    }) catch return Error.MalformedResponse;
+    defer parsed.deinit();
+
+    const root = switch (parsed.value) {
+        .object => |obj| obj,
+        else => return Error.MalformedResponse,
+    };
+    if (root.get("error") != null) return Error.BadStatus;
+    const models_value = root.get("models") orelse return Error.MalformedResponse;
+    const models_array = switch (models_value) {
+        .array => |arr| arr,
+        else => return Error.MalformedResponse,
+    };
+
+    var models = std.array_list.Managed(ModelDescriptor).init(allocator);
+    errdefer {
+        for (models.items) |model| model.deinit(allocator);
+        models.deinit();
     }
-    return false;
+
+    for (models_array.items) |entry| {
+        const obj = switch (entry) {
+            .object => |o| o,
+            else => continue,
+        };
+        const slug_value = obj.get("slug") orelse continue;
+        const slug = switch (slug_value) {
+            .string => |s| s,
+            else => continue,
+        };
+        if (slug.len == 0) continue;
+        // codex-rs filters to visibility=="list": hidden or none entries
+        // are not operator-selectable.
+        if (obj.get("visibility")) |visibility| {
+            if (visibility == .string and !std.mem.eql(u8, visibility.string, "list")) continue;
+        }
+
+        var context_window: ?u64 = null;
+        if (obj.get("context_window")) |value| {
+            switch (value) {
+                .integer => |n| {
+                    if (n > 0) context_window = @intCast(n);
+                },
+                .float => |n| {
+                    if (n > 0) context_window = @intFromFloat(n);
+                },
+                else => {},
+            }
+        }
+
+        const id = allocator.dupe(u8, slug) catch return Error.OutOfMemory;
+        errdefer allocator.free(id);
+        const owned_by = allocator.dupe(u8, provider_id) catch return Error.OutOfMemory;
+        errdefer allocator.free(owned_by);
+        const raw_json = std.fmt.allocPrint(allocator, "{{\"id\":\"{s}\",\"native_surface\":\"codex_backend\"}}", .{slug}) catch return Error.OutOfMemory;
+        errdefer allocator.free(raw_json);
+        models.append(.{
+            .id = id,
+            .owned_by = owned_by,
+            .context_length = context_window,
+            .raw_json = raw_json,
+        }) catch return Error.OutOfMemory;
+    }
+
+    if (models.items.len == 0) return Error.MalformedResponse;
+
+    return .{
+        .provider_id = allocator.dupe(u8, provider_id) catch return Error.OutOfMemory,
+        .base_url = allocator.dupe(u8, base_url) catch return Error.OutOfMemory,
+        .models = models.toOwnedSlice() catch return Error.OutOfMemory,
+        .context_from_native_surface = true,
+    };
 }
 
-/// Family default when the credential carries no model: the Codex adapter's
-/// fixed descriptor model, and the OpenCode gateway's import default.
-fn nativeModelFallback(provider_id: []const u8) []const u8 {
-    if (std.mem.eql(u8, provider_id, "openai-codex")) return "gpt-5.4-mini";
-    return "opencode-go";
+/// Map a VANTARI provider id onto its models.dev registry id. Family
+/// aliases keep the snapshot tier answering for gateway credentials whose
+/// registry entry is named differently.
+fn snapshotRegistryId(provider_id: []const u8) []const u8 {
+    if (std.mem.eql(u8, provider_id, "openai-codex")) return "openai";
+    if (std.mem.eql(u8, provider_id, "opencode-go") or
+        std.mem.eql(u8, provider_id, "opencode-zen") or
+        std.mem.eql(u8, provider_id, "zai-coding-plan")) return "opencode";
+    if (std.mem.eql(u8, provider_id, "lm-studio")) return "lmstudio";
+    if (std.mem.eql(u8, provider_id, "google") or std.mem.eql(u8, provider_id, "gemini")) return "google";
+    return provider_id;
 }
 
-/// The native model list for a no-catalog provider. One descriptor — the
-/// configured model or the family default — with no network I/O.
+/// Snapshot catalog for one provider: the vendored models.dev subset with
+/// real context/output limits. Answers "what exists" when the gateway has
+/// no live models endpoint or is unreachable.
+pub fn snapshotModels(
+    allocator: std.mem.Allocator,
+    provider_id: []const u8,
+    base_url: []const u8,
+) Error!?ModelsList {
+    const registry_id = snapshotRegistryId(provider_id);
+    const snapshot_models = models_snapshot.listProviderModels(allocator, registry_id) catch |err| switch (err) {
+        error.OutOfMemory => return Error.OutOfMemory,
+        else => return Error.MalformedResponse,
+    };
+    const listed = snapshot_models orelse return null;
+    errdefer models_snapshot.freeModelList(allocator, listed);
+
+    var descriptors = std.array_list.Managed(ModelDescriptor).init(allocator);
+    errdefer {
+        for (descriptors.items) |model| model.deinit(allocator);
+        descriptors.deinit();
+    }
+    for (listed) |model| {
+        const id = allocator.dupe(u8, model.id) catch return Error.OutOfMemory;
+        errdefer allocator.free(id);
+        const raw_json = std.fmt.allocPrint(
+            allocator,
+            "{{\"id\":\"{s}\",\"native_surface\":\"models_dev_snapshot\"}}",
+            .{model.id},
+        ) catch return Error.OutOfMemory;
+        errdefer allocator.free(raw_json);
+        const owned_by = allocator.dupe(u8, provider_id) catch return Error.OutOfMemory;
+        errdefer allocator.free(owned_by);
+        descriptors.append(.{
+            .id = id,
+            .owned_by = owned_by,
+            .context_length = model.context,
+            .raw_json = raw_json,
+        }) catch return Error.OutOfMemory;
+    }
+    models_snapshot.freeModelList(allocator, listed);
+
+    return .{
+        .provider_id = allocator.dupe(u8, provider_id) catch return Error.OutOfMemory,
+        .base_url = allocator.dupe(u8, base_url) catch return Error.OutOfMemory,
+        .models = descriptors.toOwnedSlice() catch return Error.OutOfMemory,
+        .context_from_native_surface = true,
+    };
+}
+
+/// Enrich a live-discovered descriptor with snapshot context limits when
+/// the gateway omitted them (LM Studio's OpenAI-compat surface has no
+/// context_length; the snapshot supplies real values).
+pub fn enrichFromSnapshot(allocator: std.mem.Allocator, provider_id: []const u8, models: []ModelDescriptor) void {
+    const registry_id = snapshotRegistryId(provider_id);
+    for (models) |*model| {
+        if (model.context_length != null) continue;
+        const snapshot_model = models_snapshot.lookup(allocator, registry_id, model.id) catch continue orelse continue;
+        model.context_length = snapshot_model.context;
+    }
+}
+
+/// ONE discovery entry point for the whole family. Precedence: live
+/// endpoint per transport → vendored snapshot → configured-model catalog.
+/// Every provider is the same shape here; callers never branch on provider
+/// id to pick a discovery surface.
+pub fn discoverModels(
+    allocator: std.mem.Allocator,
+    provider_id: []const u8,
+    base_url: []const u8,
+    api_key: []const u8,
+    account_id: ?[]const u8,
+    configured_auth_scheme: ?types.AuthScheme,
+    configured_model: ?[]const u8,
+) Error!ModelsList {
+    const family = discoveryFamilyFor(provider_id, base_url);
+
+    var live: ?ModelsList = switch (family) {
+        .codex_backend => listCodexModels(allocator, base_url, api_key, account_id, provider_id) catch |err| blk: {
+            if (err == Error.OutOfMemory) return err;
+            break :blk null;
+        },
+        .anthropic, .openai_compatible => listModelsWithAuth(allocator, base_url, api_key, account_id, provider_id, configured_auth_scheme) catch |err| blk: {
+            if (err == Error.OutOfMemory) return err;
+            break :blk null;
+        },
+    };
+
+    if (live) |*listed| {
+        enrichFromSnapshot(allocator, provider_id, listed.models);
+        return listed.*;
+    }
+
+    if (try snapshotModels(allocator, provider_id, base_url)) |snapshot_list| {
+        return snapshot_list;
+    }
+
+    return nativeModels(allocator, provider_id, base_url, configured_model);
+}
+
+/// Last-resort catalog: the credential's configured model as one entry.
+/// Reached only when both live discovery and the snapshot have nothing
+/// for the provider (custom gateways, brand-new families).
 pub fn nativeModels(
     allocator: std.mem.Allocator,
     provider_id: []const u8,
@@ -151,17 +389,17 @@ pub fn nativeModels(
     configured_model: ?[]const u8,
 ) Error!ModelsList {
     const model = if (configured_model) |value|
-        (if (value.len > 0) value else nativeModelFallback(provider_id))
+        (if (value.len > 0) value else provider_id)
     else
-        nativeModelFallback(provider_id);
+        provider_id;
 
-    const id = try allocator.dupe(u8, model);
+    const id = allocator.dupe(u8, model) catch return Error.OutOfMemory;
     errdefer allocator.free(id);
-    const owned_by = try allocator.dupe(u8, provider_id);
+    const owned_by = allocator.dupe(u8, provider_id) catch return Error.OutOfMemory;
     errdefer allocator.free(owned_by);
-    const raw_json = try std.fmt.allocPrint(allocator, "{{\"id\":\"{s}\",\"native_surface\":true}}", .{model});
+    const raw_json = std.fmt.allocPrint(allocator, "{{\"id\":\"{s}\",\"native_surface\":\"configured\"}}", .{model}) catch return Error.OutOfMemory;
     errdefer allocator.free(raw_json);
-    const descriptors = try allocator.alloc(ModelDescriptor, 1);
+    const descriptors = allocator.alloc(ModelDescriptor, 1) catch return Error.OutOfMemory;
     errdefer allocator.free(descriptors);
     descriptors[0] = .{
         .id = id,
@@ -171,8 +409,8 @@ pub fn nativeModels(
     };
 
     return .{
-        .provider_id = try allocator.dupe(u8, provider_id),
-        .base_url = try allocator.dupe(u8, base_url),
+        .provider_id = allocator.dupe(u8, provider_id) catch return Error.OutOfMemory,
+        .base_url = allocator.dupe(u8, base_url) catch return Error.OutOfMemory,
         .models = descriptors,
         .context_from_native_surface = true,
     };
@@ -339,41 +577,91 @@ fn mergeNativeInstances(
     return merged_any;
 }
 
+test "discovery family resolves codex backend and anthropic without provider lists" {
+    try std.testing.expectEqual(DiscoveryFamily.codex_backend, discoveryFamilyFor("openai-codex", "https://chatgpt.com/backend-api"));
+    try std.testing.expectEqual(DiscoveryFamily.anthropic, discoveryFamilyFor("anthropic", "https://api.anthropic.com"));
+    try std.testing.expectEqual(DiscoveryFamily.openai_compatible, discoveryFamilyFor("zai", "https://api.z.ai/api/coding/paas/v4"));
+    try std.testing.expectEqual(DiscoveryFamily.openai_compatible, discoveryFamilyFor("custom-gateway", "http://127.0.0.1:9000/v1"));
+}
+
+test "codex models parser filters visibility and maps slug to context window" {
+    const body =
+        \\{"models":[
+        \\  {"slug":"gpt-5.4-mini","display_name":"GPT-5.4 Mini","context_window":400000,"visibility":"list"},
+        \\  {"slug":"gpt-hidden","context_window":100000,"visibility":"hidden"},
+        \\  {"slug":"gpt-5.3-codex","context_window":400000}
+        \\]}
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var listed = try parseCodexModelsData(allocator, body, "openai-codex", "https://chatgpt.com/backend-api");
+    defer listed.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 2), listed.models.len);
+    try std.testing.expectEqualStrings("gpt-5.4-mini", listed.models[0].id);
+    try std.testing.expectEqual(@as(u64, 400000), listed.models[0].context_length.?);
+    // Missing visibility defaults to listable (codex-rs treats absent as list).
+    try std.testing.expectEqualStrings("gpt-5.3-codex", listed.models[1].id);
+}
+
+test "discovery falls back to snapshot when live endpoint is unreachable" {
+    // Unroutable base URL proves the live tier failed; the snapshot still
+    // answers with real models and context windows for a vendored provider.
+    var listed = try discoverModels(
+        std.testing.allocator,
+        "opencode",
+        "http://127.0.0.1:1/v1",
+        "unused-key",
+        null,
+        null,
+        "opencode-go",
+    );
+    defer listed.deinit(std.testing.allocator);
+    try std.testing.expect(listed.models.len > 1);
+    try std.testing.expect(listed.context_from_native_surface);
+    var found_configured = false;
+    for (listed.models) |model| {
+        if (model.context_length != null and model.context_length.? > 50_000) found_configured = true;
+    }
+    try std.testing.expect(found_configured);
+}
+
+test "discovery last resort returns configured model for unknown providers" {
+    var listed = try discoverModels(
+        std.testing.allocator,
+        "private-gateway",
+        "http://127.0.0.1:1/v1",
+        "unused-key",
+        null,
+        null,
+        "tenant/custom-model",
+    );
+    defer listed.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), listed.models.len);
+    try std.testing.expectEqualStrings("tenant/custom-model", listed.models[0].id);
+}
+
 const ParsedModelEntry = struct {
     id: ?[]const u8 = null,
     owned_by: ?[]const u8 = null,
     context_length: ?u64 = null,
 };
 
-test "native model surface covers the no-catalog provider families" {
-    const native = [_][]const u8{ "openai-codex", "opencode", "opencode-go", "opencode-zen", "zai-coding-plan" };
-    for (native) |provider_id| {
-        try std.testing.expect(hasNativeModelSurface(provider_id));
-    }
-    // Catalog providers keep HTTP discovery.
-    try std.testing.expect(!hasNativeModelSurface("zai"));
-    try std.testing.expect(!hasNativeModelSurface("anthropic"));
-    try std.testing.expect(!hasNativeModelSurface("openrouter"));
-    try std.testing.expect(!hasNativeModelSurface("lmstudio"));
-}
 
-test "native models return the configured model without network and fall back per family" {
-    // Configured model wins; unroutable base URL proves no HTTP occurred.
-    var configured = try nativeModels(std.testing.allocator, "opencode", "http://127.0.0.1:1/v1", "opencode/glm-4.7");
+test "last-resort catalog carries the configured model without network" {
+    // Custom gateway: no live endpoint reachable, no snapshot entry — the
+    // configured model becomes the single-entry catalog.
+    var configured = try nativeModels(std.testing.allocator, "private-gateway", "http://127.0.0.1:1/v1", "tenant/custom-model");
     defer configured.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 1), configured.models.len);
-    try std.testing.expectEqualStrings("opencode/glm-4.7", configured.models[0].id);
+    try std.testing.expectEqualStrings("tenant/custom-model", configured.models[0].id);
     try std.testing.expect(configured.context_from_native_surface);
 
-    // Codex falls back to the adapter descriptor model.
-    var codex = try nativeModels(std.testing.allocator, "openai-codex", "https://chatgpt.com/backend-api", null);
-    defer codex.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings("gpt-5.4-mini", codex.models[0].id);
-
-    // Empty configured model falls back to the OpenCode import default.
-    var fallback = try nativeModels(std.testing.allocator, "zai-coding-plan", "https://api.opencode.ai/v1", "");
+    // Null configured model degrades to the provider id, never a fabricated id.
+    var fallback = try nativeModels(std.testing.allocator, "brand-new-family", "https://gw.example/v1", null);
     defer fallback.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings("opencode-go", fallback.models[0].id);
+    try std.testing.expectEqualStrings("brand-new-family", fallback.models[0].id);
 }
 
 test "models parser handles LM Studio shape with missing created and no context_length" {

@@ -2,6 +2,7 @@ const std = @import("std");
 const fsutil = @import("../../shared/fsutil.zig");
 const types = @import("../../shared/types.zig");
 const provider_profile = @import("../providers/profile.zig");
+const codex_oauth = @import("openai_codex.zig");
 
 pub const Error = error{
     InvalidAuthState,
@@ -394,7 +395,9 @@ fn readActiveProvider(allocator: std.mem.Allocator, path: []const u8) !ResolvedA
     if (active_provider_value != .string) return Error.InvalidAuthState;
     const active_provider = active_provider_value.string;
 
-    return readProviderFromRoot(allocator, root, active_provider);
+    var auth = try readProviderFromRoot(allocator, root, active_provider);
+    refreshExpiredOAuth(allocator, path, &auth);
+    return auth;
 }
 
 /// Read a specific provider by id from the auth ledger's providers map.
@@ -415,8 +418,103 @@ pub fn readProviderById(allocator: std.mem.Allocator, workspace_root: []const u8
     defer parsed.deinit();
 
     if (parsed.value != .object) return Error.InvalidAuthState;
-    return readProviderFromRoot(allocator, parsed.value.object, provider_id);
+    var auth = try readProviderFromRoot(allocator, parsed.value.object, provider_id);
+    refreshExpiredOAuth(allocator, path, &auth);
+    return auth;
 }
+
+/// OAuth access tokens live for hours; the ledger previously served stale
+/// tokens until every provider call 401'd (the "provider system doesn't
+/// work" failure class). Refresh through the codex OAuth owner when a
+/// record is within its refresh window, persist the new tokens, and return
+/// the fresh credential. A failed refresh keeps the stale record — the
+/// typed failure surfaces at dispatch and the operator re-runs auth login.
+fn refreshExpiredOAuth(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    auth: *ResolvedAuth,
+) void {
+    if (auth.auth_type != .oauth) return;
+    const refresh_token = auth.refresh_token orelse return;
+    if (refresh_token.len == 0) return;
+    const expires_at_ms = auth.expires_at_ms orelse return;
+    const now_ms = std.time.milliTimestamp();
+    if (expires_at_ms > now_ms + 60 * std.time.ms_per_s) return; // still fresh
+
+    const tokens = codex_oauth.refreshAccessToken(
+        allocator,
+        .{ .context = null, .postFn = codex_oauth.postTokenForm },
+        refresh_token,
+        now_ms,
+    ) catch return; // keep stale; dispatch surfaces the 401 class
+
+    // Persist the rotated tokens so every surface (restarts, other
+    // processes reading the ledger) sees the same fresh credential.
+    updateOAuthTokens(
+        allocator,
+        workspace_root,
+        auth.provider_id,
+        tokens.access_token,
+        tokens.refresh_token,
+        tokens.expires_at_ms,
+    ) catch {};
+
+    allocator.free(auth.api_key);
+    auth.api_key = tokens.access_token;
+    auth.expires_at_ms = tokens.expires_at_ms;
+    // tokens.refresh_token ownership: ledger owns it now; free our copy.
+    allocator.free(tokens.refresh_token);
+    if (tokens.id_token) |value| allocator.free(value);
+}
+
+/// Persist rotated OAuth tokens into an existing provider record without
+/// touching any other field. Field-level update on the parsed ledger; the
+/// whole file rewrites atomically after mutation.
+fn updateOAuthTokens(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    provider_id: []const u8,
+    access_token: []const u8,
+    refresh_token: []const u8,
+    expires_at_ms: i64,
+) !void {
+    const path = try authFilePath(allocator, workspace_root);
+    defer allocator.free(path);
+    if (!fsutil.fileExists(path)) return Error.MissingAuth;
+
+    const content = try fsutil.readTextAlloc(allocator, path);
+    defer allocator.free(content);
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, stripUtf8Bom(content), .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return Error.InvalidAuthState;
+    const root = parsed.value.object;
+    const providers_value = root.get("providers") orelse return Error.MissingProvider;
+    if (providers_value != .object) return Error.InvalidAuthState;
+    const provider_value = providers_value.object.get(provider_id) orelse return Error.MissingProvider;
+    if (provider_value != .object) return Error.InvalidAuthState;
+    var provider = provider_value.object;
+    try putOwnedString(allocator, &provider, "access_token", access_token);
+    try putOwnedString(allocator, &provider, "refresh_token", refresh_token);
+    try putOwnedInteger(allocator, &provider, "expires_at_ms", expires_at_ms);
+
+    var rendered = std.array_list.Managed(u8).init(allocator);
+    defer rendered.deinit();
+    try rendered.writer().print("{f}", .{std.json.fmt(parsed.value, .{})});
+    try fsutil.writeText(path, rendered.items);
+}
+
+fn putOwnedString(allocator: std.mem.Allocator, obj: *std.json.ObjectMap, key: []const u8, value: []const u8) !void {
+    const owned = try allocator.dupe(u8, value);
+    defer allocator.free(owned);
+    try obj.put(try allocator.dupe(u8, key), .{ .string = owned });
+}
+
+fn putOwnedInteger(allocator: std.mem.Allocator, obj: *std.json.ObjectMap, key: []const u8, value: i64) !void {
+    const gop = try obj.getOrPut(try allocator.dupe(u8, key));
+    gop.value_ptr.* = .{ .integer = value };
+}
+
+
 
 /// Read the persisted credential-source provenance for one provider id, or
 /// null when the provider is absent or carries no source tag. Import callers

@@ -102,33 +102,30 @@ pub fn postTokenForm(
     endpoint: []const u8,
     form_body: []const u8,
 ) ![]u8 {
-    var client: std.http.Client = .{ .allocator = allocator };
-    defer client.deinit();
-
-    var response = std.Io.Writer.Allocating.init(allocator);
-    defer response.deinit();
-
-    const result = client.fetch(.{
-        .location = .{ .url = endpoint },
-        .method = .POST,
-        .payload = form_body,
-        .headers = .{
-            .content_type = .{ .override = "application/x-www-form-urlencoded" },
+    // Raw TCP+TLS POST on the same hand-rolled transport the provider
+    // adapters use. std.http.Client's fetch interface is unused here: the
+    // production path must match the proven provider transport, not a
+    // second HTTP stack.
+    const transport = @import("../providers/openai_compatible.zig");
+    const response = transport.httpSendWithHeaders(
+        null,
+        allocator,
+        endpoint,
+        "",
+        .{
+            .auth_scheme = .none,
+            .content_type = "application/x-www-form-urlencoded",
+            .accept = "application/json",
         },
-        .response_writer = &response.writer,
-    }) catch return error.TokenTransportFailed;
+        form_body,
+    ) catch return error.TokenTransportFailed;
 
-    if (result.status != .ok) {
-        // Classify the failure so the operator knows whether to re-login or retry.
-        // Harvested from codex's RefreshTokenFailedReason classification.
-        const code = @intFromEnum(result.status);
-        return switch (code) {
-            400, 401, 403 => error.RefreshTokenExpired, // invalid_grant: token expired or revoked
-            429 => error.RefreshTokenExhausted, // rate-limited: retry later
-            else => error.TokenEndpointRejected, // server error or unexpected: transient
-        };
+    // httpSendWithHeaders surfaces non-2xx as BadStatus; classify the same
+    // way the previous implementation did so operator guidance is stable.
+    if (std.mem.indexOf(u8, response, "\"error\"") != null) {
+        return error.TokenEndpointRejected;
     }
-    return response.toOwnedSlice();
+    return response;
 }
 
 pub fn generatePkce(allocator: std.mem.Allocator) !PkceFlow {

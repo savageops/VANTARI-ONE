@@ -175,6 +175,7 @@ pub const RequestHeaders = struct {
     openai_beta: ?[]const u8 = null,
     anthropic_version: ?[]const u8 = null,
     accept: ?[]const u8 = null,
+    content_type: ?[]const u8 = null,
 };
 
 pub const Transport = struct {
@@ -992,7 +993,9 @@ fn writeRequestHead(
         try writer.writeAll("\r\n");
     }
 
-    try writer.writeAll("content-type: application/json\r\n");
+    try writer.writeAll("content-type: ");
+    try writer.writeAll(headers.content_type orelse "application/json");
+    try writer.writeAll("\r\n");
     try writer.writeAll("accept: ");
     try writer.writeAll(headers.accept orelse "text/event-stream, application/json");
     try writer.writeAll("\r\n");
