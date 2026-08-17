@@ -1425,13 +1425,19 @@ const ChatState = struct {
         if (self.messages.items.len > 0) {
             const last_index = self.messages.items.len - 1;
             if (self.messages.items[last_index].role == .assistant) {
-                const previous = self.messages.items[last_index].text;
-                const previous_rows = messageRowCount(.assistant, previous, false, self.last_transcript_body_width);
-                try self.messages.items[last_index].appendText(self.allocator, delta);
-                const expanded = self.messages.items[last_index].text;
+                // Row expansion only matters while the view is scrolled up —
+                // a pinned-bottom view tracks the tail by construction. The
+                // full-text wrap scan is O(text) per delta, so keep it off
+                // the pinned streaming path.
                 if (self.scroll_offset > 0) {
+                    const previous = self.messages.items[last_index].text;
+                    const previous_rows = messageRowCount(.assistant, previous, false, self.last_transcript_body_width);
+                    try self.messages.items[last_index].appendText(self.allocator, delta);
+                    const expanded = self.messages.items[last_index].text;
                     const next_rows = messageRowCount(.assistant, expanded, false, self.last_transcript_body_width);
                     if (next_rows > previous_rows) self.scroll_offset += next_rows - previous_rows;
+                } else {
+                    try self.messages.items[last_index].appendText(self.allocator, delta);
                 }
                 return;
             }
@@ -2601,12 +2607,13 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         "";
     // The footer meta line is cached in ChatState; drawStatusBar borrows it.
     const reasoning_body_width = @max(@as(usize, 1), @as(usize, root.width -| 8));
-    var reasoning_rows = try buildReasoningDockRows(
-        state.allocator,
+    // Rows only borrow dock_source; the frame arena owns the list storage,
+    // so this per-frame build allocates without a matching free path.
+    const reasoning_rows = try buildReasoningDockRows(
+        frame_allocator,
         dock_source,
         reasoning_body_width,
     );
-    defer reasoning_rows.deinit(state.allocator);
     const top_status_height: u16 = if (state.status_bar_position == .top) @min(@as(u16, 1), root.height) else 0;
     const base_footer_height: u16 = if (state.status_bar_position == .top)
         @min(@as(u16, 1), root.height -| top_status_height)

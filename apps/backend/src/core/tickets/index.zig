@@ -248,6 +248,14 @@ pub const TicketProjection = struct {
     }
 };
 
+/// One-pass ledger read result: the projection (carrying last_seq) and the
+/// raw first line matching a mutation's idempotency key. `idempotent_line`
+/// is owned by the TicketStore allocator; callers free it before deinit.
+const LedgerScan = struct {
+    projection: TicketProjection,
+    idempotent_line: ?[]u8 = null,
+};
+
 /// Read-only queue pressure derived from the valid ticket-event prefix. This
 /// is an operator projection, not a second lifecycle registry.
 pub const TicketSnapshot = struct {
@@ -353,15 +361,16 @@ pub const TicketStore = struct {
         var guard = try self.acquireLedgerGuard();
         defer guard.deinit();
 
-        if (input.idempotency_key.len > 0) {
-            if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
-                defer self.allocator.free(existing);
-                var parsed = try std.json.parseFromSlice(RawEvent, self.allocator, existing, .{ .ignore_unknown_fields = true });
-                defer parsed.deinit();
-                if (!std.mem.eql(u8, eventType(parsed.value), "create")) return Error.IdempotencyConflict;
-                return self.mutationFromRaw(parsed.value, false);
-            }
+        var scan = try self.scanLedgerForKeyLocked(input.idempotency_key);
+        defer scan.projection.deinit();
+        defer if (scan.idempotent_line) |line| self.allocator.free(line);
+        if (scan.idempotent_line) |existing| {
+            var parsed = try std.json.parseFromSlice(RawEvent, self.allocator, existing, .{ .ignore_unknown_fields = true });
+            defer parsed.deinit();
+            if (!std.mem.eql(u8, eventType(parsed.value), "create")) return Error.IdempotencyConflict;
+            return self.mutationFromRaw(parsed.value, false);
         }
+        if (scan.projection.poisoned_suffix) return Error.PoisonedSuffix;
 
         const ticket_id = try std.fmt.allocPrint(self.allocator, "ticket-{d}-{x}", .{ input.created_at_ms, std.crypto.random.int(u64) });
         errdefer self.allocator.free(ticket_id);
@@ -386,7 +395,7 @@ pub const TicketStore = struct {
             .idempotency_key = input.idempotency_key,
             .revision = 1,
         };
-        const appended = try self.appendEventLocked(&event);
+        const appended = try self.appendEventFromScan(&event, &scan);
         return .{ .ticket_id = ticket_id, .status = input.status, .revision = 1, .appended = appended };
     }
 
@@ -396,20 +405,17 @@ pub const TicketStore = struct {
         var guard = try self.acquireLedgerGuard();
         defer guard.deinit();
 
-        if (input.idempotency_key.len > 0) {
-            if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
-                defer self.allocator.free(existing);
-                var parsed = try std.json.parseFromSlice(RawEvent, self.allocator, existing, .{ .ignore_unknown_fields = true });
-                defer parsed.deinit();
-                if (!std.mem.eql(u8, eventType(parsed.value), "transition")) return Error.IdempotencyConflict;
-                return self.mutationFromRaw(parsed.value, false);
-            }
+        var scan = try self.scanLedgerForKeyLocked(input.idempotency_key);
+        defer scan.projection.deinit();
+        defer if (scan.idempotent_line) |line| self.allocator.free(line);
+        if (scan.idempotent_line) |existing| {
+            var parsed = try std.json.parseFromSlice(RawEvent, self.allocator, existing, .{ .ignore_unknown_fields = true });
+            defer parsed.deinit();
+            if (!std.mem.eql(u8, eventType(parsed.value), "transition")) return Error.IdempotencyConflict;
+            return self.mutationFromRaw(parsed.value, false);
         }
-
-        var projection = try self.readProjectionLocked();
-        defer projection.deinit();
-        if (projection.poisoned_suffix) return Error.PoisonedSuffix;
-        const ticket = projection.find(input.ticket_id) orelse return Error.TicketNotFound;
+        if (scan.projection.poisoned_suffix) return Error.PoisonedSuffix;
+        const ticket = scan.projection.find(input.ticket_id) orelse return Error.TicketNotFound;
         if (ticket.status == input.status) return Error.NoopTransition;
         if (!manualTransitionAllowed(ticket.status, input.status)) return Error.InvalidTransition;
 
@@ -424,7 +430,7 @@ pub const TicketStore = struct {
             .transitioned_at_ms = input.transitioned_at_ms,
             .revision = ticket.revision + 1,
         };
-        const appended = try self.appendEventLocked(&event);
+        const appended = try self.appendEventFromScan(&event, &scan);
         return .{ .ticket_id = try self.allocator.dupe(u8, input.ticket_id), .status = input.status, .revision = event.revision, .appended = appended };
     }
 
@@ -434,18 +440,17 @@ pub const TicketStore = struct {
         var guard = try self.acquireLedgerGuard();
         defer guard.deinit();
 
-        if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
-            defer self.allocator.free(existing);
+        var scan = try self.scanLedgerForKeyLocked(input.idempotency_key);
+        defer scan.projection.deinit();
+        defer if (scan.idempotent_line) |line| self.allocator.free(line);
+        if (scan.idempotent_line) |existing| {
             var parsed = try std.json.parseFromSlice(RawEvent, self.allocator, existing, .{ .ignore_unknown_fields = true });
             defer parsed.deinit();
             if (!std.mem.eql(u8, eventType(parsed.value), "claim")) return Error.IdempotencyConflict;
             return self.claimFromRaw(parsed.value, false);
         }
-
-        var projection = try self.readProjectionLocked();
-        defer projection.deinit();
-        if (projection.poisoned_suffix) return Error.PoisonedSuffix;
-        const ticket = projection.find(input.ticket_id) orelse return Error.TicketNotFound;
+        if (scan.projection.poisoned_suffix) return Error.PoisonedSuffix;
+        const ticket = scan.projection.find(input.ticket_id) orelse return Error.TicketNotFound;
         if (ticket.status != .assigned) return Error.InvalidClaim;
         if (ticket.revision != input.expected_revision) return Error.RevisionConflict;
 
@@ -467,7 +472,7 @@ pub const TicketStore = struct {
             .capability_hash = input.capability_hash,
             .transitioned_at_ms = input.claimed_at_ms,
         };
-        const appended = try self.appendEventLocked(&event);
+        const appended = try self.appendEventFromScan(&event, &scan);
         return self.claimFromRawWithAllocator(event, appended);
     }
 
@@ -479,18 +484,17 @@ pub const TicketStore = struct {
         var guard = try self.acquireLedgerGuard();
         defer guard.deinit();
 
-        if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
-            defer self.allocator.free(existing);
+        var scan = try self.scanLedgerForKeyLocked(input.idempotency_key);
+        defer scan.projection.deinit();
+        defer if (scan.idempotent_line) |line| self.allocator.free(line);
+        if (scan.idempotent_line) |existing| {
             var parsed = try std.json.parseFromSlice(RawEvent, self.allocator, existing, .{ .ignore_unknown_fields = true });
             defer parsed.deinit();
             if (!std.mem.eql(u8, eventType(parsed.value), "resume")) return Error.IdempotencyConflict;
             return self.claimFromRaw(parsed.value, false);
         }
-
-        var projection = try self.readProjectionLocked();
-        defer projection.deinit();
-        if (projection.poisoned_suffix) return Error.PoisonedSuffix;
-        const ticket = projection.find(input.ticket_id) orelse return Error.TicketNotFound;
+        if (scan.projection.poisoned_suffix) return Error.PoisonedSuffix;
+        const ticket = scan.projection.find(input.ticket_id) orelse return Error.TicketNotFound;
         if (ticket.status != .in_progress or !ticket.claim_complete) return Error.InvalidResume;
         if (ticket.revision != input.expected_revision) return Error.RevisionConflict;
         if (!std.mem.eql(u8, ticket.active_session_id, input.session_id)) return Error.InvalidResume;
@@ -514,7 +518,7 @@ pub const TicketStore = struct {
             .capability_hash = ticket.capability_hash,
             .transitioned_at_ms = input.resumed_at_ms,
         };
-        const appended = try self.appendEventLocked(&event);
+        const appended = try self.appendEventFromScan(&event, &scan);
         return self.claimFromRawWithAllocator(event, appended);
     }
 
@@ -524,18 +528,17 @@ pub const TicketStore = struct {
         var guard = try self.acquireLedgerGuard();
         defer guard.deinit();
 
-        if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
-            defer self.allocator.free(existing);
+        var scan = try self.scanLedgerForKeyLocked(input.idempotency_key);
+        defer scan.projection.deinit();
+        defer if (scan.idempotent_line) |line| self.allocator.free(line);
+        if (scan.idempotent_line) |existing| {
             var parsed = try std.json.parseFromSlice(RawEvent, self.allocator, existing, .{ .ignore_unknown_fields = true });
             defer parsed.deinit();
             if (!std.mem.eql(u8, eventType(parsed.value), "heartbeat")) return Error.IdempotencyConflict;
             return self.mutationFromRaw(parsed.value, false);
         }
-
-        var projection = try self.readProjectionLocked();
-        defer projection.deinit();
-        if (projection.poisoned_suffix) return Error.PoisonedSuffix;
-        const ticket = projection.find(input.ticket_id) orelse return Error.TicketNotFound;
+        if (scan.projection.poisoned_suffix) return Error.PoisonedSuffix;
+        const ticket = scan.projection.find(input.ticket_id) orelse return Error.TicketNotFound;
         if (ticket.status != .in_progress or !ticket.claim_complete) return Error.InvalidRenewal;
         if (ticket.revision != input.expected_revision or
             !std.mem.eql(u8, ticket.worker_id, input.worker_id) or
@@ -560,7 +563,7 @@ pub const TicketStore = struct {
             .session_id = input.session_id,
             .transitioned_at_ms = input.renewed_at_ms,
         };
-        const appended = try self.appendEventLocked(&event);
+        const appended = try self.appendEventFromScan(&event, &scan);
         return .{ .ticket_id = try self.allocator.dupe(u8, input.ticket_id), .status = .in_progress, .revision = event.revision, .appended = appended };
     }
 
@@ -570,18 +573,17 @@ pub const TicketStore = struct {
         var guard = try self.acquireLedgerGuard();
         defer guard.deinit();
 
-        if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
-            defer self.allocator.free(existing);
+        var scan = try self.scanLedgerForKeyLocked(input.idempotency_key);
+        defer scan.projection.deinit();
+        defer if (scan.idempotent_line) |line| self.allocator.free(line);
+        if (scan.idempotent_line) |existing| {
             var parsed = try std.json.parseFromSlice(RawEvent, self.allocator, existing, .{ .ignore_unknown_fields = true });
             defer parsed.deinit();
             if (!std.mem.eql(u8, eventType(parsed.value), "requeue")) return Error.IdempotencyConflict;
             return self.mutationFromRaw(parsed.value, false);
         }
-
-        var projection = try self.readProjectionLocked();
-        defer projection.deinit();
-        if (projection.poisoned_suffix) return Error.PoisonedSuffix;
-        const ticket = projection.find(input.ticket_id) orelse return Error.TicketNotFound;
+        if (scan.projection.poisoned_suffix) return Error.PoisonedSuffix;
+        const ticket = scan.projection.find(input.ticket_id) orelse return Error.TicketNotFound;
         if (ticket.status != .in_progress or !ticket.claim_complete) return Error.InvalidTransition;
         if (ticket.revision != input.expected_revision) return Error.RevisionConflict;
         if (ticket.lease_expires_at_ms <= 0 or ticket.lease_expires_at_ms > input.requeued_at_ms) return Error.LeaseNotExpired;
@@ -612,7 +614,7 @@ pub const TicketStore = struct {
             .reason = input.reason,
             .transitioned_at_ms = input.requeued_at_ms,
         };
-        const appended = try self.appendEventLocked(&event);
+        const appended = try self.appendEventFromScan(&event, &scan);
         return .{ .ticket_id = try self.allocator.dupe(u8, input.ticket_id), .status = .assigned, .revision = event.revision, .appended = appended };
     }
 
@@ -622,18 +624,17 @@ pub const TicketStore = struct {
         var guard = try self.acquireLedgerGuard();
         defer guard.deinit();
 
-        if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
-            defer self.allocator.free(existing);
+        var scan = try self.scanLedgerForKeyLocked(input.idempotency_key);
+        defer scan.projection.deinit();
+        defer if (scan.idempotent_line) |line| self.allocator.free(line);
+        if (scan.idempotent_line) |existing| {
             var parsed = try std.json.parseFromSlice(RawEvent, self.allocator, existing, .{ .ignore_unknown_fields = true });
             defer parsed.deinit();
             if (!std.mem.eql(u8, eventType(parsed.value), "complete")) return Error.IdempotencyConflict;
             return self.mutationFromRaw(parsed.value, false);
         }
-
-        var projection = try self.readProjectionLocked();
-        defer projection.deinit();
-        if (projection.poisoned_suffix) return Error.PoisonedSuffix;
-        const ticket = projection.find(input.ticket_id) orelse return Error.TicketNotFound;
+        if (scan.projection.poisoned_suffix) return Error.PoisonedSuffix;
+        const ticket = scan.projection.find(input.ticket_id) orelse return Error.TicketNotFound;
         if (ticket.status != .in_progress or !ticket.claim_complete) return Error.InvalidTerminalEvidence;
         if (ticket.revision != input.expected_revision or !std.mem.eql(u8, ticket.active_session_id, input.session_id) or !std.mem.eql(u8, ticket.lease_token, input.lease_token)) return Error.InvalidTerminalEvidence;
 
@@ -650,7 +651,7 @@ pub const TicketStore = struct {
             .terminal_receipt = input.terminal_receipt,
             .transitioned_at_ms = input.completed_at_ms,
         };
-        const appended = try self.appendEventLocked(&event);
+        const appended = try self.appendEventFromScan(&event, &scan);
         return .{ .ticket_id = try self.allocator.dupe(u8, input.ticket_id), .status = .completed, .revision = event.revision, .appended = appended };
     }
 
@@ -660,18 +661,17 @@ pub const TicketStore = struct {
         var guard = try self.acquireLedgerGuard();
         defer guard.deinit();
 
-        if (try self.idempotencyExistsLocked(input.idempotency_key)) |existing| {
-            defer self.allocator.free(existing);
+        var scan = try self.scanLedgerForKeyLocked(input.idempotency_key);
+        defer scan.projection.deinit();
+        defer if (scan.idempotent_line) |line| self.allocator.free(line);
+        if (scan.idempotent_line) |existing| {
             var parsed = try std.json.parseFromSlice(RawEvent, self.allocator, existing, .{ .ignore_unknown_fields = true });
             defer parsed.deinit();
             if (!std.mem.eql(u8, eventType(parsed.value), "close")) return Error.IdempotencyConflict;
             return self.mutationFromRaw(parsed.value, false);
         }
-
-        var projection = try self.readProjectionLocked();
-        defer projection.deinit();
-        if (projection.poisoned_suffix) return Error.PoisonedSuffix;
-        const ticket = projection.find(input.ticket_id) orelse return Error.TicketNotFound;
+        if (scan.projection.poisoned_suffix) return Error.PoisonedSuffix;
+        const ticket = scan.projection.find(input.ticket_id) orelse return Error.TicketNotFound;
         if (ticket.status != .completed or ticket.revision != input.expected_revision) return Error.InvalidTerminalEvidence;
         var event = RawEvent{
             .schema = "var1.ticket_event.v2",
@@ -683,18 +683,37 @@ pub const TicketStore = struct {
             .revision = ticket.revision + 1,
             .transitioned_at_ms = input.closed_at_ms,
         };
-        const appended = try self.appendEventLocked(&event);
+        const appended = try self.appendEventFromScan(&event, &scan);
         return .{ .ticket_id = try self.allocator.dupe(u8, input.ticket_id), .status = .closed, .revision = event.revision, .appended = appended };
     }
 
-    fn readProjectionLocked(self: *const TicketStore) !TicketProjection {
-        var projection = try TicketProjection.init(self.allocator);
-        errdefer projection.deinit();
+    /// One ledger pass producing the projection, the last committed sequence,
+    /// and the first idempotency-key match. Mutations previously replayed the
+    /// full ledger three to four times per call (idempotency scan, projection
+    /// read, then both again inside appendEventLocked); this fold keeps the
+    /// identical observable semantics on one parse pass.
+    ///
+    /// Ordering contract preserved from the split readers:
+    /// Ordering contract preserved from the split readers:
+    ///   - a JSON-parse failure marks the suffix poisoned and stops the pass
+    ///     (readProjectionLocked broke out with the valid prefix; the
+    ///     idempotency scan never matched past a torn line either, because a
+    ///     non-parsing line cannot carry a key)
+    ///   - an applyEvent failure stops projection building (poisoned_suffix)
+    ///     but parsing continues so a later idempotency match can still
+    ///     short-circuit the mutation, exactly as the split readers allowed
+    ///   - the first key match wins and returns its raw line
+    fn scanLedgerLocked(self: *const TicketStore) !LedgerScan {
+        var scan = LedgerScan{
+            .projection = try TicketProjection.init(self.allocator),
+            .idempotent_line = null,
+        };
+        errdefer scan.projection.deinit();
 
         const ledger_path = try self.ledgerPath();
         defer self.allocator.free(ledger_path);
         const content = fsutil.readTextAlloc(self.allocator, ledger_path) catch |err| switch (err) {
-            error.FileNotFound => return projection,
+            error.FileNotFound => return scan,
             else => return err,
         };
         defer self.allocator.free(content);
@@ -705,27 +724,87 @@ pub const TicketStore = struct {
             if (trimmed.len == 0) continue;
 
             var parsed = std.json.parseFromSlice(RawEvent, self.allocator, trimmed, .{ .ignore_unknown_fields = true }) catch {
-                projection.poisoned_suffix = true;
+                scan.projection.poisoned_suffix = true;
                 break;
             };
             defer parsed.deinit();
 
             const kind = eventType(parsed.value);
             if (kind.len == 0) {
-                projection.poisoned_suffix = true;
+                scan.projection.poisoned_suffix = true;
                 break;
             }
 
-            projection.valid_events += 1;
-            const sequence = if (parsed.value.seq > 0) parsed.value.seq else @as(u64, @intCast(projection.valid_events));
-            projection.last_seq = @max(projection.last_seq, sequence);
-            self.applyEvent(&projection, parsed.value, kind) catch {
-                projection.poisoned_suffix = true;
+            scan.projection.valid_events += 1;
+            const sequence = if (parsed.value.seq > 0) parsed.value.seq else @as(u64, @intCast(scan.projection.valid_events));
+            scan.projection.last_seq = @max(scan.projection.last_seq, sequence);
+            self.applyEvent(&scan.projection, parsed.value, kind) catch {
+                scan.projection.poisoned_suffix = true;
                 break;
             };
         }
+        return scan;
+    }
 
-        return projection;
+    /// Key-matching variant: identical pass, but a JSON-parse failure aborts
+    /// with PoisonedSuffix (idempotencyExistsLocked semantics — a torn line
+    /// ends the durable prefix and no key beyond it may replay) and the first
+    /// idempotency match returns its raw line.
+    fn scanLedgerForKeyLocked(self: *const TicketStore, idempotency_key: []const u8) !LedgerScan {
+        var scan = LedgerScan{
+            .projection = try TicketProjection.init(self.allocator),
+            .idempotent_line = null,
+        };
+        errdefer scan.projection.deinit();
+
+        const ledger_path = try self.ledgerPath();
+        defer self.allocator.free(ledger_path);
+        // An empty key never matches, but the projection must still build —
+        // the mutation validates ticket state before appending.
+        const content = fsutil.readTextAlloc(self.allocator, ledger_path) catch |err| switch (err) {
+            error.FileNotFound => return scan,
+            else => return err,
+        };
+        defer self.allocator.free(content);
+
+        var line_iter = std.mem.splitScalar(u8, content, '\n');
+        while (line_iter.next()) |line| {
+            const trimmed = std.mem.trim(u8, line, " \t\r");
+            if (trimmed.len == 0) continue;
+
+            var parsed = std.json.parseFromSlice(RawEvent, self.allocator, trimmed, .{ .ignore_unknown_fields = true }) catch {
+                return Error.PoisonedSuffix;
+            };
+            defer parsed.deinit();
+
+            if (idempotency_key.len > 0 and std.mem.eql(u8, parsed.value.idempotency_key, idempotency_key)) {
+                scan.idempotent_line = try self.allocator.dupe(u8, trimmed);
+                return scan;
+            }
+
+            if (scan.projection.poisoned_suffix) continue;
+
+            const kind = eventType(parsed.value);
+            if (kind.len == 0) {
+                scan.projection.poisoned_suffix = true;
+                continue;
+            }
+
+            scan.projection.valid_events += 1;
+            const sequence = if (parsed.value.seq > 0) parsed.value.seq else @as(u64, @intCast(scan.projection.valid_events));
+            scan.projection.last_seq = @max(scan.projection.last_seq, sequence);
+            self.applyEvent(&scan.projection, parsed.value, kind) catch {
+                scan.projection.poisoned_suffix = true;
+                continue;
+            };
+        }
+        return scan;
+    }
+
+
+    fn readProjectionLocked(self: *const TicketStore) !TicketProjection {
+        const scan = try self.scanLedgerLocked();
+        return scan.projection;
     }
 
     fn applyEvent(self: *const TicketStore, projection: *TicketProjection, event: RawEvent, kind: []const u8) !void {
@@ -805,15 +884,11 @@ pub const TicketStore = struct {
         _ = self;
     }
 
-    fn appendEventLocked(self: *const TicketStore, event: *RawEvent) !bool {
-        if (event.idempotency_key.len > 0) {
-            if (try self.idempotencyExistsLocked(event.idempotency_key)) |_| return false;
-        }
 
-        var projection = try self.readProjectionLocked();
-        defer projection.deinit();
-        if (projection.poisoned_suffix) return Error.PoisonedSuffix;
-        event.seq = projection.last_seq + 1;
+    fn appendEventFromScan(self: *const TicketStore, event: *RawEvent, scan: *LedgerScan) !bool {
+        if (scan.idempotent_line != null) return false;
+        if (scan.projection.poisoned_suffix) return Error.PoisonedSuffix;
+        event.seq = scan.projection.last_seq + 1;
 
         const ledger_path = try self.ledgerPath();
         defer self.allocator.free(ledger_path);
@@ -824,26 +899,6 @@ pub const TicketStore = struct {
         return true;
     }
 
-    fn idempotencyExistsLocked(self: *const TicketStore, key: []const u8) !?[]u8 {
-        if (key.len == 0) return null;
-        const ledger_path = try self.ledgerPath();
-        defer self.allocator.free(ledger_path);
-        const content = fsutil.readTextAlloc(self.allocator, ledger_path) catch |err| switch (err) {
-            error.FileNotFound => return null,
-            else => return err,
-        };
-        defer self.allocator.free(content);
-
-        var line_iter = std.mem.splitScalar(u8, content, '\n');
-        while (line_iter.next()) |line| {
-            const trimmed = std.mem.trim(u8, line, " \t\r");
-            if (trimmed.len == 0) continue;
-            var parsed = std.json.parseFromSlice(RawEvent, self.allocator, trimmed, .{ .ignore_unknown_fields = true }) catch return Error.PoisonedSuffix;
-            defer parsed.deinit();
-            if (std.mem.eql(u8, parsed.value.idempotency_key, key)) return try self.allocator.dupe(u8, trimmed);
-        }
-        return null;
-    }
 
     fn mutationFromRaw(self: *const TicketStore, event: RawEvent, appended: bool) !MutationReceipt {
         const status = if (event.status.len == 0) TicketStatus.unassigned else try TicketStatus.parse(event.status);
