@@ -1,5 +1,30 @@
 # Execution Log
 
+## 2026-08-17 - Ticket ledger single-pass scan + TUI streaming-path allocations
+
+**Outcome:** Follow-up audit pass over the four scout reports plus a
+kernel-wide scan; the highest-leverage ledger and streaming fixes landed,
+and two flagged "optimizations" were rejected with evidence.
+
+- Every ticket mutation replayed the ledger JSONL 3-4x per call
+  (idempotency scan, projection read, then both again inside append).
+  `scanLedgerForKeyLocked` folds projection + last_seq + first key match
+  into one pass; `appendEventFromScan` consumes it. The subtle split-
+  reader semantics are preserved: prefix-preserving poison on projection
+  reads vs abort-on-torn for key reads, applyEvent failure stops
+  projection but not key matching, and an empty key still builds the
+  projection for state validation.
+- `addAssistantDelta` wrapped the full accumulated text twice per delta
+  unconditionally; the scan is now gated on `scroll_offset > 0` so the
+  pinned-bottom streaming path appends without O(text) work. Reasoning
+  dock rows moved from per-frame alloc/deinit into the frame arena.
+- Rejected with evidence: `root.fill` per-frame memset (required
+  immediate-mode clear; Vaxis diffs content, not dirty flags) and
+  `InternalScreen` unbounded-arena growth (bounded by retained per-cell
+  capacity).
+
+Details: `.docs/todo/changelog/088-ticket-single-scan-tui-streaming.md`.
+
 ## 2026-08-16 - TUI performance caching and settings correctness
 
 **Outcome:** Four parallel audits (render path, event path, renderer
