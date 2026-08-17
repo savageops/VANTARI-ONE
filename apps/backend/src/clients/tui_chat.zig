@@ -216,20 +216,31 @@ const ChatState = struct {
     /// Exact session_started event sequence for the run this TUI observed.
     active_run_seq: u64 = 0,
     last_transcript_body_width: usize = 80,
-    /// Cached transcript rows — rebuilt only when messages, width, or
-    /// reasoning presence change. The per-frame full-transcript rewrap
-    /// dominated draw cost on long sessions.
+    /// Cached transcript rows — the per-frame full-transcript rewrap
+    /// dominated draw cost on long sessions. Rows borrow message storage;
+    /// transcript_revision bumps on every content mutation, so a stale
+    /// cache can never render freed or outdated text.
     cached_transcript_rows: std.ArrayList(TranscriptRow) = .{},
     cached_transcript_width: usize = 0,
-    cached_transcript_message_count: usize = 0,
-    cached_transcript_last_message_len: usize = 0,
+    cached_transcript_revision: u64 = 0,
     cached_transcript_reasoning_active: bool = false,
+    /// Bumped by every mutation that can change rendered transcript
+    /// content: message add/remove, text replacement, activity flag flips.
+    /// Length/count keys alone miss middle-message edits (child-agent
+    /// state updates, tool phase changes) and borrowed rows would dangle.
+    transcript_revision: u64 = 0,
     /// Cached footer meta line — the 6+ allocPrint cascade in
     /// formatFooterMetaWithScopePrecision dominated per-frame allocation.
     cached_footer_meta: ?[]u8 = null,
     cached_footer_model: []const u8 = "",
     cached_footer_status: []const u8 = "",
     cached_footer_width: usize = 0,
+    /// Footer telemetry revision: agent counts, waiting, cancel, scroll,
+    /// context tokens, and pool pressure all render into the meta line but
+    /// were missing from the original dirty key, freezing the footer after
+    /// the first agent launch.
+    footer_telemetry_revision: u64 = 0,
+    cached_footer_revision: u64 = 0,
     history_entries: std.ArrayList([]u8) = .{},
     history_cursor: usize = 0,
     history_draft: ?[]u8 = null,
@@ -274,6 +285,14 @@ const ChatState = struct {
         if (self.input_state) |*input_state| input_state.deinit();
         self.autocomplete_matches.deinit(self.allocator);
         self.search_buffer.deinit(self.allocator);
+    }
+
+    /// Invalidate the transcript row cache. Every mutation that adds,
+    /// removes, or rewrites message content — or flips an activity flag —
+    /// must call this: cached rows borrow message storage, and a stale
+    /// cache renders freed memory (the multi-agent segfault class).
+    fn invalidateTranscriptCache(self: *ChatState) void {
+        self.transcript_revision +%= 1;
     }
 
     fn cyclePromptMode(self: *ChatState) void {
@@ -503,6 +522,7 @@ const ChatState = struct {
         }
         return null;
     }
+
     pub fn add(self: *ChatState, role: Role, text: []const u8) !void {
         if (self.scroll_offset > 0) {
             self.scroll_offset += messageRowCount(role, text, false, self.last_transcript_body_width);
@@ -511,6 +531,7 @@ const ChatState = struct {
             .role = role,
             .text = try self.allocator.dupe(u8, text),
         });
+        self.invalidateTranscriptCache();
     }
 
     fn loadLatestSession(self: *ChatState) !bool {
@@ -552,6 +573,7 @@ const ChatState = struct {
 
         for (self.messages.items) |message| message.deinit(self.allocator);
         self.messages.clearRetainingCapacity();
+        self.invalidateTranscriptCache();
         self.last_transport_sequence = 0;
         self.last_event_seq = 0;
         self.active_run_seq = 0;
@@ -581,8 +603,6 @@ const ChatState = struct {
 
     /// TUI health read model / Copy canonical pool and ticket projections into
     /// frame state without admitting work. Why: later footer and Agent Hub views
-    /// must not recompute idle or queue semantics. Preserves: old kernels remain
-    /// parseable through additive defaults. Evidence: Move 28 telemetry test.
     fn applyHealthTelemetry(self: *ChatState, health: protocol.HealthGetResult) void {
         self.log_level = shared_types.LogLevel.fromString(health.log_level) orelse .silent;
         self.agent_pool_known = true;
@@ -595,6 +615,13 @@ const ChatState = struct {
         self.tickets_assigned = health.tickets_assigned;
         self.tickets_in_progress = health.tickets_in_progress;
         self.ticket_ledger_healthy = health.ticket_ledger_healthy;
+        self.footer_telemetry_revision +%= 1;
+    }
+
+    /// Mark footer-rendered telemetry as changed: waiting/cancel state,
+    /// scroll offset, context usage, or cost settlement.
+    fn invalidateFooterTelemetry(self: *ChatState) void {
+        self.footer_telemetry_revision +%= 1;
     }
 
     fn refreshTuiPolicy(self: *ChatState) void {
@@ -1193,6 +1220,7 @@ const ChatState = struct {
             if (compact_summary) |value| try self.replaceActivitySummary(message, value);
             message.replaceTextOwned(self.allocator, replacement);
             message.activity_state = state;
+            self.invalidateTranscriptCache();
             return true;
         }
         return false;
@@ -1214,6 +1242,7 @@ const ChatState = struct {
             if (summary) |value| try self.replaceActivitySummary(message, value);
             if (phase) |value| try self.replaceActivityPhase(message, value);
             if (elapsed_ms > 0) message.activity_elapsed_ms = elapsed_ms;
+            self.invalidateTranscriptCache();
             return;
         }
     }
@@ -1322,6 +1351,7 @@ const ChatState = struct {
                 message.replaceTextOwned(self.allocator, replacement);
                 message.activity_kind = kind;
                 message.activity_state = state;
+                self.invalidateTranscriptCache();
                 return;
             }
         }
@@ -1346,19 +1376,26 @@ const ChatState = struct {
             .activity_state = state,
             .activity_last = kind == .item,
         });
+        self.invalidateTranscriptCache();
     }
 
     fn markPriorActivitySiblings(self: *ChatState, parent_id: []const u8) void {
         for (self.messages.items) |*message| {
             const existing_parent = message.activity_parent_id orelse continue;
-            if (std.mem.eql(u8, existing_parent, parent_id)) message.activity_last = false;
+            if (std.mem.eql(u8, existing_parent, parent_id)) {
+                message.activity_last = false;
+                self.invalidateTranscriptCache();
+            }
         }
     }
 
     fn setActivityChildrenState(self: *ChatState, parent_id: []const u8, state: ActivityState) void {
         for (self.messages.items) |*message| {
             const existing_parent = message.activity_parent_id orelse continue;
-            if (std.mem.eql(u8, existing_parent, parent_id)) message.activity_state = state;
+            if (std.mem.eql(u8, existing_parent, parent_id)) {
+                message.activity_state = state;
+                self.invalidateTranscriptCache();
+            }
         }
     }
 
@@ -1410,6 +1447,7 @@ const ChatState = struct {
             const next = try appendBoundedProgress(self.allocator, message.text, stream, formatted);
             message.replaceTextOwned(self.allocator, next);
             message.activity_state = .running;
+            self.invalidateTranscriptCache();
             return;
         }
 
@@ -1439,6 +1477,9 @@ const ChatState = struct {
                 } else {
                     try self.messages.items[last_index].appendText(self.allocator, delta);
                 }
+                // appendText may realloc (and free) the text buffer cached
+                // rows borrow; content also changed.
+                self.invalidateTranscriptCache();
                 return;
             }
         }
@@ -1469,6 +1510,7 @@ const ChatState = struct {
             .pending = true,
         });
         self.pending_assistant_placeholder = true;
+        self.invalidateTranscriptCache();
     }
 
     fn replaceAssistantPlaceholder(self: *ChatState, text: []const u8) !bool {
@@ -1490,6 +1532,7 @@ const ChatState = struct {
         last.replaceTextOwned(self.allocator, replacement);
         last.pending = false;
         self.pending_assistant_placeholder = false;
+        self.invalidateTranscriptCache();
         if (self.scroll_offset > 0) {
             const next_rows = messageRowCount(.assistant, text, false, self.last_transcript_body_width);
             if (next_rows > previous_rows) {
@@ -1517,6 +1560,7 @@ const ChatState = struct {
             }
         }
         self.pending_assistant_placeholder = false;
+        self.invalidateTranscriptCache();
     }
 
     fn hasProgress(self: *const ChatState, text: []const u8) bool {
@@ -1572,6 +1616,7 @@ const ChatState = struct {
             message.replaceTextOwned(self.allocator, replacement);
         }
         self.last_transcript_body_width = body_width;
+        self.invalidateTranscriptCache();
     }
 
     fn drainUiEventsDuringTurn(
@@ -1740,8 +1785,8 @@ fn cmdHelp(state: *ChatState, args: []const u8) anyerror!commands.CommandResult 
 fn cmdClear(state: *ChatState, _: []const u8) anyerror!commands.CommandResult {
     for (state.messages.items) |message| message.deinit(state.allocator);
     state.messages.clearRetainingCapacity();
+    state.invalidateTranscriptCache();
     state.reasoning_buffer.clearRetainingCapacity();
-    state.scroll_offset = 0;
     try state.add(.system, "Conversation cleared.");
     return .handled;
 }
@@ -2730,20 +2775,18 @@ fn drawStatusBar(
     const agent_counts = state.agentCounts();
     const footer_width = @as(usize, win.width) -| 4;
 
-    // Rebuild the meta line only when an input changed. The formatting
-    // path allocates 6+ intermediate strings; caching it removes all
-    // footer allocation from steady-state frames.
+    // Rebuild the meta line only when an input changed. Agent counts derive
+    // from messages, so transcript_revision bumps also refresh the footer.
     const footer_dirty =
         state.cached_footer_meta == null or
         state.cached_footer_width != footer_width or
         !std.mem.eql(u8, state.cached_footer_status, state.status) or
-        !std.mem.eql(u8, state.cached_footer_model, state.model);
+        !std.mem.eql(u8, state.cached_footer_model, state.model) or
+        state.cached_footer_revision != state.footer_telemetry_revision;
     if (footer_dirty) {
-        if (state.cached_footer_meta) |old| state.allocator.free(old);
-        state.cached_footer_status = state.status;
-        state.cached_footer_model = state.model;
-        state.cached_footer_width = footer_width;
-        state.cached_footer_meta = try formatFooterMetaWithScopePrecision(
+        // Build the replacement before freeing the old line so a failed
+        // build leaves the cache pointing at valid memory.
+        const replacement = try formatFooterMetaWithScopePrecision(
             state.allocator,
             state.model,
             state.effort,
@@ -2771,6 +2814,12 @@ fn drawStatusBar(
             if (state.has_session_cost) state.session_cost_usd else null,
             footer_width,
         );
+        if (state.cached_footer_meta) |old| state.allocator.free(old);
+        state.cached_footer_meta = replacement;
+        state.cached_footer_status = state.status;
+        state.cached_footer_model = state.model;
+        state.cached_footer_width = footer_width;
+        state.cached_footer_revision = state.footer_telemetry_revision;
     }
     const meta = state.cached_footer_meta.?;
 
@@ -3228,16 +3277,14 @@ fn drawTranscript(win: Window, state: *ChatState) void {
     const body_width = @max(@as(usize, 1), @as(usize, content.width -| 4));
     state.reflowActivityRows(body_width) catch return;
 
-    const last_message_len: usize = if (state.messages.items.len > 0)
-        state.messages.items[state.messages.items.len - 1].text.len
-    else
-        0;
     const reasoning_active = state.reasoning_buffer.items.len > 0;
+    // transcript_revision covers every content mutation (adds, removals,
+    // text rewrites, activity flag flips); width and reasoning presence
+    // change row geometry without a message mutation.
     const cache_valid =
         state.cached_transcript_rows.items.len > 0 and
         state.cached_transcript_width == body_width and
-        state.cached_transcript_message_count == state.messages.items.len and
-        state.cached_transcript_last_message_len == last_message_len and
+        state.cached_transcript_revision == state.transcript_revision and
         state.cached_transcript_reasoning_active == reasoning_active;
     if (!cache_valid) {
         // Row text borrows from message storage; clearing the list is the
@@ -3253,8 +3300,7 @@ fn drawTranscript(win: Window, state: *ChatState) void {
         fresh.deinit(state.allocator);
 
         state.cached_transcript_width = body_width;
-        state.cached_transcript_message_count = state.messages.items.len;
-        state.cached_transcript_last_message_len = last_message_len;
+        state.cached_transcript_revision = state.transcript_revision;
         state.cached_transcript_reasoning_active = reasoning_active;
     }
 
@@ -5328,6 +5374,58 @@ test "tui keeps the operator's scroll anchor while live output continues below" 
     try std.testing.expectEqual(@as(usize, 5), state.messages.items.len);
     try std.testing.expectEqualStrings("stdout: live-line | live-line", state.messages.items[4].text);
 }
+
+test "tui cached transcript rows rebuild after child activity rewrites borrowed storage" {
+    var state = ChatState{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .workspace_root = "workspace",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    // Prime the activity row: rows built after this borrow its storage.
+    try state.upsertActivityProgress("group-1/task-1", "agent-a scanning", .item, .running, "group-1");
+    const cache_revision = state.transcript_revision;
+    try std.testing.expect(cache_revision > 0);
+
+    // A child completion rewrites the SAME message storage (freeing the
+    // buffer cached rows borrow) without changing message count. The
+    // revision must move so the next draw rebuilds instead of rendering
+    // freed memory.
+    _ = try state.updateChildActivity("group-1/task-1", "agent-a", .completed, "found 3 issues");
+    try std.testing.expect(state.transcript_revision > cache_revision);
+    try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
+    try std.testing.expectEqualStrings("agent-a", state.messages.items[0].activity_name.?);
+}
+
+test "tui footer telemetry revision moves without status or model change" {
+    var state = ChatState{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .workspace_root = "workspace",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+
+    state.status = "RUNNING";
+    state.waiting = true;
+    const baseline = state.footer_telemetry_revision;
+    // Agent launches move pool pressure and waiting state while the status
+    // string and model stay identical — the original dirty key missed this
+    // and froze the footer after the first launch.
+    state.applyHealthTelemetry(.{ .ok = true, .model = "model", .workspace_root = "workspace", .base_url = "base" });
+    try std.testing.expect(state.footer_telemetry_revision > baseline);
+}
+
 
 test "tui transcript rows expose every wrapped line of a long assistant response" {
     const allocator = std.testing.allocator;
