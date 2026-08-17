@@ -1,5 +1,24 @@
 # Execution Log
 
+## 2026-08-17 - Transcript row cache use-after-free after agent launches
+
+**Outcome:** Two TUI segfaults (dmesg 11:43:24 and 11:50:01, user-mode reads
+of unmapped heap pages) traced to the transcript row cache introduced in the
+performance pass: cached rows borrow `Message` storage, and child-agent
+activity events free exactly that storage via `replaceTextOwned` while the
+cache key (width/count/last-length) misses middle-message rewrites.
+
+- Invalidation is now by construction: `transcript_revision` bumps at every
+  message mutation (add, remove, text rewrite, activity flag flip, reflow,
+  session reload, clear) and cache validity compares revisions. The
+  length/count fields are gone.
+- Same audit exposed a frozen-footer bug: the footer cache dirty key missed
+  waiting, cancel, scroll, agent counts, context tokens, and pool pressure —
+  all rendered into the meta line. `footer_telemetry_revision` fixes it, and
+  the rebuild now formats the replacement before freeing the old line.
+
+Details: `.docs/todo/changelog/089-transcript-cache-use-after-free.md`.
+
 ## 2026-08-17 - Ticket ledger single-pass scan + TUI streaming-path allocations
 
 **Outcome:** Follow-up audit pass over the four scout reports plus a
