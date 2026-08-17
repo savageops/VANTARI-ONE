@@ -862,6 +862,9 @@ fn dispatch(
     if (std.mem.eql(u8, method_name, protocol_types.methods.models_list)) {
         return handleModelsList(server, params);
     }
+    if (std.mem.eql(u8, method_name, protocol_types.methods.models_list_all)) {
+        return handleModelsListAll(server);
+    }
 
     if (std.mem.eql(u8, method_name, protocol_types.methods.config_set)) {
         return handleConfigSet(server, params);
@@ -1917,6 +1920,193 @@ fn handleModelsList(server: *Server, params: ?std.json.Value) ![]u8 {
         .status = "ok",
     });
 }
+/// Flat catalog of every credentialed provider's models. Each provider group
+/// carries its own status so one unreachable endpoint degrades without
+/// failing the whole call. The active provider group is emitted first.
+fn handleModelsListAll(server: *Server) ![]u8 {
+    var inventory = auth_store.listProviderSummaries(
+        server.allocator,
+        server.config.workspace_root,
+    ) catch |err| switch (err) {
+        auth_store.Error.MissingAuth, auth_store.Error.MissingProvider => {
+            return renderJsonAlloc(server.allocator, protocol_types.ModelsAllListResult{
+                .active_provider = server.config.auth_provider orelse "openai-compatible",
+                .active_model = server.config.openai_model,
+                .providers = &.{},
+            });
+        },
+        else => {
+            return renderJsonAlloc(server.allocator, protocol_types.ModelsAllListResult{
+                .active_provider = server.config.auth_provider orelse "openai-compatible",
+                .active_model = server.config.openai_model,
+                .providers = &.{},
+            });
+        },
+    };
+    defer inventory.deinit(server.allocator);
+
+    // Resolve the active provider's configured model from the ledger.
+    const active_provider_id = inventory.active_provider;
+    var active_model: []const u8 = "";
+    for (inventory.providers) |p| {
+        if (std.mem.eql(u8, p.provider_id, active_provider_id)) {
+            active_model = p.model;
+            break;
+        }
+    }
+
+    // Allocate per-provider groups, discovered one by one. Every string
+    // placed in a group must be allocator-owned: provider summaries borrow
+    // from `inventory` (freed at scope exit, after render) while model ids
+    // are duped out of each iteration-scoped `discovered` result.
+    const provider_count = inventory.providers.len;
+    var groups = try server.allocator.alloc(protocol_types.ModelsAllProviderGroup, provider_count);
+    var initialized_groups: usize = 0;
+    errdefer freeModelsAllGroups(server.allocator, groups[0..initialized_groups]);
+
+    for (inventory.providers, 0..) |provider_summary, i| {
+        // Resolve full credentials for each provider to run discovery.
+        var resolved = auth_store.readProviderById(
+            server.allocator,
+            server.config.workspace_root,
+            provider_summary.provider_id,
+        ) catch |err| switch (err) {
+            auth_store.Error.MissingProvider, auth_store.Error.MissingAuth => {
+                groups[i] = .{
+                    .provider_id = provider_summary.provider_id,
+                    .base_url = provider_summary.base_url,
+                    .status = "unreachable",
+                    .error_message = "provider not found in ledger",
+                    .models = &.{},
+                };
+                continue;
+            },
+            else => {
+                groups[i] = .{
+                    .provider_id = provider_summary.provider_id,
+                    .base_url = provider_summary.base_url,
+                    .status = "unreachable",
+                    .error_message = "failed to read provider credentials",
+                    .models = &.{},
+                };
+                continue;
+            },
+        };
+        defer resolved.deinit(server.allocator);
+
+        var discovered = models.discoverModels(
+            server.allocator,
+            resolved.provider_id,
+            resolved.base_url,
+            resolved.api_key,
+            resolved.account_id,
+            resolved.auth_scheme,
+            if (resolved.model.len > 0) resolved.model else null,
+        ) catch |err| switch (err) {
+            models.Error.Unreachable => {
+                groups[i] = .{
+                    .provider_id = provider_summary.provider_id,
+                    .base_url = provider_summary.base_url,
+                    .status = "unreachable",
+                    .error_message = "provider offline or connection refused",
+                    .models = &.{},
+                };
+                continue;
+            },
+            models.Error.BadStatus => {
+                groups[i] = .{
+                    .provider_id = provider_summary.provider_id,
+                    .base_url = provider_summary.base_url,
+                    .status = "unreachable",
+                    .error_message = "provider returned a non-200 response",
+                    .models = &.{},
+                };
+                continue;
+            },
+            models.Error.MalformedResponse => {
+                groups[i] = .{
+                    .provider_id = provider_summary.provider_id,
+                    .base_url = provider_summary.base_url,
+                    .status = "unreachable",
+                    .error_message = "provider returned an unexpected model list shape",
+                    .models = &.{},
+                };
+                continue;
+            },
+            else => {
+                groups[i] = .{
+                    .provider_id = provider_summary.provider_id,
+                    .base_url = provider_summary.base_url,
+                    .status = "unreachable",
+                    .error_message = "unexpected discovery failure",
+                    .models = &.{},
+                };
+                continue;
+            },
+        };
+        defer discovered.deinit(server.allocator);
+
+        // Convert ModelDescriptor[] → ModelSummary[]. Ids and owners are
+        // duped: `discovered` is deinit'd at the end of this iteration, and
+        // the response renders only after every group is built.
+        var summaries = try server.allocator.alloc(protocol_types.ModelSummary, discovered.models.len);
+        var summaries_initialized: usize = 0;
+        errdefer {
+            for (summaries[0..summaries_initialized]) |m| {
+                server.allocator.free(m.id);
+                if (m.owned_by) |ob| server.allocator.free(ob);
+            }
+            server.allocator.free(summaries);
+        }
+        for (discovered.models, 0..) |model, j| {
+            summaries[j] = .{
+                .id = try server.allocator.dupe(u8, model.id),
+                .owned_by = if (model.owned_by) |ob| try server.allocator.dupe(u8, ob) else null,
+                .context_length = model.context_length,
+            };
+            summaries_initialized += 1;
+        }
+
+        groups[i] = .{
+            .provider_id = provider_summary.provider_id,
+            .base_url = provider_summary.base_url,
+            .status = "ok",
+            .models = summaries,
+        };
+        initialized_groups = i + 1;
+    }
+
+    // Sort: active provider first, then provider_id ascending.
+    std.mem.sort(protocol_types.ModelsAllProviderGroup, groups, active_provider_id, struct {
+        fn lessThan(ctx: []const u8, a: protocol_types.ModelsAllProviderGroup, b: protocol_types.ModelsAllProviderGroup) bool {
+            const a_active = std.mem.eql(u8, a.provider_id, ctx);
+            const b_active = std.mem.eql(u8, b.provider_id, ctx);
+            if (a_active != b_active) return a_active;
+            return std.mem.order(u8, a.provider_id, b.provider_id) == .lt;
+        }
+    }.lessThan);
+
+    // Render before freeing: provider_id/base_url borrow from `inventory`
+    // (deferred deinit) and every model string is now allocator-owned.
+    const response = try renderJsonAlloc(server.allocator, protocol_types.ModelsAllListResult{
+        .active_provider = active_provider_id,
+        .active_model = active_model,
+        .providers = groups,
+    });
+    freeModelsAllGroups(server.allocator, groups);
+    return response;
+}
+
+fn freeModelsAllGroups(allocator: std.mem.Allocator, groups: []protocol_types.ModelsAllProviderGroup) void {
+    for (groups) |g| {
+        for (g.models) |m| {
+            allocator.free(m.id);
+            if (m.owned_by) |ob| allocator.free(ob);
+        }
+        if (g.models.len > 0) allocator.free(g.models);
+    }
+    if (groups.len > 0) allocator.free(groups);
+}
 
 /// config/set RPC handler — atomically mutates one config key with validation.
 /// Params: {"section":"runtime","key":"effort","value":"max"}
@@ -1950,10 +2140,10 @@ fn handleConfigSet(server: *Server, params: ?std.json.Value) ![]u8 {
     });
 }
 
-/// Set the `model` field on one provider record in the auth ledger. The
-/// canonical config `provider` section only permits `wire_api`; the model lives
-/// on the ledger record, so the Models tab mutates it here (store-owned) rather
-/// than through config/set.
+/// Set the `model` field on one provider record in the auth ledger. When the
+/// requested provider_id differs from the current active provider, the handler
+/// also makes that provider active — the operator picking a model from another
+/// provider IS switching. Response carries the resulting active_provider.
 fn handleProviderModelSet(server: *Server, params: ?std.json.Value) ![]u8 {
     const params_value = params orelse return Error.InvalidParams;
     if (params_value != .object) return Error.InvalidParams;
@@ -1971,9 +2161,39 @@ fn handleProviderModelSet(server: *Server, params: ?std.json.Value) ![]u8 {
     auth_store.setProviderModel(server.allocator, server.config.workspace_root, provider_id, model) catch {
         return Error.ExecutionFailed;
     };
+
+    // If the requested provider is not the current active, switch active
+    // through the ledger's canonical selectProvider mutator. The resulting
+    // active_provider is always read from the ledger for consistency.
+    var resulting_active: []const u8 = provider_id;
+    var inventory = auth_store.listProviderSummaries(
+        server.allocator,
+        server.config.workspace_root,
+    ) catch |err| switch (err) {
+        auth_store.Error.MissingAuth, auth_store.Error.MissingProvider => {
+            return renderJsonAlloc(server.allocator, protocol_types.ProviderModelSetResult{
+                .provider_id = provider_id,
+                .model = model,
+                .active_provider = provider_id,
+            });
+        },
+        else => {
+            return Error.ExecutionFailed;
+        },
+    };
+    defer inventory.deinit(server.allocator);
+
+    if (!std.mem.eql(u8, inventory.active_provider, provider_id)) {
+        auth_store.selectProvider(server.allocator, server.config.workspace_root, provider_id) catch {
+            return Error.ExecutionFailed;
+        };
+    }
+    resulting_active = provider_id;
+
     return renderJsonAlloc(server.allocator, protocol_types.ProviderModelSetResult{
         .provider_id = provider_id,
         .model = model,
+        .active_provider = resulting_active,
     });
 }
 
@@ -3791,4 +4011,218 @@ test "models/list answers no-catalog providers from the vendored snapshot withou
     try std.testing.expect(std.mem.indexOf(u8, response, "\"context_length\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "\"context_from_native_surface\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, response, "\"error_message\":null") != null);
+}
+
+test "models/list-all aggregates a seeded multi-provider ledger" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "provider-a",
+        .base_url = "http://127.0.0.1:2/v1",
+        .model = "model-a1",
+        .api_key = "k1",
+    });
+    defer auth_store.removeProvider(std.testing.allocator, workspace_root, "provider-a") catch {};
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "provider-b",
+        .base_url = "http://127.0.0.1:2/v1",
+        .model = "model-b1",
+        .api_key = "k2",
+    });
+    defer auth_store.removeProvider(std.testing.allocator, workspace_root, "provider-b") catch {};
+
+    const request = try rpcRequest(protocol_types.methods.models_list_all, "{}");
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    // Schema and active fields present.
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"schema\":\"var1.models_all.v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"active_provider\":\"provider-b\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"active_model\":\"model-b1\"") != null);
+    // Both provider groups present with per-group status.
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"provider_id\":\"provider-b\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"provider_id\":\"provider-a\"") != null);
+    // Active group comes first in the providers array.
+    const active_idx = std.mem.indexOf(u8, response, "\"provider_id\":\"provider-b\"").?;
+    const other_idx = std.mem.indexOf(u8, response, "\"provider_id\":\"provider-a\"").?;
+    try std.testing.expect(active_idx < other_idx);
+    // Both endpoints are unroutable, but the ledger requires a configured
+    // model on every record and discoverModels' precedence serves it as the
+    // fallback catalog — so valid records stay "ok" with their configured
+    // model present, and only credential-read failures degrade a group.
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"ok\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "model-a1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "model-b1") != null);
+}
+
+test "models/list-all active group first, status propagation" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    // Seed providers in reverse-alpha order so sorting is observable.
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "z-provider",
+        .base_url = "http://127.0.0.1:2/v1",
+        .model = "z-model",
+        .api_key = "k1",
+    });
+    defer auth_store.removeProvider(std.testing.allocator, workspace_root, "z-provider") catch {};
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "a-provider",
+        .base_url = "http://127.0.0.1:2/v1",
+        .model = "a-model",
+        .api_key = "k2",
+    });
+    defer auth_store.removeProvider(std.testing.allocator, workspace_root, "a-provider") catch {};
+
+    const request = try rpcRequest(protocol_types.methods.models_list_all, "{}");
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    // a-provider is active (last upsert), so it must come first.
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"active_provider\":\"a-provider\"") != null);
+    const a_idx = std.mem.indexOf(u8, response, "\"provider_id\":\"a-provider\"").?;
+    const z_idx = std.mem.indexOf(u8, response, "\"provider_id\":\"z-provider\"").?;
+    try std.testing.expect(a_idx < z_idx);
+}
+
+test "providers/set-model cross-provider switches active" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    // Seed two providers; provider-b is active (last upsert wins).
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "provider-a",
+        .base_url = "http://127.0.0.1:2/v1",
+        .model = "old-model-a",
+        .api_key = "k1",
+    });
+    defer auth_store.removeProvider(std.testing.allocator, workspace_root, "provider-a") catch {};
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "provider-b",
+        .base_url = "http://127.0.0.1:2/v1",
+        .model = "old-model-b",
+        .api_key = "k2",
+    });
+    defer auth_store.removeProvider(std.testing.allocator, workspace_root, "provider-b") catch {};
+
+    // Set model on provider-a (non-active). This should also switch active.
+    const request = try rpcRequest(protocol_types.methods.provider_model_set, "{\"provider_id\":\"provider-a\",\"model\":\"new-model-a\"}");
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    // Response carries the new active_provider.
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"active_provider\":\"provider-a\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"provider_id\":\"provider-a\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"model\":\"new-model-a\"") != null);
+
+    // Read back ledger: model set AND active switched.
+    var inventory = try auth_store.listProviderSummaries(std.testing.allocator, workspace_root);
+    defer inventory.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("provider-a", inventory.active_provider);
+    for (inventory.providers) |p| {
+        if (std.mem.eql(u8, p.provider_id, "provider-a")) {
+            try std.testing.expectEqualStrings("new-model-a", p.model);
+        }
+    }
+}
+
+test "providers/set-model same-provider leaves active unchanged" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "provider-x",
+        .base_url = "http://127.0.0.1:2/v1",
+        .model = "old-model",
+        .api_key = "k1",
+    });
+    defer auth_store.removeProvider(std.testing.allocator, workspace_root, "provider-x") catch {};
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "provider-y",
+        .base_url = "http://127.0.0.1:2/v1",
+        .model = "old-model-y",
+        .api_key = "k2",
+    });
+    defer auth_store.removeProvider(std.testing.allocator, workspace_root, "provider-y") catch {};
+
+    // Set model on provider-y which IS the active provider (last upsert wins).
+    const request = try rpcRequest(protocol_types.methods.provider_model_set, "{\"provider_id\":\"provider-y\",\"model\":\"new-model-y\"}");
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"active_provider\":\"provider-y\"") != null);
+
+    // Read back: active unchanged, model updated.
+    var inventory = try auth_store.listProviderSummaries(std.testing.allocator, workspace_root);
+    defer inventory.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("provider-y", inventory.active_provider);
+    for (inventory.providers) |p| {
+        if (std.mem.eql(u8, p.provider_id, "provider-y")) {
+            try std.testing.expectEqualStrings("new-model-y", p.model);
+        }
+    }
+}
+
+test "providers/set-model response renders active_provider field" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+
+    try auth_store.upsertApiKeyProvider(std.testing.allocator, workspace_root, .{
+        .provider_id = "only-provider",
+        .base_url = "http://127.0.0.1:2/v1",
+        .model = "initial",
+        .api_key = "k1",
+    });
+    defer auth_store.removeProvider(std.testing.allocator, workspace_root, "only-provider") catch {};
+
+    const request = try rpcRequest(protocol_types.methods.provider_model_set, "{\"provider_id\":\"only-provider\",\"model\":\"updated\"}");
+    defer std.testing.allocator.free(request);
+    const response = (try processRequest(&server, request)).?;
+    defer std.testing.allocator.free(response);
+
+    // Schema and active_provider both present in the JSON envelope.
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"schema\":\"var1.provider_model_set.v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"active_provider\":\"only-provider\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "\"status\":\"ok\"") != null);
 }

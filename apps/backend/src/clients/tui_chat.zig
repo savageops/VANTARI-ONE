@@ -5,6 +5,7 @@ const history = VAR1.core.session_history;
 const commands = @import("commands.zig");
 const settings_view = @import("settings_view.zig");
 const question_view = @import("question_view.zig");
+const models_view = @import("models_view.zig");
 const footer_effects = @import("footer_effects.zig");
 
 const protocol = VAR1.core.protocol_types;
@@ -255,6 +256,9 @@ const ChatState = struct {
     /// One event-backed interactive input controller. The kernel owns the
     /// request lifecycle; this state owns only the active TUI projection.
     input_state: ?question_view.State = null,
+    /// Full-frame model picker overlay. Null when closed. The operator selects
+    /// a model from the flat catalog; the provider is derived on commit.
+    model_picker: ?models_view.State = null,
     /// Reserved command autocomplete. A leading slash remains accepted for
     /// compatibility, while a single bare command token (for example
     /// `sett`) uses the same registry-backed popup.
@@ -283,6 +287,7 @@ const ChatState = struct {
         if (self.buffer_preview) |preview| self.allocator.free(preview);
         if (self.settings_state) |*ss| ss.deinit();
         if (self.input_state) |*input_state| input_state.deinit();
+        if (self.model_picker) |*mp| mp.deinit();
         self.autocomplete_matches.deinit(self.allocator);
         self.search_buffer.deinit(self.allocator);
     }
@@ -1672,6 +1677,41 @@ const ChatState = struct {
                         self.handleQuestionKey(key, input);
                         continue;
                     }
+                    if (self.model_picker) |*mp| {
+                        const action = mp.handleKey(key, vx.screen.height);
+                        switch (action) {
+                            .cancel => {
+                                mp.deinit();
+                                self.model_picker = null;
+                            },
+                            .commit => {
+                                if (mp.commitSelected(self.client)) |result| {
+                                    if (result) |committed| {
+                                        defer self.allocator.free(committed.model);
+                                        self.allocator.free(self.model);
+                                        self.model = try self.allocator.dupe(u8, committed.model);
+                                        // Transfer provider_id ownership to state.
+                                        self.auth_provider = committed.provider_id;
+                                        self.footer_telemetry_revision +%= 1;
+                                        const msg = try std.fmt.allocPrint(self.allocator, "Model switched to {s} via {s}. Applies on the next turn.", .{ committed.model, committed.provider_id });
+                                        defer self.allocator.free(msg);
+                                        try self.add(.system, msg);
+                                    } else {
+                                        try self.add(.system, "No model selected.");
+                                    }
+                                } else |err| {
+                                    const msg = try std.fmt.allocPrint(self.allocator, "Error switching model: {s}", .{@errorName(err)});
+                                    defer self.allocator.free(msg);
+                                    try self.add(.system, msg);
+                                }
+                                mp.deinit();
+                                self.model_picker = null;
+                            },
+                            .consumed => {},
+                        }
+                        continue;
+                    }
+
                     if (key.matches('c', .{ .ctrl = true })) {
                         try self.requestCancel(session_id);
                         continue;
@@ -1948,27 +1988,37 @@ fn cmdModel(state: *ChatState, args: []const u8) anyerror!commands.CommandResult
             try state.add(.system, "Error: providers/set-model rejected");
             return .handled;
         }
-        const msg = try std.fmt.allocPrint(allocator, "Model set for {s}: {s}. Applies on the next turn.", .{ provider_id, trimmed });
+        // Update local read-model from the confirmed response.
+        const result_json = call.result_json orelse {
+            try state.add(.system, "Model set. Applies on the next turn.");
+            return .handled;
+        };
+        const parsed = std.json.parseFromSlice(protocol.ProviderModelSetResult, allocator, result_json, .{}) catch {
+            try state.add(.system, "Model set. Applies on the next turn.");
+            return .handled;
+        };
+        defer parsed.deinit();
+        const result = parsed.value;
+        allocator.free(state.model);
+        state.model = allocator.dupe(u8, result.model) catch result.model;
+        state.auth_provider = allocator.dupe(u8, result.active_provider) catch result.active_provider;
+        state.footer_telemetry_revision +%= 1;
+        const msg = try std.fmt.allocPrint(allocator, "Model set for {s}: {s}. Applies on the next turn.", .{ result.active_provider, result.model });
         defer allocator.free(msg);
         try state.add(.system, msg);
         return .handled;
     }
 
-    // No argument: open the settings overlay pinned to the Models section.
-    if (state.settings_state == null) {
-        state.settings_state = settings_view.SettingsState.init(state.allocator, state.workspace_root);
-    }
-    const ss = &state.settings_state.?;
-    for (settings_view.section_names, 0..) |name, index| {
-        if (std.mem.eql(u8, name, "models")) {
-            ss.section_cursor = index;
-            break;
-        }
-    }
-    ss.open = true;
-    ss.loadModels(state.client) catch {
-        ss.setStatusMessage("Models tab could not be loaded; persisted values were unavailable.") catch {};
-    };
+    // No argument: open the model picker overlay. The picker discovers
+    // all models from all providers and lets the operator select one.
+    // On commit, the provider is derived from the model's provider group.
+    const model_copy = try allocator.dupe(u8, state.model);
+    errdefer allocator.free(model_copy);
+    const provider_copy = try allocator.dupe(u8, state.auth_provider);
+    errdefer allocator.free(provider_copy);
+    if (state.model_picker) |*mp| mp.deinit();
+    state.model_picker = models_view.State.init(allocator, model_copy, provider_copy);
+    state.model_picker.?.loadFromRpc(state.client);
     return .handled;
 }
 
@@ -2336,6 +2386,7 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
         const settings_open = if (state.settings_state) |settings| settings.open else false;
         const footer_animation_visible = state.footer_effect.selected_effect != .none and
             state.input_state == null and
+            state.model_picker == null and
             !settings_open;
         const event = if (!footer_animation_visible)
             loop.nextEvent()
@@ -2364,6 +2415,43 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                     state.handleQuestionKey(key, &input);
                     continue;
                 }
+                // Model picker overlay — when open, all keys go to the picker.
+                if (state.model_picker) |*mp| {
+                    const action = mp.handleKey(key, vx.screen.height);
+                    switch (action) {
+                        .cancel => {
+                            mp.deinit();
+                            state.model_picker = null;
+                        },
+                        .commit => {
+                            if (mp.commitSelected(state.client)) |result| {
+                                if (result) |committed| {
+                                    defer allocator.free(committed.model);
+                                    allocator.free(state.model);
+                                    state.model = try allocator.dupe(u8, committed.model);
+                                    // Transfer provider_id ownership to state —
+                                    // don't free it since auth_provider now owns it.
+                                    state.auth_provider = committed.provider_id;
+                                    state.footer_telemetry_revision +%= 1;
+                                    const msg = try std.fmt.allocPrint(allocator, "Model switched to {s} via {s}. Applies on the next turn.", .{ committed.model, committed.provider_id });
+                                    defer allocator.free(msg);
+                                    try state.add(.system, msg);
+                                } else {
+                                    try state.add(.system, "No model selected.");
+                                }
+                            } else |err| {
+                                const msg = try std.fmt.allocPrint(allocator, "Error switching model: {s}", .{@errorName(err)});
+                                defer allocator.free(msg);
+                                try state.add(.system, msg);
+                            }
+                            mp.deinit();
+                            state.model_picker = null;
+                        },
+                        .consumed => {},
+                    }
+                    continue;
+                }
+
 
                 // Settings overlay key routing — when the panel is open, all keys
                 // go to the settings handler except Ctrl-C (force exit).
@@ -2545,6 +2633,21 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                 }
                 try input.update(.{ .key_press = key });
                 state.refreshAutocomplete(&input) catch state.clearAutocomplete();
+                // Space pivot: typing "model " (the word "model" followed by Space)
+                // opens the model picker overlay instead of completing as a command.
+                const input_snapshot = try input.toOwnedCopy(allocator);
+                defer allocator.free(input_snapshot);
+                if (std.mem.eql(u8, std.mem.trim(u8, input_snapshot, " \t"), "model")) {
+                    input.clearAndFree();
+                    if (state.model_picker) |*mp| mp.deinit();
+                    const model_copy = try allocator.dupe(u8, state.model);
+                    errdefer allocator.free(model_copy);
+                    const provider_copy = try allocator.dupe(u8, state.auth_provider);
+                    errdefer allocator.free(provider_copy);
+                    state.model_picker = models_view.State.init(allocator, model_copy, provider_copy);
+                    state.model_picker.?.loadFromRpc(state.client);
+                    continue;
+                }
             },
             .mouse => |mouse| {
                 if (applyMouseScroll(&state, mouse)) continue;
@@ -2673,6 +2776,29 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
             return;
         }
     }
+    // Model picker overlay — when open, render full-screen instead of normal layout.
+    if (state.model_picker) |*mp| {
+        mp.draw(
+            root,
+            .{
+                .panel = styles.meta_surface,
+                .title = styles.autocomplete_name,
+                .provider_header = styles.meta_value,
+                .model_id = styles.meta_value,
+                .selected = styles.autocomplete_selected,
+                .selected_name = styles.autocomplete_selected_name,
+                .metadata = styles.meta_value,
+                .hint = styles.meta_value,
+                .active_marker = styles.composer,
+                .error_text = styles.status_failed,
+            },
+            frame_allocator,
+        );
+        try vx.render(writer);
+        try writer.flush();
+        return;
+    }
+
 
     root.fill(.{ .style = styles.surface });
 

@@ -21,6 +21,7 @@ pub const methods = struct {
     pub const events_subscribe = "events/subscribe";
     pub const health_get = "health/get";
     pub const providers_list = "providers/list";
+    pub const models_list_all = "models/list-all";
     pub const models_list = "models/list";
     pub const config_set = "config/set";
     pub const provider_model_set = "providers/set-model";
@@ -46,6 +47,7 @@ pub const Capabilities = struct {
     health_get: bool = true,
     providers_list: bool = true,
     models_list: bool = true,
+    models_list_all: bool = true,
     config_set: bool = true,
     provider_model_set: bool = true,
     auth_detect: bool = true,
@@ -222,6 +224,23 @@ pub const ModelsListResult = struct {
     status: []const u8 = "ok",
     error_message: ?[]const u8 = null,
 };
+/// One provider group inside a models/list-all response. Each group carries
+/// its own status so a single unreachable provider degrades without failing
+/// the whole catalog.
+pub const ModelsAllProviderGroup = struct {
+    provider_id: []const u8,
+    base_url: []const u8,
+    status: []const u8 = "ok",
+    error_message: ?[]const u8 = null,
+    models: []const ModelSummary,
+};
+
+pub const ModelsAllListResult = struct {
+    schema: []const u8 = "var1.models_all.v1",
+    active_provider: []const u8,
+    active_model: []const u8,
+    providers: []const ModelsAllProviderGroup,
+};
 
 pub const ProviderSummary = struct {
     provider_id: []const u8,
@@ -275,6 +294,7 @@ pub const ProviderModelSetResult = struct {
     schema: []const u8 = "var1.provider_model_set.v1",
     provider_id: []const u8,
     model: []const u8,
+    active_provider: []const u8,
     status: []const u8 = "ok",
     error_message: ?[]const u8 = null,
 };
@@ -324,6 +344,7 @@ test "protocol capabilities advertise the full session surface" {
     try std.testing.expect(capabilities.health_get);
     try std.testing.expect(capabilities.providers_list);
     try std.testing.expect(capabilities.models_list);
+    try std.testing.expect(capabilities.models_list_all);
     try std.testing.expect(capabilities.event_seq_supported);
 }
 

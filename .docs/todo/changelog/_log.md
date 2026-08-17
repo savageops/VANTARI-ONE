@@ -1,5 +1,26 @@
 # Execution Log
 
+## 2026-08-17 - Model-first selection: picker overlay + any-model current default
+
+**Outcome:** Model selection is now model-first: one Space after typing
+`model` opens a full-frame picker with every provider's catalog grouped under
+provider headers, and Enter makes the chosen model the current default — the
+provider is derived from the model, crossing providers switches it. Receipt:
+`092-model-first-picker.md`.
+
+- `models/list-all`: one call aggregates every credentialed provider's
+  catalog with per-group degradation; active group sorts first.
+- `providers/set-model`: cross-provider picks now select the provider too —
+  one durable `{provider, model}` action, response carries `active_provider`.
+- `clients/models_view.zig`: type-to-filter, cursor, active-marker, commit
+  row; palette Space pivot for the `model` token; bare `model` opens the
+  picker; commit flips `state.model` + footer and appends a bounded system
+  row. Per-agent overrides stay in Settings → Models.
+- Fixed in review: handler ownership (per-iteration discovery strings duped,
+  freed after render — borrowing them was a UAF), const-safe picker draw.
+- Gate 19/19 2,263/2,267; live PTY on installed `c1d9bc26`: 329 models / 5
+  providers rendered, Enter committed, ledger readback confirmed the switch.
+
 ## 2026-08-17 - Align-mode extraction lens + agent-driven mode switching + single-question TUI
 
 **Outcome:** Alignment is now a brain-extraction contract with a visible
