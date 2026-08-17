@@ -277,6 +277,11 @@ pub const State = struct {
             if (self.question_index > 0) self.question_index -= 1;
         } else if (self.question_index + 1 < self.questions.items.len) {
             self.question_index += 1;
+        } else if (self.question_index + 1 == self.questions.items.len) {
+            // Forward navigation off the last question enters the review
+            // state — Down and Tab advance the same way, matching the
+            // operator expectation that both keys move forward.
+            self.confirming = true;
         }
         self.option_cursor = 0;
         self.confirm_error = false;

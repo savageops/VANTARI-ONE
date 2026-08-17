@@ -226,7 +226,6 @@ const ChatState = struct {
     cached_transcript_reasoning_active: bool = false,
     /// Cached footer meta line — the 6+ allocPrint cascade in
     /// formatFooterMetaWithScopePrecision dominated per-frame allocation.
-    /// Rebuilt only when one of its inputs changes.
     cached_footer_meta: ?[]u8 = null,
     cached_footer_model: []const u8 = "",
     cached_footer_status: []const u8 = "",
@@ -504,7 +503,6 @@ const ChatState = struct {
         }
         return null;
     }
-
     pub fn add(self: *ChatState, role: Role, text: []const u8) !void {
         if (self.scroll_offset > 0) {
             self.scroll_offset += messageRowCount(role, text, false, self.last_transcript_body_width);
@@ -1365,9 +1363,16 @@ const ChatState = struct {
     }
 
     fn upsertToolOutputDelta(self: *ChatState, message: []const u8) !void {
+        // One parse covers both the keyed-upsert projection and the display
+        // projection — the previous flow parsed the same JSON twice (once
+        // for tool_call_id/stream, again inside formatToolOutputDelta for
+        // chunk_b64/cap_reached).
         const ToolOutputDelta = struct {
+            tool: []const u8 = "",
             tool_call_id: []const u8 = "",
             stream: []const u8 = "",
+            chunk_b64: []const u8 = "",
+            cap_reached: bool = false,
         };
         var parsed = std.json.parseFromSlice(ToolOutputDelta, self.allocator, message, .{
             .ignore_unknown_fields = true,
@@ -1378,7 +1383,12 @@ const ChatState = struct {
         };
         defer parsed.deinit();
 
-        const formatted = (try formatProgress(self.allocator, "tool_output_delta", message)) orelse return;
+        const formatted = (try formatToolOutputDeltaFields(
+            self.allocator,
+            parsed.value.stream,
+            parsed.value.chunk_b64,
+            parsed.value.cap_reached,
+        )) orelse return;
         defer self.allocator.free(formatted);
 
         if (parsed.value.tool_call_id.len == 0 or parsed.value.stream.len == 0) {
@@ -2337,7 +2347,15 @@ fn mainWithMode(allocator: std.mem.Allocator, startup_mode: StartupMode) !void {
                                     input.clearAndFree();
                                     continue;
                                 },
-                                .not_a_command => {},
+                                .not_a_command => {
+                                    // The palette matched a registry name, so
+                                    // a rejected dispatch is a command-layer
+                                    // failure — never fall through to the
+                                    // model-submit path where the text would
+                                    // be sent to the provider as prose.
+                                    input.clearAndFree();
+                                    continue;
+                                },
                             }
                         }
                     }
@@ -4175,6 +4193,41 @@ fn formatToolStarted(allocator: std.mem.Allocator, message: []const u8) !?[]u8 {
     return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "start: {s}", .{parsed.value.tool}));
 }
 
+/// Display projection for one tool output delta from pre-parsed fields.
+/// Callers that already parsed the event JSON (upsertToolOutputDelta) pass
+/// the fields directly; formatProgress remains the raw-JSON entry point.
+fn formatToolOutputDeltaFields(
+    allocator: std.mem.Allocator,
+    stream: []const u8,
+    chunk_b64: []const u8,
+    cap_reached: bool,
+) !?[]u8 {
+    if (chunk_b64.len == 0 and !cap_reached) return null;
+
+    const decoded_size = std.base64.standard.Decoder.calcSizeForSlice(chunk_b64) catch {
+        return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "{s}: <invalid output chunk>", .{stream}));
+    };
+    const decoded = try allocator.alloc(u8, decoded_size);
+    defer allocator.free(decoded);
+    if (decoded_size > 0) {
+        std.base64.standard.Decoder.decode(decoded, chunk_b64) catch {
+            return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "{s}: <invalid output chunk>", .{stream}));
+        };
+    }
+
+    const normalized = try normalizeTerminalChunk(allocator, decoded);
+    defer allocator.free(normalized);
+    const preview = try compactOutputPreview(allocator, normalized);
+    defer allocator.free(preview);
+
+    const suffix = if (cap_reached) " [cap]" else "";
+    const label = if (stream.len == 0) "output" else stream;
+    if (preview.len == 0) {
+        return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "{s}:{s}", .{ label, suffix }));
+    }
+    return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "{s}: {s}{s}", .{ label, preview, suffix }));
+}
+
 fn formatToolOutputDelta(allocator: std.mem.Allocator, message: []const u8) !?[]u8 {
     const ToolOutputDelta = struct {
         tool: []const u8 = "",
@@ -4189,31 +4242,9 @@ fn formatToolOutputDelta(allocator: std.mem.Allocator, message: []const u8) !?[]
     };
     defer parsed.deinit();
 
-    if (parsed.value.chunk_b64.len == 0 and !parsed.value.cap_reached) return null;
-
-    const decoded_size = std.base64.standard.Decoder.calcSizeForSlice(parsed.value.chunk_b64) catch {
-        return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "{s}: <invalid output chunk>", .{parsed.value.stream}));
-    };
-    const decoded = try allocator.alloc(u8, decoded_size);
-    defer allocator.free(decoded);
-    if (decoded_size > 0) {
-        std.base64.standard.Decoder.decode(decoded, parsed.value.chunk_b64) catch {
-            return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "{s}: <invalid output chunk>", .{parsed.value.stream}));
-        };
-    }
-
-    const normalized = try normalizeTerminalChunk(allocator, decoded);
-    defer allocator.free(normalized);
-    const preview = try compactOutputPreview(allocator, normalized);
-    defer allocator.free(preview);
-
-    const suffix = if (parsed.value.cap_reached) " [cap]" else "";
-    const stream = if (parsed.value.stream.len == 0) "output" else parsed.value.stream;
-    if (preview.len == 0) {
-        return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "{s}:{s}", .{ stream, suffix }));
-    }
-    return try trimOwnedProgress(allocator, try std.fmt.allocPrint(allocator, "{s}: {s}{s}", .{ stream, preview, suffix }));
+    return formatToolOutputDeltaFields(allocator, parsed.value.stream, parsed.value.chunk_b64, parsed.value.cap_reached);
 }
+
 
 fn formatToolFinished(allocator: std.mem.Allocator, message: []const u8) !?[]u8 {
     const ToolFinished = struct {
