@@ -1,5 +1,26 @@
 # Execution Log
 
+## 2026-08-17 - One-family model discovery + OAuth token refresh
+
+**Outcome:** ACP + models.dev + codex-rs research distilled into one
+discovery surface with a three-tier precedence, plus the resolve-time OAuth
+refresh that was the actual "provider system doesn't work" root cause.
+
+- `models.discoverModels`: live endpoint per transport ({base}/v1/models,
+  codex {base}/codex/models reverse-engineered with visibility filtering,
+  Anthropic headers) → vendored models.dev snapshot (39 KB, 620 models,
+  family aliases) → configured model. `hasNativeModelSurface`'s hardcoded
+  provider list and fabricated fallback ids deleted.
+- OAuth tokens now refresh at resolve time and persist to the ledger; the
+  expired codex record in this workspace refreshed live
+  (expiry 1786753928395 → 1787243764071). `postTokenForm` moved onto the
+  raw TCP+TLS transport with form content-type support.
+- Codex live discovery is blocked for this account at the ChatGPT edge
+  (subscription lapsed 2026-08-03) — the snapshot tier answers instead;
+  reactivating the subscription lights the live tier with zero code change.
+
+Details: `.docs/todo/changelog/090-provider-family-model-discovery.md`.
+
 ## 2026-08-17 - Transcript row cache use-after-free after agent launches
 
 **Outcome:** Two TUI segfaults (dmesg 11:43:24 and 11:50:01, user-mode reads
