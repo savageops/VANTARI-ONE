@@ -1,5 +1,28 @@
 # Execution Log
 
+## 2026-08-17 - Argument-aware model palette + model-first Settings + outage crash fixes
+
+**Outcome:** `model <prefix>` is now a live model-filter autocomplete
+(prefix on model or provider id), Settings → Models opens on the flat
+grouped catalog with a named assign target, and the two live-outage root
+causes (SyntaxError misclassification; kernel-child segfault after the
+first failed turn) are fixed at the source with deterministic repros.
+Receipt: `093-argument-palette-crash-fixes.md`.
+
+- `models_view.Catalog`/`fetchCatalog` is the one catalog cache behind the
+  palette, picker, and settings; `model g`→glm, `model o`→opencode/openai,
+  `model openco`→opencode; Enter commits cross-provider and flips the footer;
+  the Space pivot is gone (regression-tested).
+- Settings → Models: flat catalog default, assign layer names the exact
+  `provider/model` it writes, providers/import behind a `P` toggle.
+- `scanCurrentTurnTerminal` copied the terminal detail after the parsed
+  payload's arena died — the commit after the first failed turn segfaulted
+  the kernel child and the owner 500'd. Fixed (copy inside the parse scope);
+  poison-based regression test; Debug repro against a local 403 server now
+  survives four consecutive failing turns with honest BadStatus diagnostics.
+- Gate 19/19 2,285/2,289; live PTY on installed `ec01f766` proved the
+  palette mechanic end to end with ledger readback.
+
 ## 2026-08-17 - Model-first selection: picker overlay + any-model current default
 
 **Outcome:** Model selection is now model-first: one Space after typing

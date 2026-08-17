@@ -415,9 +415,9 @@ fn parseCompletionResponse(
         return parseStreamCompletionResponse(allocator, configured_model, response_body);
     }
 
-    var parsed = try std.json.parseFromSlice(ParsedResponse, allocator, response_body, .{
+    var parsed = std.json.parseFromSlice(ParsedResponse, allocator, response_body, .{
         .ignore_unknown_fields = true,
-    });
+    }) catch return Error.MalformedHttpResponse;
     defer parsed.deinit();
 
     if (parsed.value.choices.len == 0) return Error.MissingChoice;
@@ -1658,6 +1658,23 @@ test "provider parses streamed tool-call deltas into normal tool calls" {
     try std.testing.expectEqualStrings("call_1", response.tool_calls[0].id);
     try std.testing.expectEqualStrings("read_file", response.tool_calls[0].name);
     try std.testing.expectEqualStrings("{\"path\":\"README.md\"}", response.tool_calls[0].arguments_json);
+}
+
+test "provider maps non-JSON response bodies to MalformedHttpResponse, never SyntaxError" {
+    // Cloudflare edge rejections (and plain-text error pages) arrive as
+    // non-JSON bodies; leaking std.json's error.SyntaxError as the turn
+    // failure detail hid the real cause behind a meaningless name.
+    const plain_text_body = "error code: 1010\n";
+    try std.testing.expectError(
+        Error.MalformedHttpResponse,
+        parseCompletionResponse(std.testing.allocator, "kimi-k2.5-free", plain_text_body),
+    );
+
+    const html_body = "<html><head><title>Just a moment...</title></head></html>";
+    try std.testing.expectError(
+        Error.MalformedHttpResponse,
+        parseCompletionResponse(std.testing.allocator, "kimi-k2.5-free", html_body),
+    );
 }
 
 test "provider preserves non-200 HTTP status diagnostic for session failure" {

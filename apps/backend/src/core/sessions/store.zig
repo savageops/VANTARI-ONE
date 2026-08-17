@@ -860,7 +860,8 @@ fn scanCurrentTurnTerminal(
         }
 
         var outcome = legacyTurnTerminalOutcome(parsed.value.event_type);
-        var detail = parsed.value.message;
+        var detail: []u8 = @constCast(parsed.value.message);
+        var detail_owned = false;
         var failure_id: ?[]u8 = null;
         if (std.mem.eql(u8, parsed.value.event_type, protocol_events.turn_terminal_event_type)) {
             var terminal = std.json.parseFromSlice(ParsedTurnTerminal, allocator, parsed.value.message, .{
@@ -873,21 +874,30 @@ fn scanCurrentTurnTerminal(
             if (!std.mem.eql(u8, terminal.value.schema, "var1.turn_terminal.v1")) return error.InvalidTurnTerminalPayload;
             if (terminal.value.run_seq != scan.run_seq) return error.StaleTurnTerminalGeneration;
             outcome = protocol_events.parseTurnTerminalOutcome(terminal.value.outcome) catch return error.InvalidTurnTerminalPayload;
-            detail = terminal.value.detail;
+            // The parsed terminal's arena dies with this block, so the detail
+            // must be copied while the source is alive; deferring the copy to
+            // the scan assignment below reads freed memory (a long-lived
+            // server segfaults on the commit AFTER the first failed turn).
+            detail = try allocator.dupe(u8, terminal.value.detail);
+            detail_owned = true;
             if (terminal.value.failure) |failure| {
                 if (failure.failure_id.len > 0) failure_id = try allocator.dupe(u8, failure.failure_id);
             }
         }
-        const resolved_outcome = outcome orelse continue;
+        const resolved_outcome = outcome orelse {
+            if (detail_owned) allocator.free(detail);
+            continue;
+        };
         if (scan.terminal != null) {
             if (failure_id) |value| allocator.free(value);
+            if (detail_owned) allocator.free(detail);
             return error.DuplicateTurnTerminal;
         }
         scan.terminal = .{
             .seq = parsed.value.seq,
             .run_seq = scan.run_seq,
             .outcome = resolved_outcome,
-            .detail = try allocator.dupe(u8, detail),
+            .detail = if (detail_owned) detail else try allocator.dupe(u8, detail),
             .failure_id = failure_id,
         };
     }
@@ -2137,4 +2147,33 @@ test "setSessionPromptMode returns previous label as independent memory" {
     var restored = try readSessionRecord(allocator, workspace, session.id);
     defer restored.deinit(allocator);
     try std.testing.expectEqualStrings("build", restored.prompt_mode.?);
+}
+
+test "terminal scan keeps committed detail bytes alive across the parse scope" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var session = try initSessionWithOptions(allocator, workspace, "terminal scan", .{
+        .session_id = "session-terminal-scan-0123456789a",
+    });
+    defer session.deinit(allocator);
+    const events_path = try eventsFilePath(allocator, workspace, session.id);
+    defer allocator.free(events_path);
+
+    // A prior failed run's terminal row: the next commit rescans it, and the
+    // detail must be copied while the parsed payload is still alive. The
+    try fsutil.appendText(events_path,
+        "{\"event_type\":\"turn_terminal\",\"message\":\"{\\\"schema\\\":\\\"var1.turn_terminal.v1\\\",\\\"run_seq\\\":0,\\\"outcome\\\":\\\"failed\\\",\\\"detail\\\":\\\"BadStatus status=403 body_prefix=error code: 1010\\\"}\",\"timestamp_ms\":1,\"seq\":1}\n");
+
+    var projection = try readCurrentTurnTerminal(allocator, workspace, session.id);
+    try std.testing.expect(projection != null);
+    defer projection.?.deinit(allocator);
+    try std.testing.expect(projection.?.outcome == .failed);
+    try std.testing.expectEqualStrings(
+        "BadStatus status=403 body_prefix=error code: 1010",
+        projection.?.detail,
+    );
 }

@@ -17,6 +17,7 @@ const std = @import("std");
 const VAR1 = @import("VAR1");
 const config_file = VAR1.core.config_file;
 const protocol = VAR1.core.protocol_types;
+const models_view = @import("models_view.zig");
 
 pub const section_names = [_][]const u8{
     "runtime",
@@ -106,22 +107,37 @@ pub const Picker = struct {
     }
 };
 
-/// Mode state for the Models tab. A layered selection: provider → model →
-/// (assign to active provider or an agent). Each layer reuses the Picker
-/// engine so the whole flow is cycle-to-lock, never typing.
+/// Mode state for the Models tab. Default: flat model catalog grouped by
+/// provider (active provider first). Enter on a model opens the assign-target
+/// layer (current default or agents). Providers mode is secondary, toggled
+/// with P.
 pub const ModelsState = struct {
-    mode: enum { providers, models, assign } = .providers,
-    providers: Picker,
-    models: Picker,
-    /// Assign-target picker. Index 0 is always the active provider; indices
-    /// 1..N are the agents (from `agent_ids`). Rebuilt on each assign entry.
+    mode: enum { catalog, assign, providers, provider_models } = .catalog,
+
+    // Flat model catalog from models/list-all (shared with palette/picker).
+    catalog: ?models_view.Catalog = null,
+    catalog_cursor: usize = 0,
+    catalog_scroll: usize = 0,
+
+    // The model + provider selected for assignment (set when entering assign).
+    selected_model_id: []u8 = "",
+    selected_provider_id: []u8 = "",
+
+    // Assign-target picker. Index 0 = "current default"; 1..N = agent ids.
     agents: Picker,
-    /// The real agent ids from agents/list, kept separately so the assign
-    /// picker can be rebuilt (active provider + agents) without losing them.
-    agent_ids: std.ArrayList([]u8) = .{},
-    /// Provider id the current model list was pulled from (for assignment).
-    active_provider_id: []u8 = "",
+
+    // Providers mode (secondary, retained). Connected + detected providers.
+    providers: Picker,
+    // Per-provider model list (entered from providers mode).
+    models: Picker,
     loaded_provider_id: []u8 = "",
+
+    // Agent ids from agents/list, kept separately from picker labels.
+    agent_ids: std.ArrayList([]u8) = .{},
+
+    // Active provider id from providers/list (used in providers mode).
+    active_provider_id: []u8 = "",
+
     status_message: ?[]u8 = null,
     allocator: std.mem.Allocator,
 
@@ -135,6 +151,7 @@ pub const ModelsState = struct {
     }
 
     pub fn deinit(self: *ModelsState) void {
+        if (self.catalog) |cat| cat.deinit(self.allocator);
         self.providers.deinit();
         self.models.deinit();
         self.agents.deinit();
@@ -142,6 +159,8 @@ pub const ModelsState = struct {
         self.agent_ids.deinit(self.allocator);
         if (self.active_provider_id.len > 0) self.allocator.free(self.active_provider_id);
         if (self.loaded_provider_id.len > 0) self.allocator.free(self.loaded_provider_id);
+        if (self.selected_model_id.len > 0) self.allocator.free(self.selected_model_id);
+        if (self.selected_provider_id.len > 0) self.allocator.free(self.selected_provider_id);
         if (self.status_message) |msg| self.allocator.free(msg);
     }
 
@@ -391,19 +410,19 @@ pub const SettingsState = struct {
         });
     }
 
-    /// Populate the models tab from kernel RPC surfaces: connected providers
-    /// (providers/list), detected-but-unconnected natives (auth/detect), and
-    /// the agent registry (agents/list) for assignment. All read-only; the
-    /// operator triggers the single mutating actions (import, set-model,
-    /// assign) explicitly.
+    /// Populate the models tab: flat model catalog (default), providers list
+    /// (secondary), and agent registry (for assignment). The catalog and
+    /// providers load independently; a catalog failure degrades to an inline
+    /// error without breaking the providers mode.
     pub fn loadModels(self: *SettingsState, rpc_client: anytype) !void {
         if (self.models_state == null) self.models_state = ModelsState.init(self.allocator);
         const models = &self.models_state.?;
         models.providers.clear();
         models.models.clear();
         models.agents.clear();
+        models.clearStatus();
 
-        // Agents for the assignment cycler.
+        // Agents for the assignment layer.
         {
             for (models.agent_ids.items) |id| self.allocator.free(id);
             models.agent_ids.clearRetainingCapacity();
@@ -433,7 +452,21 @@ pub const SettingsState = struct {
             }
         }
 
-        // Connected providers + their current model.
+        // Flat model catalog from models/list-all (shared with palette and picker).
+        {
+            if (models.catalog) |cat| cat.deinit(self.allocator);
+            models.catalog = null;
+            models.catalog_cursor = 0;
+            models.catalog_scroll = 0;
+            const cat_result = models_view.fetchCatalog(self.allocator, rpc_client);
+            if (cat_result) |cat| {
+                models.catalog = cat;
+            } else |_| {
+                try models.setStatus("Error: model catalog unavailable");
+            }
+        }
+
+        // Connected providers + their current model (for providers mode).
         {
             const call = rpc_client.call(protocol.methods.providers_list, "{}") catch null;
             if (call) |*c| {
@@ -493,18 +526,12 @@ pub const SettingsState = struct {
                                             const provider_id = entry.object.get("provider_id") orelse continue;
                                             const live = entry.object.get("live") orelse continue;
                                             if (provider_id != .string or live != .bool) continue;
-                                            // Already connected (in providers) is
-                                            // shown by the providers row above.
                                             if (models.providers.indexOfValue(provider_id.string) != null) continue;
                                             if (!live.bool) continue;
                                             const source = entry.object.get("source") orelse continue;
                                             if (source != .string) continue;
                                             const label = try std.fmt.allocPrint(self.allocator, "{s} (detected: {s}, press Enter to connect)", .{ provider_id.string, source.string });
                                             defer self.allocator.free(label);
-                                            // auth/import matches PROVENANCE source names
-                                            // (claude/codex/opencode), not provider ids, so
-                                            // the picker value is the source name while the
-                                            // label keeps the human provider id.
                                             try models.providers.add(label, source.string);
                                         }
                                     }
@@ -517,27 +544,28 @@ pub const SettingsState = struct {
         }
     }
 
-    /// Handle a key while the models tab is active. Routes provider/model/assign
-    /// picker navigation and the explicit mutations.
+    /// Handle a key while the models tab is active. Routes catalog/provider/
+    /// assign navigation and the explicit mutations. The default mode is
+    /// catalog (flat model list from models/list-all); providers mode is
+    /// secondary, toggled with P.
     pub fn handleModelsKey(self: *SettingsState, key_event: anytype, rpc_client: anytype) !bool {
         const models = &self.models_state.?;
         const key = key_event;
 
         // Esc walks back up the layered picker, then out of models entirely.
         if (key.matches(tui.Key.escape, .{})) {
-            if (models.mode != .providers) {
-                models.mode = .providers;
-                models.models.clear();
-                models.clearStatus();
-            } else {
-                self.open = false;
+            switch (models.mode) {
+                .catalog => self.open = false,
+                .assign, .provider_models => {
+                    models.mode = .catalog;
+                    models.clearStatus();
+                },
+                .providers => self.open = false,
             }
             return true;
         }
         // Tab / Shift-Tab keep section navigation even while the models overlay
-        // owns keys, so the operator can leave the tab without Esc. The same
-        // section-change owner the generic handler uses loads the destination
-        // surface — including models when the cursor wraps onto it.
+        // owns keys, so the operator can leave the tab without Esc.
         if (key.matches(tui.Key.tab, .{ .shift = true })) {
             _ = try self.changeSection(-1, rpc_client);
             return true;
@@ -547,9 +575,7 @@ pub const SettingsState = struct {
             return true;
         }
 
-        // Dedicated section keys mirror the generic handler: Ctrl-Q previous,
-        // Ctrl-E next. They always move sections so an operator on the models
-        // tab is never trapped by the picker's own Left/Right value cycling.
+        // Dedicated section keys: Ctrl-Q previous, Ctrl-E next.
         if (key.matches('q', .{ .ctrl = true })) {
             _ = try self.changeSection(-1, rpc_client);
             return true;
@@ -560,6 +586,66 @@ pub const SettingsState = struct {
         }
 
         switch (models.mode) {
+            .catalog => {
+                if (key.matches(tui.Key.up, .{}) or key.matches(tui.Key.left, .{})) {
+                    if (models.catalog) |cat| {
+                        if (cat.entries.len > 0) {
+                            if (models.catalog_cursor == 0) {
+                                models.catalog_cursor = cat.entries.len - 1;
+                            } else {
+                                models.catalog_cursor -= 1;
+                            }
+                        }
+                    }
+                    return true;
+                }
+                if (key.matches(tui.Key.down, .{}) or key.matches(tui.Key.right, .{})) {
+                    if (models.catalog) |cat| {
+                        if (cat.entries.len > 0) {
+                            models.catalog_cursor = (models.catalog_cursor + 1) % cat.entries.len;
+                        }
+                    }
+                    return true;
+                }
+                if (key.matches(tui.Key.enter, .{})) {
+                    if (models.catalog) |cat| {
+                        if (cat.entries.len > 0 and models.catalog_cursor < cat.entries.len) {
+                            const entry = cat.entries[models.catalog_cursor];
+                            if (entry.id.len > 0) {
+                                // Store selected model for commit.
+                                if (models.selected_model_id.len > 0) self.allocator.free(models.selected_model_id);
+                                models.selected_model_id = try self.allocator.dupe(u8, entry.id);
+                                if (models.selected_provider_id.len > 0) self.allocator.free(models.selected_provider_id);
+                                models.selected_provider_id = try self.allocator.dupe(u8, entry.provider_id);
+                                // Build assign picker: "current default" + agents. The
+                                // default row names the provider it will write so the
+                                // operator sees cross-provider targets before committing.
+                                models.agents.clear();
+                                const default_label = try std.fmt.allocPrint(
+                                    self.allocator,
+                                    "current default ({s}/{s})",
+                                    .{ entry.provider_id, entry.id },
+                                );
+                                defer self.allocator.free(default_label);
+                                try models.agents.add(default_label, "current default");
+                                for (models.agent_ids.items) |agent_id| {
+                                    try models.agents.add(agent_id, agent_id);
+                                }
+                                models.mode = .assign;
+                                models.clearStatus();
+                            }
+                        }
+                    }
+                    return true;
+                }
+                // P toggles to providers mode (secondary).
+                if (key.matches('p', .{})) {
+                    models.mode = .providers;
+                    models.clearStatus();
+                    return true;
+                }
+                return false;
+            },
             .providers => {
                 if (key.matches(tui.Key.up, .{})) {
                     models.providers.move(-1);
@@ -580,8 +666,6 @@ pub const SettingsState = struct {
                 if (key.matches(tui.Key.enter, .{})) {
                     const provider_id = models.providers.value();
                     if (provider_id.len == 0) return true;
-                    // Connected providers are in providers/list; detected-only
-                    // rows are marked "(detected: ...)" and import on Enter.
                     if (std.mem.indexOf(u8, models.providers.label(), "detected:") != null) {
                         try self.importDetectedSource(rpc_client, provider_id);
                         return true;
@@ -591,7 +675,7 @@ pub const SettingsState = struct {
                 }
                 return false;
             },
-            .models => {
+            .provider_models => {
                 if (key.matches(tui.Key.up, .{})) {
                     models.models.move(-1);
                     return true;
@@ -611,22 +695,20 @@ pub const SettingsState = struct {
                 if (key.matches(tui.Key.enter, .{})) {
                     const model = models.models.value();
                     if (model.len == 0) return true;
-                    // Rebuild the assign picker: index 0 = the provider the
-                    // model list was pulled from (set-model writes THAT
-                    // provider's ledger record), then every agent. The label
-                    // must name the provider the commit will actually write —
-                    // "(active provider)" only when it really is the ledger's
-                    // active provider, never as a blanket caption.
+                    if (models.selected_model_id.len > 0) self.allocator.free(models.selected_model_id);
+                    models.selected_model_id = try self.allocator.dupe(u8, model);
+                    if (models.selected_provider_id.len > 0) self.allocator.free(models.selected_provider_id);
+                    models.selected_provider_id = try self.allocator.dupe(u8, models.loaded_provider_id);
+                    // Build assign picker: "current default" + agents, with
+                    // the default row naming the provider it will write.
                     models.agents.clear();
-                    const target_provider = models.loaded_provider_id;
-                    const is_active_target = models.active_provider_id.len > 0 and
-                        std.mem.eql(u8, target_provider, models.active_provider_id);
-                    const provider_label = if (is_active_target)
-                        try std.fmt.allocPrint(self.allocator, "{s} (active provider)", .{target_provider})
-                    else
-                        try std.fmt.allocPrint(self.allocator, "{s} (provider)", .{target_provider});
-                    defer self.allocator.free(provider_label);
-                    try models.agents.add(provider_label, target_provider);
+                    const default_label = try std.fmt.allocPrint(
+                        self.allocator,
+                        "current default ({s}/{s})",
+                        .{ models.loaded_provider_id, model },
+                    );
+                    defer self.allocator.free(default_label);
+                    try models.agents.add(default_label, "current default");
                     for (models.agent_ids.items) |agent_id| {
                         try models.agents.add(agent_id, agent_id);
                     }
@@ -637,9 +719,6 @@ pub const SettingsState = struct {
                 return false;
             },
             .assign => {
-                // Left/Right cycle between "active provider" and each agent.
-                // The first picker entry is the active provider; the rest are
-                // agents from the loaded registry.
                 if (key.matches(tui.Key.left, .{})) {
                     models.agents.move(-1);
                     return true;
@@ -722,7 +801,7 @@ pub const SettingsState = struct {
             try models.setStatus("No models reported by this provider");
             return;
         }
-        models.mode = .models;
+        models.mode = .provider_models;
     }
 
     /// Return whether a mutation RPC's result envelope reports `status:"ok"`.
@@ -786,14 +865,12 @@ pub const SettingsState = struct {
 
     fn commitModelAssignment(self: *SettingsState, rpc_client: anytype) !void {
         const models = &self.models_state.?;
-        const model = models.models.value();
-        if (model.len == 0) return;
+        const model = models.selected_model_id;
+        const provider_id = models.selected_provider_id;
+        if (model.len == 0 or provider_id.len == 0) return;
 
-        // The assign picker has index 0 = active provider, 1..N = agents.
-        // Derive the target from the cursor so Left/Right reaches agents.
+        // Assign picker: index 0 = "current default", 1..N = agents.
         if (models.agents.cursor == 0) {
-            const provider_id = models.loaded_provider_id;
-            if (provider_id.len == 0) return;
             const params = try std.fmt.allocPrint(self.allocator, "{{\"provider_id\":{f},\"model\":{f}}}", .{
                 std.json.fmt(provider_id, .{}),
                 std.json.fmt(model, .{}),
@@ -814,12 +891,9 @@ pub const SettingsState = struct {
         } else {
             const agent_id = models.agents.value();
             if (agent_id.len == 0) return;
-            // Include the provider the model was pulled from so a model
-            // discovered on a non-active provider configures a usable
-            // provider/model pair on the agent.
             const params = try std.fmt.allocPrint(self.allocator, "{{\"agent_id\":{f},\"provider_id\":{f},\"model\":{f}}}", .{
                 std.json.fmt(agent_id, .{}),
-                std.json.fmt(models.loaded_provider_id, .{}),
+                std.json.fmt(provider_id, .{}),
                 std.json.fmt(model, .{}),
             });
             defer self.allocator.free(params);
@@ -835,10 +909,9 @@ pub const SettingsState = struct {
             try models.setStatus("Assigned to agent. Hot-loads on the next agents snapshot.");
         }
         self.config_changed = true;
-        models.mode = .providers;
-        // Reload the provider list so the updated model label is visible
-        // immediately — without this the operator sees stale "(old-model)"
-        // labels until they leave and re-enter the tab.
+        models.mode = .catalog;
+        models.agents.clear();
+        // Reload so the updated catalog + providers are visible.
         self.loadModels(rpc_client) catch {};
     }
 
@@ -1118,76 +1191,174 @@ pub fn drawSettings(win: tui.Window, state: *SettingsState, frame_allocator: std
     );
 }
 
-/// Render the Models tab: a layered picker over providers → models → assign
-/// target. Each layer reuses the Picker engine; Left/Right (and Up/Down) cycle,
-/// Enter locks, Esc walks back up. Every formatted row string comes from the
-/// frame allocator: Vaxis cells BORROW printed text until `vx.render`, so a
-/// per-row alloc/free here segfaults the render after the models list grows.
+/// Render the Models tab. Default mode is a flat catalog grouped by provider
+/// (active provider first, active model marked with ▸); Enter opens an
+/// assign-target layer. Providers mode is secondary. Every formatted row
+/// string comes from the frame allocator: Vaxis cells BORROW printed text
+/// until `vx.render`, so a per-row alloc/free here segfaults the render.
 fn drawModels(win: tui.Window, state: *SettingsState, frame_allocator: std.mem.Allocator) void {
-    // Every print is single-line (`.wrap = .none`): the default `.grapheme`
-    // wrap would push long provider/model labels onto the next picker row and
-    // corrupt the layered list layout on narrow terminals.
     const models = state.models_state orelse {
         _ = win.print(
-            &.{.{ .text = "Loading providers…", .style = .{ .bg = Color.bg, .fg = Color.dim } }},
+            &.{.{ .text = "Loading models…", .style = .{ .bg = Color.bg, .fg = Color.dim } }},
             .{ .col_offset = 2, .row_offset = 3, .wrap = .none },
         );
         return;
     };
 
     var row: usize = 3;
-    const picker: *const Picker = switch (models.mode) {
-        .providers => &models.providers,
-        .models => &models.models,
-        .assign => &models.agents,
-    };
-    const mode_title = switch (models.mode) {
-        .providers => "Providers (connected + detected):",
-        .models => "Models:",
-        .assign => "Assign to (provider default or an agent):",
-    };
 
-    _ = win.print(
-        &.{.{ .text = mode_title, .style = .{ .bg = Color.bg, .fg = Color.fg } }},
-        .{ .col_offset = 2, .row_offset = @intCast(row), .wrap = .none },
-    );
-    row += 1;
-
-    if (picker.itemCount() == 0) {
-        _ = win.print(
-            &.{.{ .text = "  (none)", .style = .{ .bg = Color.bg, .fg = Color.dim } }},
-            .{ .col_offset = 4, .row_offset = @intCast(row), .wrap = .none },
-        );
-        row += 1;
-    } else {
-        const start = if (picker.cursor >= 8) picker.cursor - 7 else 0;
-        const visible = @min(@as(usize, 8), picker.itemCount() - start);
-        for (0..visible) |offset| {
-            const index = start + offset;
-            const is_selected = index == picker.cursor;
-            const label = picker.labels.items[index];
-            const row_text = std.fmt.allocPrint(frame_allocator, "{s}{s}", .{ if (is_selected) "→ " else "  ", label }) catch {
-                row += 1;
-                continue;
-            };
+    if (models.mode == .catalog) {
+        // Flat catalog: header + grouped entries with bounded 8-row window.
+        if (models.catalog) |cat| {
+            const header = std.fmt.allocPrint(frame_allocator, "Active: {s} / {s}", .{ cat.active_provider, cat.active_model }) catch "Active: (unknown)";
             _ = win.print(
-                &.{.{ .text = row_text, .style = if (is_selected)
-                    .{ .bold = true, .bg = Color.bg, .fg = Color.accent }
-                else
-                    .{ .bg = Color.bg, .fg = Color.fg } }},
+                &.{.{ .text = header, .style = .{ .bold = true, .bg = Color.bg, .fg = Color.fg } }},
                 .{ .col_offset = 2, .row_offset = @intCast(row), .wrap = .none },
             );
             row += 1;
+
+            if (cat.entries.len == 0) {
+                _ = win.print(
+                    &.{.{ .text = "  (no models)", .style = .{ .bg = Color.bg, .fg = Color.dim } }},
+                    .{ .col_offset = 2, .row_offset = @intCast(row), .wrap = .none },
+                );
+            } else {
+                const max_rows: usize = 8;
+                // Compute visual row of the cursor entry (headers + entries).
+                var cursor_visual: usize = 0;
+                var prev: []const u8 = "";
+                for (cat.entries[0..@min(models.catalog_cursor + 1, cat.entries.len)]) |e| {
+                    if (!std.mem.eql(u8, e.provider_id, prev)) {
+                        cursor_visual += 1;
+                        prev = e.provider_id;
+                    }
+                    cursor_visual += 1;
+                }
+                // Scroll: ensure the cursor entry is in the first half of the window.
+                var scroll_entry: usize = 0;
+                if (cursor_visual >= max_rows) {
+                    const target = cursor_visual - max_rows + 1;
+                    var visual: usize = 0;
+                    prev = "";
+                    for (cat.entries, 0..) |e, i| {
+                        if (!std.mem.eql(u8, e.provider_id, prev)) {
+                            visual += 1;
+                            prev = e.provider_id;
+                        }
+                        if (visual >= target) {
+                            scroll_entry = i;
+                            break;
+                        }
+                        visual += 1;
+                    }
+                }
+                // Render up to max_rows visual lines.
+                var rendered: usize = 0;
+                var current_provider: []const u8 = "";
+                for (cat.entries[scroll_entry..], scroll_entry..) |entry, abs_idx| {
+                    if (rendered >= max_rows) break;
+                    // Provider group header.
+                    if (!std.mem.eql(u8, entry.provider_id, current_provider)) {
+                        current_provider = entry.provider_id;
+                        _ = win.print(
+                            &.{.{ .text = entry.provider_id, .style = .{ .bg = Color.bg, .fg = Color.dim } }},
+                            .{ .col_offset = 2, .row_offset = @intCast(row), .wrap = .none },
+                        );
+                        row += 1;
+                        rendered += 1;
+                        if (rendered >= max_rows) break;
+                    }
+                    const is_selected = abs_idx == models.catalog_cursor;
+                    const active_marker: []const u8 = if (entry.is_active) "▸ " else "  ";
+                    const cursor_prefix: []const u8 = if (is_selected) "→" else " ";
+                    const display_id = if (entry.id.len > 0) entry.id else "(unreachable)";
+                    const ctx_str = if (entry.context_length) |ctx| blk: {
+                        break :blk std.fmt.allocPrint(frame_allocator, " ({d}k)", .{ctx / 1024}) catch "";
+                    } else "";
+                    const row_text = std.fmt.allocPrint(frame_allocator, "{s}{s}{s}{s}", .{ active_marker, cursor_prefix, display_id, ctx_str }) catch {
+                        row += 1;
+                        rendered += 1;
+                        continue;
+                    };
+                    _ = win.print(
+                        &.{.{ .text = row_text, .style = if (is_selected)
+                            .{ .bold = true, .bg = Color.bg, .fg = Color.accent }
+                        else if (entry.is_active)
+                            .{ .bold = true, .bg = Color.bg, .fg = Color.fg }
+                        else if (!entry.reachable)
+                            .{ .bg = Color.bg, .fg = Color.dim }
+                        else
+                            .{ .bg = Color.bg, .fg = Color.fg } }},
+                        .{ .col_offset = 4, .row_offset = @intCast(row), .wrap = .none },
+                    );
+                    row += 1;
+                    rendered += 1;
+                }
+            }
+        } else {
+            _ = win.print(
+                &.{.{ .text = "Model catalog unavailable.", .style = .{ .bg = Color.bg, .fg = Color.dim } }},
+                .{ .col_offset = 2, .row_offset = @intCast(row), .wrap = .none },
+            );
+        }
+    } else {
+        // Picker-based rendering for assign / providers / provider_models.
+        const picker: *const Picker = switch (models.mode) {
+            .assign => &models.agents,
+            .providers => &models.providers,
+            .provider_models => &models.models,
+            .catalog => unreachable,
+        };
+        const mode_title = switch (models.mode) {
+            .providers => "Providers (connected + detected):",
+            .provider_models => "Models:",
+            .assign => "Assign to (current default or an agent):",
+            .catalog => unreachable,
+        };
+
+        _ = win.print(
+            &.{.{ .text = mode_title, .style = .{ .bg = Color.bg, .fg = Color.fg } }},
+            .{ .col_offset = 2, .row_offset = @intCast(row), .wrap = .none },
+        );
+        row += 1;
+
+        if (picker.itemCount() == 0) {
+            _ = win.print(
+                &.{.{ .text = "  (none)", .style = .{ .bg = Color.bg, .fg = Color.dim } }},
+                .{ .col_offset = 4, .row_offset = @intCast(row), .wrap = .none },
+            );
+            row += 1;
+        } else {
+            const start = if (picker.cursor >= 8) picker.cursor - 7 else 0;
+            const visible = @min(@as(usize, 8), picker.itemCount() - start);
+            for (0..visible) |offset| {
+                const index = start + offset;
+                const is_selected = index == picker.cursor;
+                const label = picker.labels.items[index];
+                const row_text = std.fmt.allocPrint(frame_allocator, "{s}{s}", .{ if (is_selected) "→ " else "  ", label }) catch {
+                    row += 1;
+                    continue;
+                };
+                _ = win.print(
+                    &.{.{ .text = row_text, .style = if (is_selected)
+                        .{ .bold = true, .bg = Color.bg, .fg = Color.accent }
+                    else
+                        .{ .bg = Color.bg, .fg = Color.fg } }},
+                    .{ .col_offset = 2, .row_offset = @intCast(row), .wrap = .none },
+                );
+                row += 1;
+            }
+        }
+
+        if (models.mode == .provider_models and models.loaded_provider_id.len > 0) {
+            _ = win.print(
+                &.{.{ .text = models.loaded_provider_id, .style = .{ .bg = Color.bg, .fg = Color.dim } }},
+                .{ .col_offset = 30, .row_offset = 4, .wrap = .none },
+            );
         }
     }
 
-    if (models.mode == .models and models.loaded_provider_id.len > 0) {
-        _ = win.print(
-            &.{.{ .text = models.loaded_provider_id, .style = .{ .bg = Color.bg, .fg = Color.dim } }},
-            .{ .col_offset = 30, .row_offset = 4, .wrap = .none },
-        );
-    }
-
+    // Status message.
     if (models.status_message) |msg| {
         _ = win.print(
             &.{.{ .text = msg, .style = .{ .bg = Color.bg, .fg = Color.success } }},
@@ -1195,21 +1366,17 @@ fn drawModels(win: tui.Window, state: *SettingsState, frame_allocator: std.mem.A
         );
     }
 
+    // Footer hint.
     const hint = switch (models.mode) {
-        .providers => "↑/↓/←/→ cycle  Enter: connect/import or show models  Esc back",
-        .models => "↑/↓/←/→ cycle model  Enter: assign  Esc back",
+        .catalog => "↑/↓/←/→ cycle  Enter: assign  P providers  Esc close",
+        .providers => "↑/↓/←/→ cycle  Enter: connect/import or show models  Esc close",
+        .provider_models => "↑/↓/←/→ cycle  Enter: assign  Esc back",
         .assign => "←/→ cycle target  Enter: lock in  Esc back",
     };
     _ = win.print(
         &.{.{ .text = hint, .style = .{ .bg = Color.bg, .fg = Color.dim } }},
         .{ .col_offset = 2, .row_offset = @intCast(win.height -| 1), .wrap = .none },
     );
-}
-
-fn nextLogLevel(value: []const u8) []const u8 {
-    if (std.mem.eql(u8, value, "silent")) return "normal";
-    if (std.mem.eql(u8, value, "normal")) return "full";
-    return "silent";
 }
 
 fn nextTheme(value: []const u8) []const u8 {
@@ -1225,6 +1392,12 @@ fn nextStatusBarPosition(value: []const u8) []const u8 {
 
 /// Cycle a constrained setting's value one step in `direction` (-1 prev,
 /// +1 next). Each family keeps a stable ring so Left/Right wraps deterministically.
+fn nextLogLevel(value: []const u8) []const u8 {
+    if (std.mem.eql(u8, value, "silent")) return "normal";
+    if (std.mem.eql(u8, value, "normal")) return "full";
+    return "silent";
+}
+
 fn nextEnumValue(entry: SettingsState.ConfigEntry, direction: i8) []const u8 {
     if (entry.is_log_level) {
         if (direction < 0) {
@@ -1444,7 +1617,7 @@ const SettingsTestResult = struct {
     error_json: ?[]const u8 = null,
     result_json: ?[]u8 = null,
 
-    fn deinit(self: SettingsTestResult, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: SettingsTestResult, allocator: std.mem.Allocator) void {
         if (self.result_json) |value| allocator.free(value);
     }
 };
@@ -1454,7 +1627,7 @@ const SettingsSuccessClient = struct {
     saw_json_string_value: bool = false,
     saw_tui_theme: bool = false,
 
-    fn call(self: *SettingsSuccessClient, method: []const u8, params: []const u8) anyerror!SettingsTestResult {
+    pub fn call(self: *SettingsSuccessClient, method: []const u8, params: []const u8) anyerror!SettingsTestResult {
         try std.testing.expectEqualStrings(protocol.methods.config_set, method);
         const is_runtime = std.mem.indexOf(u8, params, "\"section\":\"runtime\"") != null;
         const is_tui = std.mem.indexOf(u8, params, "\"section\":\"tui\"") != null;
@@ -1468,7 +1641,7 @@ const SettingsSuccessClient = struct {
 };
 
 const SettingsTimeoutClient = struct {
-    fn call(_: *SettingsTimeoutClient, _: []const u8, _: []const u8) anyerror!SettingsTestResult {
+    pub fn call(_: *SettingsTimeoutClient, _: []const u8, _: []const u8) anyerror!SettingsTestResult {
         return error.RpcTimeout;
     }
 };
@@ -1668,7 +1841,7 @@ const ModelsTestClient = struct {
         if (self.import_params) |value| std.testing.allocator.free(value);
     }
 
-    fn call(self: *ModelsTestClient, method: []const u8, params: []const u8) anyerror!SettingsTestResult {
+    pub fn call(self: *ModelsTestClient, method: []const u8, params: []const u8) anyerror!SettingsTestResult {
         if (std.mem.eql(u8, method, protocol.methods.auth_import)) {
             self.import_params = try std.testing.allocator.dupe(u8, params);
             if (self.import_skipped) {
@@ -1706,6 +1879,11 @@ const ModelsTestClient = struct {
                 \\{"status":"ok","models":[{"id":"glm-5.5","context_length":128000}]}
             ) };
         }
+        if (std.mem.eql(u8, method, protocol.methods.models_list_all)) {
+            return .{ .result_json = try std.testing.allocator.dupe(u8,
+                \\{"active_provider":"zai","active_model":"glm-5.2","providers":[{"provider_id":"zai","base_url":"https://api.z.ai/v4","status":"ok","models":[{"id":"glm-5.2","owned_by":"zai","context_length":128000},{"id":"glm-5.5","owned_by":"zai","context_length":128000}]}]}
+            ) };
+        }
         if (std.mem.eql(u8, method, protocol.methods.provider_model_set) or
             std.mem.eql(u8, method, protocol.methods.agents_configure))
         {
@@ -1737,7 +1915,7 @@ test "settings cycles constrained entries with left/right arrows" {
     try std.testing.expect(state.takeConfigChanged());
 }
 
-test "models tab cycles models with left/right arrows and preserves tab nav" {
+test "models catalog cycles with up/down arrows and preserves tab nav" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const workspace = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
@@ -1758,13 +1936,16 @@ test "models tab cycles models with left/right arrows and preserves tab nav" {
     const models = &state.models_state.?;
     const Mode = @TypeOf(models.mode);
 
-    // Enter provider → models mode.
-    _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
-    try std.testing.expectEqual(Mode.models, models.mode);
+    // Default mode is catalog; catalog should have 2 entries (glm-5.2, glm-5.5).
+    try std.testing.expectEqual(Mode.catalog, models.mode);
+    try std.testing.expect(models.catalog != null);
+    try std.testing.expectEqual(@as(usize, 2), models.catalog.?.entries.len);
 
-    // Right arrow cycles within models (single model: wraps to itself).
-    try std.testing.expect(try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.right }, &client));
-    try std.testing.expectEqualStrings("glm-5.5", models.models.value());
+    // Down arrow advances catalog cursor (wraps at end).
+    try std.testing.expect(try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.down }, &client));
+    try std.testing.expectEqual(@as(usize, 1), models.catalog_cursor);
+    try std.testing.expect(try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.down }, &client));
+    try std.testing.expectEqual(@as(usize, 0), models.catalog_cursor); // wraps
 
     // Shift-Tab leaves the models overlay to the previous section.
     const shift_tab = tui.Key{ .codepoint = tui.Key.tab, .mods = .{ .shift = true } };
@@ -1792,6 +1973,10 @@ test "models tab passes the provenance source name to auth import for detected r
     try state.loadModels(&client);
     const models = &state.models_state.?;
     const Mode = @TypeOf(models.mode);
+
+    // Switch to providers mode (secondary) via P key.
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = 'p' }, &client);
+    try std.testing.expectEqual(Mode.providers, models.mode);
 
     // Providers: zai (index 0) + anthropic detected (index 1). The detected
     // row's picker value is the PROVENANCE source ("claude"), not the
@@ -1849,13 +2034,17 @@ test "models tab loads providers detected and agents and assigns to an agent" {
     const models = &state.models_state.?;
     const Mode = @TypeOf(models.mode);
 
+    // P → providers mode.
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = 'p' }, &client);
+    try std.testing.expectEqual(Mode.providers, models.mode);
+
     // Providers: zai (connected) + anthropic (detected).
     try std.testing.expectEqual(@as(usize, 2), models.providers.itemCount());
     try std.testing.expectEqualStrings("zai", models.providers.value());
 
-    // Enter on connected provider pulls models.
+    // Enter on connected provider pulls models → provider_models mode.
     try std.testing.expect(try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client));
-    try std.testing.expectEqual(Mode.models, models.mode);
+    try std.testing.expectEqual(Mode.provider_models, models.mode);
     try std.testing.expectEqual(@as(usize, 1), models.models.itemCount());
     try std.testing.expectEqualStrings("glm-5.5", models.models.value());
 
@@ -1872,8 +2061,8 @@ test "models tab loads providers detected and agents and assigns to an agent" {
     try std.testing.expect(std.mem.indexOf(u8, client.mutation.?, "\"agent_id\":\"recon\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, client.mutation.?, "\"provider_id\":\"zai\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, client.mutation.?, "\"model\":\"glm-5.5\"") != null);
-    // Returns to providers mode after committing.
-    try std.testing.expectEqual(Mode.providers, models.mode);
+    // Returns to catalog mode after committing.
+    try std.testing.expectEqual(Mode.catalog, models.mode);
 }
 
 test "models tab assigns to the active provider at cursor 0" {
@@ -1895,10 +2084,11 @@ test "models tab assigns to the active provider at cursor 0" {
     defer client.deinit();
     try state.loadModels(&client);
     const models = &state.models_state.?;
-
-    // providers → models → assign (cursor stays 0 = active provider).
+    // Catalog mode default. Enter on catalog entry (glm-5.2, index 0) → assign.
+    models.catalog_cursor = 0;
     _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
-    _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
+    const Mode = @TypeOf(models.mode);
+    try std.testing.expectEqual(Mode.assign, models.mode);
     try std.testing.expectEqual(@as(usize, 0), models.agents.cursor);
     _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
     try std.testing.expect(client.mutation != null);
@@ -1954,14 +2144,15 @@ test "models status transitions free the previous message" {
     const models = &state.models_state.?;
     const Mode = @TypeOf(models.mode);
 
-    // A status line exists, then every clearing transition (Esc back from
-    // models mode, a fresh pull) must free it — leaks fail the test
-    // allocator at deinit.
+    // A status line exists, then every clearing transition must free it —
+    // leaks fail the test allocator at deinit.
     try models.setStatus("previous message that must be freed");
+    // Enter on catalog entry → assign (clears status).
     _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
-    try std.testing.expectEqual(Mode.models, models.mode);
+    try std.testing.expectEqual(Mode.assign, models.mode);
+    // Esc from assign back to catalog (clears status).
     _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.escape }, &client);
-    try std.testing.expectEqual(Mode.providers, models.mode);
+    try std.testing.expectEqual(Mode.catalog, models.mode);
     try std.testing.expect(models.status_message == null);
 }
 
@@ -1986,13 +2177,16 @@ test "assign row names the provider the commit writes" {
     const models = &state.models_state.?;
     const Mode = @TypeOf(models.mode);
 
+    // P → providers mode.
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = 'p' }, &client);
+    try std.testing.expectEqual(Mode.providers, models.mode);
+
     // zai (active) + openrouter (connected, non-active). Pull models from
-    // openrouter: the assign row 0 must name openrouter — never the active
-    // provider zai — and the commit must write openrouter.
+    // openrouter: the commit must write openrouter as the provider.
     models.providers.cursor = 1;
     try std.testing.expectEqualStrings("openrouter", models.providers.value());
     _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
-    try std.testing.expectEqual(Mode.models, models.mode);
+    try std.testing.expectEqual(Mode.provider_models, models.mode);
     _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
     try std.testing.expectEqual(Mode.assign, models.mode);
     try std.testing.expect(std.mem.indexOf(u8, models.agents.label(), "openrouter") != null);
@@ -2022,8 +2216,8 @@ test "import reports skipped sources instead of claiming success" {
     try state.loadModels(&client);
     const models = &state.models_state.?;
 
-    // The detected row (index 1) triggers import; the collision guard
-    // skipped everything and the status must say so.
+    // Switch to providers mode, then trigger detected row import.
+    _ = try state.handleModelsKey(tui.Key{ .codepoint = 'p' }, &client);
     models.providers.cursor = 1;
     _ = try state.handleModelsKey(tui.Key{ .codepoint = tui.Key.enter }, &client);
     try std.testing.expect(models.status_message != null);

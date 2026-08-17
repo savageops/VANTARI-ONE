@@ -423,3 +423,135 @@ pub const State = struct {
         }
     }
 };
+
+/// Lightweight catalog entry for prefix-filtered palette display.
+/// All string fields are allocator-owned by the owning Catalog.
+pub const CatalogEntry = struct {
+    provider_id: []const u8,
+    id: []const u8,
+    context_length: ?u64,
+    is_active: bool,
+    reachable: bool,
+};
+
+/// Flat, allocator-owned view of all models across all providers.
+/// Suitable for prefix filtering in the composer palette.
+pub const Catalog = struct {
+    entries: []CatalogEntry,
+    active_provider: []const u8,
+    active_model: []const u8,
+
+    pub fn deinit(self: Catalog, allocator: std.mem.Allocator) void {
+        for (self.entries) |entry| {
+            allocator.free(entry.provider_id);
+            allocator.free(entry.id);
+        }
+        allocator.free(self.entries);
+        allocator.free(self.active_provider);
+        allocator.free(self.active_model);
+    }
+
+    /// Case-insensitive prefix match on `entry.id` OR `entry.provider_id`.
+    /// Unreachable entries (empty id) never match.
+    /// Returns allocator-owned indices into `self.entries`; caller must free.
+    pub fn filterPrefix(self: Catalog, allocator: std.mem.Allocator, prefix: []const u8) ![]usize {
+        var result: std.ArrayList(usize) = .{};
+        errdefer result.deinit(allocator);
+        for (self.entries, 0..) |entry, i| {
+            if (!entry.reachable) continue;
+            if (entry.id.len >= prefix.len and
+                std.ascii.eqlIgnoreCase(entry.id[0..prefix.len], prefix))
+            {
+                try result.append(allocator, i);
+                continue;
+            }
+            if (entry.provider_id.len >= prefix.len and
+                std.ascii.eqlIgnoreCase(entry.provider_id[0..prefix.len], prefix))
+            {
+                try result.append(allocator, i);
+            }
+        }
+        return result.toOwnedSlice(allocator);
+    }
+};
+
+/// Fetch a Catalog from the RPC `models/list-all` call.  The caller owns
+/// the returned value and must call `deinit` when done.
+pub fn fetchCatalog(allocator: std.mem.Allocator, client: anytype) !Catalog {
+    const call = try client.call(protocol.methods.models_list_all, "{}");
+    defer call.deinit(allocator);
+
+    if (call.error_json != null) return error.RpcRejected;
+    const result_json = call.result_json orelse return error.RpcFailed;
+
+    const parsed = try std.json.parseFromSlice(
+        protocol.ModelsAllListResult,
+        allocator,
+        result_json,
+        .{},
+    );
+    defer parsed.deinit();
+    const result = parsed.value;
+
+    // Count total entries to pre-allocate (one per reachable model, plus
+    // one placeholder per unreachable provider group).
+    var total: usize = 0;
+    for (result.providers) |group| {
+        if (std.mem.eql(u8, group.status, "ok")) {
+            total += group.models.len;
+        } else {
+            total += 1;
+        }
+    }
+
+    var entries = try allocator.alloc(CatalogEntry, total);
+    var count: usize = 0;
+    errdefer {
+        // Free everything allocated so far on error.
+        for (entries[0..count]) |entry| {
+            allocator.free(entry.provider_id);
+            allocator.free(entry.id);
+        }
+        allocator.free(entries);
+    }
+
+    for (result.providers) |group| {
+        const reachable = std.mem.eql(u8, group.status, "ok");
+        if (!reachable) {
+            // Unreachable group: one placeholder entry with empty id.
+            entries[count] = .{
+                .provider_id = try allocator.dupe(u8, group.provider_id),
+                .id = "",
+                .context_length = null,
+                .is_active = false,
+                .reachable = false,
+            };
+            count += 1;
+            continue;
+        }
+        for (group.models) |model| {
+            const id = try allocator.dupe(u8, model.id);
+            const pid = try allocator.dupe(u8, group.provider_id);
+            errdefer {
+                allocator.free(id);
+                allocator.free(pid);
+            }
+            const is_active = std.mem.eql(u8, model.id, result.active_model) and
+                std.mem.eql(u8, group.provider_id, result.active_provider);
+            entries[count] = .{
+                .provider_id = pid,
+                .id = id,
+                .context_length = model.context_length,
+                .is_active = is_active,
+                .reachable = true,
+            };
+            count += 1;
+        }
+    }
+
+    return .{
+        .entries = try allocator.realloc(entries, count),
+        .active_provider = try allocator.dupe(u8, result.active_provider),
+        .active_model = try allocator.dupe(u8, result.active_model),
+    };
+}
