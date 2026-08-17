@@ -92,6 +92,38 @@ pub const TurnTerminalInput = struct {
     cost_total_usd: ?f64 = null,
 };
 
+pub const prompt_mode_changed_event_type = "prompt_mode_changed";
+
+pub const PromptModeChanged = struct {
+    schema: []const u8 = "var1.prompt_mode_changed.v1",
+    from: []const u8,
+    to: []const u8,
+    reason: []const u8,
+};
+
+pub const max_prompt_mode_reason_bytes: usize = 240;
+
+pub fn serializePromptModeChanged(
+    allocator: std.mem.Allocator,
+    from_label: []const u8,
+    to_label: []const u8,
+    reason: []const u8,
+) ![]u8 {
+    const bounded_reason = if (reason.len > max_prompt_mode_reason_bytes)
+        reason[0..max_prompt_mode_reason_bytes]
+    else
+        reason;
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"schema\":\"var1.prompt_mode_changed.v1\",\"from\":{f},\"to\":{f},\"reason\":{f}}}",
+        .{
+            std.json.fmt(from_label, .{}),
+            std.json.fmt(to_label, .{}),
+            std.json.fmt(bounded_reason, .{}),
+        },
+    );
+}
+
 pub const TurnTerminal = struct {
     schema: []const u8 = "var1.turn_terminal.v1",
     run_seq: u64,

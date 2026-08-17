@@ -102,7 +102,7 @@ pub const PromptMode = enum {
         return switch (self) {
             .orchestrate => "Coordinate the request as the primary agent. Start with the eligible agent snapshot when collaboration may help; delegate artifact-heavy work, ask bounded questions, and keep the work moving through meaningful checkpoints.",
             .build => "Bias toward direct implementation. Inspect the canonical owner, make the smallest durable change, run proof, and keep the operator informed. Delegate only independent work.",
-            .@"align" => "Resolve material ambiguity before irreversible work. When preference discovery is needed, ask concise multiple-choice questions in bounded rounds, using 12 to 60 questions when the operator requests deep alignment. Otherwise state assumptions and proceed.",
+            .@"align" => "Extract the operator's intent, the idea behind the request, what they are thinking, the outcome they imagine, and the constraints they carry, to reach a precise understanding of what exactly the operator wants before any execution. Ask concise multiple-choice questions through ask_user in bounded rounds, using 12 to 60 questions when the operator requests deep alignment; never interrogate beyond what changes the plan. Distill what you learned into a PROFILE (goals, constraints, preferences, environment, definition of done) and KEYWORDS (the operator's exact domain vocabulary and names), then state them back to the operator in one visible summary they can correct before execution. Alignment exists when being right the first time matters — surface every assumption that could break the plan. Once the profile holds, call set_prompt_mode to hand off; typically align then plan then build or orchestrate. Do not begin irreversible execution from align.",
             .plan => "Turn the request into bounded executable tickets. Name the owner, dependencies, acceptance proof, and next action, then keep the plan connected to delivery instead of using planning as work avoidance.",
         };
     }
@@ -437,4 +437,17 @@ test "prompt builder enforces the estimated system prompt budget" {
             .{ .prompt_budget_tokens = 64 },
         ),
     );
+}
+
+
+test "align instruction contains extraction contract and does not leak into other lenses" {
+    const align_inst = PromptMode.@"align".instruction();
+    try std.testing.expect(std.mem.indexOf(u8, align_inst, "PROFILE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, align_inst, "KEYWORDS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, align_inst, "set_prompt_mode") != null);
+    try std.testing.expect(std.mem.indexOf(u8, align_inst, "ask_user") != null);
+    // Other lenses must not contain set_prompt_mode — handoff is align-only.
+    try std.testing.expect(std.mem.indexOf(u8, PromptMode.orchestrate.instruction(), "set_prompt_mode") == null);
+    try std.testing.expect(std.mem.indexOf(u8, PromptMode.build.instruction(), "set_prompt_mode") == null);
+    try std.testing.expect(std.mem.indexOf(u8, PromptMode.plan.instruction(), "set_prompt_mode") == null);
 }

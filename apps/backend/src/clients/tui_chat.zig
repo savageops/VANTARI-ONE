@@ -297,6 +297,7 @@ const ChatState = struct {
 
     fn cyclePromptMode(self: *ChatState) void {
         self.prompt_mode = self.prompt_mode.next();
+        self.footer_telemetry_revision +%= 1;
     }
 
     fn clearAutocomplete(self: *ChatState) void {
@@ -993,6 +994,41 @@ const ChatState = struct {
         if (std.mem.eql(u8, event_type, "buffer_preview")) {
             if (self.log_level == .silent) return false;
             try self.setBufferPreview(message);
+            return true;
+        }
+        if (std.mem.eql(u8, event_type, "prompt_mode_changed")) {
+            const ModeEvent = struct {
+                schema: []const u8 = "",
+                from: []const u8 = "",
+                to: []const u8 = "",
+                reason: []const u8 = "",
+            };
+            var parsed = std.json.parseFromSlice(ModeEvent, self.allocator, message, .{
+                .ignore_unknown_fields = true,
+            }) catch return true;
+            defer parsed.deinit();
+            if (!std.mem.eql(u8, parsed.value.schema, "var1.prompt_mode_changed.v1")) return true;
+            const new_mode = prompt_modes.PromptMode.fromString(parsed.value.to) orelse return true;
+            self.prompt_mode = new_mode;
+            self.footer_telemetry_revision +%= 1;
+            var bounded_reason = parsed.value.reason;
+            if (bounded_reason.len > 160) {
+                var byte_end: usize = 0;
+                var cp_count: usize = 0;
+                while (byte_end < bounded_reason.len and cp_count < 160) {
+                    const byte_len = std.unicode.utf8ByteSequenceLength(bounded_reason[byte_end]) catch 1;
+                    byte_end += @min(@as(usize, byte_len), bounded_reason.len - byte_end);
+                    cp_count += 1;
+                }
+                bounded_reason = bounded_reason[0..byte_end];
+            }
+            const line = try std.fmt.allocPrint(
+                self.allocator,
+                "mode: {s} \xe2\x86\x92 {s} \xe2\x80\x94 {s}",
+                .{ parsed.value.from, parsed.value.to, bounded_reason },
+            );
+            defer self.allocator.free(line);
+            try self.add(.system, line);
             return true;
         }
         if (std.mem.eql(u8, event_type, "user_message_queued")) return true;
@@ -6390,8 +6426,7 @@ test "tui question requests share one crash-safe panel in every prompt mode" {
         state.last_event_seq = 0;
         try std.testing.expect(try state.recordProgressEvent(1, "input_requested", request));
         try std.testing.expect(state.input_state != null);
-        try std.testing.expectEqual(@as(usize, 2), state.input_state.?.questions.items.len);
-        try std.testing.expectEqual(@as(u16, 6), state.input_state.?.panelHeight(20));
+        try std.testing.expectEqual(@as(u16, 7), state.input_state.?.panelHeight(20));
         state.clearInputRequest();
     }
 
@@ -6525,7 +6560,10 @@ test "tui question key routing stays inside the panel in every prompt mode" {
         try std.testing.expect(try state.recordProgressEvent(1, "input_requested", request));
         state.handleQuestionKey(down_key, &input);
         try std.testing.expect(state.input_state != null);
-        try std.testing.expectEqual(@as(usize, 1), state.input_state.?.question_index);
+        // Down moves the option cursor on the single-question view; the
+        // question stays until Tab / ctrl+e advance it.
+        try std.testing.expectEqual(@as(usize, 0), state.input_state.?.question_index);
+        try std.testing.expectEqual(@as(usize, 1), state.input_state.?.option_cursor);
         state.handleQuestionKey(escape_key, &input);
         try std.testing.expect(state.input_state == null);
     }
@@ -6779,4 +6817,102 @@ test "tui command palette preserves slash compatibility and caps its popover" {
     try std.testing.expectEqual(@as(usize, 5), state.autocomplete_cursor);
     try std.testing.expectEqual(@as(usize, 1), state.autocomplete_scroll);
     try std.testing.expect(state.selectedAutocompleteName() != null);
+}
+test "tui prompt_mode_changed event updates state and adds system row" {
+    var state = ChatState{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .workspace_root = ".",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+    state.last_event_seq = 0;
+
+    // (a) Valid event: align -> plan
+    const payload = "{\"schema\":\"var1.prompt_mode_changed.v1\",\"from\":\"align\",\"to\":\"plan\",\"reason\":\"child agents completed the build\"}";
+    const changed = try state.applyProgressEvent("prompt_mode_changed", payload);
+    try std.testing.expect(changed);
+    try std.testing.expectEqual(prompt_modes.PromptMode.plan, state.prompt_mode);
+    try std.testing.expectEqual(@as(usize, 1), state.messages.items.len);
+    try std.testing.expectEqual(Role.system, state.messages.items[0].role);
+    try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "align") != null);
+    try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "plan") != null);
+    try std.testing.expect(std.mem.indexOf(u8, state.messages.items[0].text, "child agents completed the build") != null);
+
+    // (b) Wrong schema: no change
+    state.prompt_mode = .orchestrate;
+    for (state.messages.items) |msg| std.testing.allocator.free(msg.text);
+    state.messages.clearRetainingCapacity();
+    _ = try state.applyProgressEvent("prompt_mode_changed", "{\"schema\":\"var1.prompt_mode_changed.v2\",\"from\":\"orchestrate\",\"to\":\"build\",\"reason\":\"test\"}");
+    try std.testing.expectEqual(prompt_modes.PromptMode.orchestrate, state.prompt_mode);
+    try std.testing.expectEqual(@as(usize, 0), state.messages.items.len);
+
+    // (b) Unknown mode label: no change
+    _ = try state.applyProgressEvent("prompt_mode_changed", "{\"schema\":\"var1.prompt_mode_changed.v1\",\"from\":\"build\",\"to\":\"nonexistent\",\"reason\":\"test\"}");
+    try std.testing.expectEqual(prompt_modes.PromptMode.orchestrate, state.prompt_mode);
+    try std.testing.expectEqual(@as(usize, 0), state.messages.items.len);
+
+    // (c) Footer meta shows new mode label after event
+    state.prompt_mode = .build;
+    for (state.messages.items) |msg| std.testing.allocator.free(msg.text);
+    state.messages.clearRetainingCapacity();
+    state.last_event_seq = 0;
+    const footer = try formatFooterMetaWithPool(
+        std.testing.allocator,
+        "model",
+        "",
+        "",
+        state.prompt_mode,
+        "READY",
+        null,
+        0,
+        0,
+        0,
+        false,
+        false,
+        0,
+        .{},
+        null,
+        80,
+    );
+    defer std.testing.allocator.free(footer);
+    try std.testing.expect(std.mem.indexOf(u8, footer, "build") != null);
+}
+
+test "tui prompt_mode_changed is additive and does not touch input_state" {
+    var state = ChatState{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .workspace_root = ".",
+        .model = "model",
+        .base_url = "base",
+        .auth_provider = "provider",
+        .plan = "plan",
+        .subscription_status = "active",
+    };
+    defer state.deinit();
+    state.last_event_seq = 0;
+
+    const request = "{\"request_id\":\"call-safety\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Go\",\"options\":[{\"id\":\"a\",\"label\":\"Yes\"},{\"id\":\"b\",\"label\":\"No\"}]}]}";
+    // input_requested sets up the panel
+    _ = try state.applyProgressEvent("input_requested", request);
+    try std.testing.expect(state.input_state != null);
+
+    // prompt_mode_changed must not clear it
+    _ = try state.applyProgressEvent("prompt_mode_changed", "{\"schema\":\"var1.prompt_mode_changed.v1\",\"from\":\"orchestrate\",\"to\":\"align\",\"reason\":\"build phase done\"}");
+    try std.testing.expect(state.input_state != null);
+    try std.testing.expectEqual(prompt_modes.PromptMode.@"align", state.prompt_mode);
+
+    // The system row was appended alongside the panel
+    var system_count: usize = 0;
+    for (state.messages.items) |msg| {
+        if (msg.role == .system) system_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), system_count);
+    try std.testing.expect(std.mem.indexOf(u8, state.messages.items[state.messages.items.len - 1].text, "orchestrate") != null);
+    try std.testing.expect(std.mem.indexOf(u8, state.messages.items[state.messages.items.len - 1].text, "align") != null);
 }

@@ -968,17 +968,6 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
     var parsed = try parseParams(Args, server.allocator, params);
     defer parsed.deinit();
 
-    const prompt_mode = if (parsed.value.prompt_mode) |label|
-        prompts.PromptMode.fromString(label) orelse return Error.InvalidParams
-    else
-        prompts.PromptMode.orchestrate;
-    var prompt_mode_override = config_file.loadPromptModeOverride(
-        server.allocator,
-        server.config.workspace_root,
-        prompt_mode.label(),
-    ) catch return Error.InvalidParams;
-    defer prompt_mode_override.deinit(server.allocator);
-
     // Extract optional u64 overrides manually — std.json's optional-u64
     // static parser overflows at comptime (f64 cannot represent maxInt(u64)).
     const context_window_override: ?u64 = if (params) |v| blk: {
@@ -994,6 +983,33 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
         return Error.SessionNotFound;
     };
     defer session.deinit(server.allocator);
+
+    // Resolve prompt_mode after the session record is available so we can
+    // fall back to the stored mode when the param is omitted.
+    const prompt_mode = if (parsed.value.prompt_mode) |label|
+        prompts.PromptMode.fromString(label) orelse return Error.InvalidParams
+    else if (session.prompt_mode) |stored_label|
+        prompts.PromptMode.fromString(stored_label) orelse prompts.PromptMode.orchestrate
+    else
+        prompts.PromptMode.orchestrate;
+
+    // Persist explicit mode only when it differs from the stored value.
+    if (parsed.value.prompt_mode) |label| {
+        const changed = if (session.prompt_mode) |stored| !std.mem.eql(u8, stored, label) else true;
+        if (changed) {
+            const previous = store.setSessionPromptMode(server.allocator, server.config.workspace_root, &session, label) catch return Error.ExecutionFailed;
+            if (previous) |value| server.allocator.free(value);
+        }
+    }
+
+    // Load prompt-mode config overlay (provider/model/thinking). Must follow
+    // resolution so the correct label is used for the override lookup.
+    var prompt_mode_override = config_file.loadPromptModeOverride(
+        server.allocator,
+        server.config.workspace_root,
+        prompt_mode.label(),
+    ) catch return Error.InvalidParams;
+    defer prompt_mode_override.deinit(server.allocator);
 
     try server.runtime.ensureSession(server.allocator, session.id, parsed.value.enable_agent_tools);
     try reconcileStaleRunningSession(server, &session);
@@ -1176,6 +1192,10 @@ fn handleSessionSend(server: *Server, params: ?std.json.Value) ![]u8 {
             .input_service = .{
                 .context = server,
                 .requestFn = onInputRequest,
+            },
+            .prompt_mode_service = .{
+                .context = server,
+                .setFn = onPromptModeSet,
             },
         },
         .session_id = session.id,
@@ -2169,6 +2189,43 @@ fn onInputRequest(
     return server.input_broker.wait(allocator, session_id, request_id);
 }
 
+/// Host-side PromptModeService: durably persist the mode change, then emit
+/// the prompt_mode_changed event for the session transcript and live clients.
+fn onPromptModeSet(
+    ctx: ?*anyopaque,
+    allocator: std.mem.Allocator,
+    session_id: []const u8,
+    mode_label: []const u8,
+    reason: []const u8,
+) anyerror!void {
+    const server: *Server = @ptrCast(@alignCast(ctx.?));
+
+    var session = store.readSessionRecord(allocator, server.config.workspace_root, session_id) catch
+        return Error.SessionNotFound;
+    defer session.deinit(allocator);
+
+    const current_label = session.prompt_mode orelse prompts.PromptMode.orchestrate.label();
+    // No-op if unchanged — skip the write and event entirely.
+    if (std.mem.eql(u8, current_label, mode_label)) return;
+    // The mutator frees the stored label, so it returns the previous value as
+    // owned memory; reading through the old slice after the call is a
+    // use-after-free that only manifests in long-lived server processes.
+    const previous_label = try store.setSessionPromptMode(allocator, server.config.workspace_root, &session, mode_label);
+    defer if (previous_label) |value| allocator.free(value);
+    const from_label = previous_label orelse prompts.PromptMode.orchestrate.label();
+
+    const message = protocol_events.serializePromptModeChanged(allocator, from_label, mode_label, reason) catch return;
+    defer allocator.free(message);
+
+    server.recordAndEmitSessionEvent(
+        session_id,
+        protocol_events.prompt_mode_changed_event_type,
+        message,
+        "info",
+        std.time.milliTimestamp(),
+    ) catch {};
+}
+
 fn makeSessionSummary(session: types.SessionRecord, output: ?[]const u8) protocol_types.SessionSummary {
     return .{
         .session_id = session.id,
@@ -2182,6 +2239,7 @@ fn makeSessionSummary(session: types.SessionRecord, output: ?[]const u8) protoco
         .full_access_mode = session.full_access_mode,
         .execution_receipt = if (session.execution_receipt) |receipt| receipt.*.view() else null,
         .failure_reason = session.failure_reason,
+        .prompt_mode = session.prompt_mode,
         .created_at_ms = session.created_at_ms,
         .updated_at_ms = session.updated_at_ms,
     };
@@ -2861,21 +2919,76 @@ test "processRequest returns method-not-found errors for unknown methods" {
     try std.testing.expect(std.mem.indexOf(u8, response.?, "\"code\":-32601") != null);
 }
 
-test "session/send rejects unknown prompt modes before session execution" {
-    var server = makeTestServer();
-    defer server.deinit();
+test "session/send rejects unknown prompt modes after session read" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
 
-    const payload = try std.testing.allocator.dupe(
-        u8,
-        "{\"jsonrpc\":\"2.0\",\"id\":\"req-prompt-mode\",\"method\":\"session/send\",\"params\":{\"session_id\":\"missing\",\"prompt_mode\":\"unknown\"}}",
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    var stdout_capture = try attachTestStdout(&tmp, &server, "prompt-mode-reject-stdout.bin");
+    defer stdout_capture.close();
+
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "test prompt", .{});
+    defer session.deinit(std.testing.allocator);
+
+    const payload = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-prompt-mode\",\"method\":\"session/send\",\"params\":{{\"session_id\":\"{s}\",\"prompt_mode\":\"unknown\"}}}}",
+        .{session.id},
     );
     defer std.testing.allocator.free(payload);
+
     const response = try processRequest(&server, payload);
     defer if (response) |value| std.testing.allocator.free(value);
 
     try std.testing.expect(response != null);
     try std.testing.expect(std.mem.indexOf(u8, response.?, "\"id\":\"req-prompt-mode\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, response.?, "\"code\":-32602") != null);
+}
+
+test "session/send falls back to stored prompt_mode when param is omitted" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const workspace_root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(workspace_root);
+
+    var config = try makeTestConfig(std.testing.allocator, workspace_root);
+    defer config.deinit(std.testing.allocator);
+
+    var server = makeTestServer();
+    server.config = &config;
+    defer server.deinit();
+    var stdout_capture = try attachTestStdout(&tmp, &server, "prompt-mode-fallback-stdout.bin");
+    defer stdout_capture.close();
+
+    // Create session and persist a build prompt_mode.
+    var session = try store.initSessionWithOptions(std.testing.allocator, workspace_root, "mode test", .{});
+    defer session.deinit(std.testing.allocator);
+    if (try store.setSessionPromptMode(std.testing.allocator, workspace_root, &session, "build")) |value| std.testing.allocator.free(value);
+
+    // Send without prompt_mode param — should use stored "build".
+    // The turn will fail at provider resolution (no real provider), but the
+    // prompt_mode resolution itself must not reject before that point.
+    const payload = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":\"req-fallback\",\"method\":\"session/send\",\"params\":{{\"session_id\":\"{s}\"}}}}",
+        .{session.id},
+    );
+    defer std.testing.allocator.free(payload);
+
+    // Verify the session still has "build" mode persisted after the call.
+    var reloaded = try store.readSessionRecord(std.testing.allocator, workspace_root, session.id);
+    defer reloaded.deinit(std.testing.allocator);
+    try std.testing.expect(reloaded.prompt_mode != null);
+    try std.testing.expectEqualStrings("build", reloaded.prompt_mode.?);
 }
 
 test "processRequest treats id-less initialize requests as notifications" {

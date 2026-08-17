@@ -87,6 +87,30 @@ pub const InputService = struct {
     }
 };
 
+/// Service for agent-driven prompt-mode switching. The host wires the
+/// implementation; the kernel tool calls through this vtable.
+pub const PromptModeService = struct {
+    context: ?*anyopaque = null,
+    setFn: ?*const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        session_id: []const u8,
+        mode_label: []const u8,
+        reason: []const u8,
+    ) anyerror!void = null,
+
+    pub fn set(
+        self: PromptModeService,
+        allocator: std.mem.Allocator,
+        session_id: []const u8,
+        mode_label: []const u8,
+        reason: []const u8,
+    ) !void {
+        const callback = self.setFn orelse return Error.ToolUnavailable;
+        return callback(self.context, allocator, session_id, mode_label, reason);
+    }
+};
+
 pub const CommandOutput = struct {
     exit_code: i32,
     stdout: []u8,
@@ -589,6 +613,7 @@ pub const ExecutionContext = struct {
     parent_session_id: ?[]const u8 = null,
     agent_service: ?AgentService = null,
     input_service: InputService = .{},
+    prompt_mode_service: ?PromptModeService = null,
     command_probe: ?CommandProbe = null,
     tool_events: ?ToolEventSink = null,
     file_inspection_ledger: ?*FileInspectionLedger = null,

@@ -25,6 +25,7 @@ pub const skills = @import("builtin/skills.zig");
 const agents = @import("builtin/agents.zig");
 const agent_message = @import("builtin/agent_message.zig");
 const ask_user = @import("builtin/ask_user.zig");
+const set_prompt_mode = @import("builtin/set_prompt_mode.zig");
 
 pub const max_error_arguments_json_echo_bytes: usize = 4096;
 
@@ -50,7 +51,7 @@ pub const DelegationScope = module.DelegationScope;
 
 const agent_tool_definitions = agents.definitions;
 const collaboration_tool_definitions = agent_message.definitions;
-const interactive_tool_definitions = ask_user.definitions;
+const interactive_tool_definitions = ask_user.definitions ++ set_prompt_mode.definitions;
 const agent_and_collaboration_tool_definitions = agent_tool_definitions ++ collaboration_tool_definitions;
 const agent_collaboration_interactive_tool_definitions = agent_and_collaboration_tool_definitions ++ interactive_tool_definitions;
 const collaboration_interactive_tool_definitions = collaboration_tool_definitions ++ interactive_tool_definitions;
@@ -479,6 +480,9 @@ pub fn executeWithRunner(
     if (ask_user.handles(tool_call.name)) {
         return ask_user.execute(allocator, tool_execution_context, tool_call.arguments_json, tool_call.id);
     }
+    if (set_prompt_mode.handles(tool_call.name)) {
+        return set_prompt_mode.execute(allocator, tool_execution_context, tool_call.arguments_json, tool_call.id);
+    }
     if (dap_tool.handles(tool_call.name)) {
         return dap_tool.execute(allocator, tool_execution_context, tool_call.name, tool_call.arguments_json, runner);
     }
@@ -498,7 +502,7 @@ fn ensureToolAllowed(execution_context: ExecutionContext, tool_name: []const u8)
         return Error.CapabilityDenied;
     }
     if (execution_context.orchestrator_only) {
-        if (!agents.handles(tool_name) and !agent_message.handles(tool_name) and !ask_user.handles(tool_name)) return Error.CapabilityDenied;
+        if (!agents.handles(tool_name) and !agent_message.handles(tool_name) and !ask_user.handles(tool_name) and !set_prompt_mode.handles(tool_name)) return Error.CapabilityDenied;
         if (agents.handles(tool_name) and !std.mem.eql(u8, tool_name, "agents")) {
             const ledger = execution_context.agent_eligibility_ledger orelse return Error.AgentEligibilityRequired;
             if (!ledger.hasCurrent()) return Error.AgentEligibilityRequired;
@@ -529,7 +533,7 @@ pub fn toolClassForName(tool_name: []const u8) ?profile_contract.ToolClass {
         std.mem.eql(u8, tool_name, "update_session_summary")) return .file_write;
     if (std.mem.eql(u8, tool_name, "shell_exec") or std.mem.eql(u8, tool_name, "eval") or dap_tool.handles(tool_name)) return .command;
     if (std.mem.eql(u8, tool_name, "schedule_job")) return .scheduling;
-    if (ask_user.handles(tool_name)) return .interaction;
+    if (ask_user.handles(tool_name) or set_prompt_mode.handles(tool_name)) return .interaction;
     if (agent_message.handles(tool_name)) return .collaboration;
     if (agents.handles(tool_name)) return .delegation;
     if (workspace_state_tools.handles(tool_name)) return .workspace_state;

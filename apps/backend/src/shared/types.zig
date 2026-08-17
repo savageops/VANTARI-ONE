@@ -330,7 +330,10 @@ pub const SessionRecord = struct {
     /// clean Zig 0.15.1 ReleaseFast builds. Pointer presence is the stable
     /// discriminant; the receipt itself remains immutable session state.
     execution_receipt: ?*ExecutionReceipt = null,
-    failure_reason: ?[]u8 = null,
+    /// Agent-driven prompt mode override. Null means the TUI/CLI default
+    /// applies. Set only by the `set_prompt_mode` tool or `handleSessionSend`.
+    prompt_mode: ?[]const u8 = null,
+    failure_reason: ?[]const u8 = null,
     created_at_ms: i64,
     updated_at_ms: i64,
 
@@ -345,6 +348,7 @@ pub const SessionRecord = struct {
             value.deinit(allocator);
             allocator.destroy(value);
         }
+        if (self.prompt_mode) |value| allocator.free(value);
         if (self.failure_reason) |value| allocator.free(value);
     }
 };

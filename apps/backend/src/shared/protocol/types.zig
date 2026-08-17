@@ -77,6 +77,7 @@ pub const SessionSummary = struct {
     full_access_mode: bool = false,
     execution_receipt: ?types.ExecutionReceiptView = null,
     failure_reason: ?[]const u8 = null,
+    prompt_mode: ?[]const u8 = null,
     created_at_ms: i64,
     updated_at_ms: i64,
 };

@@ -297,6 +297,7 @@ pub fn runPromptWithOptions(
     var executed_tool_calls: usize = 0;
     var provider_retries: u8 = 0;
     const max_provider_retries: u8 = 4;
+    var active_prompt_mode: prompts.PromptMode = options.prompt_mode;
 
     var step: usize = 0;
     while (step < config.max_steps) : (step += 1) {
@@ -328,7 +329,7 @@ pub fn runPromptWithOptions(
                     session,
                     &messages,
                     messages.items.len,
-                    options.prompt_mode,
+                    active_prompt_mode,
                 );
             }
         }
@@ -382,7 +383,7 @@ pub fn runPromptWithOptions(
             session,
             &messages,
             base_message_count,
-            options.prompt_mode,
+            active_prompt_mode,
         ) catch |err| {
             try failSession(allocator, config.workspace_root, options.hooks, &session, run_seq, .failed, provider.failureDiagnosticForError(err), run_start_ms);
             return err;
@@ -420,7 +421,7 @@ pub fn runPromptWithOptions(
             &messages,
             &base_message_count,
             options.transport,
-            options.prompt_mode,
+            active_prompt_mode,
         ) catch |err| {
             if (err == Error.StreamRuleMatched) {
                 provider_retries = 0;
@@ -676,6 +677,24 @@ pub fn runPromptWithOptions(
                     std.time.milliTimestamp(),
                 );
             }
+            // Refresh active_prompt_mode from the durable session record if
+            // a tool (set_prompt_mode) changed it mid-batch. This ensures
+            // subsequent rebuildProviderBaseMessages and the next provider turn
+            // observe the new mode without re-resolving provider or model.
+            if (store.readSessionRecord(allocator, config.workspace_root, session.id)) |fresh| {
+                defer fresh.deinit(allocator);
+                if (fresh.prompt_mode) |label| {
+                    if (prompts.PromptMode.fromString(label)) |resolved| {
+                        if (resolved != active_prompt_mode) {
+                            active_prompt_mode = resolved;
+                            // In root posture, mode change may alter orchestration gating.
+                            if (root_agent_run) {
+                                execution_context.orchestrator_only = active_prompt_mode.enforcesOrchestration();
+                            }
+                        }
+                    }
+                }
+            } else |_| {}
 
             if (requires_child_supervision) {
                 const agent_service = execution_context.agent_service orelse return tools.Error.AgentServiceUnavailable;
@@ -700,7 +719,7 @@ pub fn runPromptWithOptions(
                         session,
                         &messages,
                         messages.items.len,
-                        options.prompt_mode,
+                        active_prompt_mode,
                     );
                     continue;
                 }
@@ -724,7 +743,7 @@ pub fn runPromptWithOptions(
                         session,
                         &messages,
                         messages.items.len,
-                        options.prompt_mode,
+                        active_prompt_mode,
                     );
                     const after_convergence = try agent_service.waitParent(session.id, 0);
                     requires_child_supervision = !after_convergence.terminal or after_convergence.ready;
@@ -802,7 +821,7 @@ pub fn runPromptWithOptions(
                     session,
                     &messages,
                     messages.items.len,
-                    options.prompt_mode,
+                    active_prompt_mode,
                 );
                 continue;
             }
@@ -867,7 +886,7 @@ pub fn runPromptWithOptions(
                 session,
                 &messages,
                 messages.items.len,
-                options.prompt_mode,
+                active_prompt_mode,
             );
             continue;
         }

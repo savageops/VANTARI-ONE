@@ -1,5 +1,33 @@
 # Execution Log
 
+## 2026-08-17 - Align-mode extraction lens + agent-driven mode switching + single-question TUI
+
+**Outcome:** Alignment is now a brain-extraction contract with a visible
+agent-owned mode transition, and the question surface gives each question the
+full frame. Receipt: `091-align-mode-agent-mode-switching.md`.
+
+- Align lens names the goal (extract intent/idea/thought process/constraints),
+  mandates PROFILE + KEYWORDS with a correctable summary, and hands off via
+  `set_prompt_mode` — typically align → plan → build/orchestrate.
+- `SessionRecord.prompt_mode` is the durable mode owner; explicit sends
+  persist, omitted sends follow the record. The new `set_prompt_mode` root
+  tool (all four modes) validates, persists, and emits
+  `var1.prompt_mode_changed.v1`; the executor reconciles lens + catalog
+  gating from the durable record after the executing tool batch, so the
+  switch lands on the next provider call of the SAME run.
+- TUI: one question at a time, vertical options, Ctrl+Q/E wrap cycling,
+  full-context wrapped prompt; the switch event flips the footer label and
+  appends one bounded system row.
+- Two live-proof bugs fixed at the source: a use-after-free in the mode
+  mutator's caller (deterministic ReleaseFast segfault; the mutator now
+  returns the previous label as owned memory) and a stale-record clobber in
+  terminal settlement (status/failure/prompt-mode mutators are now
+  field-surgical read-modify-write). Footer cache gained prompt_mode in its
+  dirty key via the telemetry revision.
+- Gate 19/19, 2,258/2,262; live PTY proof on installed `b7b8d083`: modal,
+  cycling, submit, event with agent-authored reason, footer flip, and mode
+  surviving cancellation in session.json.
+
 ## 2026-08-17 - One-family model discovery + OAuth token refresh
 
 **Outcome:** ACP + models.dev + codex-rs research distilled into one

@@ -133,11 +133,21 @@ pub const State = struct {
 
     pub fn panelHeight(self: *const State, root_height: u16) u16 {
         if (root_height == 0 or self.questions.items.len == 0) return 0;
-        const needed: u16 = @intCast(@min(
-            self.questions.items.len + 4 + @as(usize, if (self.editing_other and !self.confirming) 1 else 0),
-            @as(usize, std.math.maxInt(u16)),
-        ));
-        return @min(root_height, @max(@as(u16, 6), needed));
+        const active = self.questions.items[@min(self.question_index, self.questions.items.len - 1)];
+        // header + divider + prompt (at least 1 row) + blank + options + descriptions + footer
+        const prompt_rows: usize = 1; // conservative minimum
+        const option_rows = active.options.items.len;
+        const desc_rows: usize = blk: {
+            var c: usize = 0;
+            for (active.options.items) |opt| {
+                if (opt.description != null) c += 1;
+            }
+            break :blk c;
+        };
+        const editing_rows: usize = if (self.editing_other and !self.confirming) 1 else 0;
+        const needed: usize = 2 + prompt_rows + 1 + option_rows + desc_rows + editing_rows + 1;
+        const clamped: u16 = @intCast(@min(needed, @as(usize, std.math.maxInt(u16))));
+        return @min(root_height, @max(@as(u16, 6), clamped));
     }
 
     pub fn handleKey(self: *State, key: tui.Key, input: *TextInput) !Action {
@@ -190,25 +200,54 @@ pub const State = struct {
 
         const question = &self.questions.items[self.question_index];
         if (key.matches(tui.Key.escape, .{})) return .cancel;
-        if (key.matches(tui.Key.tab, .{ .shift = true }) or key.matches(tui.Key.up, .{})) {
-            self.moveQuestion(-1);
+
+        // ctrl+q / ctrl+e: wrap-cycle questions without entering confirming
+        if (key.matches('q', .{ .ctrl = true })) {
+            self.question_index = if (self.question_index > 0)
+                self.question_index - 1
+            else
+                self.questions.items.len - 1;
+            self.option_cursor = 0;
+            self.confirm_error = false;
+            return .consumed;
+        }
+        if (key.matches('e', .{ .ctrl = true })) {
+            self.question_index = (self.question_index + 1) % self.questions.items.len;
+            self.option_cursor = 0;
+            self.confirm_error = false;
+            return .consumed;
+        }
+
+        if (key.matches(tui.Key.tab, .{ .shift = true })) {
+            if (self.question_index > 0) {
+                self.question_index -= 1;
+                self.option_cursor = 0;
+                self.confirm_error = false;
+            }
             return .consumed;
         }
         if (key.matches(tui.Key.tab, .{})) {
             if (self.question_index + 1 < self.questions.items.len) {
-                self.moveQuestion(1);
+                self.question_index += 1;
+                self.option_cursor = 0;
             } else {
                 self.confirming = true;
                 self.confirm_error = false;
             }
             return .consumed;
         }
-        if (key.matches(tui.Key.left, .{})) {
+
+        // Up/Down/Left/Right: move option cursor (clamped)
+        if (key.matches(tui.Key.up, .{})) {
             if (self.option_cursor > 0) self.option_cursor -= 1;
             return .consumed;
         }
         if (key.matches(tui.Key.down, .{})) {
-            self.moveQuestion(1);
+            if (self.option_cursor + 1 < question.options.items.len) self.option_cursor += 1;
+            return .consumed;
+        }
+        if (key.matches(tui.Key.left, .{})) {
+            if (self.option_cursor > 0) self.option_cursor -= 1;
             return .consumed;
         }
         if (key.matches(tui.Key.right, .{})) {
@@ -269,22 +308,6 @@ pub const State = struct {
         } else {
             self.confirming = true;
         }
-    }
-
-    fn moveQuestion(self: *State, direction: i8) void {
-        if (self.questions.items.len == 0) return;
-        if (direction < 0) {
-            if (self.question_index > 0) self.question_index -= 1;
-        } else if (self.question_index + 1 < self.questions.items.len) {
-            self.question_index += 1;
-        } else if (self.question_index + 1 == self.questions.items.len) {
-            // Forward navigation off the last question enters the review
-            // state — Down and Tab advance the same way, matching the
-            // operator expectation that both keys move forward.
-            self.confirming = true;
-        }
-        self.option_cursor = 0;
-        self.confirm_error = false;
     }
 
     fn clampCursors(self: *State) void {
@@ -368,13 +391,12 @@ pub const State = struct {
             return;
         }
 
+        // Non-confirming: single-question full-panel layout
         const active_index = @min(self.question_index, self.questions.items.len - 1);
-        // Vaxis retains printed text until the outer frame reaches
-        // `vx.render`.  Header text therefore belongs to the frame arena, not
-        // a helper stack frame that ends before the render boundary.
+        const question = &self.questions.items[active_index];
         const header = std.fmt.allocPrint(
             frame_allocator,
-            " Questions {d}/{d} · ↑/↓ question · ←/→ option · Tab next",
+            " Questions {d}/{d} · ctrl+q/ctrl+e question · ↑/↓ option · Space/Enter",
             .{ active_index + 1, self.questions.items.len },
         ) catch " Questions";
         if (win.height > 0) {
@@ -384,21 +406,84 @@ pub const State = struct {
             _ = win.print(&.{.{ .text = "────────────────────────────────────────────────────────────────", .style = styles.hint }}, .{ .row_offset = 1, .wrap = .none });
         }
 
-        const row_start: usize = 2;
-        const reserved_rows: usize = 1 + @as(usize, if (self.editing_other) 1 else 0);
-        const visible_capacity = @as(usize, win.height) -| row_start -| reserved_rows;
-        if (visible_capacity == 0) return;
-        const visible_questions = @min(self.questions.items.len, visible_capacity);
-        const first_question = if (active_index >= visible_questions)
-            @min(active_index - visible_questions + 1, self.questions.items.len - visible_questions)
-        else
-            0;
-        var row = row_start;
-        for (self.questions.items[first_question .. first_question + visible_questions], first_question..) |question, question_index| {
-            self.drawQuestionRow(win, question, question_index == active_index, row, styles, frame_allocator);
+        // Row 2: full-width prompt, grapheme-wrapped
+        const content_start: usize = 2;
+        if (win.height <= content_start) return;
+        const safe_prompt = safeDisplayText(frame_allocator, question.prompt);
+        const prompt_result = win.print(
+            &.{.{ .text = safe_prompt, .style = styles.prompt }},
+            .{ .row_offset = @intCast(content_start), .col_offset = 1, .wrap = .grapheme },
+        );
+        // Count prompt rows consumed
+        const consumed_rows: i32 = @as(i32, @intCast(prompt_result.row)) - @as(i32, content_start);
+        const wrapped_tail: usize = @as(usize, if (prompt_result.col > 0) 1 else 0);
+        const prompt_rows: usize = @as(usize, @intCast(@max(0, consumed_rows))) + wrapped_tail;
+        var row = content_start + @max(1, prompt_rows);
+
+        if (row >= win.height) return;
+
+        // Blank separator row
+        row += 1;
+        if (row >= win.height) return;
+
+        // Multi-select hint
+        if (question.multiple) {
+            _ = win.print(&.{.{ .text = "(multi-select)", .style = styles.hint }}, .{ .row_offset = @intCast(row), .col_offset = 1, .wrap = .none });
             row += 1;
+            if (row >= win.height) return;
         }
 
+        // Count how many rows are available for options + descriptions + footer
+        const footer_reserved: usize = 1 + @as(usize, if (self.editing_other) 1 else 0);
+        const available_for_options: usize = @as(usize, win.height) -| row -| footer_reserved;
+
+        // First pass: count total option rows and description rows to decide
+        // whether descriptions fit.
+        const option_count = question.options.items.len;
+        var desc_count: usize = 0;
+        for (question.options.items) |opt| {
+            if (opt.description != null) desc_count += 1;
+        }
+        const show_descriptions = available_for_options >= option_count and available_for_options - option_count >= desc_count;
+
+        for (question.options.items, 0..) |option, option_index| {
+            if (row >= win.height) break;
+            const marker = if (option.selected) "✓ " else if (option_index == self.option_cursor) "› " else "   ";
+            const option_style = if (option_index == self.option_cursor)
+                styles.selected
+            else if (option.selected)
+                styles.confirm
+            else
+                styles.option;
+            const key = optionKey(option_index);
+            const safe_label = safeDisplayText(frame_allocator, option.label);
+            _ = win.print(
+                &.{
+                    .{ .text = marker, .style = option_style },
+                    .{ .text = key, .style = option_style },
+                    .{ .text = ") ", .style = option_style },
+                    .{ .text = safe_label, .style = option_style },
+                },
+                .{ .row_offset = @intCast(row), .col_offset = 1, .wrap = .none },
+            );
+            row += 1;
+
+            // Description row beneath the option
+            if (show_descriptions) {
+                if (option.description) |desc| {
+                    if (row < win.height) {
+                        const safe_desc = safeDisplayText(frame_allocator, desc);
+                        _ = win.print(
+                            &.{.{ .text = safe_desc, .style = styles.hint }},
+                            .{ .row_offset = @intCast(row), .col_offset = 5, .wrap = .none },
+                        );
+                        row += 1;
+                    }
+                }
+            }
+        }
+
+        // Other editor row when editing_other
         if (self.editing_other and row < @as(usize, win.height) -| 1) {
             _ = win.print(&.{.{ .text = " Other: ", .style = styles.option }}, .{ .row_offset = @intCast(row), .col_offset = 1, .wrap = .none });
             if (win.width > 10) {
@@ -406,63 +491,7 @@ pub const State = struct {
             }
         }
         const confirm_row: usize = @as(usize, win.height) -| 1;
-        _ = win.print(&.{.{ .text = " Review and submit · Tab from the last question", .style = styles.hint }}, .{ .row_offset = @intCast(confirm_row), .col_offset = 1, .wrap = .none });
-    }
-
-    fn drawQuestionRow(
-        self: *const State,
-        win: tui.Window,
-        question: Question,
-        active: bool,
-        row: usize,
-        styles: DrawStyles,
-        frame_allocator: std.mem.Allocator,
-    ) void {
-        if (row >= win.height or win.width == 0) return;
-        const prompt_width = @min(@as(usize, 28), @max(@as(usize, 10), @as(usize, win.width) / 3));
-        const prompt_limit = prompt_width -| 2;
-        const prompt = truncateToWidth(win, safeDisplayText(frame_allocator, question.prompt), prompt_limit);
-        const prompt_style = if (active) styles.selected else styles.prompt;
-        _ = win.print(
-            &.{
-                .{ .text = if (active) "› " else "  ", .style = prompt_style },
-                .{ .text = prompt, .style = prompt_style },
-            },
-            .{ .row_offset = @intCast(row), .col_offset = 1, .wrap = .none },
-        );
-
-        var col: usize = prompt_width + 3;
-        for (question.options.items, 0..) |option, option_index| {
-            if (col >= win.width) break;
-            const available = @as(usize, win.width) - col;
-            const marker = if (option.selected) "✓ " else if (active and option_index == self.option_cursor) "› " else "  ";
-            const option_style = if (active and option_index == self.option_cursor)
-                styles.selected
-            else if (option.selected)
-                styles.confirm
-            else
-                styles.option;
-            const key = optionKey(option_index);
-            const prefix_width: usize = @intCast(
-                win.gwidth(marker) + win.gwidth(key) + win.gwidth(") "),
-            );
-            const label_width = available -| prefix_width;
-            const visible_label = truncateToWidth(win, safeDisplayText(frame_allocator, option.label), label_width);
-            if (visible_label.len == 0) break;
-            _ = win.print(
-                &.{
-                    .{ .text = marker, .style = option_style },
-                    .{ .text = key, .style = option_style },
-                    .{ .text = ") ", .style = option_style },
-                    .{ .text = visible_label, .style = option_style },
-                },
-                .{ .row_offset = @intCast(row), .col_offset = @intCast(col), .wrap = .none },
-            );
-            const option_width: usize = @intCast(
-                win.gwidth(marker) + win.gwidth(key) + win.gwidth(") ") + win.gwidth(visible_label),
-            );
-            col += @min(available, option_width + @as(usize, win.gwidth("  ")));
-        }
+        _ = win.print(&.{.{ .text = " Tab from last question → review · Esc cancel", .style = styles.hint }}, .{ .row_offset = @intCast(confirm_row), .col_offset = 1, .wrap = .none });
     }
 };
 
@@ -610,7 +639,8 @@ fn sliceBorrowedFromQuestionStatic(slice: []const u8) bool {
         "?",
         ") ",
         " Other: ",
-        " Review and submit · Tab from the last question",
+        " Tab from last question → review · Esc cancel",
+        "(multi-select)",
         "Choose an answer and complete every selected Other option.",
         "(none)",
         ": ",
@@ -689,7 +719,7 @@ test "question controller rejects empty answers and captures Other text" {
     try std.testing.expect(std.mem.indexOf(u8, response, "\"other\":\"custom\"") != null);
 }
 
-test "question controller keeps all question rows navigable before review" {
+test "question controller navigates questions with tab and shift-tab and enters review" {
     var state = try State.initFromJson(
         std.testing.allocator,
         "{\"request_id\":\"call-3\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"First\",\"options\":[{\"id\":\"a\",\"label\":\"One\"},{\"id\":\"b\",\"label\":\"Two\"}]},{\"id\":\"q2\",\"prompt\":\"Second\",\"options\":[{\"id\":\"a\",\"label\":\"Alpha\"},{\"id\":\"b\",\"label\":\"Beta\"}]}]}",
@@ -698,15 +728,27 @@ test "question controller keeps all question rows navigable before review" {
     var input = TextInput.init(std.testing.allocator, undefined);
     defer input.deinit();
     const enter_key: tui.Key = .{ .codepoint = tui.Key.enter };
-    const down_key: tui.Key = .{ .codepoint = tui.Key.down };
+    const tab_key: tui.Key = .{ .codepoint = tui.Key.tab };
     const shift_tab: tui.Key = .{ .codepoint = tui.Key.tab, .mods = .{ .shift = true } };
-    try std.testing.expectEqual(Action.consumed, try state.handleKey(down_key, &input));
+
+    // Tab advances to the second question
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(tab_key, &input));
     try std.testing.expectEqual(@as(usize, 1), state.question_index);
+
+    // Tab from the last question enters confirming
     try std.testing.expectEqual(Action.consumed, try state.handleKey(enter_key, &input));
     try std.testing.expect(state.confirming);
+
+    // Esc returns to the last question
     try std.testing.expectEqual(Action.consumed, try state.handleKey(.{ .codepoint = tui.Key.escape }, &input));
     try std.testing.expect(!state.confirming);
     try std.testing.expectEqual(@as(usize, 1), state.question_index);
+
+    // Shift+Tab goes back
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(shift_tab, &input));
+    try std.testing.expectEqual(@as(usize, 0), state.question_index);
+
+    // Shift+Tab at index 0 stays (no wrap for Shift+Tab)
     try std.testing.expectEqual(Action.consumed, try state.handleKey(shift_tab, &input));
     try std.testing.expectEqual(@as(usize, 0), state.question_index);
 }
@@ -722,7 +764,7 @@ test "question controller keeps multi-select on the row until review and clears 
     );
     defer state.deinit();
     const enter_key: tui.Key = .{ .codepoint = tui.Key.enter };
-    const right_key: tui.Key = .{ .codepoint = tui.Key.right };
+    const down_key: tui.Key = .{ .codepoint = tui.Key.down };
     const tab_key: tui.Key = .{ .codepoint = tui.Key.tab };
     const text_key: tui.Key = .{ .codepoint = 'x', .text = "custom" };
 
@@ -730,7 +772,7 @@ test "question controller keeps multi-select on the row until review and clears 
     try std.testing.expect(!state.confirming);
     try std.testing.expect(state.questions.items[0].options.items[0].selected);
 
-    try std.testing.expectEqual(Action.consumed, try state.handleKey(right_key, &input));
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(down_key, &input));
     try std.testing.expectEqual(Action.consumed, try state.handleKey(enter_key, &input));
     try std.testing.expect(state.editing_other);
     try input.update(.{ .key_press = text_key });
@@ -767,7 +809,7 @@ test "question panel render cells keep state or frame-owned text through the fra
     const allocator = std.testing.allocator;
     var unicode = try tui.Unicode.init(allocator);
     defer unicode.deinit(allocator);
-    var screen = try tui.Screen.init(allocator, .{ .rows = 8, .cols = 120, .x_pixel = 0, .y_pixel = 0 });
+    var screen = try tui.Screen.init(allocator, .{ .rows = 10, .cols = 120, .x_pixel = 0, .y_pixel = 0 });
     defer screen.deinit(allocator);
     var state = try State.initFromJson(
         allocator,
@@ -776,7 +818,7 @@ test "question panel render cells keep state or frame-owned text through the fra
     defer state.deinit();
     var input = TextInput.init(allocator, &unicode);
     defer input.deinit();
-    var frame_storage: [2048]u8 = undefined;
+    var frame_storage: [4096]u8 = undefined;
     var frame_allocator = std.heap.FixedBufferAllocator.init(&frame_storage);
     const win = tui.Window{
         .x_off = 0,
@@ -863,7 +905,7 @@ test "question panel sanitizes untrusted text and survives clipped viewports" {
     try std.testing.expect(std.mem.indexOf(u8, response, "server-choice") != null);
 }
 
-test "question panel bounds and renders the maximum batch at the viewport edges" {
+test "question panel renders single question at viewport edges" {
     const allocator = std.testing.allocator;
     var request = std.array_list.Managed(u8).init(allocator);
     defer request.deinit();
@@ -916,18 +958,198 @@ test "question panel bounds and renders the maximum batch at the viewport edges"
         };
         var frame_storage: [4096]u8 = undefined;
         var frame_allocator = std.heap.FixedBufferAllocator.init(&frame_storage);
+
+        // First question visible
         state.confirming = false;
         state.question_index = 0;
         state.option_cursor = 0;
         state.draw(win, &input, styles, frame_allocator.allocator());
 
-        // The active row must remain renderable when the question window has
-        // scrolled to the final item in a large align-style batch.
+        // Last question visible (single-question layout, no scrolling needed)
         state.question_index = state.questions.items.len - 1;
         state.option_cursor = state.questions.items[state.question_index].options.items.len - 1;
         state.draw(win, &input, styles, frame_allocator.allocator());
 
+        // Confirming view
         state.confirming = true;
         state.draw(win, &input, styles, frame_allocator.allocator());
     }
+}
+
+test "ctrl+q wraps to last question and ctrl+e wraps to first" {
+    var state = try State.initFromJson(
+        std.testing.allocator,
+        "{\"request_id\":\"call-wrap\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"First\",\"options\":[{\"id\":\"a\",\"label\":\"One\"},{\"id\":\"b\",\"label\":\"Two\"}]},{\"id\":\"q2\",\"prompt\":\"Second\",\"options\":[{\"id\":\"a\",\"label\":\"Alpha\"},{\"id\":\"b\",\"label\":\"Beta\"}]}]}",
+    );
+    defer state.deinit();
+    var input = TextInput.init(std.testing.allocator, undefined);
+    defer input.deinit();
+    const ctrl_q: tui.Key = .{ .codepoint = 'q', .mods = .{ .ctrl = true } };
+    const ctrl_e: tui.Key = .{ .codepoint = 'e', .mods = .{ .ctrl = true } };
+
+    // ctrl+q at index 0 wraps to last
+    try std.testing.expectEqual(@as(usize, 0), state.question_index);
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(ctrl_q, &input));
+    try std.testing.expectEqual(@as(usize, 1), state.question_index);
+    try std.testing.expect(!state.confirming);
+    try std.testing.expectEqual(@as(usize, 0), state.option_cursor);
+
+    // ctrl+q at last index wraps to first
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(ctrl_q, &input));
+    try std.testing.expectEqual(@as(usize, 0), state.question_index);
+    try std.testing.expect(!state.confirming);
+    try std.testing.expectEqual(@as(usize, 0), state.option_cursor);
+
+    // ctrl+e at last index wraps to first
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(ctrl_e, &input));
+    try std.testing.expectEqual(@as(usize, 1), state.question_index);
+    try std.testing.expect(!state.confirming);
+    try std.testing.expectEqual(@as(usize, 0), state.option_cursor);
+
+    // ctrl+e at first wraps to last
+    state.question_index = 0;
+    try std.testing.expectEqual(Action.consumed, try state.handleKey(ctrl_e, &input));
+    try std.testing.expectEqual(@as(usize, 1), state.question_index);
+    try std.testing.expect(!state.confirming);
+    try std.testing.expectEqual(@as(usize, 0), state.option_cursor);
+}
+
+test "single-question focus renders only the active question" {
+    const allocator = std.testing.allocator;
+    var unicode = try tui.Unicode.init(allocator);
+    defer unicode.deinit(allocator);
+    var screen = try tui.Screen.init(allocator, .{ .rows = 14, .cols = 80, .x_pixel = 0, .y_pixel = 0 });
+    defer screen.deinit(allocator);
+    var state = try State.initFromJson(
+        allocator,
+        "{\"request_id\":\"call-focus\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"First question prompt text\",\"options\":[{\"id\":\"a\",\"label\":\"Alpha\"},{\"id\":\"b\",\"label\":\"Beta\"}]},{\"id\":\"q2\",\"prompt\":\"Second question prompt text\",\"options\":[{\"id\":\"a\",\"label\":\"One\"},{\"id\":\"b\",\"label\":\"Two\"}]}]}",
+    );
+    defer state.deinit();
+    var input = TextInput.init(allocator, &unicode);
+    defer input.deinit();
+    var frame_storage: [4096]u8 = undefined;
+    var frame_allocator = std.heap.FixedBufferAllocator.init(&frame_storage);
+    const win = tui.Window{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = screen.width,
+        .height = screen.height,
+        .screen = &screen,
+        .unicode = &unicode,
+    };
+    const styles = DrawStyles{
+        .panel = .{},
+        .title = .{},
+        .prompt = .{},
+        .option = .{},
+        .selected = .{},
+        .hint = .{},
+        .input = .{},
+        .confirm = .{},
+    };
+
+    // Draw question 0 — only its prompt is on screen
+    state.question_index = 0;
+    state.draw(win, &input, styles, frame_allocator.allocator());
+    try std.testing.expect(try screenContains(allocator, screen, "First question prompt text"));
+    try std.testing.expect(!(try screenContains(allocator, screen, "Second question prompt text")));
+
+    // Draw question 1 — only its prompt is on screen
+    win.fill(.{ .style = styles.panel });
+    state.question_index = 1;
+    state.draw(win, &input, styles, frame_allocator.allocator());
+    try std.testing.expect(!(try screenContains(allocator, screen, "First question prompt text")));
+    try std.testing.expect(try screenContains(allocator, screen, "Second question prompt text"));
+}
+
+fn screenRowText(allocator: std.mem.Allocator, screen: tui.Screen, row: usize) ![]u8 {
+    var out = std.array_list.Managed(u8).init(allocator);
+    defer out.deinit();
+    const stride: usize = screen.width;
+    var col: usize = 0;
+    while (col < screen.width) : (col += 1) {
+        try out.appendSlice(screen.buf[row * stride + col].char.grapheme);
+    }
+    return out.toOwnedSlice();
+}
+
+fn screenContains(allocator: std.mem.Allocator, screen: tui.Screen, needle: []const u8) !bool {
+    var row: usize = 0;
+    while (row < screen.height) : (row += 1) {
+        const text = try screenRowText(allocator, screen, row);
+        defer allocator.free(text);
+        if (std.mem.indexOf(u8, text, needle) != null) return true;
+    }
+    return false;
+}
+
+fn screenRowContaining(allocator: std.mem.Allocator, screen: tui.Screen, needle: []const u8) !?usize {
+    var row: usize = 0;
+    while (row < screen.height) : (row += 1) {
+        const text = try screenRowText(allocator, screen, row);
+        defer allocator.free(text);
+        if (std.mem.indexOf(u8, text, needle) != null) return row;
+    }
+    return null;
+}
+
+fn rowHasGrapheme(screen: tui.Screen, row: usize, grapheme: []const u8) bool {
+    const stride: usize = screen.width;
+    var col: usize = 0;
+    while (col < screen.width) : (col += 1) {
+        if (std.mem.eql(u8, screen.buf[row * stride + col].char.grapheme, grapheme)) return true;
+    }
+    return false;
+}
+
+test "vertical stacking places one option per row with cursor marker" {
+    const allocator = std.testing.allocator;
+    var unicode = try tui.Unicode.init(allocator);
+    defer unicode.deinit(allocator);
+    var screen = try tui.Screen.init(allocator, .{ .rows = 14, .cols = 80, .x_pixel = 0, .y_pixel = 0 });
+    defer screen.deinit(allocator);
+    var state = try State.initFromJson(
+        allocator,
+        "{\"request_id\":\"call-stack\",\"questions\":[{\"id\":\"q1\",\"prompt\":\"Pick one\",\"options\":[{\"id\":\"a\",\"label\":\"Fast\"},{\"id\":\"b\",\"label\":\"Careful\"},{\"id\":\"c\",\"label\":\"Thorough\"}]}]}",
+    );
+    defer state.deinit();
+    var input = TextInput.init(allocator, &unicode);
+    defer input.deinit();
+    var frame_storage: [4096]u8 = undefined;
+    var frame_allocator = std.heap.FixedBufferAllocator.init(&frame_storage);
+    const win = tui.Window{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = screen.width,
+        .height = screen.height,
+        .screen = &screen,
+        .unicode = &unicode,
+    };
+    const styles = DrawStyles{
+        .panel = .{},
+        .title = .{},
+        .prompt = .{},
+        .option = .{},
+        .selected = .{},
+        .hint = .{},
+        .input = .{},
+        .confirm = .{},
+    };
+
+    state.draw(win, &input, styles, frame_allocator.allocator());
+
+    // Each option label occupies its own row.
+    const fast_row = (try screenRowContaining(allocator, screen, "Fast")) orelse return error.TestUnexpectedResult;
+    const careful_row = (try screenRowContaining(allocator, screen, "Careful")) orelse return error.TestUnexpectedResult;
+    const thorough_row = (try screenRowContaining(allocator, screen, "Thorough")) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(fast_row != careful_row);
+    try std.testing.expect(careful_row != thorough_row);
+    try std.testing.expect(fast_row != thorough_row);
+
+    // The cursor marker sits on the first option's row.
+    try std.testing.expect(rowHasGrapheme(screen, fast_row, "\u{203a}"));
 }

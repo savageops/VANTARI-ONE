@@ -87,6 +87,7 @@ const ParsedSessionRecord = struct {
     display_name: ?[]const u8 = null,
     agent_profile: ?[]const u8 = null,
     full_access_mode: bool = false,
+    prompt_mode: ?[]const u8 = null,
     failure_reason: ?[]const u8 = null,
     created_at_ms: i64,
     updated_at_ms: i64,
@@ -102,6 +103,7 @@ const SessionRecordProjectionWithReceipt = struct {
     agent_profile: ?[]const u8,
     full_access_mode: bool,
     execution_receipt: types.ExecutionReceiptView,
+    prompt_mode: ?[]const u8 = null,
     failure_reason: ?[]const u8,
     created_at_ms: i64,
     updated_at_ms: i64,
@@ -117,6 +119,7 @@ const SessionRecordProjectionWithoutReceipt = struct {
     agent_profile: ?[]const u8,
     full_access_mode: bool,
     execution_receipt: ?types.ExecutionReceiptView = null,
+    prompt_mode: ?[]const u8 = null,
     failure_reason: ?[]const u8,
     created_at_ms: i64,
     updated_at_ms: i64,
@@ -377,6 +380,7 @@ pub fn readSessionRecord(
         .agent_profile = if (parsed.value.agent_profile) |value| try allocator.dupe(u8, value) else null,
         .full_access_mode = parsed.value.full_access_mode,
         .execution_receipt = execution_receipt,
+        .prompt_mode = if (parsed.value.prompt_mode) |value| try allocator.dupe(u8, value) else null,
         .failure_reason = if (parsed.value.failure_reason) |value| try allocator.dupe(u8, value) else null,
         .created_at_ms = parsed.value.created_at_ms,
         .updated_at_ms = parsed.value.updated_at_ms,
@@ -412,6 +416,7 @@ pub fn writeSessionRecord(
             .agent_profile = session.agent_profile,
             .full_access_mode = session.full_access_mode,
             .execution_receipt = value.*.view(),
+            .prompt_mode = session.prompt_mode,
             .failure_reason = session.failure_reason,
             .created_at_ms = session.created_at_ms,
             .updated_at_ms = session.updated_at_ms,
@@ -426,6 +431,7 @@ pub fn writeSessionRecord(
             .display_name = session.display_name,
             .agent_profile = session.agent_profile,
             .full_access_mode = session.full_access_mode,
+            .prompt_mode = session.prompt_mode,
             .failure_reason = session.failure_reason,
             .created_at_ms = session.created_at_ms,
             .updated_at_ms = session.updated_at_ms,
@@ -564,13 +570,26 @@ pub fn setSessionStatus(
     session: *types.SessionRecord,
     status: types.SessionStatus,
 ) !void {
+    // Field-surgical mutation: read the current record, change only this
+    // mutator's fields, write. A run may have mutated other fields (for
+    // example prompt_mode through set_prompt_mode) since the caller's struct
+    // was read; writing the caller's whole struct would revert them. The
+    // caller struct stays mirrored so its view remains coherent.
+    var current = try readSessionRecord(allocator, workspace_root, session.id);
+    defer current.deinit(allocator);
+    current.status = status;
+    if (status != .failed and current.failure_reason != null) {
+        allocator.free(current.failure_reason.?);
+        current.failure_reason = null;
+    }
+    current.updated_at_ms = std.time.milliTimestamp();
+    try writeSessionRecord(allocator, workspace_root, current);
+
     session.status = status;
-    session.updated_at_ms = std.time.milliTimestamp();
     if (status != .failed and session.failure_reason != null) {
         allocator.free(session.failure_reason.?);
         session.failure_reason = null;
     }
-    try writeSessionRecord(allocator, workspace_root, session.*);
 }
 
 pub fn setSessionPrompt(
@@ -584,10 +603,6 @@ pub fn setSessionPrompt(
     session.prompt = try allocator.dupe(u8, prompt);
     session.status = status;
     session.updated_at_ms = std.time.milliTimestamp();
-    if (status != .failed and session.failure_reason != null) {
-        allocator.free(session.failure_reason.?);
-        session.failure_reason = null;
-    }
     try writeSessionRecord(allocator, workspace_root, session.*);
 }
 
@@ -597,11 +612,47 @@ pub fn setSessionFailure(
     session: *types.SessionRecord,
     failure_reason: []const u8,
 ) !void {
+    // Field-surgical for the same reason as setSessionStatus: concurrent
+    // mid-run field mutations must survive terminal settlement.
+    var current = try readSessionRecord(allocator, workspace_root, session.id);
+    defer current.deinit(allocator);
+    if (current.failure_reason) |value| allocator.free(value);
+    current.failure_reason = try allocator.dupe(u8, failure_reason);
+    current.status = .failed;
+    current.updated_at_ms = std.time.milliTimestamp();
+    try writeSessionRecord(allocator, workspace_root, current);
+
     if (session.failure_reason) |value| allocator.free(value);
     session.failure_reason = try allocator.dupe(u8, failure_reason);
     session.status = .failed;
-    session.updated_at_ms = std.time.milliTimestamp();
-    try writeSessionRecord(allocator, workspace_root, session.*);
+}
+
+/// Durably persist a prompt-mode change on a session record. Field-surgical
+/// like setSessionStatus (concurrent mid-run mutations must survive) and
+/// returns the previous label as freshly owned memory when one existed, so
+/// callers that need the "from" value never alias the freed slice.
+pub fn setSessionPromptMode(
+    allocator: std.mem.Allocator,
+    workspace_root: []const u8,
+    session: *types.SessionRecord,
+    mode_label: []const u8,
+) !?[]u8 {
+    const previous: ?[]u8 = if (session.prompt_mode) |value|
+        try allocator.dupe(u8, value)
+    else
+        null;
+    errdefer if (previous) |value| allocator.free(value);
+
+    var current = try readSessionRecord(allocator, workspace_root, session.id);
+    defer current.deinit(allocator);
+    if (current.prompt_mode) |value| allocator.free(value);
+    current.prompt_mode = try allocator.dupe(u8, mode_label);
+    current.updated_at_ms = std.time.milliTimestamp();
+    try writeSessionRecord(allocator, workspace_root, current);
+
+    if (session.prompt_mode) |value| allocator.free(value);
+    session.prompt_mode = try allocator.dupe(u8, mode_label);
+    return previous;
 }
 
 pub fn appendEvent(
@@ -2049,4 +2100,41 @@ test "session access scope survives cold read and legacy records stay contained"
     var restored_legacy = try readSessionRecord(allocator, workspace, legacy_session.id);
     defer restored_legacy.deinit(allocator);
     try std.testing.expect(!restored_legacy.full_access_mode);
+}
+
+test "setSessionPromptMode returns previous label as independent memory" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var session = try initSessionWithOptions(allocator, workspace, "mode ownership", .{
+        .session_id = "session-mode-ownership-0123456789a",
+    });
+    defer session.deinit(allocator);
+
+    // First mutation on a null mode returns null.
+    const first_previous = try setSessionPromptMode(allocator, workspace, &session, "align");
+    try std.testing.expect(first_previous == null);
+
+    // Second mutation returns the prior label as memory that stays valid
+    // across further mutations of the record — the caller-held "from" value
+    // must not alias the freed stored slice (live-server use-after-free).
+    const previous = try setSessionPromptMode(allocator, workspace, &session, "plan");
+    try std.testing.expect(previous != null);
+    defer allocator.free(previous.?);
+    try std.testing.expectEqualStrings("align", previous.?);
+
+    const later = try setSessionPromptMode(allocator, workspace, &session, "build");
+    try std.testing.expect(later != null);
+    defer allocator.free(later.?);
+    try std.testing.expectEqualStrings("plan", later.?);
+    // The earlier returned slice still reads its own value, proving the
+    // mutator handed over a copy rather than the stored allocation.
+    try std.testing.expectEqualStrings("align", previous.?);
+
+    var restored = try readSessionRecord(allocator, workspace, session.id);
+    defer restored.deinit(allocator);
+    try std.testing.expectEqualStrings("build", restored.prompt_mode.?);
 }
