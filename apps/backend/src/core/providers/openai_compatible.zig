@@ -1000,6 +1000,9 @@ fn writeRequestHead(
     try writer.writeAll(headers.accept orelse "text/event-stream, application/json");
     try writer.writeAll("\r\n");
     try writer.writeAll("accept-encoding: identity\r\n");
+    // Edge gateways (Cloudflare) reject requests with a missing or
+    // library-default User-Agent signature (error 1010); identify honestly.
+    try writer.writeAll("user-agent: vantari/0.1\r\n");
     try writer.writeAll("connection: close\r\n");
     try writer.print("content-length: {d}\r\n\r\n", .{payload_len});
 }
@@ -1041,6 +1044,7 @@ fn writeGetHead(
     }
     try writer.writeAll("accept: application/json\r\n");
     try writer.writeAll("accept-encoding: identity\r\n");
+    try writer.writeAll("user-agent: vantari/0.1\r\n");
     try writer.writeAll("connection: close\r\n");
     try writer.writeAll("content-length: 0\r\n\r\n");
 }

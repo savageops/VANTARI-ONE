@@ -123,7 +123,7 @@ pub fn detectContextWindowForModel(list: ModelsList, model_id: []const u8) ?u64 
 ///   1. LIVE — the family's real discovery endpoint:
 ///        OpenAI-compatible gateways  {base}/v1/models   (listModelsWithAuth)
 ///        Codex (ChatGPT OAuth)       {base}/codex/models  listCodexModels
-///        OpenCode Zen gateway        https://api.opencode.ai/zen/v1/models
+///        OpenCode Zen gateway        https://opencode.ai/zen[/go]/v1/models
 ///        Anthropic                   {base}/v1/models with x-api-key headers
 ///   2. SNAPSHOT — the vendored models.dev subset (models_snapshot.zig):
 ///      answers "what exists" with real context limits when the gateway

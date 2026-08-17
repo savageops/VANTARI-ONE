@@ -1,5 +1,21 @@
 # Execution Log
 
+## 2026-08-17 - Real OpenCode Zen gateways + honest client identity
+
+**Outcome:** opencode providers now hit their real Zen gateways
+(`opencode.ai/zen[/go]/v1`, mapped from omp's working registry) with a
+`user-agent` the edge accepts — live catalogs flow through the kernel and a
+real send reaches the origin. Receipt: `094-opencode-zen-gateways.md`.
+
+- The legacy `api.opencode.ai/v1` host served nothing but 200 "Not Found";
+  the import and profile fallback now map go-tier vs zen-tier URLs with
+  tier-real default models, and the live ledger was repaired to match.
+- Provider request writers send `user-agent: vantari/0.1` — Cloudflare bans
+  the missing-UA signature (error 1010).
+- Live proof: `models/list-all` returns real Zen catalogs for all five
+  providers; an opencode-go send surfaces the API's honest
+  `429 GoUsageLimitError` (monthly go-plan cap, resets in 19 days).
+
 ## 2026-08-17 - Argument-aware model palette + model-first Settings + outage crash fixes
 
 **Outcome:** `model <prefix>` is now a live model-filter autocomplete

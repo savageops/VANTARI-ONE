@@ -260,8 +260,11 @@ fn importClaude(
     });
 }
 
-/// Import OpenCode: each `provider_id:{type,key}` becomes an api-key record
-/// under that provider id with the shared OpenCode base URL.
+/// Import an OpenCode-sourced credential under its real Zen gateway: the
+/// `opencode-go` plan routes through the go tier, every other opencode id
+/// through the base Zen tier. Both gateways serve live model lists, so the
+/// import default is a model that exists on that tier (verified against
+/// {base}/models); the operator refines it through the model picker.
 fn importOpenCode(
     allocator: std.mem.Allocator,
     workspace_root: []const u8,
@@ -274,10 +277,11 @@ fn importOpenCode(
     if (provider_object != .object) return Error.InvalidSourceFormat;
     const key = getString(provider_object.object, "key") orelse return Error.InvalidSourceFormat;
 
+    const go_tier = std.mem.eql(u8, entry.provider_id, "opencode-go");
     try auth_store.upsertApiKeyProvider(allocator, workspace_root, .{
         .provider_id = entry.provider_id,
-        .base_url = "https://api.opencode.ai/v1",
-        .model = "opencode-go",
+        .base_url = if (go_tier) "https://opencode.ai/zen/go/v1" else "https://opencode.ai/zen/v1",
+        .model = if (go_tier) "glm-5.2" else "claude-sonnet-5",
         .api_key = key,
         .credential_source = "opencode",
     });
@@ -430,6 +434,11 @@ test "import opencode persists an api-key record under its provider id" {
     var auth = try auth_store.readProviderById(testing.allocator, workspace, "opencode-go");
     defer auth.deinit(testing.allocator);
     try testing.expectEqualStrings("opk-77", auth.api_key);
+    // The go tier must land on its real Zen gateway with a model that
+    // exists on that tier — the legacy api.opencode.ai host serves
+    // nothing but 200 "Not Found" pages.
+    try testing.expectEqualStrings("https://opencode.ai/zen/go/v1", auth.base_url);
+    try testing.expectEqualStrings("glm-5.2", auth.model);
     const source = try auth_store.readProviderSourceById(testing.allocator, workspace, "opencode-go");
     try testing.expectEqualStrings("opencode", source.?);
     testing.allocator.free(source.?);

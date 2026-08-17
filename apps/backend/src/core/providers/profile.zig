@@ -179,7 +179,8 @@ pub fn defaultBaseUrl(provider_id: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, provider_id, "openai")) return "https://api.openai.com/v1";
     if (std.mem.eql(u8, provider_id, "anthropic")) return "https://api.anthropic.com";
     if (std.mem.eql(u8, provider_id, "openrouter")) return "https://openrouter.ai/api/v1";
-    if (std.mem.eql(u8, provider_id, "opencode") or std.mem.eql(u8, provider_id, "opencode-go") or std.mem.eql(u8, provider_id, "opencode-zen")) return "https://api.opencode.ai/v1";
+    if (std.mem.eql(u8, provider_id, "opencode-go")) return "https://opencode.ai/zen/go/v1";
+    if (std.mem.eql(u8, provider_id, "opencode") or std.mem.eql(u8, provider_id, "opencode-zen")) return "https://opencode.ai/zen/v1";
     return null;
 }
 
