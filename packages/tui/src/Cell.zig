@@ -206,6 +206,82 @@ pub const Color = union(enum) {
         };
     }
 
+    /// Quantize a 24-bit color to the nearest xterm-256 palette index when the
+    /// terminal does not advertise truecolor support. The 256-color palette is
+    /// 16 base colors (terminal-defined, skipped — we cannot guess their RGB),
+    /// a 6×6×6 color cube at indices 16..231, and a 24-step grayscale ramp at
+    /// 232..255. The cube is quantized on the standard 6-level ladder
+    /// (0, 95, 135, 175, 215, 255); grayscale is matched when the source is
+    /// near-achromatic, which keeps theme neutrals (borders, dim text, panels)
+    /// from drifting into hue-tinted cube corners.
+    pub fn to256(rgb: [3]u8) Color {
+        const r: u16 = rgb[0];
+        const g: u16 = rgb[1];
+        const b: u16 = rgb[2];
+
+        const cube_index: u16 = 16 + 36 * @as(u16, levelOf(r)) + 6 * @as(u16, levelOf(g)) + @as(u16, levelOf(b));
+
+        const maxc = @max(r, @max(g, b));
+        const minc = @min(r, @min(g, b));
+        // Near-achromatic sources also consider the grayscale ramp: it has no
+        // hue, so it is often nearer than a hue-tinted cube corner. Pick the
+        // candidate with the smaller squared Euclidean distance.
+        if (maxc -| minc <= 8) {
+            // Grayscale ramp: index 232 = 8, step 10, up to 238 at 255.
+            const gray = @as(u16, @intCast(@min(r + g + b, 3 * 255)));
+            const level = if (gray <= 26) 0 else (gray - 26) / 30;
+            const ramp_level: u16 = @min(23, level);
+            const ramp_value: u16 = 8 + 10 * ramp_level;
+            const cube_value = cubeLuma(cube_index);
+            const ramp_dist = dist3(r, ramp_value) + dist3(g, ramp_value) + dist3(b, ramp_value);
+            const cube_dist = dist3(r, cube_value) + dist3(g, cube_value) + dist3(b, cube_value);
+            if (ramp_dist < cube_dist) {
+                return .{ .index = @intCast(232 + ramp_level) };
+            }
+        }
+        return .{ .index = @intCast(cube_index) };
+    }
+
+    fn dist3(a: u16, v: u16) u32 {
+        const d = if (a > v) a - v else v - a;
+        return @as(u32, d) * @as(u32, d);
+    }
+
+    /// The representative channel value of a color-cube index (16..231):
+    /// level l maps to the standard ladder value.
+    fn cubeLuma(index: u16) u16 {
+        const ladder = [6]u16{ 0, 95, 135, 175, 215, 255 };
+        const cube = index - 16;
+        // Average of the three channel levels weighted by their cube position.
+        const ri = cube / 36;
+        const gi = (cube / 6) % 6;
+        const bi = cube % 6;
+        return (ladder[ri] + ladder[gi] + ladder[bi]) / 3;
+    }
+
+    fn levelOf(channel: u16) u8 {
+        const ladder = [6]u16{ 0, 95, 135, 175, 215, 255 };
+        var best: u8 = 0;
+        var best_dist: u32 = std.math.maxInt(u32);
+        for (ladder, 0..) |candidate, i| {
+            const dist = if (candidate >= channel) candidate - channel else channel - candidate;
+            if (dist < best_dist) {
+                best_dist = dist;
+                best = @intCast(i);
+            }
+        }
+        return best;
+    }
+
+    /// Downgrade a color for terminals without truecolor. `.default` and
+    /// `.index` pass through untouched; `.rgb` quantizes through `to256`.
+    pub fn downgrade(color: Color) Color {
+        return switch (color) {
+            .default, .index => color,
+            .rgb => |rgb| to256(rgb),
+        };
+    }
+
     test "rgbFromSpec" {
         const spec = "rgb:aaaa/bbbb/cccc";
         const actual = try rgbFromSpec(spec);
@@ -217,5 +293,48 @@ pub const Color = union(enum) {
             },
             else => try std.testing.expect(false),
         }
+    }
+
+    test "to256 maps palette corners exactly" {
+        // Pure primary channels hit cube corner indices.
+        try std.testing.expectEqual(@as(u8, 16), indexValue(to256(.{ 0, 0, 0 })));
+        try std.testing.expectEqual(@as(u8, 231), indexValue(to256(.{ 255, 255, 255 })));
+        try std.testing.expectEqual(@as(u8, 196), indexValue(to256(.{ 255, 0, 0 })));
+        try std.testing.expectEqual(@as(u8, 46), indexValue(to256(.{ 0, 255, 0 })));
+        try std.testing.expectEqual(@as(u8, 21), indexValue(to256(.{ 0, 0, 255 })));
+    }
+
+    test "to256 prefers grayscale for near-achromatic colors" {
+        // The vantari theme's dim border color (0x4a6a5c) is green-tinted
+        // (max-min = 32 > 8), so it must land in the cube, not grayscale.
+        const cube = to256(.{ 0x4a, 0x6a, 0x5c });
+        try std.testing.expect(indexValue(cube) < 232);
+        // A gray that the ramp represents exactly (89 ≈ ramp gray-88) must
+        // land on the ramp; mid-gray 128 is nearer cube 102 and stays there.
+        const gray = to256(.{ 0x59, 0x59, 0x59 });
+        try std.testing.expect(indexValue(gray) >= 232);
+        const cube_gray = to256(.{ 0x80, 0x80, 0x80 });
+        try std.testing.expectEqual(@as(u8, 102), indexValue(cube_gray));
+        // Pure white maps to the white end of the ramp (gray-238), which is
+        // nearer than the cube's (255,255,255) corner only when equal — cube
+        // white is exact, so white stays at 231.
+        try std.testing.expectEqual(@as(u8, 231), indexValue(to256(.{ 255, 255, 255 })));
+    }
+
+    test "downgrade passes through non-rgb colors" {
+        try std.testing.expectEqual(Color.default, downgrade(.default));
+        const indexed = Color{ .index = 42 };
+        try std.testing.expect(indexValue(downgrade(indexed)) == 42);
+        switch (downgrade(.{ .rgb = .{ 255, 0, 0 } })) {
+            .index => {},
+            else => return error.TestUnexpectedResult,
+        }
+    }
+
+    fn indexValue(color: Color) u8 {
+        return switch (color) {
+            .index => |idx| idx,
+            else => 0,
+        };
     }
 };

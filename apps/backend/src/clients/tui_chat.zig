@@ -216,6 +216,21 @@ const ChatState = struct {
     /// Exact session_started event sequence for the run this TUI observed.
     active_run_seq: u64 = 0,
     last_transcript_body_width: usize = 80,
+    /// Cached transcript rows — rebuilt only when messages, width, or
+    /// reasoning presence change. The per-frame full-transcript rewrap
+    /// dominated draw cost on long sessions.
+    cached_transcript_rows: std.ArrayList(TranscriptRow) = .{},
+    cached_transcript_width: usize = 0,
+    cached_transcript_message_count: usize = 0,
+    cached_transcript_last_message_len: usize = 0,
+    cached_transcript_reasoning_active: bool = false,
+    /// Cached footer meta line — the 6+ allocPrint cascade in
+    /// formatFooterMetaWithScopePrecision dominated per-frame allocation.
+    /// Rebuilt only when one of its inputs changes.
+    cached_footer_meta: ?[]u8 = null,
+    cached_footer_model: []const u8 = "",
+    cached_footer_status: []const u8 = "",
+    cached_footer_width: usize = 0,
     history_entries: std.ArrayList([]u8) = .{},
     history_cursor: usize = 0,
     history_draft: ?[]u8 = null,
@@ -247,6 +262,10 @@ const ChatState = struct {
         if (self.session_id) |value| self.allocator.free(value);
         for (self.messages.items) |message| message.deinit(self.allocator);
         self.messages.deinit(self.allocator);
+        // Cached transcript rows borrow message storage, so only the list
+        // itself needs freeing.
+        self.cached_transcript_rows.deinit(self.allocator);
+        if (self.cached_footer_meta) |value| self.allocator.free(value);
         self.reasoning_buffer.deinit(self.allocator);
         for (self.history_entries.items) |entry| self.allocator.free(entry);
         self.history_entries.deinit(self.allocator);
@@ -2552,7 +2571,6 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
 
     root.fill(.{ .style = styles.surface });
 
-    const reasoning_body_width = @max(@as(usize, 1), @as(usize, root.width -| 8));
     // Dual-mode dock: when the heavyweight model is actively reasoning,
     // show the live reasoning trace. When idle, show the buffer model's
     // navigation preview if available. The dock collapses when both are empty.
@@ -2563,12 +2581,14 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
         preview
     else
         "";
-    var reasoning_rows = try buildReasoningDockRows(state.allocator, dock_source, reasoning_body_width);
+    // The footer meta line is cached in ChatState; drawStatusBar borrows it.
+    const reasoning_body_width = @max(@as(usize, 1), @as(usize, root.width -| 8));
+    var reasoning_rows = try buildReasoningDockRows(
+        state.allocator,
+        dock_source,
+        reasoning_body_width,
+    );
     defer reasoning_rows.deinit(state.allocator);
-    // Vaxis screen cells borrow printed text until vx.render completes.
-    // Keep the frame-owned footer backing bytes alive through that call.
-    var footer_meta_owned: ?[]u8 = null;
-    defer if (footer_meta_owned) |value| state.allocator.free(value);
     const top_status_height: u16 = if (state.status_bar_position == .top) @min(@as(u16, 1), root.height) else 0;
     const base_footer_height: u16 = if (state.status_bar_position == .top)
         @min(@as(u16, 1), root.height -| top_status_height)
@@ -2631,7 +2651,7 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
     });
     input.drawWithStyle(editor, styles.composer);
     if (state.status_bar_position == .bottom) {
-        footer_meta_owned = try drawStatusBar(input_win, state, footer_frame, layout.meta_y);
+        _ = try drawStatusBar(input_win, state, footer_frame, layout.meta_y);
     }
 
     if (state.status_bar_position == .top) {
@@ -2642,7 +2662,7 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
             .height = top_status_height,
         });
         status_win.fill(.{ .style = styles.meta_surface });
-        footer_meta_owned = try drawStatusBar(status_win, state, footer_frame, 0);
+        _ = try drawStatusBar(status_win, state, footer_frame, 0);
     }
 
     // Reverse search overlay — show search bar at the bottom when active.
@@ -2672,46 +2692,62 @@ fn draw(vx: *tui.Vaxis, writer: anytype, state: *ChatState, input: *TextInput) !
 fn footerStatusStyle(state: *const ChatState) Style {
     if (std.ascii.eqlIgnoreCase(state.status, "FAILED") or
         std.ascii.eqlIgnoreCase(state.status, "RPC_ERROR")) return styles.status_failed;
-    if (state.waiting or std.ascii.eqlIgnoreCase(state.status, "CANCELLING")) return styles.status_working;
+    if (state.waiting) return styles.status_working;
     return styles.status_ready;
 }
 
 fn drawStatusBar(
     win: Window,
-    state: *const ChatState,
+    state: *ChatState,
     frame: footer_effects.Frame,
     row: u16,
 ) ![]u8 {
     const agent_counts = state.agentCounts();
-    const meta = try formatFooterMetaWithScopePrecision(
-        state.allocator,
-        state.model,
-        state.effort,
-        state.thinking_mode,
-        state.prompt_mode,
-        state.status,
-        state.full_access_mode,
-        state.context_used_tokens,
-        state.context_used_precision,
-        state.context_window_tokens,
-        agent_counts.running,
-        agent_counts.total,
-        state.waiting,
-        state.cancel_requested,
-        state.scroll_offset,
-        .{
-            .known = state.agent_pool_known,
-            .healthy = state.agent_pool_healthy,
-            .max = state.agent_pool_max,
-            .running = state.agent_pool_running,
-            .tickets_assigned = state.tickets_assigned,
-            .tickets_in_progress = state.tickets_in_progress,
-            .ticket_ledger_healthy = state.ticket_ledger_healthy,
-        },
-        if (state.has_session_cost) state.session_cost_usd else null,
-        @as(usize, win.width) -| 4,
-    );
-    errdefer state.allocator.free(meta);
+    const footer_width = @as(usize, win.width) -| 4;
+
+    // Rebuild the meta line only when an input changed. The formatting
+    // path allocates 6+ intermediate strings; caching it removes all
+    // footer allocation from steady-state frames.
+    const footer_dirty =
+        state.cached_footer_meta == null or
+        state.cached_footer_width != footer_width or
+        !std.mem.eql(u8, state.cached_footer_status, state.status) or
+        !std.mem.eql(u8, state.cached_footer_model, state.model);
+    if (footer_dirty) {
+        if (state.cached_footer_meta) |old| state.allocator.free(old);
+        state.cached_footer_status = state.status;
+        state.cached_footer_model = state.model;
+        state.cached_footer_width = footer_width;
+        state.cached_footer_meta = try formatFooterMetaWithScopePrecision(
+            state.allocator,
+            state.model,
+            state.effort,
+            state.thinking_mode,
+            state.prompt_mode,
+            state.status,
+            state.full_access_mode,
+            state.context_used_tokens,
+            state.context_used_precision,
+            state.context_window_tokens,
+            agent_counts.running,
+            agent_counts.total,
+            state.waiting,
+            state.cancel_requested,
+            state.scroll_offset,
+            .{
+                .known = state.agent_pool_known,
+                .healthy = state.agent_pool_healthy,
+                .max = state.agent_pool_max,
+                .running = state.agent_pool_running,
+                .tickets_assigned = state.tickets_assigned,
+                .tickets_in_progress = state.tickets_in_progress,
+                .ticket_ledger_healthy = state.ticket_ledger_healthy,
+            },
+            if (state.has_session_cost) state.session_cost_usd else null,
+            footer_width,
+        );
+    }
+    const meta = state.cached_footer_meta.?;
 
     if (win.width > 1) {
         _ = win.print(&.{.{ .text = "●", .style = footerStatusStyle(state) }}, .{
@@ -3166,18 +3202,49 @@ fn drawTranscript(win: Window, state: *ChatState) void {
 
     const body_width = @max(@as(usize, 1), @as(usize, content.width -| 4));
     state.reflowActivityRows(body_width) catch return;
-    var rows = buildTranscriptRows(state.allocator, content, state) catch return;
-    defer rows.deinit(state.allocator);
 
-    const visible_rows = visibleTranscriptRowCount(rows.items);
+    const last_message_len: usize = if (state.messages.items.len > 0)
+        state.messages.items[state.messages.items.len - 1].text.len
+    else
+        0;
+    const reasoning_active = state.reasoning_buffer.items.len > 0;
+    const cache_valid =
+        state.cached_transcript_rows.items.len > 0 and
+        state.cached_transcript_width == body_width and
+        state.cached_transcript_message_count == state.messages.items.len and
+        state.cached_transcript_last_message_len == last_message_len and
+        state.cached_transcript_reasoning_active == reasoning_active;
+    if (!cache_valid) {
+        // Row text borrows from message storage; clearing the list is the
+        // full cleanup. A rebuild re-derives every slice from the current
+        // message buffers.
+        state.cached_transcript_rows.clearRetainingCapacity();
+
+        var fresh = buildTranscriptRows(state.allocator, content, state) catch return;
+        state.cached_transcript_rows.appendSlice(state.allocator, fresh.items) catch {
+            fresh.deinit(state.allocator);
+            return;
+        };
+        fresh.deinit(state.allocator);
+
+        state.cached_transcript_width = body_width;
+        state.cached_transcript_message_count = state.messages.items.len;
+        state.cached_transcript_last_message_len = last_message_len;
+        state.cached_transcript_reasoning_active = reasoning_active;
+    }
+
+
+    const rows = state.cached_transcript_rows.items;
+    const visible_rows = visibleTranscriptRowCount(rows);
     const range = visibleRowRange(content, state, visible_rows);
     var row: u16 = 1;
-    for (rows.items[range.start..range.end]) |transcript_row| {
+    for (rows[range.start..range.end]) |transcript_row| {
         if (row >= content.height) break;
         drawTranscriptRow(content, row, transcript_row);
         row +|= 1;
     }
 }
+
 
 fn drawReasoningDock(win: Window, rows: []const TranscriptRow, is_reasoning: bool) void {
     // Glyph distinguishes modes: ∞ for live reasoning, ◊ for buffer preview.

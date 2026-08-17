@@ -54,6 +54,10 @@ screen: Screen,
 /// the next render
 screen_last: InternalScreen,
 
+/// Current render generation for the scaled-cell skip mechanism. Bumping
+/// this replaces a full-screen per-frame bool reset.
+skip_generation: u32 = 1,
+
 caps: Capabilities = .{},
 
 opts: Options = .{},
@@ -271,15 +275,16 @@ pub fn queryTerminal(self: *Vaxis, tty: *IoWriter, timeout_ns: u64) !void {
 pub fn queryTerminalSend(vx: *Vaxis, tty: *IoWriter) !void {
     vx.queries_done.store(false, .unordered);
 
-    // TODO: re-enable this
-    // const colorterm = std.posix.getenv("COLORTERM") orelse "";
-    // if (std.mem.eql(u8, colorterm, "truecolor") or
-    //     std.mem.eql(u8, colorterm, "24bit"))
-    // {
-    //     if (@hasField(Event, "cap_rgb")) {
-    //         self.postEvent(.cap_rgb);
-    //     }
-    // }
+    // COLORTERM is the portable truecolor signal that works even when the
+    // terminal does not answer capability queries (SSH sessions to hosts
+    // without a terminfo entry, minimal muxes, etc.). Terminals that do not
+    // support 24-bit color simply do not set it.
+    const colorterm = std.posix.getenv("COLORTERM") orelse "";
+    if (std.mem.eql(u8, colorterm, "truecolor") or
+        std.mem.eql(u8, colorterm, "24bit"))
+    {
+        vx.caps.rgb = true;
+    }
 
     // TODO: XTGETTCAP queries ("RGB", "Smulx")
     // TODO: decide if we actually want to query for focus and sync. It
@@ -406,10 +411,10 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
     if (self.caps.kitty_graphics)
         try tty.writeAll(ctlseqs.kitty_graphics_clear);
 
-    // Reset skip flag on all last_screen cells
-    for (self.screen_last.buf) |*last_cell| {
-        last_cell.skip = false;
-    }
+    // Advance the skip-generation counter instead of touching every cell:
+    // the full-screen bool reset dominated the render cost on large
+    // terminals. Cells compare their generation to the current one.
+    self.skip_generation +%= 1;
 
     var i: usize = 0;
     while (i < self.screen.buf.len) {
@@ -446,7 +451,7 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
             last.eql(cell) and
             !last.skipped and
             cell.image == null) or
-            last.skip)
+            last.skip_generation == self.skip_generation)
         {
             reposition = true;
             // Close any osc8 sequence we might be in before
@@ -477,7 +482,7 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
                         continue;
                     }
                     const skipped_i = (@as(usize, @intCast(skipped_row + row)) * self.screen_last.width) + (skipped_col + col);
-                    self.screen_last.buf[skipped_i].skip = true;
+                    self.screen_last.buf[skipped_i].skip_generation = self.skip_generation;
                 }
             }
         }
@@ -558,7 +563,10 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
                     }
                 },
                 .rgb => |rgb| {
-                    switch (self.sgr) {
+                    if (!self.caps.rgb) {
+                        const q = Cell.Color.to256(rgb);
+                        try tty.print(ctlseqs.fg_indexed, .{q.index});
+                    } else switch (self.sgr) {
                         .standard => try tty.print(ctlseqs.fg_rgb, .{ rgb[0], rgb[1], rgb[2] }),
                         .legacy => try tty.print(ctlseqs.fg_rgb_legacy, .{ rgb[0], rgb[1], rgb[2] }),
                     }
@@ -582,7 +590,10 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
                     }
                 },
                 .rgb => |rgb| {
-                    switch (self.sgr) {
+                    if (!self.caps.rgb) {
+                        const q = Cell.Color.to256(rgb);
+                        try tty.print(ctlseqs.bg_indexed, .{q.index});
+                    } else switch (self.sgr) {
                         .standard => try tty.print(ctlseqs.bg_rgb, .{ rgb[0], rgb[1], rgb[2] }),
                         .legacy => try tty.print(ctlseqs.bg_rgb_legacy, .{ rgb[0], rgb[1], rgb[2] }),
                     }
@@ -600,7 +611,13 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
                     }
                 },
                 .rgb => |rgb| {
-                    if (self.enable_workarounds)
+                    if (!self.caps.rgb) {
+                        const q = Cell.Color.to256(rgb);
+                        switch (self.sgr) {
+                            .standard => try tty.print(ctlseqs.ul_indexed, .{q.index}),
+                            .legacy => try tty.print(ctlseqs.ul_indexed_legacy, .{q.index}),
+                        }
+                    } else if (self.enable_workarounds)
                         try tty.print(ctlseqs.ul_rgb_conpty, .{ rgb[0], rgb[1], rgb[2] })
                     else switch (self.sgr) {
                         .standard => try tty.print(ctlseqs.ul_rgb, .{ rgb[0], rgb[1], rgb[2] }),

@@ -4,7 +4,8 @@
 /// Opened by the registry-backed `settings` command (slash syntax remains a
 /// compatibility alias). Renders as a full-screen overlay replacing the
 /// normal transcript+footer when active. Navigation:
-///   Left/Right or Tab — switch section
+///   Tab / Shift-Tab / Ctrl-Q / Ctrl-E — switch section (wraps at the ends)
+///   Left/Right — switch section, or cycle the value of a constrained entry
 ///   Up/Down           — navigate entries within section
 ///   Enter             — edit entry (or toggle for bools)
 ///   Enter in edit     — save via config/set
@@ -221,18 +222,30 @@ pub const SettingsState = struct {
 
     /// Move to an adjacent section and load its surface through one owner.
     /// The models section is RPC-backed (`loadModels`); every other section
-    /// loads its config entries. Returns false at a boundary (no movement,
-    /// no reload). Consolidating this keeps keyboard paths — the generic
-    /// handler and the models overlay — from diverging on what entering the
-    /// models section loads.
+    /// loads its config entries. Movement wraps at both ends — an operator on
+    /// "runtime" pressing previous lands on "environment" and vice versa — so
+    /// horizontal navigation always produces visible movement. Consolidating
+    /// this keeps keyboard paths — the generic handler and the models overlay
+    /// — from diverging on what entering the models section loads.
     fn changeSection(self: *SettingsState, direction: i8, rpc_client: anytype) !bool {
-        const before = self.section_cursor;
+        // Wrap at both boundaries: the section ring is a cycle, so the
+        // operator can always move without hitting an edge.
         if (direction < 0) {
-            if (self.section_cursor > 0) self.section_cursor -= 1;
+            self.section_cursor = if (self.section_cursor > 0)
+                self.section_cursor - 1
+            else
+                section_names.len - 1;
         } else {
-            if (self.section_cursor < section_names.len - 1) self.section_cursor += 1;
+            self.section_cursor = (self.section_cursor + 1) % section_names.len;
         }
-        if (self.section_cursor == before) return false;
+        // Clear the status message from the previous section so a "Saved
+        // tui.theme = midnight" hint doesn't persist into the next section
+        // and confuse the operator into thinking the last action there was
+        // also saved.
+        if (self.status_message) |msg| {
+            self.allocator.free(msg);
+            self.status_message = null;
+        }
         if (std.mem.eql(u8, section_names[self.section_cursor], "models")) {
             try self.loadModels(rpc_client);
         } else {
@@ -240,12 +253,28 @@ pub const SettingsState = struct {
         }
         return true;
     }
+
     /// Load the config entries for the current section from disk.
     pub fn loadSection(self: *SettingsState) !void {
-        // The models section is not a config section; it is an RPC-backed
-        // picker over providers/models/agents. loadModels() (client-aware)
-        // populates it; the generic loader leaves it to the models draw path.
-        if (std.mem.eql(u8, section_names[self.section_cursor], "models")) return;
+        // Preserve the operator's position and edit state across a reload.
+        // Without this, a save-triggered loadSection resets entry_cursor to
+        // 0 (the operator must re-navigate after every enum cycle) and the
+        // editing flag survives into a different section where Enter would
+        // write the stale edit_buffer under the wrong key (data corruption).
+        const saved_cursor = self.entry_cursor;
+        var saved_key_buf: [128]u8 = undefined;
+        const saved_key: ?[]const u8 = if (saved_cursor < self.entries.items.len)
+            blk: {
+                const key = self.entries.items[saved_cursor].key;
+                const copy_len = @min(key.len, saved_key_buf.len);
+                @memcpy(saved_key_buf[0..copy_len], key[0..copy_len]);
+                break :blk saved_key_buf[0..copy_len];
+            }
+        else
+            null;
+        self.editing = false;
+        self.edit_buffer.clearRetainingCapacity();
+
 
         for (self.entries.items) |entry| {
             self.allocator.free(entry.key);
@@ -307,7 +336,19 @@ pub const SettingsState = struct {
             }
             try self.appendConfigEntry(entry.key_ptr.*, entry.value_ptr.*, default_help_obj);
         }
-        self.entry_cursor = 0;
+
+        // Restore cursor position: match the saved key against the new
+        // entries list so the operator stays where they were after a save.
+        if (saved_key) |key| {
+            for (self.entries.items, 0..) |entry, index| {
+                if (std.mem.eql(u8, entry.key, key)) {
+                    self.entry_cursor = index;
+                    break;
+                }
+            }
+        } else {
+            self.entry_cursor = @min(saved_cursor, self.entries.items.len -| 1);
+        }
         if (parsed == null) try self.setStatusMessage("Using defaults: workspace config is unavailable");
     }
 
@@ -502,6 +543,18 @@ pub const SettingsState = struct {
             return true;
         }
         if (key.matches(tui.Key.tab, .{})) {
+            _ = try self.changeSection(1, rpc_client);
+            return true;
+        }
+
+        // Dedicated section keys mirror the generic handler: Ctrl-Q previous,
+        // Ctrl-E next. They always move sections so an operator on the models
+        // tab is never trapped by the picker's own Left/Right value cycling.
+        if (key.matches('q', .{ .ctrl = true })) {
+            _ = try self.changeSection(-1, rpc_client);
+            return true;
+        }
+        if (key.matches('e', .{ .ctrl = true })) {
             _ = try self.changeSection(1, rpc_client);
             return true;
         }
@@ -783,6 +836,10 @@ pub const SettingsState = struct {
         }
         self.config_changed = true;
         models.mode = .providers;
+        // Reload the provider list so the updated model label is visible
+        // immediately — without this the operator sees stale "(old-model)"
+        // labels until they leave and re-enter the tab.
+        self.loadModels(rpc_client) catch {};
     }
 
     /// Save the currently-edited entry via config/set RPC.
@@ -835,6 +892,18 @@ pub const SettingsState = struct {
         // The models section is RPC-backed; route all keys to its picker.
         if (std.mem.eql(u8, section_names[self.section_cursor], "models")) {
             return self.handleModelsKey(key, rpc_client);
+        }
+        // Dedicated section keys — Ctrl-Q previous, Ctrl-E next — always move
+        // sections regardless of the selected entry. Left/Right are overloaded
+        // (value cycling on constrained entries), so operators need one key
+        // pair whose meaning never changes while the overlay is open.
+        if (key.matches('q', .{ .ctrl = true })) {
+            _ = try self.changeSection(-1, rpc_client);
+            return true;
+        }
+        if (key.matches('e', .{ .ctrl = true })) {
+            _ = try self.changeSection(1, rpc_client);
+            return true;
         }
         // Esc — cancel edit or close panel.
         if (key.matches(tui.Key.escape, .{})) {
@@ -1043,7 +1112,7 @@ pub fn drawSettings(win: tui.Window, state: *SettingsState, frame_allocator: std
     const footer_row = win.height -| 1;
     _ = win.print(
         &.{
-            .{ .text = " ←/→ section  ↑/↓ entry  Enter edit/toggle  Esc close", .style = .{ .bg = Color.bg, .fg = Color.dim } },
+            .{ .text = " Tab/Ctrl-Q ← section →  Ctrl-E/Tab  ↑/↓ entry  ←/→ value  Enter edit/toggle  Esc close", .style = .{ .bg = Color.bg, .fg = Color.dim } },
         },
         .{ .col_offset = 2, .row_offset = footer_row },
     );
@@ -1490,6 +1559,75 @@ test "settings tab navigates to the next section" {
     try std.testing.expect(try state.handleKey(tab, &client));
     try std.testing.expectEqual(@as(usize, 1), state.section_cursor);
     try std.testing.expect(state.entries.items.len > 0);
+}
+
+test "settings section navigation wraps at both boundaries" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var state = SettingsState.init(allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    try state.loadSection();
+
+    var client = SettingsSuccessClient{};
+    // Shift-Tab from the first section wraps to the last (environment).
+    const shift_tab = tui.Key{ .codepoint = tui.Key.tab, .mods = .{ .shift = true } };
+    try std.testing.expect(try state.handleKey(shift_tab, &client));
+    try std.testing.expectEqual(@as(usize, section_names.len - 1), state.section_cursor);
+    try std.testing.expect(state.entries.items.len > 0);
+    // Tab from the last section wraps back to the first (runtime).
+    const tab = tui.Key{ .codepoint = tui.Key.tab, .mods = .{} };
+    try std.testing.expect(try state.handleKey(tab, &client));
+    try std.testing.expectEqual(@as(usize, 0), state.section_cursor);
+    try std.testing.expect(state.entries.items.len > 0);
+}
+
+test "settings dedicated section keys ctrl-q and ctrl-e always move sections" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const workspace = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(workspace);
+
+    var state = SettingsState.init(allocator, workspace);
+    defer state.deinit();
+    state.open = true;
+    try state.loadSection();
+
+    var client = ModelsTestClient{};
+    defer client.deinit();
+    // Move onto the tui section and select `theme` — a constrained enum where
+    // Left/Right cycle the VALUE. Ctrl-E must still switch the section.
+    const tab = tui.Key{ .codepoint = tui.Key.tab, .mods = .{} };
+    try std.testing.expect(try state.handleKey(tab, &client));
+    for (state.entries.items, 0..) |entry, i| {
+        if (std.mem.eql(u8, entry.key, "theme")) {
+            state.entry_cursor = i;
+            break;
+        }
+    }
+    try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = 'e', .mods = .{ .ctrl = true } }, &client));
+    try std.testing.expectEqualStrings("provider", section_names[state.section_cursor]);
+    try std.testing.expect(state.entries.items.len > 0);
+    // A second Ctrl-E crosses onto the RPC-backed models surface.
+    try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = 'e', .mods = .{ .ctrl = true } }, &client));
+    try std.testing.expectEqualStrings("models", section_names[state.section_cursor]);
+    try std.testing.expect(state.models_state != null);
+    // Ctrl-Q walks back off the models tab to the previous section.
+    try std.testing.expect(try state.handleKey(tui.Key{ .codepoint = 'q', .mods = .{ .ctrl = true } }, &client));
+    try std.testing.expectEqualStrings("provider", section_names[state.section_cursor]);
+    try std.testing.expect(state.entries.items.len > 0);
+    // Wrap check: Ctrl-Q from the first section lands on environment.
+    var state2 = SettingsState.init(allocator, workspace);
+    defer state2.deinit();
+    state2.open = true;
+    try state2.loadSection();
+    try std.testing.expect(try state2.handleKey(tui.Key{ .codepoint = 'q', .mods = .{ .ctrl = true } }, &client));
+    try std.testing.expectEqual(@as(usize, section_names.len - 1), state2.section_cursor);
 }
 
 test "settings timeout is visible and remains closable" {

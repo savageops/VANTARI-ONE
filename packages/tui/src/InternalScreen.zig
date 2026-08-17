@@ -18,9 +18,10 @@ pub const InternalCell = struct {
     skipped: bool = false,
     default: bool = true,
 
-    // If we should skip rendering *this* round due to being printed over previously (from a scaled
-    // cell, for example)
-    skip: bool = false,
+    // Frame generation when this cell was last marked as printed-over by a
+    // scaled cell. Comparing against the renderer's current generation
+    // replaces the per-frame full-screen bool reset with one counter bump.
+    skip_generation: u32 = 0,
 
     scale: Cell.Scale = .{},
 
