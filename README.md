@@ -12,7 +12,7 @@ One binary; one protocol; one owner for runtime truth.
 
 [![Release](https://img.shields.io/github/v/release/savageops/VANTARI-ONE?display_name=tag&sort=semver&label=Release&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/savageops/VANTARI-ONE/total?label=Downloads&color=0f766e)](https://github.com/savageops/VANTARI-ONE/releases)
-[![Tests](https://img.shields.io/badge/Tests-2%2C102%20cases-0f766e)](#validation)
+[![Tests](https://img.shields.io/badge/Tests-2%2C285%20passing%20of%202%2C289%20cases-0f766e)](#validation)
 [![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-f7a41d?logo=zig)](https://ziglang.org/)
 
 [![Stars](https://img.shields.io/github/stars/savageops/VANTARI-ONE?label=Stars&color=111111)](https://github.com/savageops/VANTARI-ONE/stargazers)
@@ -90,11 +90,11 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 | Metric | Value |
 |---|---|
 | **Runtime** | Single static Zig binary — `vantari` |
-| **Kernel surface** | 122 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
-| **Proof surface** | 2,129 passing backend cases across source and adversarial pipeline suites |
+| **Kernel surface** | 126 backend Zig source files; explicit owners for context, sessions, tools, providers, auth, scheduling, and transport |
+| **Proof surface** | 2,285 passing backend cases (2,289 with skipped) across source and adversarial pipeline suites |
 | **Dependencies** | No language runtime for the core binary; search, eval, LSP, DAP, and other optional tools require their advertised executables |
 | **Provider wires** | Chat Completions · OpenAI Responses · Anthropic Messages |
-| **Tracked clients** | Native streaming TUI · CLI; the local browser workbench is an ignored prototype in this checkout |
+| **Tracked clients** | Native streaming TUI · CLI · tracked SvelteKit web client served by the kernel bridge when its `apps/web/dist` build is present |
 | **Protocol** | Exact JSON-RPC over owner-only loopback HTTP; private Content-Length stdio inside the owner tree |
 | **Session storage** | Filesystem JSONL ledgers at `.var/sessions/<id>/` |
 | **Platform** | Windows-native first class; Linux/macOS via Zig cross-compilation |
@@ -107,11 +107,11 @@ Every transition produces durable evidence. Tool calls generate `tool_requested`
 flowchart TB
   tui["TUI client<br/><sub>streaming terminal interface</sub>"]
   cli["CLI client<br/><sub>single-shot commands</sub>"]
-  browser["Browser workbench<br/><sub>framework-free static client</sub>"]
+  browser["Web client<br/><sub>tracked SvelteKit app · hash-router SPA</sub>"]
   tui --> facade["owner client facade<br/><sub>resolve · handshake · reconnect</sub>"]
   cli --> facade
   facade --> owner["project-local execution owner<br/><sub>exact loopback RPC · generation lease</sub>"]
-  browser -.->|prototype| bridge["redacted browser routes<br/><sub>POST /rpc · GET /events · GET /api/health</sub>"]
+  browser --> bridge["redacted browser routes<br/><sub>POST /rpc · GET /events · GET /api/health · SPA assets</sub>"]
   bridge --> owner
   owner --> child["private ChildClient<br/><sub>one supervised kernel child</sub>"]
   child --> stdio["JSON-RPC 2.0 over stdio<br/><sub>Content-Length framing</sub>"]
@@ -135,14 +135,15 @@ flowchart TB
   provider --> events
 ```
 
-The two tracked client surfaces — TUI and CLI — attach to one project-local
-execution owner and enter the same kernel runtime. Closing either client leaves
-the owner, fixed pool, scheduler, and active sessions alive. The owner retains
-one private `kernel-stdio` child; it does not create a second runtime lane.
-Session state, context assembly, provider interaction, tool dispatch, capability
-governance, and event emission stay inside the Zig binary. The local browser
-workbench exists only as an ignored prototype in this checkout and is not a
-shipped client.
+The three tracked client surfaces — TUI, CLI, and the SvelteKit web client in
+`apps/web/` — attach to one project-local execution owner and enter the same
+kernel runtime. Closing any client leaves the owner, fixed pool, scheduler,
+and active sessions alive. The owner retains one private `kernel-stdio`
+child; it does not create a second runtime lane. Session state, context
+assembly, provider interaction, tool dispatch, capability governance, and
+event emission stay inside the Zig binary. The web client rides the same
+token-gated, redacted browser routes as the other surfaces and does not
+assemble provider context, infer tool state, or own a second transcript.
 
 ### Remote Deployment Boundary
 
@@ -189,8 +190,9 @@ The promotion test is mechanical: kill the relay, start a fresh relay, and recov
 Each layer has a single canonical owner. The context engine never writes to the provider. The tool runtime never writes to the transcript. The provider never reads from the session store. Dependencies flow downward. State flows through explicit function parameters, never globals.
 
 The host layer is the outermost kernel surface: one reconnectable loopback owner
-in front of one private framed-stdio kernel child. TUI and CLI are tracked clients. Browser and remote
-surfaces remain prototype or roadmap clients. Public networking and remote
+in front of one private framed-stdio kernel child. TUI, CLI, and the web client
+in `apps/web/` are tracked clients; the remote relay remains a roadmap client.
+Public networking and remote
 identity belong to the planned relay boundary, so local execution does not
 inherit deployment infrastructure.
 
@@ -228,11 +230,15 @@ vantari workspace set <path>                    # pin a specific workspace
 vantari workspace clear                         # return to directory-based resolution
 ```
 
-### Browser workbench boundary
+### Browser client boundary
 
-The tracked checkout does not ship a browser client. A local ignored prototype
-may use the loopback HTTP bridge, but it has no tracked source, packaging, or
-consumer proof and is therefore not part of the release surface.
+The tracked web client lives in `apps/web/` (SvelteKit) and talks to the
+kernel exclusively through the token-gated, redacted browser routes:
+`POST /rpc`, `GET /events`, and `GET /api/health`. The kernel bridge serves
+the built SPA from `<workspace>/apps/web/dist` when that directory exists;
+the `dist/` build is not tracked, so a fresh checkout runs `npm run build`
+in `apps/web/` before the web surface appears. The web client never assembles
+provider context, infers tool state, or owns a transcript.
 
 <br/>
 
@@ -504,7 +510,7 @@ All tool definitions are schema-first. The registry resolves availability from m
 
 TUI and CLI use exact JSON-RPC through the project-local owner's token-gated
 loopback routes. The owner forwards each call to the sole kernel over private
-Content-Length-framed stdio. The ignored browser prototype reaches the same
+Content-Length-framed stdio. The tracked web client reaches the same
 methods through separately redacted bridge routes. A future relay may project
 the owner protocol over authenticated WebSockets, but does not exist in the
 shipped runtime.
@@ -882,8 +888,8 @@ Run a local agent that reads your codebase, executes tools with review gates, an
 
 Embed the kernel behind your own interface. The tracked TUI and CLI demonstrate
 the pattern: different interaction surfaces, one protocol, no duplicated
-executor. The HTTP bridge is kernel source; a tracked browser consumer is not
-currently shipped.
+executor. The HTTP bridge is kernel source, and the tracked web client in
+`apps/web/` rides it.
 
 </td>
 <td width="33%">
@@ -915,14 +921,14 @@ Every tool call, context window, and model interaction is recorded in structured
 | Buffered ticket admission, fixed capacity, and same-session owner recovery | **Source and installed Windows process meshes passed** |
 | Sequence-addressed direct/group/parent agent mailbox | **Source and installed Windows restart/delivery meshes passed** |
 | Model-selected route eligibility and team snapshot | **Source proven; dedicated installed snapshot proof not run** |
-| Plugin runtime with typed socket execution | **In progress** |
+| Plugin runtime with typed socket execution | Deferred — contract scaffolding only; no mount or dispatch (Moves 86–87 owner census) |
 | Provider fallback chains | Planned |
 | Local Codex subscription auth — CLI PKCE login, durable ledger, logout, secret-free status, and explicit `/codex/responses` transport | Source + installed local fixture proven; real entitlement proof pending |
 | Identity auth against `auth.vantari.one` — PKCE OAuth mirroring the openai-codex pattern | Planned |
 | Remote relay — authenticated WebSocket fan-out with no session ownership | Planned |
 | Multi-client session binding — connected clients as capability peers, not parallel authority. Client-offered tools must route through the existing module-owned catalog, not a parallel tool system | Planned |
 | Cloud dashboard as event-spine read model — same socket, read-only | Planned |
-| Frontend workbench — salvaged component library, deferred until socket contract is stable | Deferred |
+| Frontend workbench — tracked SvelteKit app in `apps/web/` served by the kernel bridge | **Shipped** |
 
 <br/>
 
@@ -973,8 +979,8 @@ The socket owns request/response semantics; provider records select base URL, mo
 <summary><strong>Why multiple clients, one protocol</strong></summary>
 
 The tracked TUI and CLI speak to the same kernel protocol. The HTTP bridge
-exposes the same kernel boundary, but this checkout does not ship a tracked
-browser consumer. This means:
+exposes the same kernel boundary, and the tracked web client in `apps/web/`
+consumes it through the redacted browser routes. This means:
 
 - **No execution path divergence** — clients submit `session/send`; the kernel advances the session.
 - **No state duplication** — clients render session state but do not own it. A session started in one surface remains recoverable through another.
@@ -1052,8 +1058,9 @@ vantari auth status|login|use|logout <provider> identity and provider auth
 
 ## Validation
 
-The pinned Debug and ReleaseFast graphs currently pass 2,180 test cases across `apps/backend/src/`
-and `apps/backend/tests/`. They target state transitions, protocol edges, and
+The pinned Debug and ReleaseFast graphs currently pass 2,285 of 2,289 test
+cases across `apps/backend/src/` and `apps/backend/tests/`. They target state
+transitions, protocol edges, and
 failure pressure rather than line coverage:
 
 - Corrupted JSONL suffixes, torn writes, BOMs, duplicated sequence IDs

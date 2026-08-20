@@ -7,7 +7,7 @@ version: 1.1.0
 
 # Project module index
 
-`E:\Workspaces\01_Projects\01_Github\VANTARI-ONE\AGENTS.md` is the governing project contract. Load the owner below when work touches its surface.
+`../AGENTS.md` is the governing project contract. Load the owner below when work touches its surface.
 
 | Surface | Canonical owner | Load when |
 |---|---|---|
